@@ -431,3 +431,38 @@ A `Decimal` rounded to `prec` significant digits after each operation: `BigFloat
 `BigFloat.e(prec)`, `to_str`, `to_sci_str`, `with_prec`. Checked against Python's `decimal` at 50 digits.
 
 Tested by `tests/lang/112_decimal_rational.tr`.
+
+---
+
+## Tensors — `std.math.tensor`
+
+n-dimensional float64 arrays with NumPy-style broadcasting; elementwise loops, reductions and matmul run in C
+(`std/math/tensor_native.c`).
+
+```tauraro
+from std.math.tensor import Tensor
+mut a = Tensor.arange(0.0, 6.0, 1.0).reshape([2, 3])?
+mut b = a.add(Tensor.vector([10.0, 20.0, 30.0]))?        # broadcast over rows
+mut m = a.matmul(a.transpose())?                          # (2, 2)
+mut p = a.softmax(1)?
+print(b.sum_axis(0, false)?.to_str())
+```
+
+- **Create**: `zeros/ones/full(shape[, v])`, `scalar(v)`, `from_list(values, shape)?`, `vector(values)`,
+  `arange(start, stop, step)`, `linspace(a, b, n)`, `eye(n)`, `random_uniform(shape, seed)`,
+  `random_normal(shape, mean, std, seed)`, `from_matrix`, `from_vector`.
+- **Views** (share storage): `reshape(shape)?` (one `-1`; copies non-contiguous data), `transpose()`, `permute(axes)?`,
+  `slice(axis, start, stop, step)?`, `select(axis, i)?`, `expand_dims(axis)`, `squeeze()`, `squeeze_axis(a)?`,
+  `broadcast_to(shape)?`. `copy()`, `contiguous()`, `flatten()`, `to_list()`.
+- **Access**: `get(idx)?`, `set(idx, v)?`, `item()?`, `shape`, `ndim()`, `size()`, `dim(axis)`, `shape_str()`.
+- **Elementwise** (broadcasting, raise on incompatible shapes): `add sub mul div pow maximum minimum atan2 fmod`,
+  comparisons `eq ne lt le gt ge` (0/1 masks), `logical_and/or`, `Tensor.where(cond, a, b)?`; scalar forms `add_s
+  sub_s mul_s div_s pow_s rsub_s rdiv_s max_s min_s gt_s lt_s eq_s clip`; unary `neg abs sqrt exp log log2 log10
+  log1p expm1 sin cos tan asin acos atan tanh relu leaky_relu sigmoid floor ceil round square sign`, `apply(f)`.
+- **Reductions**: `sum prod max min argmax argmin mean var std norm count_nonzero`, and `*_axis(axis, keepdims)?`
+  for sum/prod/max/min/argmax/argmin/mean; `softmax(axis)?`.
+- **Linear algebra**: `matmul(o)?` (2-D, vector cases, batched with broadcast leading dims), `dot(o)?`, `outer(o)?`,
+  `to_matrix()?` / `Tensor.from_matrix` (std.math.linalg).
+- **Join**: `Tensor.concat(parts, axis)?`, `Tensor.stack(parts, axis)?`. Text: `to_str()`.
+
+GPU execution is not wired in; use `std.gpu` kernels on `to_list()` data for that. Tested by `tests/lang/113_tensor.tr`.

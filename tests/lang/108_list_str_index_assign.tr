@@ -4,6 +4,8 @@
 #    store and did not compile; it now goes through List_TrStr_set.
 #  * `return f"...{local}..."` released `local` before building the result
 #    (use-after-free); f-string parts now count as reads of the return value.
+#  * an untyped lambda passed to a `def(float) -> float` parameter compiled its
+#    parameter as int (ABI mismatch); it now takes the expected parameter types.
 
 from std.test import TestRunner
 
@@ -20,6 +22,16 @@ extend Greeter:
     pub def greet(self, msg: str) -> str:
         mut who = self.title()
         return f"{msg}, {who}! ({who})"
+
+def twice_f(f: def(float) -> float, x: float) -> float:
+    return f(f(x))
+
+class Scaler:
+    pub k: float
+
+extend Scaler:
+    pub def run(self, f: def(float) -> float) -> float:
+        return f(self.k)
 
 def main():
     mut t = TestRunner.init("108_list_str_index_assign")
@@ -51,4 +63,8 @@ def main():
         if g.greet("Hello") != "Hello, Dr. Ada! (Dr. Ada)": same = false
         k2 = k2 + 1
     t.assert_true(same, "return f-string reading a local str")
+    t.assert_true(twice_f(lambda x: x * 1.5, 2.0) == 4.5, "lambda param typed from a function's def(float) param")
+    mut sc = Scaler()
+    sc.k = 0.25
+    t.assert_true(sc.run(lambda v: v + 0.5) == 0.75, "lambda param typed from a method's def(float) param")
     t.summary()

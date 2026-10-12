@@ -11,6 +11,7 @@
 #   from std.math.decimal  import Decimal
 #   from std.math.rational import Rational
 #   from std.math.bigfloat import BigFloat
+#   from std.math.tensor   import Tensor   (links std/math/tensor_native.c)
 
 from std.math.int    import Math
 from std.math.float  import FloatMath

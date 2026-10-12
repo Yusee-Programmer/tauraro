@@ -26,6 +26,9 @@ added here as each phase lands.
   not reachable through these clients any more.
 
 ### Compiler limitations closed
+- An untyped lambda passed to a `def(float) -> float` (or any function-typed) parameter now takes
+  its parameter types from that signature; it used to compile them as `int`, so the call read
+  garbage through the mismatched C ABI.
 - `return f"...{local}..."` released `local` before the f-string was built (use-after-free):
   f-string parts now count as reads of the returned expression.
 - `xs[i] = s` inside a generic class whose `List[T]` is instantiated with `T = str` generated an
@@ -46,6 +49,10 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.math.tensor`** — n-dimensional float64 arrays with NumPy-style broadcasting, strided views
+  (reshape/transpose/permute/slice/select/broadcast_to), elementwise math, axis reductions,
+  softmax, batched matmul, concat/stack and linalg interop; kernels in C. Tested by
+  `tests/lang/113_tensor.tr`.
 - **`std.math.decimal`, `std.math.rational`, `std.math.bigfloat`** — exact decimal arithmetic
   with seven rounding modes (quantize, significant digits, sqrt, money allocation), exact
   fractions (`limit_denominator`, floor/ceil/round), and arbitrary-precision decimal floating

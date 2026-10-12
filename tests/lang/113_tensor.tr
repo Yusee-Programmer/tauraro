@@ -1,0 +1,243 @@
+# tests/lang/113_tensor.tr
+# std.math.tensor: construction, views (reshape / transpose / slice / select /
+# broadcast_to share storage), broadcasting arithmetic, reductions, matmul
+# (2-D, vector and batched cases cross-checked against naive loops), softmax,
+# joining and linalg interop.
+
+from std.test import TestRunner
+from std.math.tensor import Tensor
+from std.math.linalg import Matrix
+
+def fl(xs: List[float]) -> str:
+    mut out = ""
+    mut i = 0
+    while i < len(xs):
+        if i > 0: out = out + ","
+        mut v = xs[i]
+        if v == floor(v):
+            mut iv = v as int
+            out = out + f"{iv}"
+        else:
+            out = out + f"{v}"
+        i = i + 1
+    return out
+
+def T(values: List[float], shape: List[int]) -> Tensor:
+    mut r: Result[Tensor, str] = Tensor.from_list(values, shape)
+    return r.ok
+
+def ok(r: Result[Tensor, str]) -> Tensor:
+    return r.ok
+
+def close(a: float, b: float) -> bool:
+    mut d = a - b
+    if d < 0.0: d = 0.0 - d
+    return d < 0.000000001
+
+def test_basics(t: TestRunner):
+    t.section("construction and views")
+    mut a = ok(Tensor.arange(0.0, 6.0, 1.0).reshape([2, 3]))
+    t.assert_eq_str(a.shape_str(), "(2, 3)", "shape")
+    t.assert_eq_int(a.ndim(), 2, "ndim")
+    t.assert_eq_int(a.size(), 6, "size")
+    t.assert_eq_str(a.to_str(), "[[0., 1., 2.],\n [3., 4., 5.]]", "to_str")
+    mut g: Result[float, str] = a.get([1, -1])
+    t.assert_true(g.ok == 5.0, "get with a negative index")
+    mut tr = a.transpose()
+    t.assert_eq_str(tr.shape_str(), "(3, 2)", "transpose shape")
+    t.assert_false(tr.is_contiguous(), "transpose is a strided view")
+    t.assert_eq_str(fl(tr.to_list()), "0,3,1,4,2,5", "transpose order")
+    mut sr: Result[bool, str] = setv(tr, [2, 0], 99.0)
+    mut back: Result[float, str] = a.get([0, 2])
+    t.assert_true(back.ok == 99.0, "views share storage")
+    mut cp = a.copy()
+    mut sr2: Result[bool, str] = setv(cp, [0, 0], -1.0)
+    mut orig: Result[float, str] = a.get([0, 0])
+    t.assert_true(orig.ok == 0.0, "copy is detached")
+    mut sl = ok(Tensor.arange(0.0, 10.0, 1.0).slice(0, 1, 9, 3))
+    t.assert_eq_str(fl(sl.to_list()), "1,4,7", "slice with step")
+    mut row = ok(a.select(0, 1))
+    t.assert_eq_str(fl(row.to_list()), "3,4,5", "select a row")
+    mut col = ok(a.select(1, 1))
+    t.assert_eq_str(fl(col.to_list()), "1,4", "select a column")
+    t.assert_eq_str(a.expand_dims(0).shape_str(), "(1, 2, 3)", "expand_dims")
+    t.assert_eq_str(a.expand_dims(0).squeeze().shape_str(), "(2, 3)", "squeeze")
+    mut inf = ok(Tensor.arange(0.0, 12.0, 1.0).reshape([3, -1]))
+    t.assert_eq_str(inf.shape_str(), "(3, 4)", "reshape with -1")
+    mut badr: Result[Tensor, str] = Tensor.arange(0.0, 5.0, 1.0).reshape([2, 3])
+    t.assert_true(badr.is_err, "reshape size mismatch")
+    mut tr2 = ok(tr.reshape([6]))
+    t.assert_eq_str(fl(tr2.to_list()), "0,3,1,4,99,5", "reshape of a strided view copies in view order")
+    mut p = ok(ok(Tensor.arange(0.0, 24.0, 1.0).reshape([2, 3, 4])).permute([2, 0, 1]))
+    t.assert_eq_str(p.shape_str(), "(4, 2, 3)", "permute shape")
+    mut pv: Result[float, str] = p.get([3, 1, 2])
+    t.assert_true(pv.ok == 23.0, "permute indexing")
+    t.assert_eq_str(fl(Tensor.linspace(0.0, 1.0, 5).to_list()), "0,0.25,0.5,0.75,1", "linspace")
+    t.assert_eq_str(fl(Tensor.eye(2).to_list()), "1,0,0,1", "eye")
+    t.assert_eq_str(fl(Tensor.full([2], 7.0).to_list()), "7,7", "full")
+    mut bad: Result[Tensor, str] = Tensor.from_list([1.0, 2.0], [3])
+    t.assert_true(bad.is_err, "from_list size check")
+    mut u1 = Tensor.random_uniform([1000], 42)
+    mut u2 = Tensor.random_uniform([1000], 42)
+    t.assert_true(fl(u1.to_list()) == fl(u2.to_list()), "seeded random is reproducible")
+    t.assert_true(u1.min() >= 0.0 and u1.max() < 1.0, "uniform range")
+    t.assert_true(u1.mean() > 0.45 and u1.mean() < 0.55, "uniform mean")
+    mut nrm = Tensor.random_normal([4000], 2.0, 3.0, 7)
+    t.assert_true(nrm.mean() > 1.8 and nrm.mean() < 2.2, "normal mean")
+    t.assert_true(nrm.std() > 2.8 and nrm.std() < 3.2, "normal std")
+
+def setv(x: Tensor, idx: List[int], v: float) throws str -> bool:
+    x.set(idx, v)?
+    return true
+
+def test_math(t: TestRunner):
+    t.section("broadcasting arithmetic")
+    mut a = T([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3])
+    mut row = Tensor.vector([10.0, 20.0, 30.0])
+    mut col = T([100.0, 200.0], [2, 1])
+    t.assert_eq_str(fl(ok(a.add(row)).to_list()), "11,22,33,14,25,36", "row broadcast")
+    t.assert_eq_str(fl(ok(a.add(col)).to_list()), "101,102,103,204,205,206", "column broadcast")
+    t.assert_eq_str(ok(row.add(col)).shape_str(), "(2, 3)", "outer broadcast shape")
+    t.assert_eq_str(fl(ok(a.mul(Tensor.scalar(2.0))).to_list()), "2,4,6,8,10,12", "scalar tensor")
+    mut bad: Result[Tensor, str] = a.add(Tensor.vector([1.0, 2.0]))
+    t.assert_true(bad.is_err, "incompatible shapes")
+    t.assert_contains(bad.err, "do not broadcast", "error text")
+    t.assert_eq_str(fl(ok(a.sub(row)).to_list()), "-9,-18,-27,-6,-15,-24", "sub")
+    t.assert_eq_str(fl(ok(a.div(row)).to_list()), "0.1,0.1,0.1,0.4,0.25,0.2", "div")
+    t.assert_eq_str(fl(ok(a.pow(Tensor.scalar(2.0))).to_list()), "1,4,9,16,25,36", "pow")
+    t.assert_eq_str(fl(ok(a.maximum(Tensor.scalar(3.5))).to_list()), "3.5,3.5,3.5,4,5,6", "maximum")
+    t.assert_eq_str(fl(ok(a.gt(Tensor.scalar(3.0))).to_list()), "0,0,0,1,1,1", "comparison mask")
+    mut w = ok(Tensor.where(ok(a.gt(Tensor.scalar(3.0))), a, a.neg()))
+    t.assert_eq_str(fl(w.to_list()), "-1,-2,-3,4,5,6", "where")
+    t.assert_eq_str(fl(a.add_s(1.0).mul_s(2.0).sub_s(4.0).div_s(2.0).to_list()), "0,1,2,3,4,5", "scalar chain")
+    t.assert_eq_str(fl(a.rsub_s(10.0).to_list()), "9,8,7,6,5,4", "rsub")
+    t.assert_eq_str(fl(a.clip(2.0, 4.0).to_list()), "2,2,3,4,4,4", "clip")
+    t.assert_eq_str(fl(T([-1.5, 0.0, 2.0], [3]).relu().to_list()), "0,0,2", "relu")
+    t.assert_eq_str(fl(T([-1.5, 0.0, 2.0], [3]).abs().to_list()), "1.5,0,2", "abs")
+    t.assert_eq_str(fl(T([4.0, 9.0], [2]).sqrt().to_list()), "2,3", "sqrt")
+    t.assert_true(close(Tensor.scalar(0.0).sigmoid().sum(), 0.5), "sigmoid")
+    t.assert_true(close(Tensor.scalar(1.0).exp().log().sum(), 1.0), "exp/log")
+    t.assert_eq_str(fl(T([1.0, 2.0], [2]).apply(lambda x: x * 10.0 + 1.0).to_list()), "11,21", "apply")
+
+    # broadcast against a transposed (strided) operand
+    mut tr = a.transpose()
+    mut r2 = ok(tr.add(Tensor.vector([1.0, 2.0])))
+    t.assert_eq_str(fl(r2.to_list()), "2,6,3,7,4,8", "strided operand")
+
+    t.section("reductions")
+    t.assert_true(a.sum() == 21.0, "sum")
+    t.assert_true(a.prod() == 720.0, "prod")
+    t.assert_true(a.max() == 6.0 and a.min() == 1.0, "max/min")
+    t.assert_eq_int(a.argmax(), 5, "argmax")
+    t.assert_true(close(a.mean(), 3.5), "mean")
+    t.assert_true(close(a.var(), 35.0 / 12.0), "variance")
+    t.assert_true(close(T([3.0, 4.0], [2]).norm(), 5.0), "norm")
+    t.assert_eq_str(fl(ok(a.sum_axis(0, false)).to_list()), "5,7,9", "sum over rows")
+    t.assert_eq_str(fl(ok(a.sum_axis(1, false)).to_list()), "6,15", "sum over columns")
+    t.assert_eq_str(ok(a.sum_axis(1, true)).shape_str(), "(2, 1)", "keepdims")
+    t.assert_eq_str(fl(ok(a.max_axis(-1, false)).to_list()), "3,6", "max along the last axis")
+    t.assert_eq_str(fl(ok(a.argmin_axis(0, false)).to_list()), "0,0,0", "argmin along an axis")
+    t.assert_eq_str(fl(ok(a.mean_axis(0, false)).to_list()), "2.5,3.5,4.5", "mean along an axis")
+    t.assert_eq_str(fl(ok(a.transpose().sum_axis(0, false)).to_list()), "6,15", "reduce a strided view")
+    t.assert_eq_int(T([0.0, 1.0, 0.0, 2.0], [4]).count_nonzero(), 2, "count_nonzero")
+    mut sm = ok(T([1.0, 2.0, 3.0, 1.0, 1.0, 1.0], [2, 3]).softmax(1))
+    mut rows = ok(sm.sum_axis(1, false))
+    t.assert_true(close(rows.to_list()[0], 1.0) and close(rows.to_list()[1], 1.0), "softmax rows sum to 1")
+    t.assert_true(close(sm.to_list()[3], 1.0 / 3.0), "uniform row")
+
+def naive(a: Tensor, b: Tensor) -> List[float]:
+    mut out: List[float] = []
+    mut m = a.shape[0]
+    mut k = a.shape[1]
+    mut n = b.shape[1]
+    mut i = 0
+    while i < m:
+        mut j = 0
+        while j < n:
+            mut s = 0.0
+            mut p = 0
+            while p < k:
+                mut x: Result[float, str] = a.get([i, p])
+                mut y: Result[float, str] = b.get([p, j])
+                s = s + x.ok * y.ok
+                p = p + 1
+            out.append(s)
+            j = j + 1
+        i = i + 1
+    return out
+
+def same(xs: List[float], ys: List[float]) -> bool:
+    if len(xs) != len(ys): return false
+    mut i = 0
+    while i < len(xs):
+        if not close(xs[i], ys[i]): return false
+        i = i + 1
+    return true
+
+def test_linalg(t: TestRunner):
+    t.section("matmul and linear algebra")
+    mut a = T([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3])
+    mut b = T([7.0, 8.0, 9.0, 10.0, 11.0, 12.0], [3, 2])
+    t.assert_eq_str(fl(ok(a.matmul(b)).to_list()), "58,64,139,154", "2x3 . 3x2")
+    t.assert_eq_str(fl(ok(a.matmul(a.transpose())).to_list()), "14,32,32,77", "with a transposed view")
+    mut v = Tensor.vector([1.0, 1.0, 1.0])
+    mut mv = ok(a.matmul(v))
+    t.assert_eq_str(mv.shape_str(), "(2,)", "matrix . vector shape")
+    t.assert_eq_str(fl(mv.to_list()), "6,15", "matrix . vector")
+    mut vm = ok(Tensor.vector([1.0, 2.0]).matmul(a))
+    t.assert_eq_str(fl(vm.to_list()), "9,12,15", "vector . matrix")
+    mut vv = ok(v.matmul(v))
+    t.assert_eq_int(vv.ndim(), 0, "vector . vector is a scalar")
+    mut d: Result[float, str] = Tensor.vector([1.0, 2.0, 3.0]).dot(Tensor.vector([4.0, 5.0, 6.0]))
+    t.assert_true(d.ok == 32.0, "dot")
+    mut o = ok(Tensor.vector([1.0, 2.0]).outer(Tensor.vector([3.0, 4.0, 5.0])))
+    t.assert_eq_str(fl(o.to_list()), "3,4,5,6,8,10", "outer")
+    mut bad: Result[Tensor, str] = a.matmul(a)
+    t.assert_true(bad.is_err, "inner dimension mismatch")
+
+    mut ok_all = true
+    mut seed = 1
+    while seed <= 6:
+        mut m = 1 + seed * 7 % 13
+        mut k = 1 + seed * 5 % 11
+        mut n = 1 + seed * 3 % 17
+        mut x = ok(Tensor.random_uniform([m * k], seed).reshape([m, k]))
+        mut y = ok(Tensor.random_uniform([n * k], seed + 100).reshape([n, k])).transpose()
+        if not same(ok(x.matmul(y)).to_list(), naive(x, y)): ok_all = false
+        seed = seed + 1
+    t.assert_true(ok_all, "random shapes (incl. strided operands) match naive loops")
+
+    mut batch = ok(Tensor.arange(0.0, 12.0, 1.0).reshape([2, 2, 3]))
+    mut w = ok(Tensor.arange(0.0, 6.0, 1.0).reshape([3, 2]))
+    mut bm = ok(batch.matmul(w))
+    t.assert_eq_str(bm.shape_str(), "(2, 2, 2)", "batched matmul shape")
+    mut b1 = ok(ok(batch.select(0, 1)).matmul(w))
+    mut b1b = ok(bm.select(0, 1))
+    t.assert_true(same(b1.to_list(), b1b.to_list()), "batched slice equals a single matmul")
+
+    mut mr: Result[Matrix, str] = a.to_matrix()
+    mut mat = mr.ok
+    t.assert_eq_int(mat.rows(), 2, "to_matrix rows")
+    t.assert_true(mat.get(1, 2) == 6.0, "to_matrix value")
+    mut back = Tensor.from_matrix(mat.transpose())
+    t.assert_eq_str(fl(back.to_list()), "1,4,2,5,3,6", "from_matrix")
+
+    t.section("joining")
+    mut c0 = ok(Tensor.concat([a, a.mul_s(10.0)], 0))
+    t.assert_eq_str(c0.shape_str(), "(4, 3)", "concat rows")
+    t.assert_eq_str(fl(c0.to_list()), "1,2,3,4,5,6,10,20,30,40,50,60", "concat values")
+    mut c1 = ok(Tensor.concat([a, a], 1))
+    t.assert_eq_str(fl(c1.to_list()), "1,2,3,1,2,3,4,5,6,4,5,6", "concat columns")
+    mut st = ok(Tensor.stack([Tensor.vector([1.0, 2.0]), Tensor.vector([3.0, 4.0])], 0))
+    t.assert_eq_str(st.shape_str(), "(2, 2)", "stack")
+    mut st1 = ok(Tensor.stack([Tensor.vector([1.0, 2.0]), Tensor.vector([3.0, 4.0])], 1))
+    t.assert_eq_str(fl(st1.to_list()), "1,3,2,4", "stack on a new last axis")
+    mut badc: Result[Tensor, str] = Tensor.concat([a, Tensor.vector([1.0])], 0)
+    t.assert_true(badc.is_err, "concat checks shapes")
+
+def main():
+    mut t = TestRunner.init("113_tensor")
+    test_basics(t)
+    test_math(t)
+    test_linalg(t)
+    t.summary()
