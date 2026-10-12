@@ -1283,6 +1283,13 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
                 crc = _tr_system(ccmd)
                 if crc != 0:
                     print(c_red("error") + ": compiling " + cpath + " failed (exit code " + str(crc) + ")")
+                    # The remaining changed modules were not compiled, but their new .c
+                    # is already on disk: drop their old objects so the next build does
+                    # not mistake "same .c as last time" for "object up to date".
+                    mut rj = i + 1
+                    while rj < c_files.len:
+                        if needs.get(rj): delete_file(obj_path_for(c_files.get(rj)))
+                        rj = rj + 1
                     return crc
                 if file_exists(opath): break
                 # Lost the race described above: the compiler exited 0 but the
@@ -1404,6 +1411,11 @@ pub def compile_wasm_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: 
             mut crc = _tr_system(ccmd)
             if crc != 0:
                 print(c_red("error") + ": compiling " + cpath + " failed (exit code " + str(crc) + ")")
+                delete_file(opath)
+                mut rj = i + 1
+                while rj < c_files.len:
+                    if needs.get(rj): delete_file(obj_path_for(c_files.get(rj)))
+                    rj = rj + 1
                 return crc
         else:
             reused = reused + 1

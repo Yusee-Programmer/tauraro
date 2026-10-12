@@ -26,6 +26,9 @@ added here as each phase lands.
   not reachable through these clients any more.
 
 ### Compiler limitations closed
+- Incremental builds: when one module's C failed to compile, later changed modules were left
+  with their previous objects, and the next build reused those stale `.o` files (their `.c`
+  already matched), producing link errors or a wrong binary. Their objects are now dropped.
 - An untyped lambda passed to a `def(float) -> float` (or any function-typed) parameter now takes
   its parameter types from that signature; it used to compile them as `int`, so the call read
   garbage through the mismatched C ABI.
