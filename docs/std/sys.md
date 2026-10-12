@@ -536,3 +536,76 @@ glibc older than 2.34, `shm_open`/`sem_open` need `-lrt`.
 AF_UNIX streams.
 
 Tested by `tests/lang/109_sys_ipc.tr`.
+
+---
+
+## Shared libraries and plugins — `std.sys.dylib`, `std.sys.plugin`
+
+`std.sys.dylib` loads a shared library at run time (`dlopen` / `LoadLibraryW`) and calls its
+functions. Calls go through trampolines with exact C prototypes, so these signatures are supported:
+
+| Method | C signature |
+|---|---|
+| `call_int(name, [ints])?` | `int64 f(int64/pointer × 0–8)`; narrower integer parameters work on x86-64 and AArch64 |
+| `call_void(name, [ints])?` | `void f(int64/pointer × 0–8)` |
+| `call_float(name, [floats])?` | `double f(double × 0–6)` |
+| `call_str(name, [strs])?` | `str f(str × 0–4)`: functions exported by `tauraroc --lib` |
+| `call_str_int(name, s, [ints])?` | `int64 f(str, int64 × 0–3)`: functions exported by `tauraroc --lib` |
+
+32-bit `float` parameters and struct arguments are not supported.
+
+```tauraro
+from std.sys.dylib import DynLib, dylib_filename, dylib_cstr_addr
+
+mut lib = DynLib.open("./libgeometry.so")?
+mut area = lib.call_float("circle_area", [2.0])?
+mut me = DynLib.self_process()?                     # POSIX: the program + libc
+mut n = me.call_int("strlen", [dylib_cstr_addr("hello")])?
+lib.close()
+```
+
+`DynLib.open(path)?` / `open_with(path, DL_GLOBAL | DL_LAZY)?`, `self_process()?` (POSIX), `symbol(name)?`
+(address), `has(name)`, `close()`. Helpers: `dylib_filename("m")` (`libm.so` / `libm.dylib` / `m.dll`),
+`dylib_extension()`, `dylib_cstr_addr(s)` (a `const char*` argument), `dylib_read_cstr(addr)`,
+`dylib_call_int_ptr(fn, args)?`, `dylib_call_float_ptr(fn, args)?`. Strings returned by a library
+are copied, so they stay valid after the library is closed.
+
+### Plugins
+
+A plugin is a shared library, usually built with `tauraroc plugin.tr --lib -o plugins/name`,
+that exports:
+
+```tauraro
+export def tauraro_plugin_abi() -> int:      return 1          # PLUGIN_ABI, required
+export def tauraro_plugin_name() -> str:     return "markdown" # required, unique
+export def tauraro_plugin_version() -> str:  return "1.0.0"    # optional
+export def tauraro_plugin_init() -> int:     return 0          # optional, non-zero refuses loading
+export def tauraro_plugin_shutdown() -> int: return 0          # optional, runs on unload
+
+export def render(src: str) -> str:                            # whatever the host calls
+    return "<p>" + src + "</p>"
+```
+
+```tauraro
+from std.sys.plugin import PluginHost
+
+mut host = PluginHost.init()
+host.discover("plugins")                   # every .so / .dylib / .dll in the directory
+for err in host.errors: print(err)         # libraries that were not valid plugins
+mut md = host.find("markdown")?
+print(md.call_str("render", ["hi"])?)
+mut results = host.broadcast_str_int("on_event", "startup", [])   # each plugin exporting the hook
+host.reload("markdown")?                    # pick up a rebuilt library
+host.unload_all()
+```
+
+`PluginHost`: `load(path)?`, `discover(dir)`, `find(name)?`, `has_plugin(name)`, `names()`, `count()`,
+`unload(name)?`, `reload(name)?`, `unload_all()`, `broadcast_int(fn, args)`,
+`broadcast_str_int(fn, s, args)`, plus `plugins` and `errors`. `Plugin`: `name`, `version`, `path`,
+`lib`, and the `call_*` / `has` / `symbol` methods of `DynLib`. Loading is refused when the ABI
+number differs, the name is already loaded, or `tauraro_plugin_init` returns non-zero.
+
+Each plugin carries its own copy of the Tauraro runtime. Pass plain values (`int`, `float`, `str`)
+across the boundary, not class instances or collections.
+
+Tested by `tests/lang/118_dylib_plugin.tr`.

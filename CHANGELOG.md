@@ -17,6 +17,8 @@ codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
 ### Changed
+- `File.write`, `File.append` and `File.write_text` / `append_text` write the string's real
+  length instead of stopping at the first NUL byte, so binary files are written intact.
 - `UdpSocket.send_to` sends the string's real length instead of stopping at the first NUL byte.
 - `TcpStream.send` / `send_nb` / `send_async` send the string's real length instead of stopping
   at the first NUL byte (binary protocols such as HTTP/2 frames were truncated).
@@ -27,6 +29,14 @@ added here as each phase lands.
   not reachable through these clients any more.
 
 ### Compiler limitations closed
+- `export def` functions keep their exact name in the shared library and its header unless it is a
+  C keyword or a name libc declares. Names such as `count`, `new` and `delete` used to be exported
+  as `_tr_fn_<name>`, and a call to such an export from inside the library referenced the
+  unprefixed, undefined symbol.
+- `mut w = words[i]` (and `w = words[i]`) on a `List` / `Vec` / `Array` of `str` aliased the
+  element without retaining it, yet released the local at scope exit, so each loop iteration
+  dropped one of the list's references (use-after-free once elements were heap strings, e.g. any
+  `split` or `slice` result). The local now retains the element.
 - Incremental builds: when one module's C failed to compile, later changed modules were left
   with their previous objects, and the next build reused those stale `.o` files (their `.c`
   already matched), producing link errors or a wrong binary. Their objects are now dropped.
@@ -53,6 +63,15 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.sys.dylib`, `std.sys.plugin`** — load shared libraries at run time (`dlopen` /
+  `LoadLibraryW`) and call int / double / `str` functions through exact-prototype trampolines;
+  a plugin convention on top (`tauraro_plugin_abi` / `_name` / `_version` / `_init` / `_shutdown`
+  exports from a `tauraroc --lib` library) with directory discovery, ABI checks, hook broadcast,
+  reload and unload.
+- **`std.encoding.pdf`** — PDF 1.7 writer: standard-14 Latin fonts with exact metrics, word-wrapped
+  and justified text boxes, shapes / paths / dashes / transparency / transforms, images (RGBA with
+  soft masks, JPEG pass-through), URL and page links, bookmarks, Unicode metadata, and a built-in
+  deflate encoder (fixed or dynamic Huffman per block) for FlateDecode without libz.
 - **`std.net.imap`, `std.net.pop3`** — IMAP4rev1 client (LOGIN / AUTHENTICATE PLAIN, STARTTLS,
   LIST, SELECT / EXAMINE, SEARCH / UID SEARCH, FETCH with exact `{n}` literal handling, STORE,
   COPY / MOVE, EXPUNGE, CREATE / DELETE / RENAME, APPEND, raw `command`) and POP3 client (USER /

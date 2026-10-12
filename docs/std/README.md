@@ -15,7 +15,7 @@ building libraries with `taupkg`)
 | [`std.collections`](collections.md) | Data structures: Stack, Queue, Deque, Set, Counter, MinHeap/MaxHeap, LinkedList, Graph, LruCache, BTreeMap, Trie, BloomFilter, UnionFind, BitSet, RingBuffer, SkipList, IntervalTree, Rope, SlotMap, Arena/Slab allocators |
 | [`std.compress`](compress.md) | Compression: zlib compress/decompress, raw deflate/inflate (`-lz` required), gzip container format, zip; pure-Tauraro **LZ4** (block+frame), **Zstandard** (decoder + encoder), xxHash32/64, and a unified `Compress` by-name API |
 | [`std.crypto`](crypto.md) | Cryptography: SHA-1/2/3, SHAKE, BLAKE2/3, HMAC, HKDF, PBKDF2, Argon2, bcrypt, AES (CBC, GCM), ChaCha20-Poly1305, X25519, RSA/ECDSA (P-256/P-384) and ECDH, X.509 parsing + chain verification, CSPRNG, HOTP/TOTP, UUID/ULID, JWT (HS256) |
-| [`std.encoding`](encoding.md) | Data encoding: JSON, CSV, TOML, INI, YAML, XML, Base64, Base32, Hex, CBOR, Protocol Buffers wire format |
+| [`std.encoding`](encoding.md) | Data encoding: JSON, CSV, TOML, INI, YAML, XML, Base64, Base32, Hex, CBOR, Protocol Buffers wire format, PDF writer |
 | [`std.gpu`](gpu.md) | GPU compute: CUDA/OpenCL/CPU device API (`Device`/`Buffer[T]`/`Module`/`Kernel`), Tauraro `@kernel` → PTX/SPIR-V, and OpenMP CPU dispatch (`Gpu.parallel`) |
 | [`std.image`](image.md) | Raster images: BMP, QOI, PNG, JPEG (baseline + progressive decode, encode), GIF (animated decode/encode); resizing, colour adjustments, blur/sharpen/edges, geometry; shared `Image` (RGBA8) type and format-sniffing `decode()` |
 | [`std.audio`](audio.md) | Audio: `AudioBuffer`, WAV decode/encode, MP3 and FLAC decoding, resampling, channel mixing, level and edit helpers, tone generators |
@@ -28,7 +28,7 @@ building libraries with `taupkg`)
 | [`std.regex`](regex.md) | POSIX extended regex: match, find, replace, split, count, capture groups (numbered + named), `Match`/`Captures`, backreference replace |
 | [`std.serialize`](serialize.md) | Value serialization: `Pickle` (own compact binary format for scalars + nested List/Dict/Vec/Set), `Msgpack` (real, wire-compatible MessagePack codec) |
 | [`std.string`](string.md) | String utilities (Str), formatting (Fmt), parsing, line/word splitting, `split_to_vec` |
-| [`std.sys`](sys.md) | Environment, file system, processes, timing, OS/platform info, signals, `.env`, cron expressions, memory maps, shared memory + named semaphores, pipes/FIFOs, Unix-domain sockets |
+| [`std.sys`](sys.md) | Environment, file system, processes, timing, OS/platform info, signals, `.env`, cron expressions, memory maps, shared memory + named semaphores, pipes/FIFOs, Unix-domain sockets, shared-library loading (`dylib`) and plugins |
 | [`std.term`](term.md) | Terminal UI: ANSI SGR styling/colors (`Term`/`Style`/`Color`), cursor control, terminal size query, progress bar and spinner |
 | [`std.test`](test.md) | Lightweight unit-testing framework |
 | [`std.text`](text.md) | Text processing: line diff + unified diff, Levenshtein distance, word-wrap/indent, Markdown, shell word splitting/quoting (`Shlex`) |
