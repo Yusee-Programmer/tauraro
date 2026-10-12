@@ -35,7 +35,8 @@
 # compute time on typical server hardware; raise the count over time as
 # hardware gets faster — this is a moving target, not a fixed constant).
 # If you don't have a specific reason to use PBKDF2 (e.g. FIPS
-# compliance), a memory-hard KDF such as Argon2 or scrypt is generally a
+# compliance), a memory-hard KDF such as Argon2 (std.crypto.argon2) or
+# bcrypt (std.crypto.bcrypt) is generally a
 # stronger choice for NEW password-storage designs, since PBKDF2 has no
 # memory-hardness and is comparatively cheap to accelerate on GPU/ASIC.
 #
@@ -50,6 +51,8 @@
 
 from std.crypto.hash import Hash
 from std.core.string import StringBuilder
+from std.crypto.native import ALG_SHA1, ALG_SHA256, ALG_SHA384, ALG_SHA512
+from std.crypto.native import trc_hkdf_extract, trc_hkdf_expand, trc_pbkdf2, _cn_alloc, _cn_take, _cn_free, _cn_md_size
 
 extern "C":
     def _tr_strlen(s: str) -> int
@@ -58,6 +61,47 @@ pub class Kdf:
     _dummy: int
 
 extend Kdf:
+    # ── PBKDF2 with any HMAC hash, and HKDF (RFC 5869) ───────────────────
+    # These are the binary-safe, C-backed forms: lengths come from `.len()`
+    # and `alg` is an ALG_* id from std.crypto.native.
+
+    # PBKDF2-HMAC-<alg> (RFC 8018 section 5.2). Returns dklen raw bytes.
+    pub def pbkdf2_hmac(alg: int, password: str, salt: str, iterations: int, dklen: int) throws str -> str:
+        if _cn_md_size(alg) < 0: raise(f"Kdf: unknown algorithm id {alg}")
+        if iterations < 1: raise("Kdf.pbkdf2_hmac: iterations must be >= 1")
+        if dklen < 1: raise("Kdf.pbkdf2_hmac: dklen must be >= 1")
+        mut p = _cn_alloc(dklen)
+        mut pp = password as Pointer[char]
+        mut sp = salt as Pointer[char]
+        trc_pbkdf2(alg, pp, password.len(), sp, salt.len(), iterations, p, dklen)
+        return _cn_take(p, dklen)
+
+    # HKDF-Extract: PRK = HMAC(salt, ikm). An empty salt means HashLen zeros.
+    pub def hkdf_extract(alg: int, salt: str, ikm: str) throws str -> str:
+        mut sz = _cn_md_size(alg)
+        if sz < 0: raise(f"Kdf: unknown algorithm id {alg}")
+        mut p = _cn_alloc(sz)
+        mut sp = salt as Pointer[char]
+        mut ip = ikm as Pointer[char]
+        trc_hkdf_extract(alg, sp, salt.len(), ip, ikm.len(), p)
+        return _cn_take(p, sz)
+
+    # HKDF-Expand: `length` bytes of output keying material (<= 255*HashLen).
+    pub def hkdf_expand(alg: int, prk: str, info: str, length: int) throws str -> str:
+        mut sz = _cn_md_size(alg)
+        if sz < 0: raise(f"Kdf: unknown algorithm id {alg}")
+        if length < 0 or length > 255 * sz: raise("Kdf.hkdf_expand: length out of range")
+        mut p = _cn_alloc(length)
+        mut pp = prk as Pointer[char]
+        mut ip = info as Pointer[char]
+        trc_hkdf_expand(alg, pp, prk.len(), ip, info.len(), p, length)
+        return _cn_take(p, length)
+
+    # Extract-then-expand in one call.
+    pub def hkdf(alg: int, ikm: str, salt: str, info: str, length: int) throws str -> str:
+        mut prk = Kdf.hkdf_extract(alg, salt, ikm)?
+        return Kdf.hkdf_expand(alg, prk, info, length)?
+
     # Derive `dklen` bytes of key material from `password` + `salt` using
     # PBKDF2-HMAC-SHA256 (RFC 2898 section 5.2). `slen` is the salt length
     # in bytes (salt may contain embedded NULs, so this is explicit rather

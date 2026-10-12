@@ -57,6 +57,8 @@ bootstrap/*.zip
 !runtime/coro_stub.c
 # Stage 2 in-process LLVM shim (hand-written llvm-c wrapper; --link'd into the compiler).
 !runtime/tauraro_llvm.c
+# C kernels shipped with std modules (linked via `# tauraro-cpp-shim:`)
+!std/**/*_native.c
 # Python bytecode is never source:
 __pycache__/
 *.pyc

@@ -9,7 +9,25 @@ from std.crypto.sha512 import Sha512
 from std.crypto.chacha20 import ChaCha20, Poly1305
 from std.crypto.kdf import Kdf
 from std.crypto.jwt import Jwt, JwtResult
+from std.crypto.random import SecureRandom
+from std.crypto.ct import ConstantTime
+from std.crypto.digest import Digest, Hasher
+from std.crypto.sha3 import Sha3, Sha3Stream
+from std.crypto.blake2 import Blake2, Blake2bStream
+from std.crypto.blake3 import Blake3, Blake3Stream
+from std.crypto.x25519 import X25519
+from std.crypto.otp import Otp
+from std.crypto.argon2 import Argon2, Argon2Params, Argon2Hash
+from std.crypto.bcrypt import Bcrypt
+from std.crypto.native import ALG_SHA1, ALG_SHA256, ALG_SHA384, ALG_SHA512
 ```
+
+> The modules from `random` onward are backed by `std/crypto/crypto_native.c`,
+> a dependency-free C file that `tauraroc` compiles and links automatically
+> (via the `# tauraro-cpp-shim:` pragma in `std/crypto/native.tr`) when any of
+> them is imported. They are all binary-safe: a `str` argument's length is
+> `s.len()`, so embedded NUL bytes count. Digests and keys are returned as RAW
+> bytes; `_hex` variants return lower-case hex.
 
 > SHA-256, HMAC-SHA256, and MD5 are implemented in pure C — no external library required.
 > UUID v4 uses `/dev/urandom` on POSIX and `rand()` on Windows.
@@ -395,3 +413,122 @@ match Jwt.decode(token, "wrong-secret"):
     case JwtResult.Err(msg):
         print("rejected: " + msg)    # rejected: signature verification failed
 ```
+
+---
+
+## Secure randomness — `std.crypto.random`
+
+OS CSPRNG (`getrandom`/`/dev/urandom`, `BCryptGenRandom`). Every call raises
+(`throws str`) if the OS generator is unavailable; it never falls back to `rand()`.
+
+| Method | Returns | Description |
+|---|---|---|
+| `SecureRandom.bytes(n)` | `str` | `n` raw random bytes. |
+| `SecureRandom.token_hex(n)` | `str` | `n` bytes as `2n` hex chars. |
+| `SecureRandom.token_urlsafe(n)` | `str` | `n` bytes as unpadded base64url. |
+| `SecureRandom.int63()` | `int` | Uniform non-negative 63-bit integer. |
+| `SecureRandom.below(n)` | `int` | Uniform in `[0, n)`, no modulo bias. |
+| `SecureRandom.range(lo, hi)` | `int` | Uniform in `[lo, hi]`. |
+| `SecureRandom.unit()` | `float` | Uniform in `[0, 1)` (53 bits). |
+
+## Constant-time comparison — `std.crypto.ct`
+
+| Method | Description |
+|---|---|
+| `ConstantTime.eq(a, b) -> bool` | Equal bytes? Time depends only on the lengths. |
+| `ConstantTime.eq_n(a, b, n) -> bool` | Compare the first `n` bytes. |
+| `ConstantTime.select(cond, a, b) -> int` | `a` if `cond` else `b`, without a data-dependent branch. |
+
+## Binary-safe SHA-1/SHA-2 — `std.crypto.digest`
+
+`Digest.sha1/sha256/sha384/sha512(data)` return raw digests; `*_hex` return hex;
+`Digest.compute(alg, data)` takes an `ALG_*` id. `Hasher.init(alg)` → `update(data)` →
+`finish()` / `finish_hex()` hashes incrementally (call `dispose()` to abandon one).
+
+## HMAC additions — `std.crypto.hmac`
+
+`Hmac.compute(alg, key, msg)` (raw tag, any `ALG_*`), `Hmac.sha1_raw/sha256_raw/sha384_raw/sha512_raw(key, msg)`,
+`Hmac.compute_hex(...)`, and `Hmac.verify(alg, key, msg, tag) -> bool` (constant time; accepts tags truncated to
+≥ 10 bytes). The original `Hmac.sha256(key, klen, msg)` is unchanged.
+
+## HKDF and PBKDF2 additions — `std.crypto.kdf`
+
+| Method | Description |
+|---|---|
+| `Kdf.hkdf(alg, ikm, salt, info, length)` | RFC 5869 extract-then-expand. |
+| `Kdf.hkdf_extract(alg, salt, ikm)` / `Kdf.hkdf_expand(alg, prk, info, length)` | The two halves. |
+| `Kdf.pbkdf2_hmac(alg, password, salt, iterations, dklen)` | PBKDF2 with HMAC-SHA1/256/384/512, binary-safe, in C. |
+
+## SHA-3 and SHAKE — `std.crypto.sha3`
+
+`Sha3.sha3_224/256/384/512(data)` (+ `_hex`), `Sha3.shake128(data, n)` / `shake256(data, n)` (+ `_hex`).
+`Sha3Stream.sha3(bits)?`, `Sha3Stream.shake128()`, `Sha3Stream.shake256()` → `update(data)?` →
+`finish()` (SHA-3) or repeated `squeeze(n)` (SHAKE, continues the same output stream) → `dispose()`.
+
+## BLAKE2 — `std.crypto.blake2`
+
+`Blake2.b512(data)`, `Blake2.b(data, outlen)?` (1–64), `Blake2.b_keyed(data, key, outlen)?` (key ≤ 64 bytes —
+a keyed BLAKE2b is a MAC), `Blake2.s256(data)`, `Blake2.s(data, outlen)?`, `Blake2.s_keyed(...)?`, plus `_hex`
+forms. `Blake2bStream.init(outlen, key)?` hashes incrementally.
+
+## BLAKE3 — `std.crypto.blake3`
+
+`Blake3.hash(data)` / `hash_hex`, `Blake3.hash_xof(data, n)`, `Blake3.keyed(key32, data)?`,
+`Blake3.keyed_xof(...)?`, `Blake3.derive_key(context, material, n)`. `Blake3Stream.init()` /
+`init_keyed(key)?` / `init_derive_key(context)` → `update` → `finish(n)` (repeatable) → `dispose()`.
+
+## X25519 — `std.crypto.x25519`
+
+```tauraro
+from std.crypto.x25519 import X25519
+from std.crypto.kdf import Kdf
+from std.crypto.native import ALG_SHA256
+
+mut mine = X25519.generate_private()?
+mut my_pub = X25519.public_key(mine)?          # send to the peer
+mut shared = X25519.shared_secret(mine, peer_pub)?   # raises on a low-order peer key
+mut key = Kdf.hkdf(ALG_SHA256, shared, "", "my protocol v1", 32)?
+```
+
+Also `X25519.scalar_mult(scalar, point)?`, `X25519.to_hex(key)`, `X25519.from_hex(hex)?`.
+
+## One-time passwords — `std.crypto.otp`
+
+| Method | Description |
+|---|---|
+| `Otp.hotp(secret, counter, digits, alg)?` | RFC 4226 code (6–10 digits, SHA-1/256/512). |
+| `Otp.totp(secret, unix_time, step, digits, alg)?` | RFC 6238 code. |
+| `Otp.verify_totp(secret, code, unix_time, step, digits, alg, window) -> bool` | Accepts ±`window` steps, constant-time compare. |
+| `Otp.verify_hotp(secret, code, counter, digits, alg, look_ahead) -> int` | Next counter to store, or -1. |
+| `Otp.totp_counter(unix_time, step)` | The time step (store it to block replays). |
+| `Otp.generate_secret(nbytes)?` | Random secret (≥ 10 bytes). |
+| `Otp.secret_to_base32(raw)` / `Otp.secret_from_base32(text)?` | Authenticator-app encoding. |
+| `Otp.provisioning_uri(b32, account, issuer, alg, digits, period)` | `otpauth://totp/...` for QR codes (`provisioning_uri_hotp` for HOTP). |
+
+## Argon2 — `std.crypto.argon2`
+
+Argon2d / Argon2i / Argon2id (RFC 9106, version 0x13) with PHC strings
+(`$argon2id$v=19$m=19456,t=2,p=1$salt$hash`) compatible with other Argon2 libraries.
+Defaults (`Argon2Params.default()`): Argon2id, 19 MiB, t = 2, p = 1 (OWASP). Lanes run sequentially.
+
+| Method | Description |
+|---|---|
+| `Argon2.hash(password)?` | PHC string with defaults and a random salt. |
+| `Argon2.hash_with(password, params)?` / `hash_with_salt(password, salt, params)?` | Custom costs. |
+| `Argon2.verify(encoded, password) -> bool` | Constant-time; false for malformed strings. |
+| `Argon2.needs_rehash(encoded, params) -> bool` | True when the stored costs differ. |
+| `Argon2.decode(encoded)? -> Argon2Hash` / `Argon2.encode(...)` | PHC parsing / formatting. |
+| `Argon2.hash_raw(variant, password, salt, t, m_kib, p, outlen)?` | Raw KDF output. |
+| `Argon2.hash_raw_keyed(variant, password, salt, secret, ad, t, m_kib, p, outlen)?` | With secret key K and associated data X. |
+
+Variants: `ARGON2D`, `ARGON2I`, `ARGON2ID`.
+
+## bcrypt — `std.crypto.bcrypt`
+
+`Bcrypt.hash(password, cost)?` → `$2b$<cost>$...` (60 chars), `Bcrypt.hash_with_salt(password, salt16, cost)?`,
+`Bcrypt.verify(password, hashed) -> bool` (accepts `$2a$`/`$2b$`/`$2y$`), `Bcrypt.cost_of(hashed)`,
+`Bcrypt.needs_rehash(hashed, cost)`. `hash` refuses passwords over 72 bytes instead of silently truncating;
+`verify` truncates at 72 bytes for compatibility with hashes made elsewhere.
+
+Tested in `tests/lang/105_crypto_modern.tr` against the RFC/FIPS vectors and hashes produced by
+argon2-cffi and pyca/bcrypt.

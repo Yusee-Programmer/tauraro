@@ -1,0 +1,208 @@
+# std.crypto.argon2 -- Argon2 password hashing (RFC 9106).
+#
+# Argon2id is the recommended variant for password storage; Argon2i and
+# Argon2d are available for compatibility. Hashes are stored in the standard
+# PHC string format understood by other Argon2 libraries:
+#
+#   $argon2id$v=19$m=19456,t=2,p=1$<salt, base64>$<hash, base64>
+#
+# Defaults (Argon2Params.default()) follow the OWASP Password Storage Cheat
+# Sheet: Argon2id, m = 19456 KiB (19 MiB), t = 2, p = 1, 16-byte salt,
+# 32-byte hash. Raise memory_kib for stronger protection where you can afford
+# it; RFC 9106's first recommendation is m = 2 GiB, t = 1, p = 4.
+# Lanes (p) are computed one after another: p > 1 changes the result but does
+# not make hashing faster here.
+#
+# Usage:
+#   from std.crypto.argon2 import Argon2, Argon2Params
+#   mut stored = Argon2.hash("correct horse battery staple")?
+#   if Argon2.verify(stored, attempt): ...
+#   if Argon2.needs_rehash(stored, Argon2Params.default()): ...   # after raising costs
+#   # Raw KDF use (derive a key):
+#   mut key = Argon2.hash_raw(ARGON2ID, password, salt, 3, 65536, 4, 32)?
+
+from std.crypto.native import trc_argon2, trc_ct_eq, _cn_alloc, _cn_take, _cn_free, _cn_b64, _cn_unb64
+from std.crypto.random import SecureRandom
+from std.core.string import StringBuilder
+from std.string.str import Str
+
+pub const ARGON2D  = 0
+pub const ARGON2I  = 1
+pub const ARGON2ID = 2
+
+def _a2_name(variant: int) -> str:
+    if variant == ARGON2D: return "argon2d"
+    if variant == ARGON2I: return "argon2i"
+    return "argon2id"
+
+# Non-negative decimal integer, or -1 if `s` is not one.
+def _a2_uint(s: str) -> int:
+    if s.len() == 0 or s.len() > 10: return -1
+    mut p = s as Pointer[char]
+    mut v = 0
+    mut i = 0
+    while i < s.len():
+        mut c = 0
+        unsafe: c = (p.offset(i).read() as int) & 255
+        if c < 48 or c > 57: return -1
+        v = v * 10 + (c - 48)
+        i = i + 1
+    return v
+
+def _a2_run(variant: int, version: int, password: str, salt: str, secret: str, ad: str, t: int, m: int, p: int, outlen: int) throws str -> str:
+    if variant < 0 or variant > 2: raise("Argon2: unknown variant")
+    if t < 1: raise("Argon2: time_cost must be >= 1")
+    if p < 1 or p > 16777215: raise("Argon2: parallelism must be 1..2^24-1")
+    if m < 8 * p: raise("Argon2: memory_kib must be >= 8 * parallelism")
+    if salt.len() < 8: raise("Argon2: salt must be at least 8 bytes")
+    if outlen < 4: raise("Argon2: hash length must be at least 4 bytes")
+    mut out = _cn_alloc(outlen)
+    mut pp = password as Pointer[char]
+    mut sp = salt as Pointer[char]
+    mut kp = secret as Pointer[char]
+    mut ap = ad as Pointer[char]
+    mut rc = trc_argon2(variant, version, t, m, p, pp, password.len(), sp, salt.len(), kp, secret.len(), ap, ad.len(), out, outlen)
+    if rc != 0:
+        _cn_free(out)
+        if rc == -2: raise("Argon2: out of memory")
+        raise("Argon2: invalid parameters")
+    return _cn_take(out, outlen)
+
+# Cost settings for Argon2.hash_with / needs_rehash.
+pub class Argon2Params:
+    pub variant:     int
+    pub time_cost:   int
+    pub memory_kib:  int
+    pub parallelism: int
+    pub hash_len:    int
+    pub salt_len:    int
+
+extend Argon2Params:
+    # OWASP baseline: Argon2id, 19 MiB, 2 passes, 1 lane.
+    pub def default() -> Argon2Params:
+        return Argon2Params.init(ARGON2ID, 2, 19456, 1)
+
+    pub def init(variant: int, time_cost: int, memory_kib: int, parallelism: int) -> Argon2Params:
+        mut a = Argon2Params()
+        a.variant = variant
+        a.time_cost = time_cost
+        a.memory_kib = memory_kib
+        a.parallelism = parallelism
+        a.hash_len = 32
+        a.salt_len = 16
+        return a
+
+# A parsed PHC string.
+pub class Argon2Hash:
+    pub variant:     int
+    pub version:     int
+    pub memory_kib:  int
+    pub time_cost:   int
+    pub parallelism: int
+    pub salt:        str
+    pub hash:        str
+
+pub class Argon2:
+    _dummy: int
+
+extend Argon2:
+    # Raw Argon2 output (version 0x13). Use this as a KDF.
+    pub def hash_raw(variant: int, password: str, salt: str, time_cost: int, memory_kib: int, parallelism: int, outlen: int) throws str -> str:
+        return _a2_run(variant, 0x13, password, salt, "", "", time_cost, memory_kib, parallelism, outlen)?
+
+    # Raw Argon2 with the optional secret key K (a "pepper") and associated data X.
+    pub def hash_raw_keyed(variant: int, password: str, salt: str, secret: str, ad: str, time_cost: int, memory_kib: int, parallelism: int, outlen: int) throws str -> str:
+        return _a2_run(variant, 0x13, password, salt, secret, ad, time_cost, memory_kib, parallelism, outlen)?
+
+    # Hash a password with the default parameters and a random salt (PHC string).
+    pub def hash(password: str) throws str -> str:
+        mut params = Argon2Params.default()
+        return Argon2.hash_with(password, params)?
+
+    pub def hash_with(password: str, params: Argon2Params) throws str -> str:
+        mut salt = SecureRandom.bytes(params.salt_len)?
+        return Argon2.hash_with_salt(password, salt, params)?
+
+    # Deterministic form (explicit salt), mainly for tests and migrations.
+    pub def hash_with_salt(password: str, salt: str, params: Argon2Params) throws str -> str:
+        mut raw = _a2_run(params.variant, 0x13, password, salt, "", "", params.time_cost, params.memory_kib, params.parallelism, params.hash_len)?
+        return Argon2.encode(params.variant, 0x13, params.memory_kib, params.time_cost, params.parallelism, salt, raw)
+
+    # Build a PHC string from its parts.
+    pub def encode(variant: int, version: int, memory_kib: int, time_cost: int, parallelism: int, salt: str, hash: str) -> str:
+        mut sb = StringBuilder.init(128)
+        sb.append("$")
+        sb.append(_a2_name(variant))
+        mut head = f"$v={version}$m={memory_kib},t={time_cost},p={parallelism}$"
+        sb.append(head)
+        mut s64 = _cn_b64(0, false, salt)
+        mut h64 = _cn_b64(0, false, hash)
+        sb.append(s64)
+        sb.append("$")
+        sb.append(h64)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Parse a PHC string. The version field may be absent (Argon2 1.0 hashes).
+    pub def decode(encoded: str) throws str -> Argon2Hash:
+        mut parts = Str.split_keep_empty(encoded, "$")
+        if parts.len < 5 or parts.get(0).len() != 0: raise("Argon2: not a PHC string")
+        mut h = Argon2Hash()
+        mut name = parts.get(1)
+        if name == "argon2id": h.variant = ARGON2ID
+        elif name == "argon2i": h.variant = ARGON2I
+        elif name == "argon2d": h.variant = ARGON2D
+        else: raise("Argon2: unknown algorithm in hash string")
+        mut idx = 2
+        h.version = 0x10
+        if parts.get(2).starts_with("v="):
+            mut vs = parts.get(2)
+            mut vtxt = vs.slice(2, vs.len())
+            h.version = _a2_uint(vtxt)
+            if h.version != 0x10 and h.version != 0x13: raise("Argon2: unsupported version")
+            idx = 3
+        if parts.len != idx + 3: raise("Argon2: malformed hash string")
+        h.memory_kib = -1
+        h.time_cost = -1
+        h.parallelism = -1
+        mut kv = Str.split_keep_empty(parts.get(idx), ",")
+        mut i = 0
+        while i < kv.len:
+            mut item = kv.get(i)
+            if item.len() < 3 or item.slice(1, 2) != "=": raise("Argon2: malformed parameters")
+            mut key = item.slice(0, 1)
+            mut val = _a2_uint(item.slice(2, item.len()))
+            if val < 0: raise("Argon2: malformed parameter value")
+            if key == "m": h.memory_kib = val
+            elif key == "t": h.time_cost = val
+            elif key == "p": h.parallelism = val
+            else: raise("Argon2: unknown parameter")
+            i = i + 1
+        if h.memory_kib < 0 or h.time_cost < 0 or h.parallelism < 0: raise("Argon2: missing m, t or p")
+        h.salt = _cn_unb64(0, parts.get(idx + 1))?
+        h.hash = _cn_unb64(0, parts.get(idx + 2))?
+        if h.hash.len() < 4: raise("Argon2: hash too short")
+        return h
+
+    # True if `password` matches the PHC string (false for malformed strings).
+    pub def verify(encoded: str, password: str) -> bool:
+        mut r: Result[Argon2Hash, str] = Argon2.decode(encoded)
+        if r.is_err: return false
+        mut h = r.ok
+        mut got: Result[str, str] = _a2_run(h.variant, h.version, password, h.salt, "", "", h.time_cost, h.memory_kib, h.parallelism, h.hash.len())
+        if got.is_err: return false
+        mut g = got.ok
+        mut gp = g as Pointer[char]
+        mut hp = h.hash as Pointer[char]
+        return trc_ct_eq(gp, g.len(), hp, h.hash.len()) == 1
+
+    # True if the stored hash used different settings than `params`.
+    pub def needs_rehash(encoded: str, params: Argon2Params) -> bool:
+        mut r: Result[Argon2Hash, str] = Argon2.decode(encoded)
+        if r.is_err: return true
+        mut h = r.ok
+        if h.variant != params.variant or h.version != 0x13: return true
+        if h.memory_kib != params.memory_kib or h.time_cost != params.time_cost: return true
+        if h.parallelism != params.parallelism or h.hash.len() != params.hash_len: return true
+        return false

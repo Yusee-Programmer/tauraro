@@ -9,6 +9,16 @@
 #   from std.crypto.chacha20 import ChaCha20, Poly1305
 #   from std.crypto.kdf import Kdf
 #   from std.crypto.jwt import Jwt, JwtResult
+#   from std.crypto.random import SecureRandom
+#   from std.crypto.ct import ConstantTime
+#   from std.crypto.digest import Digest, Hasher
+#   from std.crypto.sha3 import Sha3, Sha3Stream
+#   from std.crypto.blake2 import Blake2, Blake2bStream
+#   from std.crypto.blake3 import Blake3, Blake3Stream
+#   from std.crypto.x25519 import X25519
+#   from std.crypto.otp import Otp
+#   from std.crypto.argon2 import Argon2, Argon2Params, Argon2Hash
+#   from std.crypto.bcrypt import Bcrypt
 
 from std.crypto.hash import Hash
 from std.crypto.hmac import Hmac
@@ -18,3 +28,13 @@ from std.crypto.sha512 import Sha512
 from std.crypto.chacha20 import ChaCha20, Poly1305
 from std.crypto.kdf import Kdf
 from std.crypto.jwt import Jwt, JwtResult
+from std.crypto.random import SecureRandom
+from std.crypto.ct import ConstantTime
+from std.crypto.digest import Digest, Hasher
+from std.crypto.sha3 import Sha3, Sha3Stream
+from std.crypto.blake2 import Blake2, Blake2bStream
+from std.crypto.blake3 import Blake3, Blake3Stream
+from std.crypto.x25519 import X25519
+from std.crypto.otp import Otp
+from std.crypto.argon2 import Argon2, Argon2Params, Argon2Hash
+from std.crypto.bcrypt import Bcrypt

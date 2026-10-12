@@ -1,0 +1,127 @@
+# tauraro-cpp-shim: crypto_native.c
+#
+# std.crypto.native -- internal bindings to std/crypto/crypto_native.c.
+#
+# The pragma above makes tauraroc compile crypto_native.c once (cached in the
+# build directory) and link it into any program that imports this module,
+# directly or through std.crypto.{random,ct,digest,sha3,blake2,blake3,x25519,
+# argon2,bcrypt,otp}. Nothing here is meant to be called by user code; use
+# those modules instead.
+#
+# Conventions: every byte buffer crosses as (Pointer[char], explicit length):
+# an extern `str` parameter would be passed as the TrStr struct itself, so
+# callers cast a named `str` local with `s as Pointer[char]`. Outputs
+# are allocated here with _cn_alloc(n), filled by C, then adopted as a `str`
+# with _cn_take(p, n) -- C never allocates memory the Tauraro side frees.
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+    def trc_random(out: Pointer[char], n: int) -> int
+    def trc_ct_eq(a: Pointer[char], alen: int, b: Pointer[char], blen: int) -> int
+    def trc_digest(alg: int, data: Pointer[char], n: int, out: Pointer[char]) -> int
+    def trc_digest_state_size() -> int
+    def trc_digest_begin(st: Pointer[char], alg: int) -> int
+    def trc_digest_update(st: Pointer[char], data: Pointer[char], n: int)
+    def trc_digest_finish(st: Pointer[char], out: Pointer[char]) -> int
+    def trc_hmac(alg: int, key: Pointer[char], klen: int, msg: Pointer[char], mlen: int, out: Pointer[char]) -> int
+    def trc_hkdf_extract(alg: int, salt: Pointer[char], slen: int, ikm: Pointer[char], ilen: int, prk: Pointer[char]) -> int
+    def trc_hkdf_expand(alg: int, prk: Pointer[char], plen: int, info: Pointer[char], ilen: int, out: Pointer[char], olen: int) -> int
+    def trc_pbkdf2(alg: int, pwd: Pointer[char], plen: int, salt: Pointer[char], slen: int, iterations: int, out: Pointer[char], dklen: int) -> int
+    def trc_sha3(bits: int, data: Pointer[char], n: int, out: Pointer[char]) -> int
+    def trc_shake(bits: int, data: Pointer[char], n: int, out: Pointer[char], olen: int) -> int
+    def trc_keccak_state_size() -> int
+    def trc_keccak_begin(st: Pointer[char], kind: int) -> int
+    def trc_keccak_update(st: Pointer[char], data: Pointer[char], n: int) -> int
+    def trc_keccak_squeeze(st: Pointer[char], out: Pointer[char], n: int)
+    def trc_blake2b(data: Pointer[char], n: int, key: Pointer[char], klen: int, out: Pointer[char], olen: int) -> int
+    def trc_blake2b_state_size() -> int
+    def trc_blake2b_begin(st: Pointer[char], key: Pointer[char], klen: int, olen: int) -> int
+    def trc_blake2b_update(st: Pointer[char], data: Pointer[char], n: int)
+    def trc_blake2b_finish(st: Pointer[char], out: Pointer[char]) -> int
+    def trc_blake2s(data: Pointer[char], n: int, key: Pointer[char], klen: int, out: Pointer[char], olen: int) -> int
+    def trc_blake3(mode: int, key: Pointer[char], klen: int, data: Pointer[char], n: int, out: Pointer[char], olen: int) -> int
+    def trc_blake3_state_size() -> int
+    def trc_blake3_begin(st: Pointer[char], mode: int, key: Pointer[char], klen: int) -> int
+    def trc_blake3_update(st: Pointer[char], data: Pointer[char], n: int)
+    def trc_blake3_finish(st: Pointer[char], out: Pointer[char], n: int)
+    def trc_x25519(out: Pointer[char], scalar: Pointer[char], point: Pointer[char]) -> int
+    def trc_argon2(kind: int, version: int, t_cost: int, m_cost: int, lanes: int, pwd: Pointer[char], pwdlen: int, salt: Pointer[char], saltlen: int, secret: Pointer[char], secretlen: int, ad: Pointer[char], adlen: int, out: Pointer[char], outlen: int) -> int
+    def trc_bcrypt_raw(key: Pointer[char], klen: int, salt16: Pointer[char], cost: int, out24: Pointer[char]) -> int
+    def trc_hex_encode(d: Pointer[char], n: int, out: Pointer[char]) -> int
+    def trc_hex_decode(h: Pointer[char], n: int, out: Pointer[char]) -> int
+    def trc_b64_encode(kind: int, pad: int, d: Pointer[char], n: int, out: Pointer[char]) -> int
+    def trc_b64_decode(kind: int, s: Pointer[char], n: int, out: Pointer[char]) -> int
+
+# Hash algorithm ids shared by Digest / Hmac / Kdf.
+pub const ALG_SHA1   = 1
+pub const ALG_SHA256 = 256
+pub const ALG_SHA384 = 384
+pub const ALG_SHA512 = 512
+
+# A zeroed buffer of n bytes plus a NUL terminator.
+pub def _cn_alloc(n: int) -> Pointer[char]:
+    mut p = _tr_c_malloc(n + 1)
+    mut i = 0
+    unsafe:
+        while i <= n:
+            p.offset(i).write('\0')
+            i = i + 1
+    return p
+
+# Adopt the first n bytes of a _cn_alloc buffer as an owned str.
+pub def _cn_take(p: Pointer[char], n: int) -> str:
+    unsafe: p.offset(n).write('\0')
+    return _tr_str_wrap_len(p, n)
+
+pub def _cn_free(p: Pointer[char]):
+    _tr_c_free(p)
+
+# Digest size in bytes for an ALG_* id, or -1.
+pub def _cn_md_size(alg: int) -> int:
+    if alg == ALG_SHA1: return 20
+    if alg == ALG_SHA256: return 32
+    if alg == ALG_SHA384: return 48
+    if alg == ALG_SHA512: return 64
+    return -1
+
+# Lower-case hex of binary data.
+pub def _cn_hex(data: str) -> str:
+    mut n = data.len()
+    mut p = _cn_alloc(2 * n)
+    mut dp = data as Pointer[char]
+    trc_hex_encode(dp, n, p)
+    return _cn_take(p, 2 * n)
+
+# Hex -> bytes; raises on odd length or a non-hex digit.
+pub def _cn_unhex(h: str) throws str -> str:
+    mut n = h.len()
+    mut p = _cn_alloc(n / 2 + 1)
+    mut hp = h as Pointer[char]
+    mut r = trc_hex_decode(hp, n, p)
+    if r < 0:
+        _cn_free(p)
+        raise("hex: invalid hex string")
+    return _cn_take(p, r)
+
+# kind: 0 standard, 1 URL-safe, 2 bcrypt alphabet.
+pub def _cn_b64(kind: int, pad: bool, data: str) -> str:
+    mut n = data.len()
+    mut p = _cn_alloc(4 * (n / 3 + 1))
+    mut padi = 0
+    if pad: padi = 1
+    mut dp = data as Pointer[char]
+    mut r = trc_b64_encode(kind, padi, dp, n, p)
+    return _cn_take(p, r)
+
+pub def _cn_unb64(kind: int, s: str) throws str -> str:
+    mut n = s.len()
+    mut p = _cn_alloc(3 * (n / 4 + 1))
+    mut sp = s as Pointer[char]
+    mut r = trc_b64_decode(kind, sp, n, p)
+    if r < 0:
+        _cn_free(p)
+        raise("base64: invalid input")
+    return _cn_take(p, r)

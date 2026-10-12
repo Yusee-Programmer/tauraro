@@ -1,8 +1,19 @@
-# std.crypto.hmac — HMAC-SHA256 message authentication codes.
+# std.crypto.hmac — HMAC message authentication codes (RFC 2104).
+#
+# `Hmac.sha256(key, klen, msg)` is the original hex-returning helper (it
+# reads `msg` up to its first NUL byte). The binary-safe API takes the real
+# lengths of both key and message, supports SHA-1/256/384/512 and returns
+# RAW tags; `Hmac.verify` checks a tag in constant time.
 #
 # Usage:
 #   from std.crypto.hmac import Hmac
-#   mut tag = Hmac.sha256("secret-key", 10, "message")
+#   from std.crypto.native import ALG_SHA256
+#   mut tag = Hmac.sha256("secret-key", 10, "message")      # hex, text only
+#   mut raw = Hmac.sha256_raw(key, msg)                       # 32 raw bytes
+#   mut ok  = Hmac.verify(ALG_SHA256, key, msg, received_tag)
+
+from std.crypto.native import ALG_SHA1, ALG_SHA256, ALG_SHA384, ALG_SHA512
+from std.crypto.native import trc_hmac, trc_ct_eq, _cn_alloc, _cn_take, _cn_hex, _cn_md_size
 
 extern "C":
     def _tr_hmac_sha256(key: str, klen: int, msg: str) -> str
@@ -22,3 +33,47 @@ extend Hmac:
         mut kp  = key as Pointer[char]
         while kp.offset(i).read() as int != 0: i = i + 1
         return _tr_hmac_sha256(key, i, msg)
+
+    # ── binary-safe API ──────────────────────────────────────────────────
+    # Raw HMAC tag of `msg` under `key` with an ALG_* hash id.
+    pub def compute(alg: int, key: str, msg: str) throws str -> str:
+        mut sz = _cn_md_size(alg)
+        if sz < 0: raise(f"Hmac: unknown algorithm id {alg}")
+        mut p = _cn_alloc(sz)
+        mut kp = key as Pointer[char]
+        mut mp = msg as Pointer[char]
+        trc_hmac(alg, kp, key.len(), mp, msg.len(), p)
+        return _cn_take(p, sz)
+
+    pub def sha1_raw(key: str, msg: str) -> str:
+        mut r: Result[str, str] = Hmac.compute(ALG_SHA1, key, msg)
+        return r.ok
+
+    pub def sha256_raw(key: str, msg: str) -> str:
+        mut r: Result[str, str] = Hmac.compute(ALG_SHA256, key, msg)
+        return r.ok
+
+    pub def sha384_raw(key: str, msg: str) -> str:
+        mut r: Result[str, str] = Hmac.compute(ALG_SHA384, key, msg)
+        return r.ok
+
+    pub def sha512_raw(key: str, msg: str) -> str:
+        mut r: Result[str, str] = Hmac.compute(ALG_SHA512, key, msg)
+        return r.ok
+
+    # Hex form of compute().
+    pub def compute_hex(alg: int, key: str, msg: str) throws str -> str:
+        mut raw = Hmac.compute(alg, key, msg)?
+        return _cn_hex(raw)
+
+    # Constant-time check of a received raw tag. A truncated tag (at least
+    # 10 bytes, per RFC 2104 section 5) is compared against the prefix.
+    pub def verify(alg: int, key: str, msg: str, tag: str) -> bool:
+        mut r: Result[str, str] = Hmac.compute(alg, key, msg)
+        if r.is_err: return false
+        mut want = r.ok
+        mut n = tag.len()
+        if n < 10 or n > want.len(): return false
+        mut wp = want as Pointer[char]
+        mut tp = tag as Pointer[char]
+        return trc_ct_eq(wp, n, tp, n) == 1

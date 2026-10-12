@@ -1,0 +1,120 @@
+# std.crypto.sha3 -- SHA-3 and SHAKE (FIPS 202).
+#
+# SHA3-224/256/384/512 fixed-length hashes and the SHAKE128/SHAKE256
+# extendable-output functions, all binary-safe (input length = `s.len()`).
+# Functions return RAW bytes; the `_hex` forms return lower-case hex.
+# `Sha3Stream` absorbs data incrementally and, for SHAKE, can squeeze any
+# number of output bytes in successive calls.
+#
+# Usage:
+#   from std.crypto.sha3 import Sha3, Sha3Stream
+#   Sha3.sha3_256_hex("abc")       # "3a985da7..."
+#   mut okm = Sha3.shake256(seed, 64)
+#   mut st = Sha3Stream.shake128()
+#   st.update(part)
+#   mut a = st.squeeze(32)
+#   mut b = st.squeeze(32)         # continues the same output stream
+#   st.dispose()
+
+from std.crypto.native import trc_sha3, trc_shake, trc_keccak_state_size, trc_keccak_begin, trc_keccak_update, trc_keccak_squeeze
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free, _cn_hex
+
+def _sha3_n(bits: int, data: str) -> str:
+    mut n = bits / 8
+    mut p = _cn_alloc(n)
+    mut dp = data as Pointer[char]
+    trc_sha3(bits, dp, data.len(), p)
+    return _cn_take(p, n)
+
+def _shake_n(bits: int, data: str, outlen: int) -> str:
+    mut n = outlen
+    if n < 0: n = 0
+    mut p = _cn_alloc(n)
+    mut dp = data as Pointer[char]
+    trc_shake(bits, dp, data.len(), p, n)
+    return _cn_take(p, n)
+
+pub class Sha3:
+    _dummy: int
+
+extend Sha3:
+    pub def sha3_224(data: str) -> str: return _sha3_n(224, data)
+    pub def sha3_256(data: str) -> str: return _sha3_n(256, data)
+    pub def sha3_384(data: str) -> str: return _sha3_n(384, data)
+    pub def sha3_512(data: str) -> str: return _sha3_n(512, data)
+
+    pub def sha3_224_hex(data: str) -> str:
+        mut d = _sha3_n(224, data)
+        return _cn_hex(d)
+    pub def sha3_256_hex(data: str) -> str:
+        mut d = _sha3_n(256, data)
+        return _cn_hex(d)
+    pub def sha3_384_hex(data: str) -> str:
+        mut d = _sha3_n(384, data)
+        return _cn_hex(d)
+    pub def sha3_512_hex(data: str) -> str:
+        mut d = _sha3_n(512, data)
+        return _cn_hex(d)
+
+    # `outlen` bytes of SHAKE128 / SHAKE256 output.
+    pub def shake128(data: str, outlen: int) -> str: return _shake_n(128, data, outlen)
+    pub def shake256(data: str, outlen: int) -> str: return _shake_n(256, data, outlen)
+
+    pub def shake128_hex(data: str, outlen: int) -> str:
+        mut d = _shake_n(128, data, outlen)
+        return _cn_hex(d)
+    pub def shake256_hex(data: str, outlen: int) -> str:
+        mut d = _shake_n(256, data, outlen)
+        return _cn_hex(d)
+
+# Incremental SHA-3 / SHAKE. For SHA-3 call finish() once; for SHAKE call
+# squeeze(n) as often as needed. Either way, call dispose() when done
+# (finish() disposes for you).
+pub class Sha3Stream:
+    pub kind: int
+    _st: Pointer[char]
+    _live: bool
+
+extend Sha3Stream:
+    def _make(kind: int) -> Sha3Stream:
+        mut s = Sha3Stream()
+        s.kind = kind
+        s._st = _cn_alloc(trc_keccak_state_size())
+        trc_keccak_begin(s._st, kind)
+        s._live = true
+        return s
+
+    # bits: 224, 256, 384 or 512.
+    pub def sha3(bits: int) throws str -> Sha3Stream:
+        if bits != 224 and bits != 256 and bits != 384 and bits != 512:
+            raise(f"Sha3Stream: unsupported SHA-3 size {bits}")
+        return Sha3Stream._make(bits)
+
+    pub def shake128() -> Sha3Stream: return Sha3Stream._make(1128)
+    pub def shake256() -> Sha3Stream: return Sha3Stream._make(1256)
+
+    # Absorb more input. Raises once output has been squeezed.
+    pub def update(self, data: str) throws str:
+        if not self._live: raise("Sha3Stream: already disposed")
+        mut dp = data as Pointer[char]
+        if trc_keccak_update(self._st, dp, data.len()) != 0:
+            raise("Sha3Stream: cannot absorb after squeezing")
+
+    # The next n output bytes (SHAKE), continuing the same stream.
+    pub def squeeze(self, n: int) -> str:
+        mut p = _cn_alloc(n)
+        if self._live: trc_keccak_squeeze(self._st, p, n)
+        return _cn_take(p, n)
+
+    # The SHA-3 digest; disposes the stream.
+    pub def finish(self) -> str:
+        mut n = self.kind / 8
+        if self.kind > 1000: n = 32
+        mut out = self.squeeze(n)
+        self.dispose()
+        return out
+
+    pub def dispose(self):
+        if self._live:
+            _cn_free(self._st)
+            self._live = false

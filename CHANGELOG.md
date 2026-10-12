@@ -17,6 +17,8 @@ codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
 ### Compiler limitations closed
+- A static `init` that `throws` no longer gets `malloc`/`returns_nonnull` attributes (it returns a
+  `Result` struct, so the generated C failed to compile).
 - **`[F-4]`** a `throws` function value where a plain `def(...) -> R` is expected (or the
   reverse) is a compile error with a fix hint; no hidden wrapper is generated.
 - **Closure return types are inferred.** `lambda x: x * 2.5`, `lambda: "s"`, class results and
@@ -29,6 +31,13 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.crypto` additions** — `SecureRandom` (OS CSPRNG, raises instead of degrading),
+  `ConstantTime`, binary-safe `Digest`/`Hasher` (SHA-1/256/384/512), `Hmac.compute/verify`
+  (all SHA variants), `Kdf.hkdf*` (RFC 5869) and `Kdf.pbkdf2_hmac`, `Sha3`/`Sha3Stream`
+  (SHA3-224..512, SHAKE128/256), `Blake2` (2b/2s, keyed), `Blake3` (hash/keyed/derive_key, XOF),
+  `X25519` (RFC 7748), `Otp` (HOTP/TOTP + `otpauth://` URIs), `Argon2` (d/i/id, PHC strings) and
+  `Bcrypt` ($2a/$2b/$2y). Kernels live in `std/crypto/crypto_native.c`, linked automatically via
+  the module shim pragma. Tested by `tests/lang/105_crypto_modern.tr`.
 - **`std.async.retry`** — `RetryPolicy` (max attempts, fixed/exponential backoff
   with cap, optional jitter, retry-on predicate, overall deadline, per-attempt
   timeout), `call_with_timeout` / `call_bool_with_timeout`, and a thread-safe
