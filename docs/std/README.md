@@ -23,7 +23,7 @@ building libraries with `taupkg`)
 | [`std.iter`](iter.md) | Range construction, int/float vector transforms, folds, prefix sums, normalization |
 | [`std.log`](log.md) | Leveled structured logging: text/JSON formats, stdout/file sinks, per-target filtering (`Logger`/`Fields`) |
 | [`std.math`](math.md) | Integer/float math, bit ops, statistics, random, `BigInt`, linear algebra, exact `Decimal`/`Rational`, `BigFloat`, n-dimensional `Tensor` with broadcasting |
-| [`std.net`](net.md) | TCP, UDP, DNS, URL, HTTP client, `HttpSession`, verified TLS 1.3 client (`std.net.tls`), HTTPS client, HTTP/2 client + HPACK, HTTP server + router, WebSocket, SMTP (STARTTLS) |
+| [`std.net`](net.md) | TCP, UDP, DNS, URL, HTTP client, `HttpSession`, verified TLS 1.3 client (`std.net.tls`), HTTPS client, HTTP/2 client + HPACK, HTTP server + router, WebSocket, SMTP (STARTTLS), IMAP and POP3 clients, DNS wire protocol (any record type), mDNS / DNS-SD browsing, NTP client |
 | [`std.prof`](prof.md) | Profiling: statistical CPU sampling (`CpuProfiler`), process memory stats (`MemProf`), metrics (`Counter`/`Gauge`/`Histogram`/`Registry`); also `tauraroc --prof` |
 | [`std.regex`](regex.md) | POSIX extended regex: match, find, replace, split, count, capture groups (numbered + named), `Match`/`Captures`, backreference replace |
 | [`std.serialize`](serialize.md) | Value serialization: `Pickle` (own compact binary format for scalars + nested List/Dict/Vec/Set), `Msgpack` (real, wire-compatible MessagePack codec) |

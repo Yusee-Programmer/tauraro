@@ -17,6 +17,7 @@ codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
 ### Changed
+- `UdpSocket.send_to` sends the string's real length instead of stopping at the first NUL byte.
 - `TcpStream.send` / `send_nb` / `send_async` send the string's real length instead of stopping
   at the first NUL byte (binary protocols such as HTTP/2 frames were truncated).
 - `std.net.client`'s `HttpSession`, `std.net.https`'s `HttpsClient` and `std.net.smtp` now use
@@ -52,6 +53,18 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.net.imap`, `std.net.pop3`** — IMAP4rev1 client (LOGIN / AUTHENTICATE PLAIN, STARTTLS,
+  LIST, SELECT / EXAMINE, SEARCH / UID SEARCH, FETCH with exact `{n}` literal handling, STORE,
+  COPY / MOVE, EXPUNGE, CREATE / DELETE / RENAME, APPEND, raw `command`) and POP3 client (USER /
+  PASS, APOP, AUTH PLAIN, STLS, CAPA, STAT, LIST, UIDL, RETR / TOP with dot-unstuffing, DELE,
+  RSET, QUIT), both over verified TLS or plaintext + STARTTLS via the new
+  `std.net.linestream.LineStream`.
+- **`std.net.dnsmsg`** — DNS wire format: query encoding (EDNS0), response parsing with name
+  compression for A, AAAA, NS, CNAME, PTR, MX, TXT, SRV, SOA; `Dns.lookup(server, name, type)`.
+- **`std.net.mdns`** — one-shot multicast DNS queries, host resolution and DNS-SD service
+  browsing. **`std.net.ntp`** — SNTPv4 client (offset, delay, stratum, reference ID).
+- **`std.net.udpx`** — `UdpEndpoint`: IPv4/IPv6 UDP with receive timeouts, sender address, and
+  multicast membership; `unix_ms()` wall clock.
 - **`std.audio`** — `AudioBuffer` with WAV decode/encode (PCM 8–32-bit, float, A-law/μ-law,
   extensible), MP3 and FLAC decoding (vendored public-domain minimp3 and dr_flac), windowed-sinc
   resampling, channel mixing, gain/normalize/fades/trim/concat/mix, and tone/noise generators.

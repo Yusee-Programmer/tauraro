@@ -1,0 +1,126 @@
+# std.net.linestream -- a buffered text-protocol connection over TCP or TLS,
+# with read timeouts and in-place STARTTLS. Used by std.net.imap and
+# std.net.pop3; handy for any CRLF line protocol.
+#
+# Usage:
+#   from std.net.linestream import LineStream
+#   mut c = LineStream.connect("mail.example.com", 110, false)?
+#   mut greeting = c.read_line()?          # without the trailing CRLF
+#   c.write_line("CAPA")?
+#   c.start_tls()?                          # after the protocol's STARTTLS/STLS reply
+
+from std.net.tcp import TcpStream
+from std.net.tls import TlsStream, TlsOptions
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free
+from std.core.string import StringBuilder
+
+extern "C":
+    def trc_net_recv(fd: int, buf: Pointer[char], cap: int, timeout_ms: int) -> int
+    def trc_net_send(fd: int, d: Pointer[char], n: int) -> int
+
+# tauraro-cpp-shim pragma lives in std/net/udpx.tr; importing it links the C side.
+from std.net.udpx import unix_ms
+
+pub class LineStream:
+    pub host:       str
+    pub tcp:        TcpStream
+    pub tls:        TlsStream
+    pub use_tls:    bool
+    pub timeout_ms: int
+    pub tls_opts:   TlsOptions
+    _buf:           str
+    _has_tcp:       bool
+
+extend LineStream:
+    # Connect; with `tls` the TLS 1.3 handshake runs immediately (implicit TLS).
+    pub def connect(host: str, port: int, tls: bool) throws str -> LineStream:
+        mut o = TlsOptions.default()
+        return LineStream.connect_with(host, port, tls, o)?
+
+    pub def connect_with(host: str, port: int, tls: bool, opts: TlsOptions) throws str -> LineStream:
+        mut c = LineStream()
+        c.host = host
+        c.use_tls = false
+        c.timeout_ms = opts.timeout_ms
+        c.tls_opts = opts
+        c._buf = ""
+        c._has_tcp = false
+        if tls:
+            c.tls = TlsStream.connect_with(host, port, opts)?
+            c.use_tls = true
+            return c
+        c.tcp = TcpStream.connect(host, port)
+        c._has_tcp = true
+        if not c.tcp.is_connected(): raise(f"connect to {host}:{port} failed")
+        return c
+
+    # Upgrade the plain connection to TLS (call right after the server agreed).
+    pub def start_tls(self) throws str:
+        if self.use_tls: raise("already using TLS")
+        self._buf = ""
+        self.tls = TlsStream.wrap_fd(self.tcp.fd, self.host, self.tls_opts)?
+        self.use_tls = true
+
+    pub def write(self, data: str) throws str:
+        if self.use_tls:
+            self.tls.write(data)?
+            return
+        mut dp = data as Pointer[char]
+        if trc_net_send(self.tcp.fd, dp, data.len()) < 0: raise("connection write failed")
+
+    pub def write_line(self, line: str) throws str:
+        mut l = line + "\r\n"
+        self.write(l)?
+
+    def _fill(self) throws str -> bool:
+        if self.use_tls:
+            self.tls.set_timeout(self.timeout_ms)
+            mut chunk = self.tls.read(16384)?
+            if chunk.len() == 0: return false
+            self._buf = self._buf + chunk
+            return true
+        mut buf = _cn_alloc(16384)
+        mut n = trc_net_recv(self.tcp.fd, buf, 16384, self.timeout_ms)
+        if n == -2:
+            _cn_free(buf)
+            raise("connection read timed out")
+        if n < 0:
+            _cn_free(buf)
+            raise("connection read failed")
+        if n == 0:
+            _cn_free(buf)
+            return false
+        mut chunk2 = _cn_take(buf, n)
+        self._buf = self._buf + chunk2
+        return true
+
+    # Next line without its CR LF. Raises at end of stream.
+    pub def read_line(self) throws str -> str:
+        while self._buf.find("\n") < 0:
+            mut more = self._fill()?
+            if not more:
+                if self._buf.len() > 0:
+                    mut rest = self._buf
+                    self._buf = ""
+                    return rest
+                raise("connection closed")
+        mut nl = self._buf.find("\n")
+        mut line = self._buf.slice(0, nl)
+        self._buf = self._buf.slice(nl + 1, self._buf.len())
+        if line.ends_with("\r"): line = line.slice(0, line.len() - 1)
+        return line
+
+    # Exactly n bytes (binary-safe).
+    pub def read_exact(self, n: int) throws str -> str:
+        while self._buf.len() < n:
+            mut more = self._fill()?
+            if not more: raise("connection closed")
+        mut out = self._buf.slice(0, n)
+        self._buf = self._buf.slice(n, self._buf.len())
+        return out
+
+    pub def close(self):
+        if self.use_tls: self.tls.close()
+        if self._has_tcp:
+            self.tcp.close()
+            self._has_tcp = false

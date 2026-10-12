@@ -1,0 +1,378 @@
+# std.net.dnsmsg -- DNS message encoding/decoding (RFC 1035) and a unicast
+# resolver for arbitrary record types.
+#
+# `DnsMessage.query(name, qtype)` builds a query; `DnsMessage.parse(bytes)`
+# decodes any response (name compression handled) into header fields and
+# `DnsRecord`s with typed data: A / AAAA addresses, NS / CNAME / PTR names,
+# MX (preference + exchange), SRV (priority, weight, port, target), TXT
+# strings, SOA fields; other types keep their raw RDATA.
+# `Dns.lookup(server, name, qtype)` sends a query over UDP and returns the
+# parsed answer (std.net.dns resolves addresses through the OS instead).
+#
+# Usage:
+#   from std.net.dnsmsg import Dns, DNS_MX, DNS_TXT
+#   mut m = Dns.lookup("1.1.1.1", "example.com", DNS_MX)?
+#   mut i = 0
+#   while i < len(m.answers): print(m.answers[i].to_str()); i = i + 1
+
+from std.core.string import StringBuilder
+from std.net.udpx import UdpEndpoint, Datagram
+
+pub const DNS_A = 1
+pub const DNS_NS = 2
+pub const DNS_CNAME = 5
+pub const DNS_SOA = 6
+pub const DNS_PTR = 12
+pub const DNS_MX = 15
+pub const DNS_TXT = 16
+pub const DNS_AAAA = 28
+pub const DNS_SRV = 33
+pub const DNS_ANY = 255
+
+def _db(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+def _d16(s: str, i: int) -> int: return (_db(s, i) << 8) | _db(s, i + 1)
+def _d32(s: str, i: int) -> int: return (_d16(s, i) << 16) | _d16(s, i + 2)
+
+pub def dns_type_name(t: int) -> str:
+    if t == DNS_A: return "A"
+    if t == DNS_NS: return "NS"
+    if t == DNS_CNAME: return "CNAME"
+    if t == DNS_SOA: return "SOA"
+    if t == DNS_PTR: return "PTR"
+    if t == DNS_MX: return "MX"
+    if t == DNS_TXT: return "TXT"
+    if t == DNS_AAAA: return "AAAA"
+    if t == DNS_SRV: return "SRV"
+    if t == DNS_ANY: return "ANY"
+    return f"TYPE{t}"
+
+pub class DnsRecord:
+    pub name:     str
+    pub rtype:    int
+    pub rclass:   int        # class without the mDNS cache-flush bit
+    pub cache_flush: bool
+    pub ttl:      int
+    pub rdata:    str        # raw RDATA
+    pub address:  str        # A / AAAA
+    pub target:   str        # NS / CNAME / PTR / MX exchange / SRV target / SOA mname
+    pub priority: int        # MX preference / SRV priority
+    pub weight:   int        # SRV
+    pub port:     int        # SRV
+    pub texts:    List[str]  # TXT strings
+    pub soa_serial: int
+
+extend DnsRecord:
+    pub def to_str(self) -> str:
+        mut tn = dns_type_name(self.rtype)
+        mut head = f"{self.name} {self.ttl} {tn} "
+        if self.rtype == DNS_A or self.rtype == DNS_AAAA: return head + self.address
+        if self.rtype == DNS_MX: return head + f"{self.priority} {self.target}"
+        if self.rtype == DNS_SRV: return head + f"{self.priority} {self.weight} {self.port} {self.target}"
+        if self.rtype == DNS_TXT:
+            mut sb = StringBuilder.init(64)
+            mut i = 0
+            while i < len(self.texts):
+                if i > 0: sb.append(" ")
+                sb.append("\"")
+                sb.append(self.texts[i])
+                sb.append("\"")
+                i = i + 1
+            mut t = sb.to_owned()
+            sb.free()
+            return head + t
+        if self.target.len() > 0: return head + self.target
+        mut n = self.rdata.len()
+        return head + f"<{n} bytes>"
+
+pub class DnsMessage:
+    pub id:          int
+    pub is_response: bool
+    pub opcode:      int
+    pub authoritative: bool
+    pub truncated:   bool
+    pub rcode:       int
+    pub questions:   List[str]       # question names
+    pub qtypes:      List[int]
+    pub answers:     List[DnsRecord]
+    pub authority:   List[DnsRecord]
+    pub additional:  List[DnsRecord]
+
+def _put16(sb: StringBuilder, v: int):
+    sb.append_char((v >> 8) & 255)
+    sb.append_char(v & 255)
+
+def _put_name(sb: StringBuilder, name: str) throws str:
+    mut n = name
+    if n.ends_with("."): n = n.slice(0, n.len() - 1)
+    if n.starts_with(".") or n.find("..") >= 0: raise(f"DNS: empty label in '{name}'")
+    if n.len() > 0:
+        mut labels = n.split(".")
+        mut i = 0
+        while i < labels.len:
+            mut l = labels.get(i)
+            if l.len() == 0 or l.len() > 63: raise(f"DNS: bad label in '{name}'")
+            sb.append_char(l.len())
+            sb.append(l)
+            i = i + 1
+    sb.append_char(0)
+
+# Decode a (possibly compressed) name at `off`; returns the name and writes
+# the offset just past it into next[0].
+def _read_name(msg: str, off: int, next: List[int]) throws str -> str:
+    mut sb = StringBuilder.init(64)
+    mut pos = off
+    mut jumped = false
+    mut hops = 0
+    while true:
+        if pos >= msg.len():
+            sb.free()
+            raise("DNS: name runs past the message")
+        mut len_ = _db(msg, pos)
+        if (len_ & 0xC0) == 0xC0:
+            if pos + 1 >= msg.len():
+                sb.free()
+                raise("DNS: truncated compression pointer")
+            if not jumped: next[0] = pos + 2
+            pos = ((len_ & 0x3F) << 8) | _db(msg, pos + 1)
+            jumped = true
+            hops = hops + 1
+            if hops > 64:
+                sb.free()
+                raise("DNS: compression loop")
+            continue
+        if len_ == 0:
+            if not jumped: next[0] = pos + 1
+            break
+        if pos + 1 + len_ > msg.len():
+            sb.free()
+            raise("DNS: label runs past the message")
+        if sb.len() > 0: sb.append(".")
+        mut lab = msg.slice(pos + 1, pos + 1 + len_)
+        sb.append(lab)
+        pos = pos + 1 + len_
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _ip4(s: str, off: int) -> str:
+    return f"{_db(s, off)}.{_db(s, off + 1)}.{_db(s, off + 2)}.{_db(s, off + 3)}"
+
+def _ip6(s: str, off: int) -> str:
+    mut sb = StringBuilder.init(48)
+    mut hx = "0123456789abcdef"
+    # find the longest run of zero groups for "::"
+    mut best = -1
+    mut bestlen = 0
+    mut g = 0
+    while g < 8:
+        if _d16(s, off + 2 * g) == 0:
+            mut e = g
+            while e < 8 and _d16(s, off + 2 * e) == 0:
+                e = e + 1
+            if e - g > bestlen and e - g >= 2:
+                best = g
+                bestlen = e - g
+            g = e
+        else:
+            g = g + 1
+    g = 0
+    while g < 8:
+        if g == best:
+            sb.append("::")
+            g = g + bestlen
+            continue
+        if g > 0 and g != best + bestlen: sb.append(":")
+        mut v = _d16(s, off + 2 * g)
+        mut started = false
+        mut sh = 12
+        while sh >= 0:
+            mut nib = (v >> sh) & 15
+            if nib != 0 or started or sh == 0:
+                sb.append_char(_db(hx, nib))
+                started = true
+            sh = sh - 4
+        g = g + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _read_record(msg: str, off: int, next: List[int]) throws str -> DnsRecord:
+    mut r = DnsRecord()
+    mut nx = [0]
+    r.name = _read_name(msg, off, nx)?
+    mut p = nx[0]
+    if p + 10 > msg.len(): raise("DNS: truncated record")
+    r.rtype = _d16(msg, p)
+    mut cls = _d16(msg, p + 2)
+    r.cache_flush = (cls & 0x8000) != 0
+    r.rclass = cls & 0x7FFF
+    r.ttl = _d32(msg, p + 4)
+    mut rdlen = _d16(msg, p + 8)
+    mut rd = p + 10
+    if rd + rdlen > msg.len(): raise("DNS: truncated RDATA")
+    r.rdata = msg.slice(rd, rd + rdlen)
+    r.address = ""
+    r.target = ""
+    r.priority = 0
+    r.weight = 0
+    r.port = 0
+    r.texts = []
+    r.soa_serial = 0
+    mut tmp = [0]
+    if r.rtype == DNS_A and rdlen == 4: r.address = _ip4(msg, rd)
+    elif r.rtype == DNS_AAAA and rdlen == 16: r.address = _ip6(msg, rd)
+    elif r.rtype == DNS_NS or r.rtype == DNS_CNAME or r.rtype == DNS_PTR: r.target = _read_name(msg, rd, tmp)?
+    elif r.rtype == DNS_MX and rdlen >= 3:
+        r.priority = _d16(msg, rd)
+        r.target = _read_name(msg, rd + 2, tmp)?
+    elif r.rtype == DNS_SRV and rdlen >= 7:
+        r.priority = _d16(msg, rd)
+        r.weight = _d16(msg, rd + 2)
+        r.port = _d16(msg, rd + 4)
+        r.target = _read_name(msg, rd + 6, tmp)?
+    elif r.rtype == DNS_TXT:
+        mut q = rd
+        while q < rd + rdlen:
+            mut l = _db(msg, q)
+            if q + 1 + l > rd + rdlen: raise("DNS: bad TXT string")
+            r.texts.append(msg.slice(q + 1, q + 1 + l))
+            q = q + 1 + l
+    elif r.rtype == DNS_SOA:
+        r.target = _read_name(msg, rd, tmp)?
+        mut rname = _read_name(msg, tmp[0], tmp)?
+        if tmp[0] + 4 <= msg.len(): r.soa_serial = _d32(msg, tmp[0])
+    next[0] = rd + rdlen
+    return r
+
+extend DnsMessage:
+    # A standard query for one name and type (with an EDNS0 OPT record so
+    # answers up to 4 KB fit in one UDP datagram).
+    pub def query(id: int, name: str, qtype: int, recursion: bool) throws str -> str:
+        mut sb = StringBuilder.init(64)
+        _put16(sb, id & 0xFFFF)
+        if recursion: _put16(sb, 0x0100)
+        else: _put16(sb, 0)
+        _put16(sb, 1)
+        _put16(sb, 0)
+        _put16(sb, 0)
+        _put16(sb, 1)               # EDNS0 OPT record follows
+        _put_name(sb, name)?
+        _put16(sb, qtype)
+        _put16(sb, 1)
+        # OPT: root name, type 41, UDP payload 4096, no extended flags, no options
+        sb.append_char(0)
+        _put16(sb, 41)
+        _put16(sb, 4096)
+        _put16(sb, 0)
+        _put16(sb, 0)
+        _put16(sb, 0)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Several questions in one message (mDNS asks many at once). unicast_response
+    # sets the QU bit (RFC 6762 section 5.4).
+    pub def multi_query(id: int, names: List[str], qtypes: List[int], unicast_response: bool) throws str -> str:
+        mut sb = StringBuilder.init(128)
+        _put16(sb, id & 0xFFFF)
+        _put16(sb, 0)
+        _put16(sb, len(names))
+        _put16(sb, 0)
+        _put16(sb, 0)
+        _put16(sb, 0)
+        mut i = 0
+        while i < len(names):
+            _put_name(sb, names[i])?
+            _put16(sb, qtypes[i])
+            if unicast_response: _put16(sb, 0x8001)
+            else: _put16(sb, 1)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def parse(msg: str) throws str -> DnsMessage:
+        if msg.len() < 12: raise("DNS: message shorter than the header")
+        mut m = DnsMessage()
+        m.id = _d16(msg, 0)
+        mut fl = _d16(msg, 2)
+        m.is_response = (fl & 0x8000) != 0
+        m.opcode = (fl >> 11) & 15
+        m.authoritative = (fl & 0x0400) != 0
+        m.truncated = (fl & 0x0200) != 0
+        m.rcode = fl & 15
+        mut qd = _d16(msg, 4)
+        mut an = _d16(msg, 6)
+        mut ns = _d16(msg, 8)
+        mut ar = _d16(msg, 10)
+        m.questions = []
+        m.qtypes = []
+        m.answers = []
+        m.authority = []
+        m.additional = []
+        mut off = 12
+        mut nx = [0]
+        mut i = 0
+        while i < qd:
+            mut qn = _read_name(msg, off, nx)?
+            off = nx[0]
+            if off + 4 > msg.len(): raise("DNS: truncated question")
+            m.questions.append(qn)
+            m.qtypes.append(_d16(msg, off))
+            off = off + 4
+            i = i + 1
+        i = 0
+        while i < an + ns + ar:
+            mut r = _read_record(msg, off, nx)?
+            off = nx[0]
+            if i < an: m.answers.append(r)
+            elif i < an + ns: m.authority.append(r)
+            else: m.additional.append(r)
+            i = i + 1
+        return m
+
+pub class Dns:
+    _dummy: int
+
+extend Dns:
+    # Ask `server` (IP or name, port 53) for `name`/`qtype` over UDP.
+    pub def lookup(server: str, name: str, qtype: int) throws str -> DnsMessage:
+        return Dns.lookup_port(server, 53, name, qtype, 3000)?
+
+    pub def lookup_port(server: str, port: int, name: str, qtype: int, timeout_ms: int) throws str -> DnsMessage:
+        mut fam = 4
+        if server.find(":") >= 0: fam = 6
+        mut u = UdpEndpoint.open(fam, 0)?
+        mut id = (unix_ms_low() * 7919) & 0xFFFF
+        mut q = DnsMessage.query(id, name, qtype, true)?
+        mut attempt = 0
+        while attempt < 2:
+            mut sr: Result[bool, str] = _dns_send(u, q, server, port)
+            if sr.is_err:
+                u.close()
+                raise(sr.err)
+            mut d: Result[Datagram, str] = u.recv(4096, timeout_ms)
+            if d.is_err:
+                u.close()
+                raise(d.err)
+            if not d.ok.timed_out:
+                mut pr: Result[DnsMessage, str] = DnsMessage.parse(d.ok.data)
+                if pr.is_ok and pr.ok.id == id and pr.ok.is_response:
+                    u.close()
+                    return pr.ok
+            attempt = attempt + 1
+        u.close()
+        raise(f"DNS: no answer from {server}")
+
+def _dns_send(u: UdpEndpoint, q: str, server: str, port: int) throws str -> bool:
+    u.send_to(q, server, port)?
+    return true
+
+extern "C":
+    def trc_udpx_unix_ms() -> int
+
+def unix_ms_low() -> int: return trc_udpx_unix_ms() & 0xFFFFFF

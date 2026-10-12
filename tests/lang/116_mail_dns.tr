@@ -1,0 +1,476 @@
+# tests/lang/116_mail_dns.tr
+# std.net.pop3 / imap / dnsmsg / ntp / mdns / udpx / linestream.
+#
+# POP3 and IMAP clients run against scripted fake servers on 127.0.0.1 in
+# spawned threads: each server checks every command line the client puts on
+# the wire against the exact expected text and counts mismatches. DNS and NTP
+# use fake UDP servers the same way; DNS and mDNS parsing is also checked
+# against byte vectors generated with Python's struct module.
+
+from std.test import TestRunner
+from std.net.tcp import TcpStream, TcpListener
+from std.net.pop3 import Pop3Client, Pop3Stat, Pop3Entry
+from std.net.imap import ImapClient, ImapMailbox, ImapStatus, ImapMessage
+from std.net.dnsmsg import DnsMessage, DnsRecord, Dns, DNS_A, DNS_MX, DNS_TXT, DNS_SRV, DNS_AAAA, DNS_PTR, dns_type_name
+from std.net.ntp import Ntp, NtpResult
+from std.net.mdns import Mdns, MdnsService
+from std.net.udpx import UdpEndpoint, Datagram, unix_ms
+from std.encoding.hex import Hex
+from std.core.string import StringBuilder
+
+class Flags implements Sendable:
+    pub port: int
+    pub bad:  Atomic[int]
+    pub done: Atomic[int]
+
+extend Flags:
+    pub def init(port: int) -> Flags:
+        mut f = Flags()
+        f.port = port
+        f.bad = Atomic.new(0)
+        f.done = Atomic.new(0)
+        return f
+
+class LineBuf:
+    pub carry: str
+
+extend LineBuf:
+    pub def init() -> LineBuf:
+        mut b = LineBuf()
+        b.carry = ""
+        return b
+
+    pub def read_line(self, s: TcpStream) -> str:
+        while true:
+            mut nl = self.carry.find("\n")
+            if nl >= 0:
+                mut line = self.carry.slice(0, nl)
+                if line.ends_with("\r"): line = line.slice(0, line.len() - 1)
+                self.carry = self.carry.slice(nl + 1, self.carry.len())
+                return line
+            mut chunk = s.recv(4096)
+            if chunk.len() == 0:
+                mut rest = self.carry
+                self.carry = ""
+                return rest
+            self.carry = self.carry + chunk
+        return ""
+
+# Expect one exact command line, then send `reply` (CRLF appended).
+def step(conn: TcpStream, lb: LineBuf, f: Shared[Flags], expect: str, reply: str):
+    mut line = lb.read_line(conn)
+    if line != expect:
+        print("  server expected: " + expect)
+        print("  server got:      " + line)
+        f.bad.add(1)
+    conn.send(reply + "\r\n")
+
+# ── POP3 ────────────────────────────────────────────────────────────────────
+
+def pop3_server(f: Shared[Flags]):
+    mut l = TcpListener.listen("127.0.0.1", f.port)
+    mut c = l.accept()
+    mut lb = LineBuf.init()
+    c.send("+OK POP3 ready <1896.697170952@dbc.mailcom>\r\n")
+    step(c, lb, f, "CAPA", "+OK\r\nUSER\r\nUIDL\r\nTOP\r\n.")
+    step(c, lb, f, "APOP mrose f64faaa2b126c1dcd5244e3c1007bf4d", "+OK maildrop locked")
+    step(c, lb, f, "AUTH PLAIN AGFsaWNlAHdvbmRlcmxhbmQ=", "+OK")
+    step(c, lb, f, "USER alice", "+OK")
+    step(c, lb, f, "PASS wonderland", "+OK logged in")
+    step(c, lb, f, "STAT", "+OK 2 320")
+    step(c, lb, f, "LIST", "+OK 2 messages\r\n1 120\r\n2 200\r\n.")
+    step(c, lb, f, "UIDL", "+OK\r\n1 uid-aaa\r\n2 uid-bbb\r\n.")
+    step(c, lb, f, "RETR 1", "+OK\r\nSubject: hi\r\n\r\n..dot line\r\nbody\r\n.")
+    step(c, lb, f, "TOP 2 0", "+OK\r\nSubject: two\r\n\r\n.")
+    step(c, lb, f, "DELE 1", "+OK deleted")
+    step(c, lb, f, "DELE 9", "-ERR no such message")
+    step(c, lb, f, "RSET", "+OK")
+    step(c, lb, f, "NOOP", "+OK")
+    step(c, lb, f, "QUIT", "+OK bye")
+    c.close()
+    l.close()
+    f.done.store(1)
+
+def test_pop3(t: TestRunner):
+    t.section("pop3")
+    shared f = Flags.init(18941)
+    mut th = Thread.spawn(pop3_server, f)
+    Thread.sleep(200)
+    mut cr: Result[Pop3Client, str] = Pop3Client.connect("127.0.0.1", 18941, false)
+    t.assert_true(cr.is_ok, "connect")
+    if cr.is_err:
+        print(cr.err)
+        return
+    mut c = cr.ok
+    t.assert_starts_with(c.greeting, "POP3 ready", "greeting text")
+    mut caps: Result[List[str], str] = c.capabilities()
+    t.assert_true(caps.is_ok and len(caps.ok) == 3, "CAPA list")
+    if caps.is_ok and len(caps.ok) == 3: t.assert_eq_str(caps.ok[2], "TOP", "CAPA entry")
+    mut ap: Result[bool, str] = pop3_apop(c)
+    t.assert_true(ap.is_ok, "APOP digest")
+    mut ar: Result[bool, str] = pop3_plain(c)
+    t.assert_true(ar.is_ok, "AUTH PLAIN")
+    mut lr: Result[bool, str] = pop3_login(c)
+    t.assert_true(lr.is_ok, "USER/PASS")
+    mut st: Result[Pop3Stat, str] = c.stat()
+    t.assert_true(st.is_ok, "STAT")
+    t.assert_eq_int(st.ok.count, 2, "STAT count")
+    t.assert_eq_int(st.ok.size, 320, "STAT size")
+    mut ls: Result[List[Pop3Entry], str] = c.list()
+    t.assert_true(ls.is_ok and len(ls.ok) == 2, "LIST entries")
+    t.assert_eq_int(ls.ok[1].size, 200, "LIST size")
+    mut us: Result[List[Pop3Entry], str] = c.uidl()
+    t.assert_true(us.is_ok and len(us.ok) == 2, "UIDL entries")
+    t.assert_eq_str(us.ok[0].uid, "uid-aaa", "UIDL uid")
+    t.assert_eq_int(us.ok[1].num, 2, "UIDL num")
+    mut m: Result[str, str] = c.retr(1)
+    t.assert_true(m.is_ok, "RETR")
+    t.assert_eq_str(m.ok, "Subject: hi\r\n\r\n.dot line\r\nbody\r\n", "RETR dot-unstuffed")
+    mut tp: Result[str, str] = c.top(2, 0)
+    t.assert_eq_str(tp.ok, "Subject: two\r\n\r\n", "TOP headers")
+    mut d1: Result[bool, str] = pop3_dele(c, 1)
+    t.assert_true(d1.is_ok, "DELE ok")
+    mut d9: Result[bool, str] = pop3_dele(c, 9)
+    t.assert_true(d9.is_err, "DELE -ERR raises")
+    if d9.is_err: t.assert_contains(d9.err, "no such message", "-ERR text")
+    mut rs: Result[bool, str] = pop3_rset_noop(c)
+    t.assert_true(rs.is_ok, "RSET + NOOP")
+    c.quit()
+    th.join()
+    t.assert_eq_int(f.bad.load(), 0, "every POP3 command matched on the wire")
+    t.assert_eq_int(f.done.load(), 1, "server finished")
+
+def pop3_apop(c: Pop3Client) throws str -> bool:
+    c.apop("mrose", "tanstaaf")?
+    return true
+def pop3_plain(c: Pop3Client) throws str -> bool:
+    c.auth_plain("alice", "wonderland")?
+    return true
+def pop3_login(c: Pop3Client) throws str -> bool:
+    c.login("alice", "wonderland")?
+    return true
+def pop3_dele(c: Pop3Client, n: int) throws str -> bool:
+    c.dele(n)?
+    return true
+def pop3_rset_noop(c: Pop3Client) throws str -> bool:
+    c.rset()?
+    c.noop()?
+    return true
+
+# ── IMAP ────────────────────────────────────────────────────────────────────
+
+def imap_server(f: Shared[Flags]):
+    mut l = TcpListener.listen("127.0.0.1", f.port)
+    mut c = l.accept()
+    mut lb = LineBuf.init()
+    c.send("* OK [CAPABILITY IMAP4rev1 STARTTLS] fake ready\r\n")
+    step(c, lb, f, "A1 CAPABILITY", "* CAPABILITY IMAP4rev1 MOVE IDLE\r\nA1 OK done")
+    step(c, lb, f, "A2 LOGIN \"alice\" \"pa\\\"ss\"", "A2 OK LOGIN completed")
+    step(c, lb, f, "A3 LIST \"\" \"*\"", "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n* LIST (\\HasChildren) \"/\" {9}\r\nWork/2026\r\nA3 OK LIST done")
+    step(c, lb, f, "A4 SELECT \"INBOX\"", "* FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)\r\n* 3 EXISTS\r\n* 1 RECENT\r\n* OK [UIDVALIDITY 3857529045] UIDs valid\r\n* OK [UIDNEXT 4392] Predicted\r\nA4 OK [READ-WRITE] SELECT completed")
+    step(c, lb, f, "A5 UID SEARCH UNSEEN", "* SEARCH 4390 4391\r\nA5 OK SEARCH done")
+    # 32-byte literal containing CRLFs and a fake literal marker
+    step(c, lb, f, "A6 UID FETCH 4390 (UID BODY.PEEK[])", "* 2 FETCH (UID 4390 BODY[] {32}\r\nSubject: t\r\n\r\nHello {5}\r\nworld\r\n)\r\nA6 OK FETCH done")
+    step(c, lb, f, "A7 FETCH 1:2 (UID FLAGS RFC822.SIZE)", "* 1 FETCH (UID 4389 FLAGS (\\Seen) RFC822.SIZE 1200)\r\n* 2 FETCH (UID 4390 FLAGS () RFC822.SIZE 32)\r\nA7 OK FETCH done")
+    step(c, lb, f, "A8 UID STORE 4390 +FLAGS.SILENT (\\Seen)", "A8 OK STORE done")
+    step(c, lb, f, "A9 UID MOVE 4391 \"Archive\"", "* 3 EXPUNGE\r\nA9 OK MOVE done")
+    step(c, lb, f, "A10 CREATE \"Work\"", "A10 NO [ALREADYEXISTS] Mailbox exists")
+    step(c, lb, f, "A11 APPEND \"INBOX\" (\\Seen) {12}", "+ Ready for literal")
+    step(c, lb, f, "Hello world!", "A11 OK [APPENDUID 38505 3955] APPEND completed")
+    step(c, lb, f, "A12 EXAMINE \"Archive\"", "* 5 EXISTS\r\nA12 OK [READ-ONLY] EXAMINE completed")
+    step(c, lb, f, "A13 NOOP", "* 4 EXPUNGE\r\nA13 OK NOOP done")
+    step(c, lb, f, "A14 LOGOUT", "* BYE logging out\r\nA14 OK LOGOUT done")
+    c.close()
+    l.close()
+    f.done.store(1)
+
+def imap_session(t: TestRunner, c: ImapClient) throws str:
+    t.assert_true(c.has_capability("STARTTLS"), "greeting [CAPABILITY] code")
+    mut caps = c.capability()?
+    t.assert_true(c.has_capability("move"), "CAPABILITY parsed (case-insensitive)")
+    t.assert_eq_int(len(caps), 3, "capability count")
+    c.login("alice", "pa\"ss")?
+    mut boxes = c.list_mailboxes("", "*")?
+    t.assert_eq_int(len(boxes), 2, "LIST mailboxes")
+    t.assert_eq_str(boxes[0].name, "INBOX", "quoted mailbox name")
+    t.assert_eq_str(boxes[0].delimiter, "/", "delimiter")
+    t.assert_eq_str(boxes[1].name, "Work/2026", "literal mailbox name")
+    t.assert_eq_str(boxes[1].flags[0], "\\HasChildren", "mailbox flags")
+    mut st = c.select("INBOX")?
+    t.assert_eq_int(st.exists, 3, "EXISTS")
+    t.assert_eq_int(st.recent, 1, "RECENT")
+    t.assert_eq_int(st.uidvalidity, 3857529045, "UIDVALIDITY")
+    t.assert_eq_int(st.uidnext, 4392, "UIDNEXT")
+    t.assert_eq_int(len(st.flags), 5, "FLAGS")
+    t.assert_false(st.read_only, "SELECT is read-write")
+    mut uids = c.uid_search("UNSEEN")?
+    t.assert_eq_int(len(uids), 2, "SEARCH hits")
+    t.assert_eq_int(uids[1], 4391, "SEARCH uid")
+    mut body = c.fetch_message(4390)?
+    t.assert_eq_int(body.len(), 32, "literal length")
+    t.assert_eq_str(body, "Subject: t\r\n\r\nHello {5}\r\nworld\r\n", "literal bytes")
+    mut ms = c.fetch("1:2", "(UID FLAGS RFC822.SIZE)", false)?
+    t.assert_eq_int(len(ms), 2, "FETCH responses")
+    t.assert_eq_int(ms[0].uid, 4389, "FETCH UID")
+    t.assert_eq_int(ms[0].size, 1200, "FETCH RFC822.SIZE")
+    t.assert_eq_str(ms[0].flags[0], "\\Seen", "FETCH FLAGS")
+    t.assert_eq_int(len(ms[1].flags), 0, "empty FLAGS")
+    t.assert_eq_int(ms[1].seq, 2, "FETCH seq")
+    c.add_flags(4390, "\\Seen")?
+    c.move("4391", "Archive")?
+    mut cr: Result[bool, str] = imap_create(c, "Work")
+    t.assert_true(cr.is_err, "NO raises")
+    if cr.is_err: t.assert_contains(cr.err, "ALREADYEXISTS", "NO text")
+    c.append("INBOX", "Hello world!", "\\Seen")?
+    mut ex = c.examine("Archive")?
+    t.assert_eq_int(ex.exists, 5, "EXAMINE exists")
+    t.assert_true(ex.read_only, "EXAMINE is read-only")
+    c.noop()?
+    c.logout()
+
+def imap_create(c: ImapClient, name: str) throws str -> bool:
+    c.create(name)?
+    return true
+
+def test_imap(t: TestRunner):
+    t.section("imap")
+    shared f = Flags.init(18942)
+    mut th = Thread.spawn(imap_server, f)
+    Thread.sleep(200)
+    mut cr: Result[ImapClient, str] = ImapClient.connect("127.0.0.1", 18942, false)
+    t.assert_true(cr.is_ok, "connect")
+    if cr.is_err:
+        print(cr.err)
+        return
+    mut r: Result[bool, str] = imap_run(t, cr.ok)
+    t.assert_true(r.is_ok, "IMAP session completed")
+    if r.is_err: print(r.err)
+    th.join()
+    t.assert_eq_int(f.bad.load(), 0, "every IMAP command matched on the wire")
+
+def imap_run(t: TestRunner, c: ImapClient) throws str -> bool:
+    imap_session(t, c)?
+    return true
+
+# ── DNS ─────────────────────────────────────────────────────────────────────
+
+def dns_vector() -> str:
+    return Hex.decode("123481800001000500000000076578616d706c6503636f6d0000010001c00c000100010000012c00045db8d822c00c000f000100000e100009000a046d61696cc00cc00c001000010000003c00120b763d73706631202d616c6c0568656c6c6f045f736970045f746370c00c0021000100000078000c0005001413c403736970c00cc00c001c00010000012c001020010db8000000000000000000000001")
+
+def test_dns_parse(t: TestRunner):
+    t.section("dns message")
+    mut q: Result[str, str] = DnsMessage.query(0x1234, "example.com", DNS_A, true)
+    t.assert_eq_str(Hex.encode(q.ok), "123401000001000000000001076578616d706c6503636f6d00000100010000291000000000000000", "query bytes (with EDNS0 OPT)")
+    mut bad: Result[str, str] = DnsMessage.query(1, "a..b", DNS_A, true)
+    t.assert_true(bad.is_err, "empty label rejected")
+    mut names: List[str] = ["_http._tcp.local", "host.local"]
+    mut types: List[int] = [DNS_PTR, DNS_A]
+    mut mq: Result[str, str] = DnsMessage.multi_query(0, names, types, true)
+    t.assert_eq_str(Hex.encode(mq.ok), "000000000002000000000000055f68747470045f746370056c6f63616c00000c800104686f7374056c6f63616c0000018001", "multi query with QU bit")
+
+    mut pr: Result[DnsMessage, str] = DnsMessage.parse(dns_vector())
+    t.assert_true(pr.is_ok, "parse response")
+    mut m = pr.ok
+    t.assert_eq_int(m.id, 0x1234, "id")
+    t.assert_true(m.is_response, "QR bit")
+    t.assert_eq_int(m.rcode, 0, "rcode")
+    t.assert_eq_str(m.questions[0], "example.com", "question name")
+    t.assert_eq_int(len(m.answers), 5, "answer count")
+    t.assert_eq_str(m.answers[0].address, "93.184.216.34", "A")
+    t.assert_eq_int(m.answers[0].ttl, 300, "TTL")
+    t.assert_eq_int(m.answers[1].priority, 10, "MX preference")
+    t.assert_eq_str(m.answers[1].target, "mail.example.com", "MX exchange via compression")
+    t.assert_eq_int(len(m.answers[2].texts), 2, "TXT strings")
+    t.assert_eq_str(m.answers[2].texts[0], "v=spf1 -all", "TXT text")
+    t.assert_eq_str(m.answers[3].name, "_sip._tcp.example.com", "SRV owner (label + pointer)")
+    t.assert_eq_int(m.answers[3].port, 5060, "SRV port")
+    t.assert_eq_int(m.answers[3].weight, 20, "SRV weight")
+    t.assert_eq_str(m.answers[3].target, "sip.example.com", "SRV target")
+    t.assert_eq_str(m.answers[4].address, "2001:db8::1", "AAAA")
+    t.assert_eq_str(m.answers[1].to_str(), "example.com 3600 MX 10 mail.example.com", "record to_str")
+    t.assert_eq_str(dns_type_name(DNS_SRV), "SRV", "type name")
+
+    # truncated message and a compression loop must fail cleanly
+    mut v = dns_vector()
+    mut tr: Result[DnsMessage, str] = DnsMessage.parse(v.slice(0, 40))
+    t.assert_true(tr.is_err, "truncated message rejected")
+    mut loop_msg = Hex.decode("000081800001000000000000c00c00010001")
+    mut lp: Result[DnsMessage, str] = DnsMessage.parse(loop_msg)
+    t.assert_true(lp.is_err, "compression loop rejected")
+
+def dns_server(f: Shared[Flags]):
+    mut ur: Result[UdpEndpoint, str] = UdpEndpoint.open(4, f.port)
+    if ur.is_err:
+        f.bad.add(1)
+        return
+    mut u = ur.ok
+    mut d: Result[Datagram, str] = u.recv(1500, 3000)
+    if d.is_err or d.ok.timed_out:
+        f.bad.add(1)
+        u.close()
+        return
+    mut q = d.ok.data
+    mut want = "01000001000000000001076578616d706c6503636f6d00000100010000291000000000000000"
+    if Hex.encode(q.slice(2, q.len())) != want: f.bad.add(1)
+    mut v = dns_vector()
+    mut reply = q.slice(0, 2) + v.slice(2, v.len())
+    mut sr: Result[bool, str] = udp_reply(u, reply, d.ok.addr, d.ok.port)
+    u.close()
+    f.done.store(1)
+
+def udp_reply(u: UdpEndpoint, data: str, host: str, port: int) throws str -> bool:
+    u.send_to(data, host, port)?
+    return true
+
+def test_dns_lookup(t: TestRunner):
+    t.section("dns lookup (fake server)")
+    shared f = Flags.init(18943)
+    mut th = Thread.spawn(dns_server, f)
+    Thread.sleep(150)
+    mut r: Result[DnsMessage, str] = Dns.lookup_port("127.0.0.1", 18943, "example.com", DNS_A, 2000)
+    t.assert_true(r.is_ok, "lookup answered")
+    if r.is_ok:
+        t.assert_eq_int(len(r.ok.answers), 5, "answers")
+        t.assert_eq_str(r.ok.answers[0].address, "93.184.216.34", "A record")
+    th.join()
+    t.assert_eq_int(f.bad.load(), 0, "query bytes on the wire")
+    mut none_r: Result[DnsMessage, str] = Dns.lookup_port("127.0.0.1", 18949, "example.com", DNS_A, 100)
+    t.assert_true(none_r.is_err, "no server -> error")
+
+# ── NTP ─────────────────────────────────────────────────────────────────────
+
+def put_ntp(sb: StringBuilder, ms: int):
+    mut secs = ms / 1000 + 2208988800
+    mut frac = ((ms % 1000) * 4294967296) / 1000
+    sb.append_char((secs >> 24) & 255)
+    sb.append_char((secs >> 16) & 255)
+    sb.append_char((secs >> 8) & 255)
+    sb.append_char(secs & 255)
+    sb.append_char((frac >> 24) & 255)
+    sb.append_char((frac >> 16) & 255)
+    sb.append_char((frac >> 8) & 255)
+    sb.append_char(frac & 255)
+
+def ntp_server(f: Shared[Flags]):
+    mut ur: Result[UdpEndpoint, str] = UdpEndpoint.open(4, f.port)
+    if ur.is_err:
+        f.bad.add(1)
+        return
+    mut u = ur.ok
+    mut d: Result[Datagram, str] = u.recv(512, 3000)
+    if d.is_err or d.ok.timed_out:
+        f.bad.add(1)
+        u.close()
+        return
+    mut q = d.ok.data
+    if q.len() != 48: f.bad.add(1)
+    mut now = unix_ms() + 5000          # server clock runs 5 s ahead
+    mut sb = StringBuilder.init(48)
+    sb.append_char(0x24)                # LI 0, VN 4, mode 4
+    sb.append_char(1)                   # stratum 1
+    sb.append_char(4)
+    sb.append_char(0xEC)
+    mut i = 0
+    while i < 8:
+        sb.append_char(0)
+        i = i + 1
+    sb.append("TEST")
+    put_ntp(sb, now - 1000)             # reference
+    sb.append(q.slice(40, 48))          # originate = client's transmit
+    put_ntp(sb, now)                    # receive
+    put_ntp(sb, now)                    # transmit
+    mut reply = sb.to_owned()
+    sb.free()
+    mut sr: Result[bool, str] = udp_reply(u, reply, d.ok.addr, d.ok.port)
+    u.close()
+    f.done.store(1)
+
+def test_ntp(t: TestRunner):
+    t.section("ntp (fake server)")
+    shared f = Flags.init(18944)
+    mut th = Thread.spawn(ntp_server, f)
+    Thread.sleep(150)
+    mut r: Result[NtpResult, str] = Ntp.query_port("127.0.0.1", 18944, 2000)
+    t.assert_true(r.is_ok, "NTP reply accepted")
+    if r.is_ok:
+        t.assert_in_range(r.ok.offset_ms, 4900, 5100, "offset ~ +5 s")
+        t.assert_in_range(r.ok.delay_ms, -5, 100, "round-trip delay")
+        t.assert_eq_int(r.ok.stratum, 1, "stratum")
+        t.assert_eq_int(r.ok.version, 4, "version")
+        t.assert_eq_str(r.ok.ref_id, "TEST", "reference id")
+        mut skew = r.ok.server_time_ms - unix_ms()
+        t.assert_in_range(skew, 4800, 5200, "server_time_ms")
+    th.join()
+    t.assert_eq_int(f.bad.load(), 0, "48-byte client request")
+    mut none_r: Result[NtpResult, str] = Ntp.query_port("127.0.0.1", 18948, 100)
+    t.assert_true(none_r.is_err, "no server -> error")
+
+# ── mDNS / UDP ──────────────────────────────────────────────────────────────
+
+def test_mdns_records(t: TestRunner):
+    t.section("mdns service assembly")
+    mut v = Hex.decode("000084000000000100000003055f68747470045f746370056c6f63616c00000c000100001194000b085765622050616765c00cc02800218001000000780012000000001f9004686f7374056c6f63616c00c0280010800100001194000d06706174683d2f05763d312e3004686f7374056c6f63616c0000018001000000780004c0a80105")
+    mut pr: Result[DnsMessage, str] = DnsMessage.parse(v)
+    t.assert_true(pr.is_ok, "parse mDNS response")
+    mut m = pr.ok
+    t.assert_true(m.authoritative, "AA bit")
+    t.assert_eq_int(len(m.additional), 3, "additional records")
+    t.assert_true(m.additional[0].cache_flush, "cache-flush bit split off")
+    t.assert_eq_int(m.additional[0].rclass, 1, "class IN")
+    mut recs: List[DnsRecord] = []
+    recs.append(m.answers[0])
+    mut i = 0
+    while i < len(m.additional):
+        recs.append(m.additional[i])
+        i = i + 1
+    mut svcs = Mdns.services_from_records("_http._tcp.local", recs)
+    t.assert_eq_int(len(svcs), 1, "one service")
+    t.assert_eq_str(svcs[0].name, "Web Page", "instance name")
+    t.assert_eq_str(svcs[0].instance, "Web Page._http._tcp.local", "instance")
+    t.assert_eq_str(svcs[0].host, "host.local", "SRV host")
+    t.assert_eq_int(svcs[0].port, 8080, "SRV port")
+    t.assert_eq_int(len(svcs[0].txt), 2, "TXT entries")
+    t.assert_eq_str(svcs[0].txt[0], "path=/", "TXT value")
+    t.assert_eq_int(len(svcs[0].addresses), 1, "addresses")
+    t.assert_eq_str(svcs[0].addresses[0], "192.168.1.5", "A address")
+
+def udp_roundtrip(t: TestRunner) throws str:
+    mut a = UdpEndpoint.open(4, 0)?
+    mut b = UdpEndpoint.open(4, 0)?
+    mut bp = b.local_port()
+    t.assert_true(bp > 0, "ephemeral port bound")
+    mut payload = "ab\0cd"
+    a.send_to(payload, "127.0.0.1", bp)?
+    mut d = b.recv(64, 1000)?
+    t.assert_false(d.timed_out, "datagram arrived")
+    t.assert_eq_int(d.data.len(), 5, "binary-safe length")
+    t.assert_eq_str(d.data, payload, "payload")
+    t.assert_eq_str(d.addr, "127.0.0.1", "sender address")
+    t.assert_eq_int(d.port, a.local_port(), "sender port")
+    mut e = b.recv(64, 50)?
+    t.assert_true(e.timed_out, "recv timeout")
+    a.close()
+    b.close()
+
+def test_udp(t: TestRunner):
+    t.section("udp endpoint")
+    mut r: Result[bool, str] = udp_run(t)
+    t.assert_true(r.is_ok, "udp round trip")
+    if r.is_err: print(r.err)
+    mut t0 = unix_ms()
+    t.assert_true(t0 > 1700000000000, "unix_ms is wall-clock milliseconds")
+
+def udp_run(t: TestRunner) throws str -> bool:
+    udp_roundtrip(t)?
+    return true
+
+def main():
+    mut t = TestRunner.init("116_mail_dns")
+    test_pop3(t)
+    test_imap(t)
+    test_dns_parse(t)
+    test_dns_lookup(t)
+    test_ntp(t)
+    test_mdns_records(t)
+    test_udp(t)
+    t.summary()

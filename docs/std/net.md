@@ -9,6 +9,11 @@ from std.net.http import HttpClient, HttpClientResponse, HttpHeader
 from std.net.client    import HttpSession, ClientRequest, HttpReply, HeaderList
 from std.net.cookie    import CookieJar, Cookie
 from std.net.multipart import FormBuilder, MultipartBuilder
+from std.net.imap      import ImapClient
+from std.net.pop3      import Pop3Client
+from std.net.dnsmsg    import Dns, DnsMessage
+from std.net.ntp       import Ntp
+from std.net.mdns      import Mdns
 ```
 
 > **Platform note** — All socket classes require `-lws2_32` on Windows (Winsock).  
@@ -574,6 +579,94 @@ if client.connected:
 
 - TLS is TLS 1.3 only; a server limited to TLS 1.2 fails the handshake.
 - **No MIME / multipart / attachment support.** `send_mail`/`data` send a single `text/plain` body (headers + blank line + body text). Building a `multipart/mixed` message with attachments is left to the caller (construct the full body string yourself, including boundaries, and pass it to `data()` directly) or a future module.
+
+---
+
+## Mail — `std.net.pop3`, `std.net.imap`
+
+Both run over `std.net.linestream.LineStream` (plain TCP or verified TLS, with an in-place
+STARTTLS upgrade). Pass `tls = true` for implicit TLS (ports 995 / 993), or connect in plaintext
+(110 / 143) and call `starttls()` before authenticating. `-ERR` / `NO` / `BAD` replies raise with
+the server's text.
+
+```tauraro
+from std.net.imap import ImapClient
+from std.net.pop3 import Pop3Client
+
+mut c = ImapClient.connect("imap.example.com", 993, true)?
+c.login("user", "secret")?
+mut box = c.select("INBOX")?                # exists, recent, uidvalidity, uidnext, flags
+for uid in c.uid_search("UNSEEN")?:
+    mut raw = c.fetch_message(uid)?         # RFC 5322 bytes (BODY.PEEK[], keeps \Unseen)
+    c.add_flags(uid, "\\Seen")?
+c.logout()
+
+mut p = Pop3Client.connect("pop.example.com", 995, true)?
+p.login("user", "secret")?
+mut st = p.stat()?                           # st.count, st.size
+mut first = p.retr(1)?                       # dot-unstuffed, CRLF line ends
+p.quit()
+```
+
+| `ImapClient` | Description |
+|---|---|
+| `connect(host, port, tls)?` / `connect_with(host, port, tls, opts)?` | Connect and read the greeting (`[CAPABILITY]` codes are picked up). |
+| `starttls()?`, `login(user, pw)?`, `auth_plain(user, pw)?`, `logout()` | Session. `LOGIN` arguments are quoted and escaped. |
+| `capability()?`, `has_capability(name)` | Capabilities (upper-cased). |
+| `list_mailboxes(ref, pattern)?` | `ImapMailbox` (`name`, `delimiter`, `flags`); names sent as literals are handled. |
+| `select(box)?` / `examine(box)?` | `ImapStatus` (`exists`, `recent`, `uidvalidity`, `uidnext`, `flags`, `read_only`). |
+| `search(criteria)?` / `uid_search(criteria)?` | Matching sequence numbers / UIDs. |
+| `fetch(set, items, by_uid)?`, `fetch_message(uid)?` | `ImapMessage` (`seq`, `uid`, `flags`, `size`, `body`); `{n}` literals are read exactly, so bodies are binary-safe. |
+| `add_flags` / `remove_flags(uid, flags)?`, `copy` / `move(uid_set, box)?`, `expunge()?` | `move` uses `MOVE` when advertised, else COPY + `\Deleted` + EXPUNGE. |
+| `create` / `delete_mailbox` / `rename`, `append(box, message, flags)?`, `noop()?` | Mailbox management and upload. |
+| `command(text)?` / `command_raw(text)?` | Any other command; returns `ImapResponse` (`status`, `text`, `untagged` with their literals). |
+
+| `Pop3Client` | Description |
+|---|---|
+| `connect(host, port, tls)?` / `connect_with(...)?` | Connect and read the greeting. |
+| `starttls()?` (STLS), `login(user, pw)?`, `apop(user, pw)?`, `auth_plain(user, pw)?` | Authentication; APOP only when the greeting carries a timestamp. |
+| `capabilities()?` | CAPA list (empty if unsupported). |
+| `stat()?`, `list()?`, `uidl()?` | `Pop3Stat` (`count`, `size`); `Pop3Entry` (`num`, `size`, `uid`). |
+| `retr(n)?`, `top(n, lines)?` | Message text, dot-unstuffed, CRLF-terminated lines. |
+| `dele(n)?`, `rset()?`, `noop()?`, `quit()` | `quit` commits deletions and closes. |
+
+Not supported: IMAP IDLE/NOTIFY push, CONDSTORE/QRESYNC, BODYSTRUCTURE parsing; OAuth2
+(`XOAUTH2`) is available through `command(...)` with your own token.
+
+---
+
+## DNS messages, mDNS, NTP — `std.net.dnsmsg`, `std.net.mdns`, `std.net.ntp`, `std.net.udpx`
+
+`std.net.dns` resolves names through the OS. `std.net.dnsmsg` speaks the DNS wire protocol
+directly, so any record type can be asked of a chosen server:
+
+```tauraro
+from std.net.dnsmsg import Dns, DNS_MX, DNS_TXT, DNS_SRV
+from std.net.ntp import Ntp
+from std.net.mdns import Mdns
+
+mut r = Dns.lookup("1.1.1.1", "gmail.com", DNS_MX)?
+for rec in r.answers: print(rec.to_str())   # gmail.com 3600 MX 5 gmail-smtp-in.l.google.com
+
+mut t = Ntp.query("time.google.com")?
+print(f"clock offset {t.offset_ms} ms, delay {t.delay_ms} ms, stratum {t.stratum}")
+
+for svc in Mdns.browse("_http._tcp", 1500)?:
+    print(f"{svc.name} at {svc.host}:{svc.port} {svc.addresses}")
+```
+
+| API | Description |
+|---|---|
+| `DnsMessage.query(id, name, qtype, recursion)?` | Encode a query (with an EDNS0 OPT record, 4096-byte UDP payload). |
+| `DnsMessage.multi_query(id, names, qtypes, unicast)?` | Several questions; `unicast` sets the mDNS QU bit. |
+| `DnsMessage.parse(bytes)?` | Header flags, questions, `answers` / `authority` / `additional` as `DnsRecord`. Compression pointers are followed (loops and truncation raise). |
+| `DnsRecord` | `name`, `rtype`, `rclass`, `cache_flush`, `ttl`, `rdata`, plus decoded `address` (A/AAAA), `target` (NS/CNAME/PTR/MX/SRV/SOA), `priority`, `weight`, `port`, `texts`, `soa_serial`; `to_str()`. |
+| `Dns.lookup(server, name, qtype)?` / `lookup_port(server, port, name, qtype, timeout_ms)?` | One UDP query with a retry; checks the reply ID. |
+| `DNS_A`, `DNS_NS`, `DNS_CNAME`, `DNS_SOA`, `DNS_PTR`, `DNS_MX`, `DNS_TXT`, `DNS_AAAA`, `DNS_SRV`, `DNS_ANY`, `dns_type_name(t)` | Record types. |
+| `Ntp.query(server)?` / `query_port(server, port, timeout_ms)?` / `best_of(server, n)?` | SNTPv4 (RFC 4330): `NtpResult` with `offset_ms`, `delay_ms`, `server_time_ms`, `stratum`, `leap`, `version`, `ref_id`. Replies that do not echo the request, and kiss-o'-death packets, are rejected. |
+| `Mdns.query(name, qtype, ms)?`, `query_many(...)?`, `resolve_host("x.local", ms)?` | One-shot multicast DNS (RFC 6762) on 224.0.0.251:5353; collects every reply within the window. |
+| `Mdns.browse("_ipp._tcp", ms)?`, `service_types(ms)?`, `services_from_records(stype, recs)` | DNS-SD (RFC 6763) browsing into `MdnsService` (`name`, `instance`, `host`, `port`, `addresses`, `txt`). |
+| `UdpEndpoint.open(family, port)?` / `open_shared(...)?` | UDP with IPv4/IPv6, receive timeouts (`recv(cap, ms)?` returns a `Datagram` with `data`, `addr`, `port`, `timed_out`), multicast join/TTL, `local_port()`. `unix_ms()` is the wall clock in ms. |
 
 ---
 

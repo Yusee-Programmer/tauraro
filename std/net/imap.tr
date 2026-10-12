@@ -1,0 +1,413 @@
+# std.net.imap -- IMAP4rev1 / IMAP4rev2 client (RFC 3501 / RFC 9051 subset).
+#
+# Commands are sent with generated tags; responses are collected until the
+# tagged completion. Literals ({n} followed by n bytes) are read exactly and
+# kept apart from the response text, so message bodies are binary-safe.
+#
+# Usage:
+#   from std.net.imap import ImapClient
+#   mut c = ImapClient.connect("imap.example.com", 993, true)?   # implicit TLS
+#   c.login("user", "secret")?
+#   mut box = c.select("INBOX")?                 # box.exists, box.uidvalidity
+#   mut uids = c.uid_search("UNSEEN")?
+#   mut raw = c.fetch_message(uids[0])?          # full RFC 5322 message
+#   c.add_flags(uids[0], "\\Seen")?
+#   c.logout()
+#
+# Port 143: call starttls() before login. NO/BAD replies raise with the
+# server's text; `command(...)` gives raw access to any other command.
+
+from std.net.linestream import LineStream
+from std.net.tls import TlsOptions
+from std.encoding.base64 import Base64
+from std.core.string import StringBuilder
+
+# One untagged response ("* ..."): text with each literal replaced by
+# "{N}" and the literal payloads, in order.
+pub class ImapUntagged:
+    pub text:     str
+    pub literals: List[str]
+
+pub class ImapResponse:
+    pub status:   str              # OK / NO / BAD
+    pub text:     str              # text of the tagged completion
+    pub untagged: List[ImapUntagged]
+
+pub class ImapMailbox:
+    pub name:      str
+    pub delimiter: str
+    pub flags:     List[str]
+
+pub class ImapStatus:
+    pub exists:      int
+    pub recent:      int
+    pub uidvalidity: int
+    pub uidnext:     int
+    pub flags:       List[str]
+    pub read_only:   bool
+
+pub class ImapMessage:
+    pub seq:   int
+    pub uid:   int
+    pub flags: List[str]
+    pub size:  int
+    pub body:  str          # BODY[] / RFC822 payload when fetched
+
+def _im_quote(s: str) -> str:
+    mut sb = StringBuilder.init(s.len() + 4)
+    sb.append("\"")
+    mut i = 0
+    while i < s.len():
+        mut c = s.slice(i, i + 1)
+        if c == "\\" or c == "\"": sb.append("\\")
+        sb.append(c)
+        i = i + 1
+    sb.append("\"")
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _im_num_after(text: str, key: str) -> int:
+    mut at = text.find(key)
+    if at < 0: return -1
+    mut i = at + key.len()
+    while i < text.len() and text.slice(i, i + 1) == " ":
+        i = i + 1
+    mut v = 0
+    mut digits = 0
+    while i < text.len():
+        mut c = text.slice(i, i + 1)
+        if c < "0" or c > "9": break
+        v = v * 10 + int(c)
+        digits = digits + 1
+        i = i + 1
+    if digits == 0: return -1
+    return v
+
+# Words inside the first "(...)" after `key`.
+def _im_paren_list(text: str, key: str) -> List[str]:
+    mut out: List[str] = []
+    mut at = text.find(key)
+    if at < 0: return out
+    mut open_ = text.slice(at, text.len()).find("(")
+    if open_ < 0: return out
+    mut start = at + open_ + 1
+    mut rest = text.slice(start, text.len())
+    mut close = rest.find(")")
+    if close < 0: return out
+    mut inner = rest.slice(0, close)
+    mut parts = inner.split(" ")
+    mut i = 0
+    while i < parts.len:
+        if parts.get(i).len() > 0: out.append(parts.get(i))
+        i = i + 1
+    return out
+
+def _im_unquote(s: str) -> str:
+    mut t = s.trim()
+    if t.len() >= 2 and t.starts_with("\"") and t.ends_with("\""):
+        mut inner = t.slice(1, t.len() - 1)
+        return inner.replace("\\\"", "\"").replace("\\\\", "\\")
+    return t
+
+pub class ImapClient:
+    pub conn:         LineStream
+    pub greeting:     str
+    pub capabilities: List[str]
+    _tag:             int
+
+extend ImapClient:
+    pub def connect(host: str, port: int, tls: bool) throws str -> ImapClient:
+        mut o = TlsOptions.default()
+        return ImapClient.connect_with(host, port, tls, o)?
+
+    pub def connect_with(host: str, port: int, tls: bool, opts: TlsOptions) throws str -> ImapClient:
+        mut c = ImapClient()
+        c.conn = LineStream.connect_with(host, port, tls, opts)?
+        c._tag = 0
+        c.capabilities = []
+        c.greeting = c.conn.read_line()?
+        if not c.greeting.starts_with("* OK") and not c.greeting.starts_with("* PREAUTH"):
+            raise("IMAP: unexpected greeting: " + c.greeting)
+        c._caps_from_code(c.greeting)
+        return c
+
+    # Pick up a "[CAPABILITY ...]" response code (greeting, LOGIN OK).
+    def _caps_from_code(self, text: str):
+        mut at = text.find("[CAPABILITY ")
+        if at < 0: return
+        mut rest = text.slice(at + 12, text.len())
+        mut end = rest.find("]")
+        if end < 0: return
+        self._set_caps(rest.slice(0, end))
+
+    # Read one logical response line, pulling in any literals it announces.
+    def _read_response(self) throws str -> ImapUntagged:
+        mut u = ImapUntagged()
+        u.literals = []
+        mut sb = StringBuilder.init(256)
+        while true:
+            mut line = self.conn.read_line()?
+            sb.append(line)
+            # literal at end of line: {N} or {N+}
+            if line.ends_with("}"):
+                mut ob = line.slice(0, line.len()).find("{")
+                mut last_ob = -1
+                mut k = 0
+                while k < line.len():
+                    if line.slice(k, k + 1) == "{": last_ob = k
+                    k = k + 1
+                if last_ob >= 0:
+                    mut inner = line.slice(last_ob + 1, line.len() - 1)
+                    if inner.ends_with("+"): inner = inner.slice(0, inner.len() - 1)
+                    mut ok = inner.len() > 0
+                    mut n = 0
+                    mut j = 0
+                    while j < inner.len():
+                        mut c = inner.slice(j, j + 1)
+                        if c < "0" or c > "9": ok = false
+                        else: n = n * 10 + int(c)
+                        j = j + 1
+                    if ok:
+                        mut lit = self.conn.read_exact(n)?
+                        u.literals.append(lit)
+                        continue
+            break
+        u.text = sb.to_owned()
+        sb.free()
+        return u
+
+    # Run one command; raises on NO/BAD.
+    pub def command(self, cmd: str) throws str -> ImapResponse:
+        mut r = self.command_raw(cmd)?
+        if r.status != "OK": raise("IMAP " + r.status + ": " + r.text)
+        return r
+
+    # Run one command and return the response whatever its status.
+    pub def command_raw(self, cmd: str) throws str -> ImapResponse:
+        self._tag = self._tag + 1
+        mut tag = f"A{self._tag}"
+        mut line = tag + " " + cmd
+        self.conn.write_line(line)?
+        mut r = ImapResponse()
+        r.untagged = []
+        r.status = ""
+        r.text = ""
+        while true:
+            mut u = self._read_response()?
+            if u.text.starts_with(tag + " "):
+                mut rest = u.text.slice(tag.len() + 1, u.text.len())
+                mut sp = rest.find(" ")
+                if sp < 0:
+                    r.status = rest
+                else:
+                    r.status = rest.slice(0, sp)
+                    r.text = rest.slice(sp + 1, rest.len())
+                return r
+            if u.text.starts_with("+"):
+                raise("IMAP: unexpected continuation request")
+            if u.text.starts_with("* CAPABILITY "):
+                self._set_caps(u.text.slice(13, u.text.len()))
+            r.untagged.append(u)
+        return r
+
+    def _set_caps(self, text: str):
+        mut caps: List[str] = []
+        mut parts = text.split(" ")
+        mut i = 0
+        while i < parts.len:
+            caps.append(parts.get(i).upper())
+            i = i + 1
+        self.capabilities = caps
+
+    pub def capability(self) throws str -> List[str]:
+        self.command("CAPABILITY")?
+        return self.capabilities
+
+    pub def has_capability(self, name: str) -> bool:
+        mut want = name.upper()
+        mut i = 0
+        while i < len(self.capabilities):
+            if self.capabilities[i] == want: return true
+            i = i + 1
+        return false
+
+    pub def starttls(self) throws str:
+        self.command("STARTTLS")?
+        self.conn.start_tls()?
+        self.capabilities = []
+
+    pub def login(self, user: str, password: str) throws str:
+        mut cmd = "LOGIN " + _im_quote(user) + " " + _im_quote(password)
+        mut r = self.command(cmd)?
+        self._caps_from_code(r.text)
+
+    pub def auth_plain(self, user: str, password: str) throws str:
+        mut raw = "\0" + user + "\0" + password
+        mut b64 = Base64.encode(raw)
+        mut cmd = "AUTHENTICATE PLAIN " + b64
+        mut r = self.command(cmd)?
+        self._caps_from_code(r.text)
+
+    pub def noop(self) throws str: self.command("NOOP")?
+
+    pub def logout(self):
+        mut r: Result[ImapResponse, str] = self.command_raw("LOGOUT")
+        self.conn.close()
+
+    # LIST reference pattern -> mailboxes.
+    pub def list_mailboxes(self, reference: str, pattern: str) throws str -> List[ImapMailbox]:
+        mut cmd = "LIST " + _im_quote(reference) + " " + _im_quote(pattern)
+        mut r = self.command(cmd)?
+        mut out: List[ImapMailbox] = []
+        mut i = 0
+        while i < len(r.untagged):
+            mut t = r.untagged[i].text
+            if t.starts_with("* LIST "):
+                mut m = ImapMailbox()
+                m.flags = _im_paren_list(t, "* LIST")
+                mut close = t.find(")")
+                mut rest = t.slice(close + 1, t.len()).trim()
+                # delimiter (quoted or NIL) then the name (quoted, atom or literal)
+                mut sp = rest.find(" ")
+                m.delimiter = _im_unquote(rest.slice(0, sp))
+                if m.delimiter == "NIL": m.delimiter = ""
+                mut namepart = rest.slice(sp + 1, rest.len()).trim()
+                if len(r.untagged[i].literals) > 0: m.name = r.untagged[i].literals[0]
+                else: m.name = _im_unquote(namepart)
+                out.append(m)
+            i = i + 1
+        return out
+
+    def _open(self, verb: str, mailbox: str) throws str -> ImapStatus:
+        mut cmd = verb + " " + _im_quote(mailbox)
+        mut r = self.command(cmd)?
+        mut s = ImapStatus()
+        s.exists = 0
+        s.recent = 0
+        s.uidvalidity = 0
+        s.uidnext = 0
+        s.flags = []
+        s.read_only = r.text.find("[READ-ONLY]") >= 0
+        mut i = 0
+        while i < len(r.untagged):
+            mut t = r.untagged[i].text
+            if t.ends_with(" EXISTS"): s.exists = _im_num_after(t, "* ")
+            elif t.ends_with(" RECENT"): s.recent = _im_num_after(t, "* ")
+            elif t.find("[UIDVALIDITY") >= 0: s.uidvalidity = _im_num_after(t, "[UIDVALIDITY")
+            elif t.find("[UIDNEXT") >= 0: s.uidnext = _im_num_after(t, "[UIDNEXT")
+            elif t.starts_with("* FLAGS"): s.flags = _im_paren_list(t, "* FLAGS")
+            i = i + 1
+        return s
+
+    pub def select(self, mailbox: str) throws str -> ImapStatus: return self._open("SELECT", mailbox)?
+    pub def examine(self, mailbox: str) throws str -> ImapStatus: return self._open("EXAMINE", mailbox)?
+
+    def _search(self, cmd: str) throws str -> List[int]:
+        mut r = self.command(cmd)?
+        mut out: List[int] = []
+        mut i = 0
+        while i < len(r.untagged):
+            mut t = r.untagged[i].text
+            if t.starts_with("* SEARCH"):
+                mut parts = t.slice(8, t.len()).split(" ")
+                mut k = 0
+                while k < parts.len:
+                    mut p = parts.get(k)
+                    if p.len() > 0: out.append(int(p))
+                    k = k + 1
+            i = i + 1
+        return out
+
+    # Message sequence numbers matching an IMAP search key (e.g. "UNSEEN").
+    pub def search(self, criteria: str) throws str -> List[int]:
+        mut cmd = "SEARCH " + criteria
+        return self._search(cmd)?
+
+    pub def uid_search(self, criteria: str) throws str -> List[int]:
+        mut cmd = "UID SEARCH " + criteria
+        return self._search(cmd)?
+
+    # FETCH (or UID FETCH) with an item list such as "(UID FLAGS RFC822.SIZE)".
+    pub def fetch(self, set: str, items: str, by_uid: bool) throws str -> List[ImapMessage]:
+        mut cmd = "FETCH " + set + " " + items
+        if by_uid: cmd = "UID " + cmd
+        mut r = self.command(cmd)?
+        mut out: List[ImapMessage] = []
+        mut i = 0
+        while i < len(r.untagged):
+            mut u = r.untagged[i]
+            if u.text.find(" FETCH ") > 0:
+                mut m = ImapMessage()
+                m.seq = _im_num_after(u.text, "* ")
+                m.uid = _im_num_after(u.text, "UID")
+                m.size = _im_num_after(u.text, "RFC822.SIZE")
+                m.flags = _im_paren_list(u.text, "FLAGS")
+                m.body = ""
+                if len(u.literals) > 0: m.body = u.literals[len(u.literals) - 1]
+                out.append(m)
+            i = i + 1
+        return out
+
+    # Whole message by UID (BODY.PEEK[] does not set \Seen).
+    pub def fetch_message(self, uid: int) throws str -> str:
+        mut set = f"{uid}"
+        mut ms = self.fetch(set, "(UID BODY.PEEK[])", true)?
+        if len(ms) == 0: raise(f"IMAP: no message with UID {uid}")
+        return ms[0].body
+
+    def _store(self, uid: int, op: str, flags: str) throws str:
+        mut cmd = f"UID STORE {uid} " + op + " (" + flags + ")"
+        self.command(cmd)?
+
+    pub def add_flags(self, uid: int, flags: str) throws str: self._store(uid, "+FLAGS.SILENT", flags)?
+    pub def remove_flags(self, uid: int, flags: str) throws str: self._store(uid, "-FLAGS.SILENT", flags)?
+
+    pub def copy(self, uid_set: str, mailbox: str) throws str:
+        mut cmd = "UID COPY " + uid_set + " " + _im_quote(mailbox)
+        self.command(cmd)?
+
+    # MOVE when advertised, else COPY + \Deleted + EXPUNGE.
+    pub def move(self, uid_set: str, mailbox: str) throws str:
+        if self.has_capability("MOVE"):
+            mut cmd = "UID MOVE " + uid_set + " " + _im_quote(mailbox)
+            self.command(cmd)?
+            return
+        self.copy(uid_set, mailbox)?
+        mut st = "UID STORE " + uid_set + " +FLAGS.SILENT (\\Deleted)"
+        self.command(st)?
+        self.command("EXPUNGE")?
+
+    pub def expunge(self) throws str: self.command("EXPUNGE")?
+
+    pub def create(self, mailbox: str) throws str:
+        mut cmd = "CREATE " + _im_quote(mailbox)
+        self.command(cmd)?
+
+    pub def delete_mailbox(self, mailbox: str) throws str:
+        mut cmd = "DELETE " + _im_quote(mailbox)
+        self.command(cmd)?
+
+    pub def rename(self, old_name: str, new_name: str) throws str:
+        mut cmd = "RENAME " + _im_quote(old_name) + " " + _im_quote(new_name)
+        self.command(cmd)?
+
+    # APPEND a message (literal) to a mailbox, optionally with flags like "\\Seen".
+    pub def append(self, mailbox: str, message: str, flags: str) throws str:
+        self._tag = self._tag + 1
+        mut tag = f"A{self._tag}"
+        mut fl = ""
+        if flags.len() > 0: fl = " (" + flags + ")"
+        mut n = message.len()
+        mut nstr = f"{n}"
+        mut line = tag + " APPEND " + _im_quote(mailbox) + fl + " {" + nstr + "}"
+        self.conn.write_line(line)?
+        mut cont = self._read_response()?
+        if not cont.text.starts_with("+"): raise("IMAP: APPEND refused: " + cont.text)
+        self.conn.write(message)?
+        self.conn.write("\r\n")?
+        while true:
+            mut u = self._read_response()?
+            if u.text.starts_with(tag + " "):
+                if u.text.find(" OK") < 0: raise("IMAP: APPEND failed: " + u.text)
+                return
