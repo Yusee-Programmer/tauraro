@@ -2,10 +2,9 @@
 # awareness (TimeZone.utc/.fixed/.local, DateTime.to_zone/.utc_offset,
 # DateTime.format_relative).
 #
-# Scope note: this is fixed-UTC-offset + system-local timezone support, NOT a
-# full IANA tzdata implementation -- there is no table of named zones (e.g.
-# "America/New_York") and no historical DST rule engine. TimeZone.local()
-# reads the live system offset/DST/abbreviation from the OS.
+# Scope note: TimeZone is fixed-UTC-offset + system-local timezone support;
+# named IANA zones with DST rules are std.sys.tz (tests/lang/121_tz.tr).
+# TimeZone.local() reads the live system offset/DST/abbreviation from the OS.
 
 from std.test import TestRunner
 from std.sys.datetime import TimeZone, TimeDelta, DateTime

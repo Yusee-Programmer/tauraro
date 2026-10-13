@@ -63,6 +63,18 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.sys.tz`** — real IANA time zones. `Tz.load("America/New_York")?` parses TZif files
+  (RFC 8536 v1–v4, 64-bit data, POSIX footer for instants past the last transition) from
+  `$TZDIR` / `/usr/share/zoneinfo` / `/usr/lib/zoneinfo` / `/usr/share/lib/zoneinfo`; POSIX TZ
+  strings (`EST5EDT,M3.2.0,M11.1.0`, `<+0330>-3:30`, `Jn`/`n` dates, −167..167 h times) work
+  anywhere a name does; without tzdata (Windows) an embedded table of all 486 zones' current rules
+  is used (`scripts/gen_tz_table.py`). `Tz.local()` (`$TZ`, Windows
+  `GetDynamicTimeZoneInformation`, `/etc/localtime`), `Tz.utc()`, `Tz.available()`,
+  `offset_at(ts) -> (offset, is_dst, abbr)`, `to_local`/`convert`/`add`, `from_local` /
+  `from_local_later` / `local_to_unix(..., TZ_EARLIER|TZ_LATER|TZ_RAISE)` for DST gaps and
+  overlaps, `classify_local`, `next_transition`. Verified against Python's `zoneinfo`.
+  `std.sys.datetime`: `TimeZone.zone` (IANA name of the snapshot), `DateTime.isoformat()`,
+  `DateTime.to_string_tz()`.
 - **`tauraroc doc`** — API documentation from source (public constants, functions, classes with
   their fields and `extend` methods, enums, interfaces, and their comments) as Markdown or HTML,
   per file or for whole directory trees. **`tauraroc cov`** / **`--coverage`** — line coverage:
