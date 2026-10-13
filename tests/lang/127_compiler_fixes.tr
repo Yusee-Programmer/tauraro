@@ -1,0 +1,203 @@
+# tests/lang/127_compiler_fixes.tr
+# Regression tests for compiler bugs found while writing the stdlib:
+#   - class fields / locals / params named like C keywords or header macros
+#     (stdout, stderr, inline, errno, unix, linux, near, small, ...)
+#   - a `throws` function returning a @value_type
+#   - quoted strings inside f-string placeholders, `{{` / `}}`, escaped quotes
+#   - \xHH, \uXXXX, \UXXXXXXXX escapes (and "C:\Users" staying literal)
+#   - unknown-str-method diagnostics (rfind now exists), split_exact
+#   - an empty `[]` passed to a List[T] parameter (function and method)
+#   - Result locals owning their boxed payloads (exercised in loops; run the
+#     test under --debug / ASan to see there are no leaks or double frees)
+# Diagnostics that must make compilation fail are checked by run_tests.sh.
+
+from std.test import TestRunner
+
+class Streams:
+    pub stdout:  str
+    pub stderr:  str
+    pub inline:  bool
+    pub errno:   int
+    pub near:    int
+    pub small:   int
+
+@value_type
+class Point:
+    pub x: int
+    pub y: int
+
+def make_point(x: int, y: int) throws str -> Point:
+    if x < 0: raise("negative x")
+    mut p = Point()
+    p.x = x
+    p.y = y
+    return p
+
+def sum_point(x: int, y: int) throws str -> int:
+    mut p = make_point(x, y)?
+    return p.x + p.y
+
+def macro_params(unix: int, linux: int, stdin: int) -> int:
+    mut i386 = unix + linux
+    mut errno = i386 * stdin
+    errno = errno + 1
+    return errno
+
+def total_len(xs: List[str]) -> int:
+    mut n = 0
+    mut i = 0
+    while i < len(xs):
+        n = n + xs[i].len()
+        i = i + 1
+    return n
+
+def sum_floats(xs: List[float]) -> float:
+    mut t = 0.0
+    mut i = 0
+    while i < len(xs):
+        t = t + xs[i]
+        i = i + 1
+    return t
+
+class Bag:
+    pub items: List[str]
+
+extend Bag:
+    pub def add_all(self, xs: List[str]) -> int:
+        mut i = 0
+        while i < len(xs):
+            self.items.append(xs[i])
+            i = i + 1
+        return len(self.items)
+
+class Holder:
+    pub msg: str
+
+def fail_with_field(h: Holder) throws str -> int:
+    raise(h.msg)
+
+def echo_field(h: Holder) throws str -> str:
+    return h.msg
+
+def echo_elem(xs: List[str], i: int) throws str -> str:
+    return xs[i]
+
+def grow(n: int) throws str -> str:
+    if n < 0: raise("n < 0: " + f"{n}")
+    mut s = ""
+    mut i = 0
+    while i < n:
+        s = s + "ab"
+        i = i + 1
+    return s
+
+def use_grow(n: int) throws str -> int:
+    mut s = grow(n)?
+    mut t = grow(n)? + "!"
+    return s.len() + t.len()
+
+def test_names(t: TestRunner):
+    t.section("C-reserved names")
+    mut s = Streams()
+    s.stdout = "out"
+    s.stderr = "err"
+    s.inline = true
+    s.errno = 5
+    s.near = 7
+    s.small = 9
+    t.assert_eq_str(s.stdout + "/" + s.stderr, "out/err", "fields stdout / stderr")
+    t.assert_true(s.inline, "field inline")
+    t.assert_eq_int(s.errno + s.near + s.small, 21, "fields errno / near / small")
+    t.assert_eq_int(macro_params(1, 2, 3), 10, "params unix / linux / stdin, locals i386 / errno")
+
+def test_value_throws(t: TestRunner):
+    t.section("throws -> @value_type")
+    mut r: Result[Point, str] = make_point(3, 4)
+    t.assert_true(r.is_ok, "ok result")
+    t.assert_eq_int(r.ok.x * 10 + r.ok.y, 34, "payload fields")
+    mut s: Result[int, str] = sum_point(5, 6)
+    t.assert_eq_int(s.ok, 11, "? on a value-type result")
+    mut e: Result[Point, str] = make_point(-1, 0)
+    t.assert_true(e.is_err, "error result")
+    t.assert_eq_str(e.err, "negative x", "error text")
+    mut se: Result[int, str] = sum_point(-1, 0)
+    t.assert_eq_str(se.err, "negative x", "error propagated through ?")
+
+def test_fstrings(t: TestRunner):
+    t.section("f-strings")
+    mut s = "abcabc"
+    t.assert_eq_str(f"{s.find("b")}", "1", "quoted argument inside a placeholder")
+    t.assert_eq_str(f"{s.replace("a", "z")}!", "zbczbc!", "two quoted arguments")
+    t.assert_eq_str(f"{{x}} = {s.len()}", "{x} = 6", "{{ and }} are literal braces")
+    t.assert_eq_str(f"say \"{s.slice(0, 2)}\"", "say \"ab\"", "escaped quotes in f-string text")
+    t.assert_eq_str(f"{s.replace("c", "}")}", "ab}ab}", "brace inside a quoted placeholder argument")
+    t.assert_eq_str(f"{"a:b".len()}", "3", "colon inside a quoted placeholder argument")
+
+def test_escapes(t: TestRunner):
+    t.section("escapes")
+    mut b = "\x41\x7a\x00\xff"
+    t.assert_eq_int(b.len(), 4, "\\xHH gives one byte each")
+    t.assert_eq_str(b.slice(0, 2), "Az", "\\x41 \\x7a")
+    t.assert_eq_str("\u00e9", "é", "\\u00e9 is UTF-8 é")
+    t.assert_eq_int("\u20ac".len(), 3, "\\u20ac is 3 UTF-8 bytes")
+    t.assert_eq_int("\U0001F600".len(), 4, "\\U0001F600 is 4 UTF-8 bytes")
+    t.assert_eq_int("C:\Users".len(), 8, "\\U without 8 hex digits stays literal")
+    t.assert_eq_int("\xZZ".len(), 4, "\\x without 2 hex digits stays literal")
+    t.assert_eq_str(f"{1}\x21", "1!", "\\xHH in f-string text")
+
+def test_str_methods(t: TestRunner):
+    t.section("str methods")
+    t.assert_eq_int("abcabc".rfind("b"), 4, "rfind")
+    mut parts = "a,,b,".split_exact(",")
+    t.assert_eq_int(len(parts), 4, "split_exact keeps empty parts")
+    t.assert_eq_str(parts[1], "", "empty middle part")
+    t.assert_eq_str(parts[3], "", "empty trailing part")
+    mut multi = "x::y::z".split_exact("::")
+    t.assert_eq_int(len(multi), 3, "multi-character separator")
+    t.assert_eq_str(multi[2], "z", "last part")
+    t.assert_eq_int(len("".split_exact(",")), 1, "empty input gives one empty part")
+
+def test_empty_list_args(t: TestRunner):
+    t.section("empty [] arguments")
+    t.assert_eq_int(total_len([]), 0, "[] to a List[str] parameter")
+    t.assert_eq_float(sum_floats([]), 0.0, 0.0, "[] to a List[float] parameter")
+    mut bag = Bag()
+    bag.items = []
+    t.assert_eq_int(bag.add_all([]), 0, "[] to a method's List[str] parameter")
+    t.assert_eq_int(bag.add_all(["a", "b"]), 2, "non-empty literal still works")
+
+def test_result_ownership(t: TestRunner):
+    t.section("Result ownership")
+    mut h = Holder()
+    h.msg = "field " + "message"
+    mut total = 0
+    mut k = 0
+    while k < 300:
+        mut r: Result[int, str] = use_grow(k % 7)
+        total = total + r.ok
+        mut e: Result[str, str] = grow(-1)
+        if e.is_err and e.err.len() != 9: total = -100000
+        mut f: Result[int, str] = fail_with_field(h)
+        if f.err != "field message": total = -100000
+        mut g: Result[str, str] = echo_field(h)
+        if g.ok != "field message": total = -100000
+        mut xs: List[str] = ["p", "q" + "r"]
+        mut el: Result[str, str] = echo_elem(xs, 1)
+        if el.ok != "qr": total = -100000
+        k = k + 1
+    t.assert_true(total > 0, "results consumed in a loop")
+    t.assert_eq_str(h.msg, "field message", "a raised field is still intact")
+    mut keep: Result[str, str] = grow(3)
+    mut copy_ok = keep.ok
+    t.assert_eq_str(copy_ok, "ababab", "a payload copied into a local")
+
+def main():
+    mut t = TestRunner.init("127_compiler_fixes")
+    test_names(t)
+    test_value_throws(t)
+    test_fstrings(t)
+    test_escapes(t)
+    test_str_methods(t)
+    test_empty_list_args(t)
+    test_result_ownership(t)
+    t.summary()

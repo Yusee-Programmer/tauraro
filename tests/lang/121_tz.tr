@@ -26,6 +26,11 @@ const KATHMANDU_HEX = "545a69663200000000000000000000000000000000000000000000000
 # strictly after that instant (+2 days for wall times) are used.
 def check_vectors(t: TestRunner, z: Tz, label: str, after: int, u_ts: List[int], u_off: List[int], u_dst: List[int], u_ab: str, l_wall: List[int], l_u0: List[int], l_u1: List[int]) -> int:
     mut abbrs = u_ab.split(" ")
+    # Zones that tzdata encodes with "negative DST" (Morocco, Ireland) carry an
+    # is_dst flag that depends on how the system's zoneinfo was built (vanguard
+    # vs rearguard data; distributions differ from Python's tzdata package).
+    # Offsets and abbreviations agree everywhere, so only the flag is skipped.
+    mut dst_varies = label.find("Casablanca") >= 0 or label.find("Dublin") >= 0
     mut bad = 0
     mut n = 0
     mut i = 0
@@ -34,7 +39,7 @@ def check_vectors(t: TestRunner, z: Tz, label: str, after: int, u_ts: List[int],
             n = n + 1
             mut off, dst, ab = z.offset_at(u_ts[i])
             mut want_dst = u_dst[i] != 0
-            if off != u_off[i] or dst != want_dst or ab != abbrs.get(i):
+            if off != u_off[i] or (dst != want_dst and not dst_varies) or ab != abbrs.get(i):
                 bad = bad + 1
                 if bad <= 5:
                     mut wd = u_dst[i]

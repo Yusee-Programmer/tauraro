@@ -458,7 +458,7 @@ video/x-ms-wmv wmv
 video/x-ms-wvx wvx
 video/x-msvideo avi
 video/x-sgi-movie movie
-"""
+""".replace("\r", "")
 
 # ─── MediaType ────────────────────────────────────────────────────────────────
 

@@ -17,6 +17,9 @@ codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
 ### Changed
+- `std.sys.subprocess`: on Windows, `env_clear()` keeps `SystemRoot` unless it is set or removed
+  explicitly (child processes cannot initialise without it). `std.net.mime` tolerates a CRLF
+  checkout; `.gitattributes` now keeps `*.tr` files LF on every platform.
 - `SmtpClient.data()` no longer drops blank lines from the message (it split the body with
   `Str.split`, which skips empty pieces, so the header/body separator was lost).
 - `File.write`, `File.append` and `File.write_text` / `append_text` write the string's real
@@ -31,6 +34,25 @@ added here as each phase lands.
   not reachable through these clients any more.
 
 ### Compiler limitations closed
+- Results returned by `throws` functions no longer leak: a `Result` local frees its boxed `str`
+  (or value-type) payload and its `str` error at scope exit, `?` frees the box it unwraps, and
+  `raise` / `return` box an owned reference (borrowed fields, parameters and list elements are
+  retained). Each one-shot `decompress(data)?`-style call used to leak its whole output.
+- A `throws` function can return a `@value_type` (the payload is boxed); it used to generate a
+  struct-to-pointer cast.
+- Class fields, parameters and locals named like C keywords or header macros (`stdout`,
+  `stderr`, `stdin`, `errno`, `inline`, `unix`, `linux`, `i386`, `near`, `far`, `small`,
+  `interface`, ...) get C-safe names; they used to break the C build (some only on Windows or
+  macOS).
+- Declaring the same local twice in one block is a sema error (`[N-2]`) instead of a C
+  "redefinition" error; shadowing in an inner block stays legal.
+- Calling a method `str` does not have is a sema error (`[E-1]`) instead of an undeclared C
+  function.
+- f-strings: string literals inside a placeholder (`f"{s.find("b")}"`), `{{` / `}}` for literal
+  braces, and `\"` in the text part all work; an f-string used as an operand of `+` is freed.
+- An empty `[]` passed to a `List[T]` / `Vec[T]` parameter takes the parameter's element type.
+- Compiled C shims are cached per compiler command, so a `--target` cross build no longer links
+  an object compiled for the host.
 - `export def` functions keep their exact name in the shared library and its header unless it is a
   C keyword or a name libc declares. Names such as `count`, `new` and `delete` used to be exported
   as `_tr_fn_<name>`, and a call to such an export from inside the library referenced the
@@ -65,6 +87,9 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- String escapes `\xHH` (a byte), `\uXXXX` and `\UXXXXXXXX` (a code point as UTF-8); `str.rfind`
+  (alias of `last_index_of`); `str.split_exact(sep)`, Python-style splitting on a whole substring
+  that keeps empty parts (`split` splits on any byte of `sep` and drops empty parts).
 - **`std.sys.subprocess`** — run programs from an argv list (`Command.new("git").arg("status")`)
   or explicitly through the shell; stdin / stdout / stderr each inherited, piped, null, or
   redirected to a file (truncate / append), stderr mergeable into stdout; environment inherit /

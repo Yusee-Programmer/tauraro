@@ -794,6 +794,25 @@ static wchar_t* sp_env_block(const sp_cmd* c) {
             if (!skip) SP_ADDW(e);
         }
         if (sys) FreeEnvironmentStringsW(sys);
+    } else {
+        /* A Windows process cannot start properly without SystemRoot (DLL
+         * loading, Winsock and crypto initialisation need it), so env_clear()
+         * keeps it unless the caller sets or removes it explicitly. */
+        static const char* keep[] = { "SystemRoot" };
+        size_t kk;
+        for (kk = 0; kk < sizeof keep / sizeof keep[0]; kk++) {
+            size_t kl = strlen(keep[kk]); int named = 0;
+            for (i = 0; i < c->env_remove.n && !named; i++) if (_stricmp(c->env_remove.v[i], keep[kk]) == 0) named = 1;
+            for (i = 0; i < c->env_set.n && !named; i++) if (_strnicmp(c->env_set.v[i], keep[kk], kl) == 0 && c->env_set.v[i][kl] == '=') named = 1;
+            if (!named) {
+                wchar_t name[32], val[512], ent[600];
+                MultiByteToWideChar(CP_UTF8, 0, keep[kk], -1, name, 32);
+                if (GetEnvironmentVariableW(name, val, 512) > 0 && wcslen(name) + wcslen(val) + 2 < 600) {
+                    wcscpy(ent, name); wcscat(ent, L"="); wcscat(ent, val);
+                    SP_ADDW(ent);
+                }
+            }
+        }
     }
     for (i = 0; i < c->env_set.n; i++) {
         size_t j; int dup = 0;

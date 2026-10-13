@@ -7021,6 +7021,36 @@ static inline List_TrStr* _tr_str_splitv(TrStr s, TrStr sep) {
     }
     return l;
 }
+/* s.split_exact(sep): Python's str.split(sep) -- `sep` is matched as a whole
+ * substring and empty parts are kept ("a,,b" -> ["a", "", "b"], "" -> [""]).
+ * (split() treats sep as a SET of delimiter bytes and drops empty parts.) */
+static inline List_TrStr* _tr_str_split_exactv(TrStr s, TrStr sep) {
+    List_TrStr* l = List_TrStr_new();
+    size_t sl = s.data ? s.len : 0, pl = sep.data ? sep.len : 0, i = 0, start = 0;
+    if (pl == 0) {
+        TrStr whole = _tr_str_new(sl);
+        if (sl) memcpy(whole.data, s.data, sl);
+        List_TrStr_append_owned(l, whole);
+        return l;
+    }
+    while (i + pl <= sl) {
+        if (memcmp(s.data + i, sep.data, pl) == 0) {
+            TrStr tok = _tr_str_new(i - start);
+            if (i > start) memcpy(tok.data, s.data + start, i - start);
+            List_TrStr_append_owned(l, tok);
+            i += pl;
+            start = i;
+        } else {
+            i++;
+        }
+    }
+    {
+        TrStr last = _tr_str_new(sl - start);
+        if (sl > start) memcpy(last.data, s.data + start, sl - start);
+        List_TrStr_append_owned(l, last);
+    }
+    return l;
+}
 static inline List_TrStr* _tr_str_linesv(TrStr s) { return _tr_str_splitv(s, _tr_str_lit("\n")); }
 static inline List_TrStr* _tr_str_wordsv(TrStr s) { return _tr_str_splitv(s, _tr_str_lit(" ")); }
 static inline List_TrStr* _tr_str_charsv(TrStr s) {

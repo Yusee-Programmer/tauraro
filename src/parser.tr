@@ -4,7 +4,7 @@
 from core.vec import Vec
 from core.alloc import alloc, dealloc
 from token import Token
-from lexer import Lexer
+from lexer import Lexer, lex_hex_val, lex_append_utf8
 from diag import c_red, c_bold, c_cyan, c_dim, c_green, repeat_char
 from ast import Program, Decl, AstType, Param, FunctionDef, FieldDef, ClassDef, VariantDef, EnumDef, InterfaceDef, ImportItem, Expr, Stmt, Block, ElifClause, MatchArm, Pattern, Decorator, FStringPart, Ownership, ChanSelectArm, CatchClause, GenericConstraint
 
@@ -2375,8 +2375,14 @@ extend Parser:
 
         while i < raw_blen:
             mut c = p.offset(i).read() as int
+            mut c_next = 0
+            if i + 1 < raw_blen: c_next = p.offset(i + 1).read() as int
 
-            if c == 123: # '{'
+            if (c == 123 and c_next == 123) or (c == 125 and c_next == 125):
+                # `{{` / `}}`: a literal brace
+                sb.append_char(c)
+                i = i + 2
+            elif c == 123: # '{'
                 # Push previous text part
                 if sb.len() > 0:
                     fl.push(FStringPart.init_text(sb.to_owned(), sb.len()))
@@ -2387,6 +2393,22 @@ extend Parser:
                 mut depth = 1
                 while depth > 0 and i < raw_blen:
                     mut ec = p.offset(i).read() as int
+                    if ec == 34 or ec == 39:
+                        # a string literal inside the expression: copy it whole so
+                        # braces or quotes in it do not end the placeholder
+                        expr_sb.append_char(ec)
+                        i = i + 1
+                        while i < raw_blen and (p.offset(i).read() as int) != ec:
+                            mut sc = p.offset(i).read() as int
+                            expr_sb.append_char(sc)
+                            i = i + 1
+                            if sc == 92 and i < raw_blen:
+                                expr_sb.append_char(p.offset(i).read() as int)
+                                i = i + 1
+                        if i < raw_blen:
+                            expr_sb.append_char(ec)
+                            i = i + 1
+                        continue
                     if ec == 123: depth = depth + 1
                     if ec == 125: depth = depth - 1
                     if depth > 0: expr_sb.append_char(ec)
@@ -2420,6 +2442,19 @@ extend Parser:
                 elif esc == 39:     sb.append_char(39)     # \'
                 elif esc == 34:     sb.append_char(34)     # \"
                 elif esc == 48:     sb.append_char(0)      # \0
+                elif (esc == 120 or esc == 117 or esc == 85) and _fstr_hex_ok(p, i + 2, raw_blen, esc):
+                    # \xHH, \uXXXX, \UXXXXXXXX (same rules as read_string)
+                    mut fnd = 2
+                    if esc == 117: fnd = 4
+                    if esc == 85: fnd = 8
+                    mut fhv = 0
+                    mut fk = 0
+                    while fk < fnd:
+                        fhv = fhv * 16 + lex_hex_val(p.offset(i + 2 + fk).read() as int)
+                        fk = fk + 1
+                    if esc == 120: sb.append_char(fhv)
+                    else: lex_append_utf8(sb, fhv)
+                    i = i + fnd
                 else:
                     # Unrecognized escape: keep the backslash literally,
                     # same policy as read_string (see its own comment).
@@ -3346,13 +3381,35 @@ extend Parser:
 # -- f-string format spec helper -----------------------------------------------
 # Find the colon that separates {expr:spec}, skipping colons inside nested
 # brackets/parens (e.g. {dict["k"]:>10} should split at the outer colon).
+pub def _fstr_hex_ok(p: Pointer[char], at: int, n: int, esc: int) -> bool:
+    mut nd = 2
+    if esc == 117: nd = 4
+    if esc == 85: nd = 8
+    if at + nd > n: return false
+    mut v = 0
+    mut k = 0
+    while k < nd:
+        mut h = lex_hex_val(p.offset(at + k).read() as int)
+        if h < 0: return false
+        v = v * 16 + h
+        k = k + 1
+    if esc != 120 and v > 0x10FFFF: return false
+    return true
+
 pub def _find_fmt_colon(s: str) -> int:
     mut i = 0
     mut n = s.len()
     mut depth = 0
     while i < n:
         mut c = s.char_at(i)
-        if c == 40 or c == 91 or c == 123: depth = depth + 1  # ( [ {
+        if c == 34 or c == 39:
+            # skip a string literal (a ':' inside it is not a format spec)
+            mut qc = c
+            i = i + 1
+            while i < n and s.char_at(i) != qc:
+                if s.char_at(i) == 92: i = i + 1
+                i = i + 1
+        elif c == 40 or c == 91 or c == 123: depth = depth + 1  # ( [ {
         elif c == 41 or c == 93 or c == 125: depth = depth - 1  # ) ] }
         elif c == 58 and depth == 0: return i  # ':' at top level
         i = i + 1

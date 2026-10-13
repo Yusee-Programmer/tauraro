@@ -126,6 +126,27 @@ CEOF
     rm -rf "$libdir"
 fi
 
+# --- diagnostics that must stop compilation --------------------------------
+total=$((total + 1))
+echo "==> compile-time diagnostics"
+diagdir=$(mktemp -d)
+diagfail=""
+printf 'def main():\n    mut a = 1\n    mut a = 2\n    print(a)\n' > "$diagdir/redecl.tr"
+dout=$("$TAURAROC" "$diagdir/redecl.tr" -o "$diagdir/redecl" 2>&1)
+case "$dout" in *"[N-2] 'a' is already declared in this block"*) ;; *) diagfail="$diagfail [N-2 redeclaration]";; esac
+printf 'def main():\n    mut s = "x"\n    print(s.nope("y"))\n' > "$diagdir/strm.tr"
+dout=$("$TAURAROC" "$diagdir/strm.tr" -o "$diagdir/strm" 2>&1)
+case "$dout" in *"No method 'nope' found on type 'str'"*) ;; *) diagfail="$diagfail [unknown str method]";; esac
+printf 'def main():\n    mut a = 1\n    if a > 0:\n        mut a = 2\n        print(a)\n    print(a)\n' > "$diagdir/shadow.tr"
+dout=$("$TAURAROC" "$diagdir/shadow.tr" -o "$diagdir/shadow" 2>&1)
+case "$dout" in *"[N-2]"*) diagfail="$diagfail [inner-block shadowing rejected]";; esac
+if [ -n "$diagfail" ]; then
+    echo "  FAILED:$diagfail"
+    failed=$((failed + 1))
+    failed_files+=("diagnostics")
+fi
+rm -rf "$diagdir"
+
 # --- `tauraroc doc` -------------------------------------------------------
 total=$((total + 1))
 echo "==> doc generator"

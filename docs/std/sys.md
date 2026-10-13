@@ -165,7 +165,7 @@ child.close()
 | `Command.new(program)` | Program looked up on `PATH` (the child's `PATH` on POSIX) unless it contains a path separator. |
 | `Command.shell(line)` | `/bin/sh -c line` (POSIX) or `cmd.exe /d /s /c "line"` (Windows). The line is not escaped. |
 | `.arg(a)`, `.args(list)` | Append arguments. |
-| `.env(k, v)`, `.env_remove(k)`, `.env_clear()` | Set, unset, or start from an empty environment (default: inherit). |
+| `.env(k, v)`, `.env_remove(k)`, `.env_clear()` | Set, unset, or start from an empty environment (default: inherit). On Windows `env_clear()` keeps `SystemRoot` (processes cannot start without it) unless you set or remove it yourself. |
 | `.current_dir(path)` | Working directory for the child. |
 | `.stdin(s)`, `.stdout(s)`, `.stderr(s)`, `.merge_stderr()` | Where each stream goes (`Stdio` below). |
 | `.timeout(ms)` | Limit for `output` / `status` / `output_with_input`; the child is killed and the call raises `"subprocess: timed out after N ms"`. |

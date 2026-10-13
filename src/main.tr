@@ -311,10 +311,14 @@ pub def auto_link_cpp_shims(mod_file_paths: Vec[str], build_dir: str, cc: str,
                 # compile once, cached by shim source content (build/<base>.o + .src sidecar)
                 mut oname = build_dir + get_filename(shim_src) + ".o"
                 mut sidecar = oname + ".src"
-                # Cache key = driver kind + source, so a change in EITHER the shim
-                # content or the C/C++ driver choice re-triggers compilation.
-                mut cache_key = "CXX\n" + shim_txt
-                if is_c_only: cache_key = "C\n" + shim_txt
+                # Cache key = driver kind + compiler command (it carries the
+                # --target for cross builds) + optimisation / flags + source, so a
+                # change in any of them re-triggers compilation instead of linking
+                # an object built for another target.
+                mut cache_hdr = cc + "\n-O" + opt_level + "\n" + cflags + "\n"
+                if lto: cache_hdr = cache_hdr + "lto\n"
+                mut cache_key = "CXX\n" + cache_hdr + shim_txt
+                if is_c_only: cache_key = "C\n" + cache_hdr + shim_txt
                 mut need = true
                 if file_exists(oname) and file_exists(sidecar):
                     if read_file(sidecar) == cache_key: need = false

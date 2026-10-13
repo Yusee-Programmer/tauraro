@@ -231,6 +231,7 @@ pub class Sema:
     pub assign_froms:       Map[str, int] # block-local last use tracking
     pub fn_sigs:            Map[str, AstType] # top-level fn name -> def(...)->R type, for first-class function references
     pub closure_hint:       Pointer[AstType]  # expected def(...)->R type of the closure argument being lowered (null = none)
+    pub list_hint:          Pointer[AstType]  # expected List[T]/Vec[T] type of an empty `[]` argument being lowered (null = none)
     pub extern_names:       Map[str, bool]    # [N-3] extern "C" function names (valid bare names not in fn_sigs/globals)
     # Nested declarations (class/def/enum/interface inside main()) hoisted to file scope.
     pub nested_classes:     Vec[HirClass]
@@ -344,6 +345,7 @@ extend Sema:
         s.assign_froms       = Map[str, int].init(32)
         s.fn_sigs            = Map[str, AstType].init(64)
         s.closure_hint       = Pointer[AstType](0)
+        s.list_hint          = Pointer[AstType](0)
         s.extern_names       = Map[str, bool].init(128)
         s.nested_classes     = Vec[HirClass].init(4)
         s.nested_functions   = Vec[HirFunction].init(4)
@@ -1491,6 +1493,16 @@ extend Sema:
             if sym.active_borrows > 0: return false
             if not sym.is_init or sym.is_maybe_init: return false
             return true
+        # A Result local owns its boxed payloads (a str or value-type Ok value, a
+        # str error): free them at scope exit unless the Result itself was passed
+        # on, returned, aliased or moved (then the new holder owns them).
+        if tn == "Result":
+            if sym.coll_escaped: return false
+            if self.alias_assigned.contains(sym.name): return false
+            if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
+            if sym.active_borrows > 0: return false
+            if not sym.is_init or sym.is_maybe_init: return false
+            return true
         if not self.classes.contains(tn): return false
         # "Box" omitted: builtin Box[T] is not in self.classes (guarded above), so a
         # tn=="Box" here is a user `class Box` — a droppable owned local, not the builtin.
@@ -1659,6 +1671,53 @@ extend Sema:
                 mi = mi + 1
             ci = ci + 1
         if ambiguous: return nohint
+        return found
+
+    # Declared List/Vec type of parameter k of free function `fname`, for an
+    # empty `[]` argument (null when unknown or not a list).
+    pub def list_hint_for_fn(self, fname: str, k: int) -> Pointer[AstType]:
+        mut nohint = Pointer[AstType](0)
+        if not self.fn_sigs.contains(fname): return nohint
+        mut sig = self.fn_sigs.get(fname)
+        if k >= sig.args.len - 1: return nohint
+        mut pt = sig.args.get(k)
+        if pt as usize == 0 as usize: return nohint
+        mut pn = pt.read().name
+        if (pn == "List" or pn == "Vec") and pt.read().args.len > 0: return pt
+        return nohint
+
+    # Same for `obj.method(...)`: used when every class declaring `method` gives
+    # parameter k the same List/Vec element type.
+    pub def list_hint_for_method(self, method: str, k: int) -> Pointer[AstType]:
+        mut nohint = Pointer[AstType](0)
+        mut found = Pointer[AstType](0)
+        mut keys = self.classes.keys()
+        mut ci = 0
+        while ci < keys.len:
+            mut cd = self.classes.get(keys.get(ci))
+            mut mi = 0
+            while mi < cd.methods.len:
+                mut md = cd.methods.get(mi)
+                if md.name == method:
+                    mut idx = 0
+                    mut pi = 0
+                    while pi < md.params.len:
+                        mut prm = md.params.get(pi)
+                        if prm.name != "self":
+                            if idx == k and prm.ty as usize != 0 as usize:
+                                mut pn = prm.ty.read().name
+                                if (pn == "List" or pn == "Vec") and prm.ty.read().args.len > 0:
+                                    mut en = prm.ty.read().args.get(0).read().name
+                                    if found as usize == 0 as usize:
+                                        found = prm.ty
+                                    elif found.read().name != pn or found.read().args.get(0).read().name != en:
+                                        return nohint
+                                else:
+                                    return nohint
+                            idx = idx + 1
+                        pi = pi + 1
+                mi = mi + 1
+            ci = ci + 1
         return found
 
     pub def collect_idents(self, e: Pointer[HirExpr], out: Vec[str]):
@@ -2079,6 +2138,10 @@ extend Sema:
                     # outlive this frame: codegen must give it a HEAP env (see
                     # escaping_closures), not a stack env.
                     self.mark_coll_escaped(nm)
+                elif tn == "Result":
+                    # a Result handed on (argument, return, alias) is owned by its new
+                    # holder: never auto-drop it here
+                    self.mark_coll_escaped(nm)
                 elif self.classes.contains(tn):
                     # A class instance passed in a NON-RECEIVER position (call/method arg,
                     # RHS, return, literal element) may be stored by the callee (pushed into
@@ -2482,6 +2545,13 @@ extend Sema:
 
         if self.scopes.len > 0:
             mut decl_scope = self.scopes.get(self.scopes.len - 1)
+            # Rule N-2: a second `mut x` / `x: T = ...` for a local already declared
+            # in the same block would be a C redefinition. Shadowing in an inner
+            # block (an if/while body) stays legal, as in C.
+            if kind == SymbolKind.SVariable and decl_scope.variables.contains(name) and not name.starts_with("_"):
+                mut prev = decl_scope.variables.get(name)
+                if prev.kind == SymbolKind.SVariable and prev.decl_block_id == sym.decl_block_id and not prev.is_param:
+                    self.error("[N-2] '" + name + "' is already declared in this block. Assign to it without `mut` (`" + name + " = ...`), or pick a different name.")
             if not decl_scope.variables.contains(name): decl_scope.decl_order.push(name)
             decl_scope.variables.insert(name, sym)
         else:
@@ -5345,7 +5415,7 @@ extend Sema:
             case _: pass
 
     pub def str_method_ret_ty(self, method: str) -> AstType:
-        if method == "split" or method == "split_to_vec" or method == "split_once":
+        if method == "split" or method == "split_to_vec" or method == "split_once" or method == "split_exact":
             return AstType.init_generic("Vec", box_asttype(AstType.init("str")))
         if method == "strip": return AstType.init("str")
         if method == "trim": return AstType.init("str")
@@ -5376,7 +5446,7 @@ extend Sema:
         if method == "join": return AstType.init("str")
         if method == "len": return AstType.init("int")
         if method == "index_of": return AstType.init("int")
-        if method == "last_index_of": return AstType.init("int")
+        if method == "last_index_of" or method == "rfind": return AstType.init("int")
         if method == "count": return AstType.init("int")
         if method == "char_at": return AstType.init("int")
         if method == "parse_int": return AstType.init("int")
@@ -5705,9 +5775,12 @@ extend Sema:
                     if _ch_fname != "":
                         match args.get(k).read():
                             case Expr.EClosure(_, _, _, _): self.closure_hint = self.closure_hint_for_fn(_ch_fname, k)
+                            case Expr.EList(_lh_items):
+                                if _lh_items.len == 0: self.list_hint = self.list_hint_for_fn(_ch_fname, k)
                             case _: pass
                     hl.push(self.lower_expr(args.get(k)))
                     self.closure_hint = Pointer[AstType](0)
+                    self.list_hint = Pointer[AstType](0)
                     k = k + 1
                 # release borrows after call
                 mut p23_ui = 0
@@ -6027,9 +6100,12 @@ extend Sema:
                     self.closure_hint = Pointer[AstType](0)
                     match args.get(k).read():
                         case Expr.EClosure(_, _, _, _): self.closure_hint = self.closure_hint_for_method(method, k)
+                        case Expr.EList(_lhm_items):
+                            if _lhm_items.len == 0: self.list_hint = self.list_hint_for_method(method, k)
                         case _: pass
                     hl.push(self.lower_expr(args.get(k)))
                     self.closure_hint = Pointer[AstType](0)
+                    self.list_hint = Pointer[AstType](0)
                     k = k + 1
                 mut _saved_recv_mc = self.in_recv_pos
                 self.in_recv_pos = true
@@ -6251,6 +6327,10 @@ extend Sema:
                 # str primitive method dispatch - str.split/strip/join/etc.
                 elif hobj_ty.name == "str":
                     ret_ty = self.str_method_ret_ty(method)
+                    if not _str_method_known(method) and not self.class_method_exists("str", method) and not self.is_universal_method(method):
+                        # Otherwise the call reaches the C compiler as an undeclared
+                        # `TrStr_<method>` function.
+                        self.error("[E-1] No method '" + method + "' found on type 'str'.\n      FIX: see docs/std/string.md for the str methods, or add one with 'extend str:'.")
                 # Int format methods - return str (int/char/iN/uN types ONLY, not Thread/Atomic/etc.)
                 elif hobj_ty.name == "int" or hobj_ty.name == "i64" or hobj_ty.name == "i32" or hobj_ty.name == "i16" or hobj_ty.name == "i8" or hobj_ty.name == "u64" or hobj_ty.name == "u32" or hobj_ty.name == "u16" or hobj_ty.name == "u8" or hobj_ty.name == "usize" or hobj_ty.name == "char":
                     if method == "to_hex" or method == "to_HEX" or method == "to_hex_upper" or method == "to_octal" or method == "to_oct" or method == "to_binary" or method == "to_bin":
@@ -6912,6 +6992,10 @@ extend Sema:
                 if hitems.len > 0:
                     list_ty.args = Vec[Pointer[AstType]].init(1)
                     list_ty.args.push(box_asttype(hir_expr_type(hitems.get(0))))
+                elif self.list_hint as usize != 0 as usize:
+                    # empty `[]` passed straight to a List[T] parameter
+                    list_ty = self.list_hint.read()
+                self.list_hint = Pointer[AstType](0)
                 return box_hirexpr(HirExpr.EList(hitems, list_ty))
             case Expr.ESet(items):
                 self.check_no_heap("a set literal", "use a fixed-size array [T; N] + linear scan, or a bitset over a fixed word")
@@ -7436,3 +7520,8 @@ pub def box_symbol(s: Symbol) -> Pointer[Symbol]:
         mut p = alloc[Symbol](1)
         p.write(s)
         return p
+
+# Methods the C backend implements on `str` (keep in sync with the str
+# dispatch in codegen/c.tr gen_method_call).
+pub def _str_method_known(m: str) -> bool:
+    return " as_ptr as_str capitalize ceil center char_at chars contains contains_char count ends_with eq find floor format free get_index index_of is_alnum is_alpha is_digit is_empty is_lower is_space is_upper join last_index_of rfind __len__ len length lines lower lpad offset pad_left pad_right parse_bool parse_float parse_int pow read remove_char repeat replace replace_first reverse rpad slice split split_exact split_once split_to_vec starts_with strip strip_prefix strip_suffix title to_float to_int to_lower to_str to_string to_upper trim trim_left trim_right upper words write zfill clone hash bytes ".contains(" " + m + " ")

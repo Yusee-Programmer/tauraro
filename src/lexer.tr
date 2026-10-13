@@ -90,6 +90,30 @@ pub def keyword_to_token(s: str) -> Token:
 
 # --- Character helpers ----------------------------------------------------------
 
+# Value of an ASCII hex digit, or -1.
+pub def lex_hex_val(c: int) -> int:
+    if c >= 48 and c <= 57: return c - 48
+    if c >= 97 and c <= 102: return c - 87
+    if c >= 65 and c <= 70: return c - 55
+    return -1
+
+# Append code point `cp` to `sb` as UTF-8.
+pub def lex_append_utf8(sb: StringBuilder, cp: int):
+    if cp < 0x80:
+        sb.append_char(cp)
+    elif cp < 0x800:
+        sb.append_char(0xC0 | (cp >> 6))
+        sb.append_char(0x80 | (cp & 63))
+    elif cp < 0x10000:
+        sb.append_char(0xE0 | (cp >> 12))
+        sb.append_char(0x80 | ((cp >> 6) & 63))
+        sb.append_char(0x80 | (cp & 63))
+    else:
+        sb.append_char(0xF0 | (cp >> 18))
+        sb.append_char(0x80 | ((cp >> 12) & 63))
+        sb.append_char(0x80 | ((cp >> 6) & 63))
+        sb.append_char(0x80 | (cp & 63))
+
 pub def char_is_digit(c: int) -> bool:
     return c >= 48 and c <= 57   # '0' .. '9'
 
@@ -334,6 +358,18 @@ pub class Lexer:
                 elif esc == 39:     sb.append_char(39)
                 elif esc == 34:     sb.append_char(34)
                 elif esc == 48:     sb.append_char(0)
+                elif (esc == 120 or esc == 117 or esc == 85) and self.hex_run_ok(esc):
+                    # \xHH (a raw byte), \uXXXX and \UXXXXXXXX (a code point as UTF-8)
+                    mut ndig = 2
+                    if esc == 117: ndig = 4
+                    if esc == 85: ndig = 8
+                    mut hv = 0
+                    mut hk = 0
+                    while hk < ndig:
+                        hv = hv * 16 + lex_hex_val(self.advance())
+                        hk = hk + 1
+                    if esc == 120: sb.append_char(hv)
+                    else: lex_append_utf8(sb, hv)
                 else:
                     # Unrecognized escape (e.g. `\U`, `\H` — not one of the
                     # forms above): keep the backslash literally instead of
@@ -349,6 +385,23 @@ pub class Lexer:
         if not self.at_end(): self.advance()
         return Token.StrLit(sb.to_owned(), sb.len())
 
+    # True when the escape letter `esc` (x / u / U) just consumed is followed by
+    # its full run of hex digits (2 / 4 / 8) -- otherwise the backslash is kept
+    # literally (`"C:\Users"` stays a path). \u / \U are capped at U+10FFFF.
+    pub def hex_run_ok(self, esc: int) -> bool:
+        mut ndig = 2
+        if esc == 117: ndig = 4
+        if esc == 85: ndig = 8
+        mut k = 0
+        mut v = 0
+        while k < ndig:
+            mut h = lex_hex_val(self.peek_at(k))
+            if h < 0: return false
+            v = v * 16 + h
+            k = k + 1
+        if esc != 120 and v > 0x10FFFF: return false
+        return true
+
     pub def read_char(self) -> Token:
         self.advance()
         mut val = 0
@@ -360,18 +413,48 @@ pub class Lexer:
             elif esc == 92: val = 92
             elif esc == 39: val = 39
             elif esc == 48: val = 0
+            elif esc == 120 and lex_hex_val(self.peek()) >= 0 and lex_hex_val(self.peek_at(1)) >= 0:
+                val = lex_hex_val(self.advance()) * 16
+                val = val + lex_hex_val(self.advance())
             else: val = esc
         else:
             val = self.advance()
         if self.peek() == 39: self.advance()
         return Token.CharLit(val)
 
+    # Raw f-string body up to the closing quote. Escape pairs are kept as-is
+    # (the parser decodes them in text parts), so `\"` does not end the
+    # string; inside a `{...}` placeholder, nested string literals are copied
+    # whole, so `f"{s.find("b")}"` keeps its inner quotes. `{{` is literal.
     pub def read_fstring(self) -> Token:
         self.advance(); mut quote = self.advance()
         mut sb = StringBuilder.init(64)
-        while not self.at_end() and self.peek() != quote:
-            mut c = self.advance()
-            sb.append_char(c)
+        mut depth = 0
+        while not self.at_end():
+            mut c = self.peek()
+            if depth == 0 and c == quote: break
+            if c == 92:
+                sb.append_char(self.advance())
+                if not self.at_end(): sb.append_char(self.advance())
+                continue
+            if depth == 0 and c == 123 and self.peek_at(1) == 123:
+                sb.append_char(self.advance())
+                sb.append_char(self.advance())
+                continue
+            if c == 123:
+                depth = depth + 1
+            elif c == 125:
+                if depth > 0: depth = depth - 1
+            elif depth > 0 and (c == 34 or c == 39):
+                mut q = self.advance()
+                sb.append_char(q)
+                while not self.at_end() and self.peek() != q:
+                    mut ch = self.advance()
+                    sb.append_char(ch)
+                    if ch == 92 and not self.at_end(): sb.append_char(self.advance())
+                if not self.at_end(): sb.append_char(self.advance())
+                continue
+            sb.append_char(self.advance())
         if not self.at_end(): self.advance()
         return Token.FStrLit(sb.to_owned(), sb.len())
 
@@ -410,6 +493,18 @@ pub class Lexer:
                 elif esc == 39:     sb.append_char(39)
                 elif esc == 34:     sb.append_char(34)
                 elif esc == 48:     sb.append_char(0)
+                elif (esc == 120 or esc == 117 or esc == 85) and self.hex_run_ok(esc):
+                    # \xHH (a raw byte), \uXXXX and \UXXXXXXXX (a code point as UTF-8)
+                    mut ndig = 2
+                    if esc == 117: ndig = 4
+                    if esc == 85: ndig = 8
+                    mut hv = 0
+                    mut hk = 0
+                    while hk < ndig:
+                        hv = hv * 16 + lex_hex_val(self.advance())
+                        hk = hk + 1
+                    if esc == 120: sb.append_char(hv)
+                    else: lex_append_utf8(sb, hv)
                 else:
                     # Unrecognized escape (e.g. `\U`, `\H` — not one of the
                     # forms above): keep the backslash literally instead of

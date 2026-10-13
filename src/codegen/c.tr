@@ -76,7 +76,26 @@ pub def _is_c_int_scalar(n: str) -> bool:
     return false
 
 pub def _safe_c_varname(n: str) -> str:
-    if _is_c_keyword(n): return "_tr_v_" + n
+    if _is_c_keyword(n) or _is_c_macro_name(n): return "_tr_v_" + n
+    return n
+
+# Identifiers the C headers (or the compiler itself) define as object-like
+# macros on some platform: using one as a variable, parameter or field name
+# makes the preprocessor rewrite it (e.g. `stdout` -> `(__acrt_iob_func(1))`
+# on Windows, `unix` -> `1` with gcc, `MAP_COPY` on macOS).
+pub def _is_c_macro_name(n: str) -> bool:
+    if n == "stdin" or n == "stdout" or n == "stderr" or n == "errno": return true
+    if n == "unix" or n == "linux" or n == "i386" or n == "near" or n == "far": return true
+    if n == "NULL" or n == "EOF": return true
+    # <windows.h> (rpcndr.h / combaseapi.h)
+    if n == "small" or n == "interface": return true
+    return false
+
+# C name of a class / struct field: escaped only when C cannot use the name
+# itself (a keyword or a header macro). Narrower than _safe_c_varname so that
+# fields such as `count` or `index`, which C shims read by name, keep it.
+pub def _c_field(n: str) -> str:
+    if _is_c_lang_keyword(n) or _is_c_macro_name(n): return "_tr_f_" + n
     return n
 
 # Only the C language's own keywords (no library names): the names an
@@ -1341,7 +1360,7 @@ pub class CGenerator:
         mut fi = 0
         while fi < cls.fields.len:
             mut f = cls.fields.get(fi)
-            self.w("    " + _fld_c_tys.get(fi) + " " + f.name + ";\n")
+            self.w("    " + _fld_c_tys.get(fi) + " " + _c_field(f.name) + ";\n")
             fi = fi + 1
         if cls.fields.len == 0 and _mono_vt:
             self.w("    char _pad;\n")
@@ -2595,7 +2614,7 @@ pub class CGenerator:
             mut bfi: int = 0
             while bfi < base_cls.fields.len:
                 mut bf: HirField = base_cls.fields.get(bfi)
-                self.ws("    " + self.type_to_c(bf.ty) + " " + bf.name + ";\n")
+                self.ws("    " + self.type_to_c(bf.ty) + " " + _c_field(bf.name) + ";\n")
                 bfi = bfi + 1
 
     # Forward-declare every per-class `_trdrop_T` before any is defined, so a
@@ -2642,7 +2661,7 @@ pub class CGenerator:
                 mut _selc = self.type_to_c(f.ty.args.get(0).read())
                 self.ws("    " + _selc + " " + f.name + " __attribute__((vector_size(sizeof(" + _selc + ") * " + f.ty.array_size.to_str() + ")));\n")
             else:
-                self.ws("    " + self.type_to_c(f.ty) + " " + f.name + ";\n")
+                self.ws("    " + self.type_to_c(f.ty) + " " + _c_field(f.name) + ";\n")
             i = i + 1
         if c.fields.len == 0 and c.base_classes.len == 0 and _is_vt:
             self.ws("    char _pad;\n")
@@ -2667,21 +2686,21 @@ pub class CGenerator:
                         # `ref T` field is a borrow — the object does not own it.
                         _csf = _csf + 1
                     elif _is_str_type(self.resolve_generic_prim(_csfld.ty.name)):
-                        self.ws("    _tr_str_release(self->" + _safe_c_varname(_csfld.name) + ");\n")
+                        self.ws("    _tr_str_release(self->" + _c_field(_csfld.name) + ");\n")
                         _csf = _csf + 1
                     elif self.is_heap_class_tn(_csfld.ty.name):
                         # Owned heap-class field: recursively release it (its own
                         # _trdrop releases ITS str/class fields). Field stores co-own
                         # (retain), so this release is balanced. Pointer-aliased types
                         # (raw_aliased) are excluded by is_heap_class_tn.
-                        self.ws("    _tr_obj_release(self->" + _safe_c_varname(_csfld.name) + ", " + self.obj_drop_fn(_csfld.ty.name) + ");\n")
+                        self.ws("    _tr_obj_release(self->" + _c_field(_csfld.name) + ", " + self.obj_drop_fn(_csfld.ty.name) + ");\n")
                         _csf = _csf + 1
                     elif self._is_coll_type_name(_csfld.ty.name) and self.coll_field_owned.contains(c.name + "." + _csfld.name) and not self.coll_field_disq.contains(_csfld.name):
                         # Uniquely-owned collection field (only ever assigned a fresh
                         # collection, name never aliased): free it, releasing any owned
                         # heap-class elements/values. Aliased collection fields are left
                         # alone (collections aren't refcounted → freeing would double-free).
-                        mut _cfree = self._coll_field_free_call("self->" + _safe_c_varname(_csfld.name), _csfld.ty)
+                        mut _cfree = self._coll_field_free_call("self->" + _c_field(_csfld.name), _csfld.ty)
                         if _cfree != "": self.ws("    " + _cfree + ";\n")
                         _csf = _csf + 1
                     else:
@@ -2896,7 +2915,7 @@ pub class CGenerator:
                 # by-reference through the env pointer (preserves live read/write).
                 if self.closure_env_var != "" and self.closure_cap_set.contains(n):
                     return "(*(__env->p_" + _safe_c_varname(n) + "))"
-                if _is_c_keyword(n) and self.decl_vars.contains(n): return "_tr_v_" + n
+                if (_is_c_keyword(n) or _is_c_macro_name(n)) and self.decl_vars.contains(n): return "_tr_v_" + n
                 # A top-level function used as a value (not a call target) is a
                 # zero-cost TrFnVal: its address as .fn, NULL .env (bare function,
                 # not a closure -- see gen_call's dispatch on .env).
@@ -3024,7 +3043,7 @@ pub class CGenerator:
                     mut nq_tmp = "_wt" + self.next_temp()
                     self.wrap_temp_decls.push(nq_pre)
                     self.wrap_temp_decls.push(nq_chk)
-                    self.wrap_temp_decls.push("TrStr " + nq_tmp + " = _tr_str_unbox(" + nq + ".data.Ok.val)")
+                    self.wrap_temp_decls.push("TrStr " + nq_tmp + " = " + self.take_payload(nq + ".data.Ok.val", "str"))
                     self.wrap_temp_names.push(nq_tmp)
                     return nq_tmp
                 mut nq_val = ""
@@ -3032,6 +3051,8 @@ pub class CGenerator:
                     nq_val = "(" + ok_c + ")(uintptr_t)" + nq + ".data.Ok.val"
                 elif _is_float_type(ok_ty.name):
                     nq_val = "_tr_ptr_to_f64(" + nq + ".data.Ok.val)"
+                elif self.value_types.contains(ok_ty.name):
+                    nq_val = self.take_payload(nq + ".data.Ok.val", ok_ty.name)
                 elif ok_c.ends_with("*"):
                     nq_val = "(" + ok_c + ")" + nq + ".data.Ok.val"
                 else:
@@ -3055,7 +3076,7 @@ pub class CGenerator:
                     i = i + 1
                 return sig + ")"
             case HirExpr.ESuperPropAccess(base, prop, _):
-                return "(((" + base + "*)self)->" + prop + ")"
+                return "(((" + base + "*)self)->" + _c_field(prop) + ")"
             case HirExpr.EAwait(expr, _):
                 return self.gen_await_call(expr)
             case HirExpr.EAwaitTimeout(at_expr, at_ms, _):
@@ -4380,9 +4401,13 @@ pub class CGenerator:
         if op == "&" or op == "ref": return "(&" + inner + ")"
         return "(" + op + inner + ")"
 
-    pub def gen_prop_access(self, o: Pointer[HirExpr], p: str) -> str:
+    pub def gen_prop_access(self, o: Pointer[HirExpr], p0: str) -> str:
         mut t_n: str = hir_expr_type(o).name
         mut obj_s = self.gen_expr(o)
+        # class / struct fields use their C-safe name; enum payloads, Result and
+        # Option members below keep the raw name
+        mut p = p0
+        if not self.enums.contains(t_n) and t_n != "Result" and t_n != "Option": p = _c_field(p0)
         # Shared var: unwrap _TrSharedBox* -> (TypeName*)obj->data
         if self.shared_vars.contains(obj_s):
             mut sh_ty = self.shared_vars.get(obj_s)
@@ -5468,8 +5493,35 @@ pub class CGenerator:
         if _is_float_type(a_ty_n):
             return "_tr_f64_to_ptr((double)(" + s + "))"
         if _is_str_type(a_ty_n):
-            return "_tr_str_box(" + s + ")"
+            # The box owns one reference (freed with the Result/Option local that
+            # holds it), so a borrowed value -- a field, parameter, list element or
+            # tracked local -- is retained; a fresh value moves in as-is.
+            if self._is_fresh_str_expr(arg): return "_tr_str_box(" + s + ")"
+            return "_tr_str_box(_tr_str_retain(" + s + "))"
+        if self.value_types.contains(a_ty_n): return self.box_value(s, a_ty_n)
         return "(void*)(" + s + ")"
+
+    # Heap copy of a @value_type struct, for a void* Result/Option payload.
+    pub def box_value(self, s: str, tn: str) -> str:
+        mut vb = "_vb" + self.next_temp()
+        return "({ " + tn + "* " + vb + " = (" + tn + "*)_tr_checked_alloc(sizeof(" + tn + ")); *" + vb + " = (" + s + "); (void*)" + vb + "; })"
+
+    # Read a boxed payload of type `tn` from `slot` and free the box: for `?`,
+    # which consumes its temporary Result exactly once.
+    pub def take_payload(self, slot: str, tn: str) -> str:
+        mut tb = "_tb" + self.next_temp()
+        if _is_str_type(tn):
+            mut ts = "_ts" + self.next_temp()
+            return "({ void* " + tb + " = (" + slot + "); TrStr " + ts + " = _tr_str_unbox(" + tb + "); if (" + tb + ") _tr_free(" + tb + "); " + ts + "; })"
+        mut tv = "_tv" + self.next_temp()
+        return "({ void* " + tb + " = (" + slot + "); " + tn + " " + tv + " = *(" + tn + "*)" + tb + "; _tr_free(" + tb + "); " + tv + "; })"
+
+    # C statement freeing a Result/Option payload slot of type `tn` (empty when
+    # the payload is stored inline or not owned by the box).
+    pub def payload_free_stmt(self, slot: str, tn: str) -> str:
+        if _is_str_type(tn): return "if (" + slot + ") { _tr_str_release(*(TrStr*)(" + slot + ")); _tr_free(" + slot + "); }"
+        if self.value_types.contains(tn): return "if (" + slot + ") _tr_free(" + slot + ");"
+        return ""
 
     # Unwrap a `void*` Option[T]/Result[T,E] payload back to type `ty`.
     pub def unwrap_voidp_as(self, expr_s: str, ty: AstType) -> str:
@@ -5478,6 +5530,7 @@ pub class CGenerator:
             return "_tr_ptr_to_f64(" + expr_s + ")"
         if _is_str_type(tn):
             return "_tr_str_unbox(" + expr_s + ")"
+        if self.value_types.contains(tn): return "(*(" + tn + "*)(" + expr_s + "))"
         mut ct = self.type_to_c(ty)
         return "((" + ct + ")(" + expr_s + "))"
 
@@ -5589,6 +5642,8 @@ pub class CGenerator:
                 if me_fty.is_borrow: return false
                 return true
             case HirExpr.EBinOp(_, _, _, _): return true
+            # An f-string is built into a new rc=1 string, like a call result.
+            case HirExpr.EFString(_, _): return true
             # A conditional (`if`-expression OR the `a if c else b` ternary) is
             # fresh-owned exactly when BOTH arms are fresh-owned: an if-expression's
             # arms are `do:` blocks (owned when str), while a plain ternary of two
@@ -5966,6 +6021,7 @@ pub class CGenerator:
             mut sa1: str = self.strz(str_arg1)
             if method == "split":         return "_tr_str_splitv(" + ov + ", " + arg0v + ")"
             if method == "split_to_vec":  return "_tr_str_splitv(" + ov + ", " + arg0v + ")"
+            if method == "split_exact":   return "_tr_str_split_exactv(" + ov + ", " + arg0v + ")"
             if method == "trim" or method == "strip": return "_tr_str_stripv(" + ov + ")"
             if method == "trim_left":     return "_tr_str_trim_leftv(" + ov + ")"
             if method == "trim_right":    return "_tr_str_trim_rightv(" + ov + ")"
@@ -5984,7 +6040,7 @@ pub class CGenerator:
             if method == "join":          return "_tr_trstr_join((List_TrStr*)(void*)" + obj_s + ", " + sa0 + ")"
             if method == "len":           return "_tr_str_lenv(" + ov + ")"
             if method == "index_of":      return "_tr_str_index_ofv(" + ov + ", " + arg0v + ")"
-            if method == "last_index_of": return "_tr_str_last_index_ofv(" + ov + ", " + arg0v + ")"
+            if method == "last_index_of" or method == "rfind": return "_tr_str_last_index_ofv(" + ov + ", " + arg0v + ")"
             if method == "count":         return "_tr_str_count_occv(" + ov + ", " + arg0v + ")"
             if method == "char_at":       return "_tr_str_char_at_codev(" + ov + ", " + str_arg0 + ")"
             if method == "starts_with":   return "_tr_str_starts_withv(" + ov + ", " + arg0v + ")"
@@ -6523,7 +6579,7 @@ pub class CGenerator:
                 return "_tr_str_slicev(" + ov + ", " + self.gen_expr(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")"
             if method == "index_of" and args.len > 0:
                 return "_tr_str_index_ofv(" + ov + ", " + self.strv(self.gen_expr(args.get(0))) + ")"
-            if method == "last_index_of" and args.len > 0:
+            if (method == "last_index_of" or method == "rfind") and args.len > 0:
                 return "_tr_str_last_index_ofv(" + ov + ", " + self.strv(self.gen_expr(args.get(0))) + ")"
             if method == "len" or method == "length":
                 return "_tr_str_lenv(" + ov + ")"
@@ -8620,7 +8676,9 @@ pub class CGenerator:
                                 elif _is_float_type(ok_ty2.name):
                                     self.w(pad + "return _tr_ptr_to_f64(" + tmp_qr2 + ".data.Ok.val);\n")
                                 elif _is_str_type(ok_ty2.name):
-                                    self.w(pad + "return _tr_str_unbox(" + tmp_qr2 + ".data.Ok.val);\n")
+                                    self.w(pad + "return " + self.take_payload(tmp_qr2 + ".data.Ok.val", "str") + ";\n")
+                                elif self.value_types.contains(ok_ty2.name):
+                                    self.w(pad + "return " + self.take_payload(tmp_qr2 + ".data.Ok.val", ok_ty2.name) + ";\n")
                                 elif ok_c2b.ends_with("*"):
                                     self.w(pad + "return (" + ok_c2b + ")" + tmp_qr2 + ".data.Ok.val;\n")
                                 else:
@@ -8653,7 +8711,17 @@ pub class CGenerator:
                         elif _is_float_type(ret_ty_n):
                             self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=_tr_f64_to_ptr((double)(" + ret_s + "))});\n")
                         elif _is_str_type(ret_ty_n):
-                            self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=_tr_str_box(" + ret_s + ")});\n")
+                            # the box must own its reference: retain a borrowed value
+                            # (a tracked local being returned moves in unchanged)
+                            mut ret_owned = self.str_retain_wrap(e, ret_s, true)
+                            match e.read():
+                                case HirExpr.EIndex(_ri_o, _, _):
+                                    mut _ri_n = hir_expr_type(_ri_o).name
+                                    if _ri_n == "List" or _ri_n == "Vec" or _ri_n == "Array": ret_owned = "_tr_str_retain(" + ret_s + ")"
+                                case _: pass
+                            self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=_tr_str_box(" + ret_owned + ")});\n")
+                        elif self.value_types.contains(ret_ty_n):
+                            self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=" + self.box_value(ret_s, ret_ty_n) + "});\n")
                         else:
                             self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=(void*)(" + ret_s + ")});\n")
                     else:
@@ -8683,6 +8751,12 @@ pub class CGenerator:
                 # branch), so an SAutoDrop free/drop names the concrete instance. The
                 # helper self-guards (only records when it finds concrete class args).
                 self.capture_local_mono(n, ty, v)
+                # Result local: remember its Ok / Err payload types for the
+                # scope-exit drop (see SAutoDrop "Result").
+                mut _rl_ty = ty
+                if _rl_ty.name != "Result" and v as usize != 0 as usize: _rl_ty = hir_expr_type(v)
+                if _rl_ty.name == "Result" and _rl_ty.args.len >= 2:
+                    self.coll_local_sfx.insert("@res:" + n, self.resolve_generic_prim(_rl_ty.args.get(0).read().name) + "|" + self.resolve_generic_prim(_rl_ty.args.get(1).read().name))
                 mut c_ty = self.type_to_c(ty)
                 # If SLet.ty is Vec/List without generic args, recover c_ty from the init expression
                 if c_ty == "List_ptr*" and v as usize != 0 as usize:
@@ -8764,7 +8838,11 @@ pub class CGenerator:
                             elif _is_float_type(ok_ty3.name):
                                 ok_val3 = "_tr_ptr_to_f64(" + tmp_qr3 + ".data.Ok.val)"
                             elif _is_str_type(ok_ty3.name):
-                                ok_val3 = "_tr_str_unbox(" + tmp_qr3 + ".data.Ok.val)"
+                                ok_val3 = self.take_payload(tmp_qr3 + ".data.Ok.val", "str")
+                                # the local owns the extracted string (released at scope exit)
+                                self.str_local_names.insert(n, true)
+                            elif self.value_types.contains(ok_ty3.name):
+                                ok_val3 = self.take_payload(tmp_qr3 + ".data.Ok.val", ok_ty3.name)
                             elif ok_c3.ends_with("*"):
                                 # type_to_c already returned a pointer type (heap class) —
                                 # cast straight to it; appending another '*' here produced a
@@ -9280,7 +9358,9 @@ pub class CGenerator:
                                 elif _is_str_type(ok_ty4.name):
                                     if self.str_local_names.contains(_trn):
                                         self.w(pad + "_tr_str_release(" + self.lv_name(_trn) + ");\n")
-                                    ok_val4 = "_tr_str_unbox(" + tmp_qr4 + ".data.Ok.val)"
+                                    ok_val4 = self.take_payload(tmp_qr4 + ".data.Ok.val", "str")
+                                elif self.value_types.contains(ok_ty4.name):
+                                    ok_val4 = self.take_payload(tmp_qr4 + ".data.Ok.val", ok_ty4.name)
                                 elif ok_c4.ends_with("*"):
                                     ok_val4 = "(" + ok_c4 + ")" + tmp_qr4 + ".data.Ok.val"
                                 else:
@@ -9698,6 +9778,16 @@ pub class CGenerator:
                     # Weak[T] handle: drop the weak ref (frees the block if it was the
                     # last one and the payload is already gone).
                     self.w(pad + "_tr_weak_drop(" + _safe_c_varname(adn) + ");\n")
+                elif adc == "Result":
+                    # Result local: free a boxed Ok / Err payload (str or value type).
+                    if self.coll_local_sfx.contains("@res:" + adn):
+                        mut _rk = self.coll_local_sfx.get("@res:" + adn)
+                        mut _rbar = _rk.find("|")
+                        mut _rv = _safe_c_varname(adn)
+                        mut _rok = self.payload_free_stmt(_rv + ".data.Ok.val", _rk.slice(0, _rbar))
+                        mut _rer = self.payload_free_stmt(_rv + ".data.Err.err", _rk.slice(_rbar + 1, _rk.len()))
+                        if _rok != "" or _rer != "":
+                            self.w(pad + "if (" + _rv + ".tag == Result_Err) { " + _rer + " } else { " + _rok + " }\n")
                 elif adc == "Mutex":
                     # Mutex[T] local: rc-guarded drop — frees the box (unlocking a
                     # still-held guard) and releases an owned fresh payload. Only fires
@@ -9785,7 +9875,7 @@ pub class CGenerator:
                                 mut _ad_fld = _ad_cls.fields.get(_ad_fi)
                                 if _is_str_type(self.resolve_generic_prim(_ad_fld.ty.name)) and not _ad_fld.ty.is_borrow:
                                     mut _ad_tmp = "_ad_f" + self.next_temp()
-                                    self.w(pad + "TrStr " + _ad_tmp + " = " + _adn_safe + "->" + _safe_c_varname(_ad_fld.name) + ";\n")
+                                    self.w(pad + "TrStr " + _ad_tmp + " = " + _adn_safe + "->" + _c_field(_ad_fld.name) + ";\n")
                                     _ad_tmps.push(_ad_tmp)
                                 _ad_fi = _ad_fi + 1
                         if self.has_method(adc, "free"):
