@@ -1,0 +1,554 @@
+# std.sys.subprocess -- run programs: argv lists, pipes, environment, timeouts.
+# tauraro-cpp-shim: subprocess_native.c
+#
+# A Command describes a program and its argument list (no shell involved
+# unless you ask for one with Command.shell), its environment, working
+# directory and what each of stdin / stdout / stderr is connected to.
+# `output()` runs it and captures everything, `status()` runs it with the
+# parent's stdio, and `spawn()` returns a Child to talk to while it runs.
+#
+# POSIX: fork + execve; the program is looked up on the child's PATH before
+# forking, and exec/chdir failures are reported back through a close-on-exec
+# pipe. Windows: CreateProcessW with MSVCRT-style argument quoting, UTF-16
+# command line / environment, and only the stdio handles inherited.
+#
+# Data is binary-safe in both directions. Capturing stdout and stderr at
+# once (output, Child.communicate) drains both pipes together, so large
+# output on either one cannot deadlock.
+#
+# Usage:
+#   from std.sys.subprocess import Command, Stdio
+#   mut out = Command.new("git").arg("status").arg("--short").output()?
+#   if out.success(): print(out.stdout_data)
+#
+#   mut child = Command.new("sort").stdin(Stdio.piped()).stdout(Stdio.piped()).spawn()?
+#   child.write_stdin("b\na\n")?
+#   child.close_stdin()
+#   print(child.read_stdout_all()?)
+#   mut st = child.wait()?
+
+from std.core.string import StringBuilder
+
+extern "C":
+    def trc_sp_last_error(out: Pointer[char], cap: int) -> int
+    def trc_sp_cmd_new() -> int
+    def trc_sp_cmd_free(h: int)
+    def trc_sp_cmd_arg(h: int, p: Pointer[char], n: int) -> int
+    def trc_sp_cmd_env(h: int, k: Pointer[char], kn: int, v: Pointer[char], vn: int) -> int
+    def trc_sp_cmd_env_remove(h: int, k: Pointer[char], kn: int) -> int
+    def trc_sp_cmd_env_clear(h: int)
+    def trc_sp_cmd_cwd(h: int, p: Pointer[char], n: int)
+    def trc_sp_cmd_raw_cmdline(h: int, p: Pointer[char], n: int)
+    def trc_sp_cmd_stdio(h: int, which: int, mode: int, p: Pointer[char], n: int)
+    def trc_sp_spawn(h: int) -> int
+    def trc_sp_pid(c: int) -> int
+    def trc_sp_has_pipe(c: int, which: int) -> int
+    def trc_sp_code(c: int) -> int
+    def trc_sp_signal(c: int) -> int
+    def trc_sp_buf_len(c: int, k: int) -> int
+    def trc_sp_buf_take(c: int, k: int, dst: Pointer[char])
+    def trc_sp_write(c: int, d: Pointer[char], n: int) -> int
+    def trc_sp_close_pipe(c: int, which: int)
+    def trc_sp_read(c: int, which: int, out: Pointer[char], cap: int, timeout_ms: int) -> int
+    def trc_sp_wait(c: int, timeout_ms: int) -> int
+    def trc_sp_signal_send(c: int, sig: int) -> int
+    def trc_sp_kill(c: int) -> int
+    def trc_sp_communicate(c: int, d: Pointer[char], n: int, timeout_ms: int) -> int
+    def trc_sp_free(c: int)
+    def trc_sp_platform() -> int
+    def trc_sp_std_write(fd: int, d: Pointer[char], n: int) -> int
+    def trc_sp_std_read(fd: int, out: Pointer[char], cap: int) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+# Stdio kinds (Stdio.kind).
+pub const SP_STDIO_DEFAULT = -1     # what the running method chooses (see Command)
+pub const SP_STDIO_INHERIT = 0      # share the parent's stream
+pub const SP_STDIO_PIPE = 1         # a pipe the parent reads / writes
+pub const SP_STDIO_NULL = 2         # /dev/null or NUL
+pub const SP_STDIO_FILE = 3         # a file: read for stdin, truncated + written for output
+pub const SP_STDIO_APPEND = 4       # a file opened for appending (stdout / stderr)
+pub const SP_STDIO_MERGE = 5        # stderr only: same destination as stdout
+
+# Common POSIX signal numbers for Child.send_signal.
+pub const SP_SIGINT = 2
+pub const SP_SIGKILL = 9
+pub const SP_SIGTERM = 15
+
+def _sp_error() -> str:
+    mut p = _tr_c_malloc(601)
+    mut n = trc_sp_last_error(p, 600)
+    unsafe: p.offset(n).write('\0')
+    return _tr_str_wrap_len(p, n)
+
+# True on Windows.
+pub def subprocess_is_windows() -> bool: return trc_sp_platform() == 3
+
+# Where a child's stdin, stdout or stderr goes.
+pub class Stdio:
+    pub kind: int
+    pub path: str
+
+extend Stdio:
+    def make(kind: int, path: str) -> Stdio:
+        mut s = Stdio()
+        s.kind = kind
+        s.path = path
+        return s
+
+    pub def inherit() -> Stdio: return Stdio.make(SP_STDIO_INHERIT, "")
+    pub def piped() -> Stdio: return Stdio.make(SP_STDIO_PIPE, "")
+    pub def devnull() -> Stdio: return Stdio.make(SP_STDIO_NULL, "")
+    # stdin: read from this file; stdout/stderr: create or truncate it.
+    pub def file(path: str) -> Stdio: return Stdio.make(SP_STDIO_FILE, path)
+    # stdout/stderr: append to this file (created if missing).
+    pub def append(path: str) -> Stdio: return Stdio.make(SP_STDIO_APPEND, path)
+    # stderr only: send it wherever stdout goes (like `2>&1`).
+    pub def to_stdout() -> Stdio: return Stdio.make(SP_STDIO_MERGE, "")
+
+# How a child ended. `code` is the exit code (-1 when a signal ended it);
+# `signal` is the POSIX signal number that killed it, else 0.
+pub class ExitStatus:
+    pub code: int
+    pub signal: int
+
+extend ExitStatus:
+    pub def success(self) -> bool: return self.code == 0 and self.signal == 0
+
+    pub def to_str(self) -> str:
+        if self.signal != 0: return "signal " + str(self.signal)
+        return "exit code " + str(self.code)
+
+# Result of Command.output / Child.communicate.
+pub class Output:
+    pub status: ExitStatus
+    pub stdout_data: str
+    pub stderr_data: str
+
+extend Output:
+    pub def success(self) -> bool: return self.status.success()
+
+# A running (or finished) child process.
+pub class Child:
+    handle: int
+    pub exit_status: ExitStatus
+    pub finished: bool
+
+extend Child:
+    def adopt(h: int) -> Child:
+        mut c = Child()
+        c.handle = h
+        mut st = ExitStatus()
+        st.code = -1
+        st.signal = 0
+        c.exit_status = st
+        c.finished = false
+        return c
+
+    def check(self) throws str:
+        if self.handle == 0: raise("subprocess: child handle is closed")
+
+    def latch(self):
+        self.finished = true
+        self.exit_status.code = trc_sp_code(self.handle)
+        self.exit_status.signal = trc_sp_signal(self.handle)
+
+    # OS process id.
+    pub def pid(self) -> int:
+        if self.handle == 0: return 0
+        return trc_sp_pid(self.handle)
+
+    pub def has_stdin(self) -> bool:
+        return self.handle != 0 and trc_sp_has_pipe(self.handle, 0) == 1
+    pub def has_stdout(self) -> bool:
+        return self.handle != 0 and trc_sp_has_pipe(self.handle, 1) == 1
+    pub def has_stderr(self) -> bool:
+        return self.handle != 0 and trc_sp_has_pipe(self.handle, 2) == 1
+
+    # Write all of `data` to the child's stdin (blocks while the pipe is full).
+    # Raises "subprocess: broken pipe ..." when the child no longer reads it.
+    pub def write_stdin(self, data: str) throws str:
+        self.check()?
+        mut dp = data as Pointer[char]
+        if trc_sp_write(self.handle, dp, data.len()) < 0: raise(_sp_error())
+
+    # Close our end of stdin so the child sees end of input.
+    pub def close_stdin(self):
+        if self.handle != 0: trc_sp_close_pipe(self.handle, 0)
+
+    def read_from(self, which: int, cap: int, timeout_ms: int) throws str -> str:
+        self.check()?
+        mut n0 = cap
+        if n0 < 1: n0 = 1
+        mut buf = _tr_c_malloc(n0 + 1)
+        mut n = trc_sp_read(self.handle, which, buf, n0, timeout_ms)
+        if n == -2:
+            _tr_c_free(buf)
+            return ""
+        if n < 0:
+            _tr_c_free(buf)
+            raise(_sp_error())
+        unsafe: buf.offset(n).write('\0')
+        return _tr_str_wrap_len(buf, n)
+
+    def read_all_from(self, which: int) throws str -> str:
+        mut sb = StringBuilder.init(4096)
+        while true:
+            mut chunk = self.read_from(which, 65536, -1)?
+            if chunk.len() == 0: break
+            sb.append(chunk)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Up to `cap` bytes of stdout; blocks until some arrive. "" = end of stream.
+    pub def read_stdout(self, cap: int) throws str -> str: return self.read_from(1, cap, -1)?
+    pub def read_stderr(self, cap: int) throws str -> str: return self.read_from(2, cap, -1)?
+    # Like read_stdout, but returns "" after timeout_ms with nothing to read
+    # (check stdout_eof-style conditions with wait/try_wait).
+    pub def read_stdout_timeout(self, cap: int, timeout_ms: int) throws str -> str: return self.read_from(1, cap, timeout_ms)?
+    pub def read_stderr_timeout(self, cap: int, timeout_ms: int) throws str -> str: return self.read_from(2, cap, timeout_ms)?
+    # Everything until end of stream. Reading one stream to the end while the
+    # child fills the other pipe can deadlock; use communicate() for both.
+    pub def read_stdout_all(self) throws str -> str: return self.read_all_from(1)?
+    pub def read_stderr_all(self) throws str -> str: return self.read_all_from(2)?
+
+    # Close stdin and block until the child exits.
+    pub def wait(self) throws str -> ExitStatus:
+        self.check()?
+        if self.finished: return self.exit_status
+        self.close_stdin()
+        mut r = trc_sp_wait(self.handle, -1)
+        if r < 0: raise(_sp_error())
+        self.latch()
+        return self.exit_status
+
+    # True (and exit_status set) when the child has exited; never blocks.
+    pub def try_wait(self) throws str -> bool:
+        self.check()?
+        if self.finished: return true
+        mut r = trc_sp_wait(self.handle, 0)
+        if r < 0: raise(_sp_error())
+        if r == 1: self.latch()
+        return r == 1
+
+    # Wait up to ms milliseconds; true (and exit_status set) when it exited.
+    pub def wait_timeout(self, ms: int) throws str -> bool:
+        self.check()?
+        if self.finished: return true
+        mut t = ms
+        if t < 0: t = 0
+        mut r = trc_sp_wait(self.handle, t)
+        if r < 0: raise(_sp_error())
+        if r == 1: self.latch()
+        return r == 1
+
+    # Forcefully end the child (SIGKILL / TerminateProcess). Does not reap it:
+    # call wait() afterwards for the status.
+    pub def kill(self) throws str:
+        self.check()?
+        if trc_sp_kill(self.handle) < 0: raise(_sp_error())
+
+    # Send a POSIX signal (e.g. SP_SIGTERM). Raises on Windows.
+    pub def send_signal(self, sig: int) throws str:
+        self.check()?
+        if trc_sp_signal_send(self.handle, sig) < 0: raise(_sp_error())
+
+    def take_buf(self, k: int) -> str:
+        mut n = trc_sp_buf_len(self.handle, k)
+        mut p = _tr_c_malloc(n + 1)
+        trc_sp_buf_take(self.handle, k, p)
+        unsafe: p.offset(n).write('\0')
+        return _tr_str_wrap_len(p, n)
+
+    # Send `input` to stdin (when piped, then close it), collect stdout and
+    # stderr (when piped) without deadlocking, and wait for exit. timeout_ms < 0
+    # waits forever; on timeout the child is killed and reaped, and this raises
+    # "subprocess: timed out after N ms".
+    pub def communicate(self, input: str, timeout_ms: int) throws str -> Output:
+        self.check()?
+        mut ip = input as Pointer[char]
+        mut r = trc_sp_communicate(self.handle, ip, input.len(), timeout_ms)
+        if r == -2:
+            trc_sp_kill(self.handle)
+            trc_sp_wait(self.handle, -1)
+            self.latch()
+            raise("subprocess: timed out after " + str(timeout_ms) + " ms")
+        if r < 0:
+            mut e = _sp_error()
+            raise(e)
+        mut o = Output()
+        o.stdout_data = self.take_buf(0)
+        o.stderr_data = self.take_buf(1)
+        o.status = self.wait()?
+        return o
+
+    # Release the pipes and bookkeeping. Does not kill a running child.
+    pub def close(self):
+        if self.handle != 0:
+            trc_sp_free(self.handle)
+            self.handle = 0
+
+# A program to run, configured builder-style; every setter returns the Command.
+pub class Command:
+    pub program: str
+    pub argv: List[str]
+    pub cwd: str
+    pub timeout_ms: int
+    use_shell: bool
+    shell_line: str
+    env_cleared: bool
+    env_keys: List[str]
+    env_vals: List[str]
+    env_removed: List[str]
+    in_cfg: Stdio
+    out_cfg: Stdio
+    err_cfg: Stdio
+
+extend Command:
+    # Run `program` (looked up on PATH unless it contains a path separator)
+    # with no arguments yet.
+    pub def new(program: str) -> Command:
+        mut c = Command()
+        c.program = program
+        mut a: List[str] = [program]
+        c.argv = a
+        c.cwd = ""
+        c.timeout_ms = -1
+        c.use_shell = false
+        c.shell_line = ""
+        c.env_cleared = false
+        mut k: List[str] = []
+        mut v: List[str] = []
+        mut r: List[str] = []
+        c.env_keys = k
+        c.env_vals = v
+        c.env_removed = r
+        c.in_cfg = Stdio.make(SP_STDIO_DEFAULT, "")
+        c.out_cfg = Stdio.make(SP_STDIO_DEFAULT, "")
+        c.err_cfg = Stdio.make(SP_STDIO_DEFAULT, "")
+        return c
+
+    # Run a command line through the system shell: `/bin/sh -c LINE` on POSIX,
+    # `cmd.exe /d /s /c "LINE"` on Windows. The line is NOT escaped -- never
+    # build it from untrusted input; prefer Command.new + arg.
+    pub def shell(line: str) -> Command:
+        if subprocess_is_windows():
+            mut c = Command.new("cmd.exe")
+            c.use_shell = true
+            c.shell_line = line
+            c.argv.append("/d")
+            c.argv.append("/s")
+            c.argv.append("/c")
+            c.argv.append(line)
+            return c
+        mut c = Command.new("/bin/sh")
+        c.argv.append("-c")
+        c.argv.append(line)
+        return c
+
+    pub def arg(self, a: str) -> Command:
+        self.argv.append(a)
+        return self
+
+    pub def args(self, list: List[str]) -> Command:
+        for a in list: self.argv.append(a)
+        return self
+
+    # Set a variable for the child (overrides an inherited one).
+    pub def env(self, key: str, value: str) -> Command:
+        self.drop_env_entry(key)
+        self.env_keys.append(key)
+        self.env_vals.append(value)
+        return self
+
+    # Unset a variable for the child.
+    pub def env_remove(self, key: str) -> Command:
+        self.drop_env_entry(key)
+        self.env_removed.append(key)
+        return self
+
+    # Start from an empty environment (also forgets earlier env() calls).
+    pub def env_clear(self) -> Command:
+        self.env_cleared = true
+        mut k: List[str] = []
+        mut v: List[str] = []
+        mut r: List[str] = []
+        self.env_keys = k
+        self.env_vals = v
+        self.env_removed = r
+        return self
+
+    def drop_env_entry(self, key: str):
+        mut k: List[str] = []
+        mut v: List[str] = []
+        mut i = 0
+        while i < len(self.env_keys):
+            if self.env_keys[i] != key:
+                k.append(self.env_keys[i])
+                v.append(self.env_vals[i])
+            i = i + 1
+        self.env_keys = k
+        self.env_vals = v
+        mut r: List[str] = []
+        for x in self.env_removed:
+            if x != key: r.append(x)
+        self.env_removed = r
+
+    # Working directory for the child ("" = the parent's).
+    pub def current_dir(self, path: str) -> Command:
+        self.cwd = path
+        return self
+
+    pub def stdin(self, s: Stdio) -> Command:
+        self.in_cfg = s
+        return self
+
+    pub def stdout(self, s: Stdio) -> Command:
+        self.out_cfg = s
+        return self
+
+    pub def stderr(self, s: Stdio) -> Command:
+        self.err_cfg = s
+        return self
+
+    # Shorthand for stderr(Stdio.to_stdout()).
+    pub def merge_stderr(self) -> Command:
+        self.err_cfg = Stdio.to_stdout()
+        return self
+
+    # Time limit for output() / status() / output_with_input() (ms; < 0 = none).
+    # On expiry the child is killed and the call raises.
+    pub def timeout(self, ms: int) -> Command:
+        self.timeout_ms = ms
+        return self
+
+    # The full argument vector (program first).
+    pub def get_argv(self) -> List[str]: return self.argv
+
+    def put_stdio(self, h: int, which: int, s: Stdio, dflt: int) throws str:
+        mut k = s.kind
+        if k == SP_STDIO_DEFAULT: k = dflt
+        if k == SP_STDIO_MERGE and which != 2: raise("subprocess: Stdio.to_stdout() is only valid for stderr")
+        if (k == SP_STDIO_FILE or k == SP_STDIO_APPEND) and s.path.len() == 0: raise("subprocess: empty file path for redirection")
+        if k == SP_STDIO_APPEND and which == 0: k = SP_STDIO_FILE
+        mut pp = s.path as Pointer[char]
+        trc_sp_cmd_stdio(h, which, k, pp, s.path.len())
+
+    def launch(self, d_in: int, d_out: int, d_err: int) throws str -> Child:
+        if self.program.len() == 0: raise("subprocess: empty program name")
+        mut h = trc_sp_cmd_new()
+        if h == 0: raise("subprocess: out of memory")
+        mut r: Result[bool, str] = self.configure(h, d_in, d_out, d_err)
+        if r.is_err:
+            trc_sp_cmd_free(h)
+            raise(r.err)
+        mut c = trc_sp_spawn(h)
+        if c == 0:
+            mut e = _sp_error()
+            trc_sp_cmd_free(h)
+            raise(e)
+        trc_sp_cmd_free(h)
+        return Child.adopt(c)
+
+    def configure(self, h: int, d_in: int, d_out: int, d_err: int) throws str -> bool:
+        for a in self.argv:
+            mut ap = a as Pointer[char]
+            if trc_sp_cmd_arg(h, ap, a.len()) < 0: raise(_sp_error())
+        if self.use_shell:
+            # cmd.exe parses its own command line: pass it through verbatim
+            mut line = "cmd.exe /d /s /c \"" + self.shell_line + "\""
+            mut lp = line as Pointer[char]
+            trc_sp_cmd_raw_cmdline(h, lp, line.len())
+        if self.env_cleared: trc_sp_cmd_env_clear(h)
+        mut i = 0
+        while i < len(self.env_keys):
+            mut k = self.env_keys[i]
+            mut v = self.env_vals[i]
+            mut kp = k as Pointer[char]
+            mut vp = v as Pointer[char]
+            if trc_sp_cmd_env(h, kp, k.len(), vp, v.len()) < 0: raise(_sp_error())
+            i = i + 1
+        for x in self.env_removed:
+            mut xp = x as Pointer[char]
+            trc_sp_cmd_env_remove(h, xp, x.len())
+        if self.cwd.len() > 0:
+            mut cp = self.cwd as Pointer[char]
+            trc_sp_cmd_cwd(h, cp, self.cwd.len())
+        self.put_stdio(h, 0, self.in_cfg, d_in)?
+        self.put_stdio(h, 1, self.out_cfg, d_out)?
+        self.put_stdio(h, 2, self.err_cfg, d_err)?
+        return true
+
+    # Start the child and return at once. Unset streams are inherited.
+    pub def spawn(self) throws str -> Child:
+        return self.launch(SP_STDIO_INHERIT, SP_STDIO_INHERIT, SP_STDIO_INHERIT)?
+
+    # Run to completion with the parent's stdio (unless redirected) and
+    # return the exit status.
+    pub def status(self) throws str -> ExitStatus:
+        mut c = self.launch(SP_STDIO_INHERIT, SP_STDIO_INHERIT, SP_STDIO_INHERIT)?
+        mut r: Result[Output, str] = c.communicate("", self.timeout_ms)
+        c.close()
+        if r.is_err: raise(r.err)
+        mut o = r.ok
+        return o.status
+
+    # Run to completion capturing stdout and stderr (unless redirected);
+    # stdin defaults to the null device.
+    pub def output(self) throws str -> Output:
+        mut c = self.launch(SP_STDIO_NULL, SP_STDIO_PIPE, SP_STDIO_PIPE)?
+        mut r: Result[Output, str] = c.communicate("", self.timeout_ms)
+        c.close()
+        if r.is_err: raise(r.err)
+        return r.ok
+
+    # Like output(), but stdin is a pipe fed with `input` (binary-safe).
+    pub def output_with_input(self, input: str) throws str -> Output:
+        mut c = self.launch(SP_STDIO_PIPE, SP_STDIO_PIPE, SP_STDIO_PIPE)?
+        mut r: Result[Output, str] = c.communicate(input, self.timeout_ms)
+        c.close()
+        if r.is_err: raise(r.err)
+        return r.ok
+
+# Run argv[0] with the remaining arguments and capture its output.
+pub def run_output(argv: List[str]) throws str -> Output:
+    if len(argv) == 0: raise("subprocess: empty argv")
+    mut c = Command.new(argv[0])
+    mut i = 1
+    while i < len(argv):
+        c.arg(argv[i])
+        i = i + 1
+    return c.output()?
+
+# ── This process's own stdio (for programs used as children) ────────────────
+# Raw and binary-safe: no newline added, no CRLF translation on Windows.
+
+# Write `data` to this process's stdout exactly as given.
+pub def subprocess_write_stdout(data: str) throws str:
+    mut dp = data as Pointer[char]
+    if trc_sp_std_write(1, dp, data.len()) < 0: raise("subprocess: write to stdout failed")
+
+# Write `data` to this process's stderr exactly as given.
+pub def subprocess_write_stderr(data: str) throws str:
+    mut dp = data as Pointer[char]
+    if trc_sp_std_write(2, dp, data.len()) < 0: raise("subprocess: write to stderr failed")
+
+# Read this process's stdin until end of input.
+pub def subprocess_read_stdin_all() throws str -> str:
+    mut sb = StringBuilder.init(4096)
+    while true:
+        mut buf = _tr_c_malloc(65537)
+        mut n = trc_sp_std_read(0, buf, 65536)
+        if n < 0:
+            _tr_c_free(buf)
+            raise("subprocess: read from stdin failed")
+        if n == 0:
+            _tr_c_free(buf)
+            break
+        unsafe: buf.offset(n).write('\0')
+        sb.append(_tr_str_wrap_len(buf, n))
+    mut out = sb.to_owned()
+    sb.free()
+    return out

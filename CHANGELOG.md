@@ -63,6 +63,17 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.sys.subprocess`** — run programs from an argv list (`Command.new("git").arg("status")`)
+  or explicitly through the shell; stdin / stdout / stderr each inherited, piped, null, or
+  redirected to a file (truncate / append), stderr mergeable into stdout; environment inherit /
+  clear / set / remove and working directory; `output()`, `output_with_input()`, `status()` with
+  an optional timeout, and `spawn()` returning a `Child` (`write_stdin`, `close_stdin`, chunked and
+  whole-stream reads, `communicate`, `wait`, `wait_timeout`, `try_wait`, `kill`, `send_signal`,
+  `pid`). `ExitStatus` has `code`, `signal` and `success()`. Capturing both pipes never deadlocks
+  (poll on POSIX; PeekNamedPipe and a writer thread on Windows). POSIX: fork + execve with a PATH
+  lookup before forking, close-on-exec on every other descriptor and a CLOEXEC error pipe; Windows:
+  CreateProcessW with MSVCRT argument quoting, UTF-16 conversion and an inherited-handle list.
+  Tested by `tests/lang/120_subprocess.tr`.
 - **`tauraroc doc`** — API documentation from source (public constants, functions, classes with
   their fields and `extend` methods, enums, interfaces, and their comments) as Markdown or HTML,
   per file or for whole directory trees. **`tauraroc cov`** / **`--coverage`** — line coverage:

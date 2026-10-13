@@ -4,6 +4,7 @@
 from std.sys.env      import Env
 from std.sys.fs       import Fs
 from std.sys.process  import Process
+from std.sys.subprocess import Command, Stdio
 from std.sys.time     import Clock
 from std.sys.os       import OS
 from std.sys.platform import Platform
@@ -128,6 +129,86 @@ if Process.check_call("ls -la"):
 Process.sleep_ms(100)
 Process.exit(0)
 ```
+
+---
+
+## std.sys.subprocess — Run programs with pipes, environment and timeouts
+
+**When**: you need more than `Process.system`: pass an argument list without a shell, capture
+stdout and stderr separately, feed stdin, change the environment or working directory, or
+enforce a timeout.
+
+```tauraro
+from std.sys.subprocess import Command, Stdio
+
+# argv list, no shell: spaces and quotes in arguments need no escaping
+mut out = Command.new("git").arg("log").arg("--format=%an: %s").arg("-n").arg("3").output()?
+if out.success(): print(out.stdout_data)
+else: print("git failed (" + out.status.to_str() + "): " + out.stderr_data)
+
+# stdin from a string, a time limit, a changed environment and directory
+mut cmd = Command.new("sort").env("LC_ALL", "C").current_dir("/tmp").timeout(5000)
+mut sorted = cmd.output_with_input("pear\napple\n")?
+
+# talk to a running child
+mut child = Command.new("cat").stdin(Stdio.piped()).stdout(Stdio.piped()).spawn()?
+child.write_stdin("hello")?
+child.close_stdin()
+print(child.read_stdout_all()?)
+mut st = child.wait()?
+child.close()
+```
+
+| Command | Description |
+|---|---|
+| `Command.new(program)` | Program looked up on `PATH` (the child's `PATH` on POSIX) unless it contains a path separator. |
+| `Command.shell(line)` | `/bin/sh -c line` (POSIX) or `cmd.exe /d /s /c "line"` (Windows). The line is not escaped. |
+| `.arg(a)`, `.args(list)` | Append arguments. |
+| `.env(k, v)`, `.env_remove(k)`, `.env_clear()` | Set, unset, or start from an empty environment (default: inherit). |
+| `.current_dir(path)` | Working directory for the child. |
+| `.stdin(s)`, `.stdout(s)`, `.stderr(s)`, `.merge_stderr()` | Where each stream goes (`Stdio` below). |
+| `.timeout(ms)` | Limit for `output` / `status` / `output_with_input`; the child is killed and the call raises `"subprocess: timed out after N ms"`. |
+| `.output()?` → `Output` | Run, capturing stdout and stderr (stdin = null device unless set). |
+| `.output_with_input(data)?` → `Output` | Same, with `data` written to a stdin pipe. |
+| `.status()?` → `ExitStatus` | Run with the parent's stdio unless redirected. |
+| `.spawn()?` → `Child` | Start and return immediately; unset streams are inherited. |
+
+`Stdio`: `inherit()`, `piped()`, `devnull()`, `file(path)` (stdin reads it; output creates or
+truncates it), `append(path)`, `to_stdout()` (stderr only, like `2>&1`).
+
+`Output`: `status`, `stdout_data`, `stderr_data` (binary-safe `str`), `success()`. (The fields
+are not called `stdout` / `stderr` because those are C macros on Windows.)
+`ExitStatus`: `code` (-1 when a signal ended the process), `signal` (POSIX signal number, else 0),
+`success()`, `to_str()`.
+
+`Child`: `pid()`, `write_stdin(data)?`, `close_stdin()`, `read_stdout(cap)?` /
+`read_stderr(cap)?` (a chunk, `""` at end of stream), `read_stdout_timeout(cap, ms)?` /
+`read_stderr_timeout(cap, ms)?` (`""` also on timeout), `read_stdout_all()?` /
+`read_stderr_all()?`, `communicate(input, timeout_ms)?` → `Output`, `wait()?`, `try_wait()?` /
+`wait_timeout(ms)?` (→ `bool`; then read `exit_status`), `kill()?`, `send_signal(sig)?` (POSIX),
+`has_stdin()` / `has_stdout()` / `has_stderr()`, `close()` (frees pipes; does not kill).
+
+Errors are `throws str`: `"subprocess: program not found: NAME"`, `"subprocess: cannot change
+directory to DIR: ..."`, `"subprocess: cannot execute NAME: ..."`, `"subprocess: cannot open
+PATH: ..."`, and a broken-pipe error from `write_stdin` when the child stopped reading.
+
+Notes:
+- `output`, `output_with_input` and `communicate` drain stdout and stderr together (poll on POSIX,
+  `PeekNamedPipe` plus a stdin writer thread on Windows), so large output on both pipes cannot
+  deadlock. Reading one stream with `read_stdout_all` while the child fills the other can.
+- POSIX uses `fork` + `execve`; every descriptor except the child's stdio is close-on-exec, and
+  exec / chdir failures come back through a close-on-exec pipe. `SIGPIPE` is blocked while
+  writing to a child's stdin, so a child that exits early gives an error instead of killing the
+  parent.
+- Windows uses `CreateProcessW` with UTF-8 → UTF-16 conversion, arguments quoted by the MSVCRT
+  rules, and `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` so only the stdio handles are inherited. The
+  program is found by `CreateProcessW`'s own search (the parent's `PATH`). `kill()` is
+  `TerminateProcess` (exit code 1); `send_signal` raises.
+- For programs that act as children: `subprocess_write_stdout(data)?`,
+  `subprocess_write_stderr(data)?` and `subprocess_read_stdin_all()?` do raw, binary-safe I/O on
+  this process's own streams (no added newline, no CRLF translation on Windows).
+
+Tested by `tests/lang/120_subprocess.tr`.
 
 ---
 

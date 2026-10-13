@@ -1,0 +1,321 @@
+# tests/lang/120_subprocess.tr
+# std.sys.subprocess. Most cases re-run this test binary as the child
+# (argv[1] == "--sp-child"), so they behave the same on Linux, macOS and
+# Windows; a few use platform tools (sort, sh / cmd.exe).
+
+from std.test import TestRunner
+from std.sys.subprocess import Command, Stdio, Child, Output, ExitStatus, subprocess_is_windows
+from std.sys.subprocess import subprocess_write_stdout, subprocess_write_stderr, subprocess_read_stdin_all
+from std.sys.env import Env
+from std.sys.os import OS
+from std.sys.time import Clock
+from std.sys.fs import Fs
+from std.io.file import File
+from std.io.dir import Dir
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+    def _tr_exit(code: int)
+
+# ── Child side ────────────────────────────────────────────────────────────────
+
+def child_main(e: Env) throws str -> int:
+    mut mode = e.get_arg(2)
+    if mode == "echo-args":
+        mut i = 3
+        while i < e.get_arg_count():
+            subprocess_write_stdout("<" + e.get_arg(i) + ">\n")?
+            i = i + 1
+        return 0
+    if mode == "streams":
+        subprocess_write_stdout("OUT")?
+        subprocess_write_stderr("ERR")?
+        return 7
+    if mode == "cat":
+        mut d = subprocess_read_stdin_all()?
+        subprocess_write_stdout(d)?
+        return 0
+    if mode == "exit": return int(e.get_arg(3))
+    if mode == "env":
+        if e.has_var(e.get_arg(3)):
+            subprocess_write_stdout(e.get_arg(3) + "=" + e.get_var(e.get_arg(3)))?
+        else:
+            subprocess_write_stdout("<unset>")?
+        return 0
+    if mode == "pwd":
+        subprocess_write_stdout(OS.cwd())?
+        return 0
+    if mode == "sleep":
+        Clock.sleep_ms(int(e.get_arg(3)))
+        return 0
+    if mode == "big":
+        mut n = int(e.get_arg(3))
+        mut line = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.\n"   # 64 bytes
+        mut sb = StringBuilder.init(n + 64)
+        mut i = 0
+        while i < n / 64:
+            sb.append(line)
+            i = i + 1
+        mut s = sb.to_owned()
+        sb.free()
+        # interleave so the parent must drain both pipes
+        mut half = s.len() / 2
+        subprocess_write_stderr(s.slice(0, half))?
+        subprocess_write_stdout(s.slice(0, half))?
+        subprocess_write_stderr(s.slice(half, s.len()))?
+        subprocess_write_stdout(s.slice(half, s.len()))?
+        return 0
+    return 99
+
+# ── Parent side ───────────────────────────────────────────────────────────────
+
+def is_abs(p: str) -> bool:
+    if p.starts_with("/") or p.starts_with("\\"): return true
+    return p.len() > 1 and p.slice(1, 2) == ":"
+
+def self_exe() -> str:
+    mut e = Env.init()
+    mut p = e.get_arg(0)
+    if is_abs(p): return p
+    if subprocess_is_windows(): return OS.cwd() + "\\" + p
+    return OS.cwd() + "/" + p
+
+def child(mode: str) -> Command:
+    return Command.new(self_exe()).arg("--sp-child").arg(mode)
+
+def all_bytes() -> str:
+    mut n = 256 * 4
+    mut p = _tr_c_malloc(n + 1)
+    mut i = 0
+    unsafe:
+        while i < n:
+            p.offset(i).write(chr(i % 256))
+            i = i + 1
+        p.offset(n).write('\0')
+    return _tr_str_wrap_len(p, n)
+
+def strip_cr(s: str) -> str: return s.replace("\r", "")
+
+def test_argv(t: TestRunner) throws str:
+    t.section("argv quoting")
+    mut args: List[str] = ["hello world", "a\"b", "", "back\\slash\\", "tab\there", "  lead", "x\\\"y", "q\"", "\\\\server\\share dir\\", "{}[]*? $`;|&<>%PATH%"]
+    mut o = child("echo-args").args(args).output()?
+    mut want = ""
+    for a in args: want = want + "<" + a + ">\n"
+    t.assert_eq_str(o.stdout_data, want, "arguments arrive unchanged")
+    t.assert_true(o.status.success(), "echo-args exit 0")
+    mut c = Command.new("prog").arg("x").args(args)
+    t.assert_eq_int(len(c.get_argv()), 2 + len(args), "get_argv includes the program")
+
+def test_streams(t: TestRunner) throws str:
+    t.section("stdout / stderr")
+    mut o = child("streams").output()?
+    t.assert_eq_str(o.stdout_data, "OUT", "stdout captured")
+    t.assert_eq_str(o.stderr_data, "ERR", "stderr captured")
+    t.assert_eq_int(o.status.code, 7, "exit code 7")
+    t.assert_false(o.success(), "non-zero is not success")
+    t.assert_eq_str(o.status.to_str(), "exit code 7", "status text")
+    mut m = child("streams").merge_stderr().output()?
+    t.assert_eq_str(m.stdout_data, "OUTERR", "stderr merged into stdout")
+    t.assert_eq_str(m.stderr_data, "", "merged stderr is empty")
+    mut n = child("streams").stderr(Stdio.devnull()).output()?
+    t.assert_eq_str(n.stdout_data + "|" + n.stderr_data, "OUT|", "stderr to null device")
+
+def test_stdin(t: TestRunner) throws str:
+    t.section("stdin")
+    mut o = child("cat").output_with_input("line one\nline two\n")?
+    t.assert_eq_str(o.stdout_data, "line one\nline two\n", "output_with_input")
+    mut e = child("cat").output()?
+    t.assert_eq_str(e.stdout_data, "", "output(): stdin is the null device")
+    mut ch = child("cat").stdin(Stdio.piped()).stdout(Stdio.piped()).spawn()?
+    t.assert_true(ch.pid() > 0, "pid")
+    t.assert_true(ch.has_stdin() and ch.has_stdout() and not ch.has_stderr(), "pipe presence")
+    ch.write_stdin("chunk1,")?
+    ch.write_stdin("chunk2")?
+    ch.close_stdin()
+    mut sb = ""
+    while true:
+        mut part = ch.read_stdout(3)?
+        if part.len() == 0: break
+        t.assert_true(part.len() <= 3, "chunk respects cap")
+        sb = sb + part
+    t.assert_eq_str(sb, "chunk1,chunk2", "chunked read_stdout")
+    mut st = ch.wait()?
+    t.assert_true(st.success(), "cat exited 0")
+    ch.close()
+    if not subprocess_is_windows():
+        mut s = Command.new("sort").output_with_input("pear\napple\nfig\n")?
+        t.assert_eq_str(s.stdout_data, "apple\nfig\npear\n", "sort via stdin pipe")
+
+def test_exit_codes(t: TestRunner) throws str:
+    t.section("exit status")
+    mut a = child("exit").arg("0").status()?
+    t.assert_true(a.success(), "status() 0")
+    mut b = child("exit").arg("42").status()?
+    t.assert_eq_int(b.code, 42, "status() 42")
+    t.assert_eq_int(b.signal, 0, "no signal")
+    mut c = child("exit").arg("3").output()?
+    t.assert_eq_int(c.status.code, 3, "output() 3")
+
+def test_env_cwd(t: TestRunner) throws str:
+    t.section("environment")
+    mut e = Env.init()
+    e.set_var("SP_TEST_INHERITED", "from-parent")
+    mut a = child("env").arg("SP_TEST_INHERITED").output()?
+    t.assert_eq_str(a.stdout_data, "SP_TEST_INHERITED=from-parent", "inherited")
+    mut b = child("env").arg("SP_TEST_NEW").env("SP_TEST_NEW", "v 1=2").output()?
+    t.assert_eq_str(b.stdout_data, "SP_TEST_NEW=v 1=2", "env() sets")
+    mut c = child("env").arg("SP_TEST_INHERITED").env("SP_TEST_INHERITED", "override").output()?
+    t.assert_eq_str(c.stdout_data, "SP_TEST_INHERITED=override", "env() overrides")
+    mut d = child("env").arg("SP_TEST_INHERITED").env_remove("SP_TEST_INHERITED").output()?
+    t.assert_eq_str(d.stdout_data, "<unset>", "env_remove")
+    mut f = child("env").arg("SP_TEST_INHERITED").env("SP_TEST_INHERITED", "x").env_remove("SP_TEST_INHERITED").output()?
+    t.assert_eq_str(f.stdout_data, "<unset>", "env_remove after env")
+    mut cl = child("env").env_clear()
+    if subprocess_is_windows(): cl.env("SystemRoot", e.get_var("SystemRoot"))
+    cl.env("SP_ONLY", "1")
+    mut g = cl.arg("SP_TEST_INHERITED").output()?
+    t.assert_eq_str(g.stdout_data, "<unset>", "env_clear drops inherited vars")
+    mut cl2 = child("env").env_clear()
+    if subprocess_is_windows(): cl2.env("SystemRoot", e.get_var("SystemRoot"))
+    mut h = cl2.env("SP_ONLY", "1").arg("SP_ONLY").output()?
+    t.assert_eq_str(h.stdout_data, "SP_ONLY=1", "env_clear keeps later env()")
+    e.unset_var("SP_TEST_INHERITED")
+
+    t.section("working directory")
+    mut dir = Dir.init("build/sp_cwd_probe")
+    dir.make()
+    mut p = child("pwd").current_dir("build/sp_cwd_probe").output()?
+    t.assert_true(p.stdout_data.ends_with("sp_cwd_probe"), "current_dir: " + p.stdout_data)
+    mut q: Result[Output, str] = child("pwd").current_dir("build/no_such_dir_xyz").output()
+    t.assert_true(q.is_err, "missing directory is an error")
+    if q.is_err: t.assert_contains(q.err, "directory", "error names the directory problem")
+    dir.remove()
+
+def test_timeout_kill(t: TestRunner) throws str:
+    t.section("timeouts and kill")
+    mut clk = Clock.init()
+    mut r: Result[Output, str] = child("sleep").arg("10000").timeout(300).output()
+    t.assert_true(r.is_err, "timeout raises")
+    if r.is_err: t.assert_contains(r.err, "timed out", "timeout message")
+    t.assert_lt_int(clk.elapsed_ms(), 5000, "killed promptly")
+    mut ok = child("exit").arg("5").timeout(10000).output()?
+    t.assert_eq_int(ok.status.code, 5, "finishes within the timeout")
+
+    mut ch = child("sleep").arg("10000").spawn()?
+    t.assert_false(ch.try_wait()?, "try_wait: still running")
+    t.assert_false(ch.wait_timeout(100)?, "wait_timeout: still running")
+    ch.kill()?
+    mut st = ch.wait()?
+    t.assert_false(st.success(), "killed child is not success")
+    if subprocess_is_windows():
+        t.assert_eq_int(st.code, 1, "TerminateProcess exit code")
+    else:
+        t.assert_eq_int(st.signal, 9, "SIGKILL reported")
+        t.assert_eq_int(st.code, -1, "no exit code when signalled")
+        t.assert_eq_str(st.to_str(), "signal 9", "signal text")
+    t.assert_true(ch.try_wait()?, "try_wait after exit")
+    ch.close()
+
+    mut q = child("exit").arg("0").spawn()?
+    t.assert_true(q.wait_timeout(10000)?, "wait_timeout: exited")
+    t.assert_true(q.exit_status.success(), "exit_status latched")
+    q.close()
+
+def test_errors(t: TestRunner):
+    t.section("errors")
+    mut r: Result[Output, str] = Command.new("definitely_not_a_program_xyz").output()
+    t.assert_true(r.is_err, "missing program raises")
+    if r.is_err: t.assert_contains(r.err, "not found", "message: " + r.err)
+    mut s: Result[Output, str] = Command.new("").output()
+    t.assert_true(s.is_err, "empty program raises")
+    mut u: Result[Output, str] = child("streams").stdout(Stdio.to_stdout()).output()
+    t.assert_true(u.is_err, "to_stdout only valid for stderr")
+    mut v: Result[Output, str] = child("cat").stdin(Stdio.file("build/no_such_input_xyz")).output()
+    t.assert_true(v.is_err, "missing stdin file raises")
+
+def test_large(t: TestRunner) throws str:
+    t.section("large output, no deadlock")
+    mut n = 2 * 1024 * 1024
+    mut o = child("big").arg(str(n)).output()?
+    t.assert_eq_int(o.stdout_data.len(), n, "2 MB on stdout")
+    t.assert_eq_int(o.stderr_data.len(), n, "2 MB on stderr")
+    t.assert_true(o.stdout_data == o.stderr_data, "both streams intact")
+    mut sb = StringBuilder.init(3 * 1024 * 1024)
+    mut i = 0
+    while i < 3 * 1024 * 16:
+        sb.append("abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz0123\n")
+        i = i + 1
+    mut big = sb.to_owned()
+    sb.free()
+    mut e = child("cat").output_with_input(big)?
+    t.assert_eq_int(e.stdout_data.len(), big.len(), "3 MB through stdin and back")
+    t.assert_true(e.stdout_data == big, "echoed data intact")
+
+def test_binary(t: TestRunner) throws str:
+    t.section("binary data")
+    mut data = all_bytes()
+    t.assert_eq_int(data.len(), 1024, "test data has every byte value")
+    mut o = child("cat").output_with_input(data)?
+    t.assert_eq_int(o.stdout_data.len(), data.len(), "length preserved")
+    t.assert_true(o.stdout_data == data, "bytes preserved, including NUL and CR/LF")
+    mut ch = child("cat").stdin(Stdio.piped()).stdout(Stdio.piped()).spawn()?
+    ch.write_stdin(data)?
+    ch.close_stdin()
+    mut back = ch.read_stdout_all()?
+    ch.wait()?
+    ch.close()
+    t.assert_true(back == data, "spawn + write_stdin + read_stdout_all")
+
+def test_files_and_shell(t: TestRunner) throws str:
+    t.section("file redirection")
+    mut st = child("streams").stdout(Stdio.file("build/sp_out.txt")).stderr(Stdio.file("build/sp_err.txt")).status()?
+    t.assert_eq_int(st.code, 7, "status with redirected output")
+    t.assert_eq_str(File.read_text("build/sp_out.txt"), "OUT", "stdout written to file")
+    t.assert_eq_str(File.read_text("build/sp_err.txt"), "ERR", "stderr written to file")
+    child("streams").stdout(Stdio.append("build/sp_out.txt")).stderr(Stdio.devnull()).status()?
+    t.assert_eq_str(File.read_text("build/sp_out.txt"), "OUTOUT", "append mode")
+    mut o = child("cat").stdin(Stdio.file("build/sp_out.txt")).output()?
+    t.assert_eq_str(o.stdout_data, "OUTOUT", "stdin from file")
+    Fs.delete("build/sp_out.txt")
+    Fs.delete("build/sp_err.txt")
+
+    t.section("shell")
+    if subprocess_is_windows():
+        mut w = Command.shell("echo shell-ok& exit 4").output()?
+        t.assert_eq_str(strip_cr(w.stdout_data).trim(), "shell-ok", "cmd.exe output")
+        t.assert_eq_int(w.status.code, 4, "cmd.exe exit code")
+    else:
+        mut s = Command.shell("printf '%s|' \"$SP_X\" a 'b c'; exit 4").env("SP_X", "x y").output()?
+        t.assert_eq_str(s.stdout_data, "x y|a|b c|", "sh -c output")
+        t.assert_eq_int(s.status.code, 4, "sh exit code")
+        mut sig = Command.shell("kill -TERM $$").output()?
+        t.assert_eq_int(sig.status.signal, 15, "signal from the shell itself")
+
+def run_all(t: TestRunner) throws str -> bool:
+    test_argv(t)?
+    test_streams(t)?
+    test_stdin(t)?
+    test_exit_codes(t)?
+    test_env_cwd(t)?
+    test_timeout_kill(t)?
+    test_errors(t)
+    test_large(t)?
+    test_binary(t)?
+    test_files_and_shell(t)?
+    return true
+
+def main():
+    mut e = Env.init()
+    if e.get_arg(1) == "--sp-child":
+        mut r: Result[int, str] = child_main(e)
+        if r.is_err:
+            print("child error: " + r.err)
+            _tr_exit(98)
+        _tr_exit(r.ok)
+    mut t = TestRunner.init("120_subprocess")
+    mut r: Result[bool, str] = run_all(t)
+    if r.is_err: t.assert_true(false, "unexpected error: " + r.err)
+    t.summary()
