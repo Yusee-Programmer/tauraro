@@ -86,6 +86,19 @@ added here as each phase lands.
   overlaps, `classify_local`, `next_transition`. Verified against Python's `zoneinfo`.
   `std.sys.datetime`: `TimeZone.zone` (IANA name of the snapshot), `DateTime.isoformat()`,
   `DateTime.to_string_tz()`.
+- **`std.unicode` normalization, case folding and segmentation** (Unicode 16.0 data, generated
+  into `std/unicode/unicode_native.c` by `scripts/gen_unicode_tables.py`).
+  `std.unicode.normalize`: NFC / NFD / NFKC / NFKD (canonical and compatibility decomposition,
+  canonical ordering, composition with exclusions, algorithmic Hangul), `is_normalized` quick
+  check, `canonical_eq`. `std.unicode.casemap`: full `to_upper` / `to_lower` (SpecialCasing,
+  Greek final sigma) / `to_title`, full `casefold`, `caseless_eq`. `std.unicode.segment`:
+  extended grapheme clusters (emoji ZWJ sequences, flags, Hangul, Indic conjuncts),
+  `grapheme_count`, word and sentence boundaries, `words`, and terminal `display_width` /
+  `truncate_width` / `pad_width`. Passes the full NormalizationTest, GraphemeBreakTest,
+  WordBreakTest and SentenceBreakTest conformance files; NFC of 1 MB of text takes ~13 ms.
+  `Unicode.to_upper` / `to_lower` / `upper` / `lower` / `is_letter` / `is_digit_cp` / `category`
+  now use the full Unicode tables (previously Latin-1 / a few scripts only; tab and newline are
+  now category `"C"`), and `Unicode.general_category`, `Unicode.chr`, `Unicode.char_width` are new.
 - **`tauraroc doc`** — API documentation from source (public constants, functions, classes with
   their fields and `extend` methods, enums, interfaces, and their comments) as Markdown or HTML,
   per file or for whole directory trees. **`tauraroc cov`** / **`--coverage`** — line coverage:

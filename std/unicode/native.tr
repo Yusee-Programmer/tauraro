@@ -1,0 +1,107 @@
+# tauraro-cpp-shim: unicode_native.c
+#
+# std.unicode.native -- internal bindings to std/unicode/unicode_native.c
+# (Unicode data tables, normalization, case mapping, segmentation, width).
+#
+# The pragma above makes tauraroc compile unicode_native.c once (cached in the
+# build directory) and link it into any program that imports std.unicode or
+# one of std.unicode.{normalize,casemap,segment}. User code should import
+# those modules instead of this one.
+#
+# Text crosses as (Pointer[char], byte length): an extern `str` parameter is
+# the TrStr struct itself, so callers cast a named `str` local. C builds its
+# results behind an int handle; uni_take_str() sizes a Tauraro string, has C
+# copy the bytes in (which also frees the handle) and adopts it.
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+    def trc_uni_quick_check(form: int, s: Pointer[char], n: int) -> int
+    def trc_uni_transform(op: int, s: Pointer[char], n: int) -> int
+    def trc_uni_segment(kind: int, s: Pointer[char], n: int) -> int
+    def trc_uni_buf_len(h: int) -> int
+    def trc_uni_buf_take(h: int, dst: Pointer[char])
+    def trc_uni_seg_count(h: int) -> int
+    def trc_uni_seg_start(h: int, i: int) -> int
+    def trc_uni_seg_end(h: int, i: int) -> int
+    def trc_uni_free(h: int)
+    def trc_uni_copy(s: Pointer[char], start: int, n: int, dst: Pointer[char])
+    def trc_uni_grapheme_count(s: Pointer[char], n: int) -> int
+    def trc_uni_grapheme_end(s: Pointer[char], n: int, pos: int) -> int
+    def trc_uni_width(s: Pointer[char], n: int) -> int
+    def trc_uni_width_prefix(s: Pointer[char], n: int, max_width: int) -> int
+    def trc_uni_char_width(cp: int) -> int
+    def trc_uni_ccc(cp: int) -> int
+    def trc_uni_gc(cp: int) -> int
+    def trc_uni_simple_case(which: int, cp: int) -> int
+    def trc_uni_encode(cp: int, dst: Pointer[char]) -> int
+
+# Operation codes for trc_uni_transform.
+pub const UNI_OP_NFC = 0
+pub const UNI_OP_NFD = 1
+pub const UNI_OP_NFKC = 2
+pub const UNI_OP_NFKD = 3
+pub const UNI_OP_LOWER = 4
+pub const UNI_OP_UPPER = 5
+pub const UNI_OP_FOLD = 6
+pub const UNI_OP_TITLE = 7
+
+# Segmentation kinds for trc_uni_segment.
+pub const UNI_SEG_GRAPHEME = 0
+pub const UNI_SEG_WORD = 1
+pub const UNI_SEG_WORD_ONLY = 2
+pub const UNI_SEG_SENTENCE = 3
+
+# Run a byte-producing operation on `s` and return the result as a new str.
+pub def uni_transform(op: int, s: str) -> str:
+    mut sp = s as Pointer[char]
+    mut h = trc_uni_transform(op, sp, s.len())
+    if h == 0: return ""
+    mut n = trc_uni_buf_len(h)
+    mut buf = _tr_c_malloc(n + 1)
+    trc_uni_buf_take(h, buf)
+    return _tr_str_wrap_len(buf, n)
+
+# Bytes s[start, start+n) as a new str.
+pub def uni_sub(s: str, start: int, n: int) -> str:
+    mut sp = s as Pointer[char]
+    mut buf = _tr_c_malloc(n + 1)
+    trc_uni_copy(sp, start, n, buf)
+    return _tr_str_wrap_len(buf, n)
+
+# Split `s` into the segments of the given kind.
+pub def uni_segments(kind: int, s: str) -> List[str]:
+    mut out: List[str] = []
+    mut sp = s as Pointer[char]
+    mut h = trc_uni_segment(kind, sp, s.len())
+    if h == 0: return out
+    mut cnt = trc_uni_seg_count(h)
+    mut i = 0
+    while i < cnt:
+        mut a = trc_uni_seg_start(h, i)
+        out.append(uni_sub(s, a, trc_uni_seg_end(h, i) - a))
+        i = i + 1
+    trc_uni_free(h)
+    return out
+
+# Byte offsets [start0, end0, start1, end1, ...] of the segments of `s`.
+pub def uni_segment_offsets(kind: int, s: str) -> List[int]:
+    mut out: List[int] = []
+    mut sp = s as Pointer[char]
+    mut h = trc_uni_segment(kind, sp, s.len())
+    if h == 0: return out
+    mut cnt = trc_uni_seg_count(h)
+    mut i = 0
+    while i < cnt:
+        out.append(trc_uni_seg_start(h, i))
+        out.append(trc_uni_seg_end(h, i))
+        i = i + 1
+    trc_uni_free(h)
+    return out
+
+# UTF-8 encoding of one code point (U+FFFD for surrogates / out of range).
+pub def uni_chr(cp: int) -> str:
+    mut buf = _tr_c_malloc(8)
+    mut n = trc_uni_encode(cp, buf)
+    return _tr_str_wrap_len(buf, n)
