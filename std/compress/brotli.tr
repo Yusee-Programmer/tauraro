@@ -1,0 +1,117 @@
+# tauraro-cpp-shim: brotli_native.c
+#
+# std.compress.brotli — Brotli (RFC 7932) decompression, e.g. for HTTP
+# `Content-Encoding: br` bodies and .br files.
+#
+# Backed by Google's reference decoder (brotli v1.2.0, MIT licence, vendored
+# in std/compress/vendor/brotli with the RFC's 122 KB static dictionary and
+# transforms) compiled into brotli_native.c: no external library, the same on
+# Linux, macOS and Windows.
+#
+# Usage:
+#   from std.compress.brotli import Brotli, BrotliDecoder
+#
+#   mut plain = Brotli.decompress(body)?            # at most 1 GiB of output
+#   mut small = Brotli.decompress_max(body, 1 << 20)?
+#
+#   mut d = BrotliDecoder.init(0)?                   # 0 = no output limit
+#   mut part = d.feed(chunk)?
+#   mut rest = d.finish()?                           # raises if truncated
+#
+# A brotli stream has no magic number; data after the end of the stream is an
+# error. Compression is not provided (decoder only).
+
+from std.compress.common import codec_status_message, COMPRESS_DEFAULT_MAX_OUT
+
+extern "C":
+    def trc_brd_new(max_out: int) -> int
+    def trc_brd_feed(h: int, data: Pointer[char], n: int) -> int
+    def trc_brd_finish(h: int) -> int
+    def trc_brd_avail(h: int) -> int
+    def trc_brd_take(h: int, dst: Pointer[char])
+    def trc_brd_error_code(h: int) -> int
+    def trc_brd_free(h: int)
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+def _brotli_message(h: int, st: int) -> str:
+    mut msg = codec_status_message("brotli", st)
+    if st == -1:
+        mut code = trc_brd_error_code(h)
+        if code != 0: msg = msg + " (decoder error " + str(code) + ")"
+    return msg
+
+# Incremental brotli decoder.
+pub class BrotliDecoder:
+    pub handle: int
+    pub done: bool
+
+extend BrotliDecoder:
+    # `max_out` bounds the total decompressed size (<= 0: unlimited).
+    pub def init(max_out: int) throws str -> BrotliDecoder:
+        mut h = trc_brd_new(max_out)
+        if h == 0: raise("brotli: out of memory")
+        mut d = BrotliDecoder()
+        d.handle = h
+        d.done = false
+        return d
+
+    def _take(self) -> str:
+        mut n = trc_brd_avail(self.handle)
+        mut p = _tr_c_malloc(n + 1)
+        trc_brd_take(self.handle, p)
+        unsafe: p.offset(n).write('\0')
+        return _tr_str_wrap_len(p, n)
+
+    # Decode a chunk of compressed input; returns the output it completed.
+    pub def feed(self, chunk: str) throws str -> str:
+        if self.handle == 0:
+            raise("brotli: decoder is closed")
+        mut st = trc_brd_feed(self.handle, chunk as Pointer[char], chunk.len())
+        if st < 0:
+            mut msg = _brotli_message(self.handle, st)
+            self.close()
+            raise(msg)
+        if st == 1: self.done = true
+        return self._take()
+
+    # Signal end of input: returns the remaining output and frees the decoder;
+    # raises when the stream is incomplete.
+    pub def finish(self) throws str -> str:
+        if self.handle == 0:
+            raise("brotli: decoder is closed")
+        mut st = trc_brd_finish(self.handle)
+        if st < 0:
+            mut msg = _brotli_message(self.handle, st)
+            self.close()
+            raise(msg)
+        mut out = self._take()
+        self.done = true
+        self.close()
+        return out
+
+    pub def close(self):
+        if self.handle != 0:
+            trc_brd_free(self.handle)
+            self.handle = 0
+
+pub class Brotli:
+    _dummy: int
+
+extend Brotli:
+    # Decompress a complete brotli stream (at most 1 GiB of output).
+    pub def decompress(data: str) throws str -> str:
+        return Brotli.decompress_max(data, COMPRESS_DEFAULT_MAX_OUT)?
+
+    # Decompress with an explicit output limit (`max_out` <= 0: unlimited).
+    pub def decompress_max(data: str, max_out: int) throws str -> str:
+        mut d = BrotliDecoder.init(max_out)?
+        mut st = trc_brd_feed(d.handle, data as Pointer[char], data.len())
+        if st >= 0: st = trc_brd_finish(d.handle)
+        if st < 0:
+            mut msg = _brotli_message(d.handle, st)
+            d.close()
+            raise(msg)
+        mut out = d._take()
+        d.close()
+        return out

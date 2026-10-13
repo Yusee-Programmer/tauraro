@@ -63,6 +63,14 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.compress.bzip2`, `std.compress.xz`, `std.compress.brotli`** — bzip2 compression and
+  decompression (libbzip2 1.0.8), `.xz` decompression (XZ Embedded: LZMA2, CRC32/CRC64/SHA-256,
+  multiple blocks and streams, BCJ filters), `.lzma` ("LZMA alone") decompression, and Brotli
+  decompression (Google's decoder with the RFC 7932 dictionary), all vendored under
+  `std/compress/vendor/` with no external library. One-shot `decompress(data)?` /
+  `decompress_max(data, max_out)?` (decompression-bomb limit, 1 GiB by default) and streaming
+  `feed` / `finish` decoders; corrupt or truncated input raises. `Compress` accepts the new
+  names and gains `Compress.detect(data)`.
 - **`tauraroc doc`** — API documentation from source (public constants, functions, classes with
   their fields and `extend` methods, enums, interfaces, and their comments) as Markdown or HTML,
   per file or for whole directory trees. **`tauraroc cov`** / **`--coverage`** — line coverage:

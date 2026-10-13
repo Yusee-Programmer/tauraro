@@ -6,6 +6,9 @@
 #   from std.compress.zip  import Zip, ZipFileWriter, ZipFileReader, ZipEntry, ZipMethod
 #   from std.compress.lz4  import Lz4           # LZ4 block + frame, pure Tauraro
 #   from std.compress.zstd import Zstd          # Zstandard frame codec, pure Tauraro
+#   from std.compress.bzip2 import Bzip2       # bzip2 (vendored libbzip2), compress + decompress
+#   from std.compress.xz   import Xz, Lzma      # .xz / .lzma decompression (vendored XZ Embedded)
+#   from std.compress.brotli import Brotli      # Brotli decompression (vendored Google decoder)
 #   from std.compress.xxhash import Xxh32, Xxh64
 #   from std.compress.common import CBuf, CResult
 #
@@ -19,7 +22,9 @@
 #   c.free()
 #   d.free()
 #
-#   algorithms: "lz4" (= "lz4-frame"), "lz4-block", "zstd"
+#   algorithms: "lz4" (= "lz4-frame"), "lz4-block", "zstd", "bzip2",
+#               and for decompress() only: "xz", "lzma", "brotli"
+#   Compress.detect(data) -> str   "zstd" / "lz4" / "bzip2" / "xz" / "gzip" or ""
 #   Compress.algorithms() -> List[str]       Compress.supports(name) -> bool
 #   Compress.compress_with(name, data, n, checksum)  — choose the checksum option
 #   (lz4 frame: XXH32 content checksum, zstd: XXH64-derived checksum; the
@@ -39,8 +44,21 @@ from std.compress.lz4  import Lz4
 from std.compress.zstd import Zstd
 from std.compress.xxhash import Xxh32
 from std.compress.xxhash import Xxh64
+from std.compress.bzip2 import Bzip2
+from std.compress.xz   import Xz
+from std.compress.xz   import Lzma
+from std.compress.brotli import Brotli
 from std.compress.common import CBuf
 from std.compress.common import CResult
+
+# A Result from the native codecs as a CResult (copying the bytes into a CBuf).
+def _wrap_result(r: Result[str, str]) -> CResult:
+    if r.is_err:
+        return CResult.failure(r.err, CBuf.init(16))
+    mut s = r.ok
+    mut b = CBuf.init(s.len() + 1)
+    b.push_str(s, s.len())
+    return CResult.success(b)
 
 pub class Compress:
     _dummy: int
@@ -48,11 +66,34 @@ pub class Compress:
 extend Compress:
     # Names accepted by compress()/decompress().
     pub def algorithms() -> List[str]:
-        mut a: List[str] = ["lz4", "lz4-frame", "lz4-block", "zstd"]
+        mut a: List[str] = ["lz4", "lz4-frame", "lz4-block", "zstd", "bzip2", "xz", "lzma", "brotli"]
         return a
 
     pub def supports(name: str) -> bool:
-        return name == "lz4" or name == "lz4-frame" or name == "lz4-block" or name == "zstd"
+        if name == "lz4" or name == "lz4-frame" or name == "lz4-block" or name == "zstd":
+            return true
+        return name == "bzip2" or name == "xz" or name == "lzma" or name == "brotli"
+
+    # Name of the format `data` starts with, from its magic bytes ("" when
+    # unknown; brotli and raw lz4 blocks have no magic and are never reported).
+    pub def detect(data: str) -> str:
+        if data.len() < 4: return ""
+        mut p = data as Pointer[char]
+        mut b0 = 0
+        mut b1 = 0
+        mut b2 = 0
+        mut b3 = 0
+        unsafe:
+            b0 = p.offset(0).read() as int & 0xFF
+            b1 = p.offset(1).read() as int & 0xFF
+            b2 = p.offset(2).read() as int & 0xFF
+            b3 = p.offset(3).read() as int & 0xFF
+        if b0 == 0x28 and b1 == 0xB5 and b2 == 0x2F and b3 == 0xFD: return "zstd"
+        if b0 == 0x04 and b1 == 0x22 and b2 == 0x4D and b3 == 0x18: return "lz4"
+        if Bzip2.is_bzip2(data): return "bzip2"
+        if Xz.is_xz(data): return "xz"
+        if b0 == 0x1F and b1 == 0x8B: return "gzip"
+        return ""
 
     # Compress `n` bytes of `data` with the named algorithm (checksum on where
     # the format has one).
@@ -66,6 +107,9 @@ extend Compress:
             return Lz4.compress_block(data, n)
         if name == "zstd":
             return Zstd.compress(data, n, checksum)
+        if name == "bzip2":
+            mut rb: Result[str, str] = Bzip2.compress(data.slice(0, n), 9)
+            return _wrap_result(rb)
         return CResult.failure("compress: unknown algorithm '" + name + "'", CBuf.init(16))
 
     # Decompress `n` bytes of `data`; the output is bounded by `max_out`.
@@ -76,4 +120,16 @@ extend Compress:
             return Lz4.decompress_block(data, n, max_out)
         if name == "zstd":
             return Zstd.decompress(data, n, max_out)
+        if name == "bzip2":
+            mut rb: Result[str, str] = Bzip2.decompress_max(data.slice(0, n), max_out)
+            return _wrap_result(rb)
+        if name == "xz":
+            mut rx: Result[str, str] = Xz.decompress_max(data.slice(0, n), max_out)
+            return _wrap_result(rx)
+        if name == "lzma":
+            mut rl: Result[str, str] = Lzma.decompress_max(data.slice(0, n), max_out)
+            return _wrap_result(rl)
+        if name == "brotli":
+            mut rr: Result[str, str] = Brotli.decompress_max(data.slice(0, n), max_out)
+            return _wrap_result(rr)
         return CResult.failure("compress: unknown algorithm '" + name + "'", CBuf.init(16))
