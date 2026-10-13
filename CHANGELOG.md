@@ -17,6 +17,8 @@ codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
 ### Changed
+- `SmtpClient.data()` no longer drops blank lines from the message (it split the body with
+  `Str.split`, which skips empty pieces, so the header/body separator was lost).
 - `File.write`, `File.append` and `File.write_text` / `append_text` write the string's real
   length instead of stopping at the first NUL byte, so binary files are written intact.
 - `UdpSocket.send_to` sends the string's real length instead of stopping at the first NUL byte.
@@ -63,6 +65,23 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.net.mime`** — media types: an extension table of ~420 extensions / ~320 types (Python
+  `mimetypes` + Debian media-types + modern types such as wasm, avif, jxl, woff2, mjs, jsonld,
+  webmanifest, toml, yaml, heic) with `type_for_path`, `extension_for_type`, `content_type_for`
+  (charset for text types); WHATWG-style content sniffing (images, audio/video, fonts, archives,
+  wasm, PDF, HTML/XML/JSON, BOMs, binary test); `MediaType` parsing/formatting with RFC 2045 /
+  9110 token and quoted-string rules, RFC 2231 continuations and charsets, `matches("image/*")`;
+  charset conversion to UTF-8 (UTF-8, US-ASCII, ISO-8859-1/-15, Windows-1252, UTF-16).
+- **`std.net.email`** — MIME email messages (RFC 5322 / 2045-2049 / 2047 / 2231 / 6532).
+  `EmailMessage` builds messages (address lists with encoded display names, Subject/Date/
+  Message-ID/In-Reply-To/References, text + HTML alternative, inline images with Content-ID in
+  multipart/related, attachments in multipart/mixed, automatic 7bit / quoted-printable / base64,
+  folding at 78 columns, CRLF, unique boundaries) and parses them (header unfolding, B/Q encoded
+  words, RFC 2231 filenames, nested multiparts, `text_body()`, `html_body()`, `attachments()`,
+  address groups / quoted local parts / comments, RFC 5322 dates). Verified against Python's
+  `email` package in both directions. `SmtpClient.send_message(msg)` sends one (envelope from
+  Sender/From, recipients To + Cc + Bcc, Bcc never written, BODY=8BITMIME / SMTPUTF8 when
+  needed); `ImapClient.fetch_email(uid)` and `Pop3Client.retr_email(n)` return parsed messages.
 - **`tauraroc doc`** — API documentation from source (public constants, functions, classes with
   their fields and `extend` methods, enums, interfaces, and their comments) as Markdown or HTML,
   per file or for whole directory trees. **`tauraroc cov`** / **`--coverage`** — line coverage:

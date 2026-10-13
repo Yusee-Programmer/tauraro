@@ -11,6 +11,7 @@
 #   mut box = c.select("INBOX")?                 # box.exists, box.uidvalidity
 #   mut uids = c.uid_search("UNSEEN")?
 #   mut raw = c.fetch_message(uids[0])?          # full RFC 5322 message
+#   mut em = c.fetch_email(uids[0])?             # ... parsed (std.net.email)
 #   c.add_flags(uids[0], "\\Seen")?
 #   c.logout()
 #
@@ -21,6 +22,7 @@ from std.net.linestream import LineStream
 from std.net.tls import TlsOptions
 from std.encoding.base64 import Base64
 from std.core.string import StringBuilder
+from std.net.email import EmailMessage
 
 # One untagged response ("* ..."): text with each literal replaced by
 # "{N}" and the literal payloads, in order.
@@ -355,6 +357,11 @@ extend ImapClient:
         mut ms = self.fetch(set, "(UID BODY.PEEK[])", true)?
         if len(ms) == 0: raise(f"IMAP: no message with UID {uid}")
         return ms[0].body
+
+    # fetch_message parsed with std.net.email (headers, bodies, attachments).
+    pub def fetch_email(self, uid: int) throws str -> EmailMessage:
+        mut raw = self.fetch_message(uid)?
+        return EmailMessage.parse(raw)
 
     def _store(self, uid: int, op: str, flags: str) throws str:
         mut cmd = f"UID STORE {uid} " + op + " (" + flags + ")"

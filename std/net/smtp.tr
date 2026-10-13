@@ -34,9 +34,14 @@
 # TLS is TLS 1.3 only (see std.net.tls); servers limited to TLS 1.2 fail the
 # handshake and the error is reported in last_text.
 #
-# LIMITATIONS:
-#   - No MIME multipart / attachment support — send_mail() sends a single
-#     text/plain body (headers + blank line + body).
+# MIME messages (multipart, HTML, attachments, non-ASCII headers) are built
+# with std.net.email and sent with send_message():
+#   mut m = EmailMessage.init()
+#   m.set_from("Me <me@example.com>"); m.add_to("you@example.com")
+#   m.add_bcc("archive@example.com")       # envelope only
+#   m.set_subject("Report"); m.set_text("See attached."); m.attach("r.pdf", pdf)
+#   client.send_message(m)                 # MAIL FROM / RCPT TO each / DATA
+# send_mail() remains the one-call plain-text shortcut.
 #
 # ── Wire framing rules this module gets right ────────────────────────────────
 #   - SMTP replies can span multiple lines: all but the last line of a
@@ -54,6 +59,7 @@ from std.core.string import StringBuilder
 from std.string.str import Str
 from std.sys.time import Clock
 from std.net.tls import TlsStream, TlsOptions
+from std.net.email import EmailMessage
 
 extern "C":
     def _tr_c_free(ptr: Pointer[char])
@@ -328,27 +334,91 @@ extend SmtpClient:
 
     # Translate a '\n'-delimited message body into CRLF-terminated, dot-stuffed
     # wire bytes, ending with the "\r\n.\r\n" end-of-data marker.
-    def _build_dot_stuffed(body: str) -> str:
-        mut sb    = StringBuilder.init(Str.len(body) + 16)
-        mut lines = Str.split(body, "\n")
-        mut n     = len(lines)
-        mut i     = 0
-        while i < n:
-            mut line = lines[i]
-            # Strip a trailing '\r' if the source already had CRLF endings,
-            # so we don't double up when we append our own "\r\n" below.
-            mut llen = Str.len(line)
-            if llen > 0 and Str.char_at(line, llen - 1) == 13:
-                line = Str.slice(line, 0, llen - 1)
-            if Str.len(line) > 0 and Str.char_at(line, 0) == 46:
-                sb.append_char(46)   # dot-stuff: prepend an extra '.'
-            sb.append(line)
+    #
+    # Lines are walked by hand rather than with Str.split, which drops empty
+    # pieces (that silently removed every blank line, including the one that
+    # separates the headers from the body).
+    pub def _build_dot_stuffed(body: str) -> str:
+        mut n  = body.len()
+        mut sb = StringBuilder.init(n + n / 32 + 16)
+        mut p  = body as Pointer[char]
+        mut st = 0
+        while st < n:
+            mut e = st
+            while e < n:
+                mut ch = 0
+                unsafe: ch = (p.offset(e).read() as int) & 255
+                if ch == 10: break
+                e = e + 1
+            mut le = e
+            if le > st:
+                mut last = 0
+                unsafe: last = (p.offset(le - 1).read() as int) & 255
+                # Strip a trailing '\r' if the source already had CRLF endings,
+                # so we don't double up when we append our own "\r\n" below.
+                if last == 13: le = le - 1
+            if le > st:
+                mut first = 0
+                unsafe: first = (p.offset(st).read() as int) & 255
+                if first == 46: sb.append_char(46)   # dot-stuff: prepend an extra '.'
+                mut line = body.slice(st, le)
+                sb.append(line)
             sb.append("\r\n")
-            i = i + 1
+            st = e + 1
         sb.append(".\r\n")
         mut out = sb.to_owned()
         sb.free()
         return out
+
+    pub def supports(self, extension: str) -> bool:
+        mut lines = self._caps.split("\n")
+        mut want = extension.upper()
+        mut i = 0
+        while i < len(lines):
+            mut l = lines[i].strip().upper()
+            if l == want or l.starts_with(want + " "): return true
+            i = i + 1
+        return false
+
+    # Send a std.net.email message: the envelope sender is its Sender/From
+    # address and the recipients are To + Cc + Bcc (Bcc is never written into
+    # the data). Stops at the first failing reply and returns it.
+    pub def send_message(self, msg: EmailMessage) -> SmtpResponse:
+        mut rc = msg.recipients()
+        return self.send_message_to(msg, msg.envelope_from(), rc)
+
+    # send_message with an explicit envelope (e.g. VERP or a forwarding hop).
+    # MAIL FROM gets SMTPUTF8 when an envelope address is not ASCII and
+    # BODY=8BITMIME when the data has 8-bit bytes (if the server offers them).
+    pub def send_message_to(self, msg: EmailMessage, envelope_from: str, rcpts: List[str]) -> SmtpResponse:
+        if len(rcpts) == 0: return SmtpResponse.init(0, "send_message: no recipients")
+        mut wire = msg.to_string()
+        mut cmd = "MAIL FROM:<" + envelope_from + ">"
+        mut utf8 = not SmtpClient._ascii(envelope_from)
+        mut i = 0
+        while i < len(rcpts):
+            if not SmtpClient._ascii(rcpts[i]): utf8 = true
+            i = i + 1
+        if not SmtpClient._ascii(wire) and self.supports("8BITMIME"): cmd = cmd + " BODY=8BITMIME"
+        if utf8 and self.supports("SMTPUTF8"): cmd = cmd + " SMTPUTF8"
+        mut r = self._cmd(cmd)
+        if r.is_error(): return r
+        i = 0
+        while i < len(rcpts):
+            mut rr = self.rcpt_to(rcpts[i])
+            if rr.is_error(): return rr
+            i = i + 1
+        return self.data(wire)
+
+    def _ascii(s: str) -> bool:
+        mut p = s as Pointer[char]
+        mut i = 0
+        while i < s.len():
+            mut c = 0
+            unsafe: c = (p.offset(i).read() as int) & 255
+            if c >= 128: return false
+            i = i + 1
+        return true
 
     pub def rset(self) -> SmtpResponse:
         return self._cmd("RSET")
