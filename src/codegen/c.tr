@@ -118,6 +118,8 @@ pub def _is_c_keyword(n: str) -> bool:
     if n == "fopen" or n == "fclose" or n == "fread" or n == "fwrite": return true
     if n == "fseek" or n == "ftell" or n == "rewind" or n == "feof": return true
     if n == "index" or n == "count" or n == "new" or n == "delete": return true
+    # <windows.h> defines these as empty macros (16-bit pointer qualifiers)
+    if n == "near" or n == "far": return true
     return false
 
 pub def _starts_with_tr(s: str) -> bool:

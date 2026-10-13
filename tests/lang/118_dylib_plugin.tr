@@ -100,6 +100,12 @@ def test_plugins(t: TestRunner, dir: str) throws str:
     t.assert_contains(errs, "does not export tauraro_plugin_abi", "non-plugin rejected")
     t.assert_contains(errs, "plugin ABI 99", "ABI mismatch rejected")
     t.assert_contains(errs, "init failed (code 7)", "refusing init rejected")
+    if n != 2:
+        i = 0
+        while i < len(host.errors):
+            print("  " + host.errors[i])
+            i = i + 1
+        return
     mut names = host.names()
     t.assert_eq_str(names[0], "alpha", "load order")
     t.assert_eq_str(names[1], "beta", "second plugin")

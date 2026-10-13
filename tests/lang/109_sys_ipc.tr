@@ -5,7 +5,7 @@
 # is exercised with two mappings / two handles of the same named object.
 
 from std.test import TestRunner
-from std.sys.mmap import MemoryMap, MAP_READ, MAP_READ_WRITE, MAP_COPY
+from std.sys.mmap import MemoryMap, MAP_READ, MAP_READ_WRITE, MAP_COPY_ON_WRITE
 from std.sys.shm import SharedMemory, NamedSemaphore
 from std.sys.pipe import Pipe, PipeEnd, Fifo
 from std.sys.unix_socket import UnixListener, UnixStream
@@ -48,7 +48,7 @@ def test_mmap(t: TestRunner):
     m2.close()
     t.assert_eq_str(File.read_text(path), "01AB456789abcdefghij", "file changed")
 
-    mut cp: Result[MemoryMap, str] = MemoryMap.open(path, MAP_COPY)
+    mut cp: Result[MemoryMap, str] = MemoryMap.open(path, MAP_COPY_ON_WRITE)
     mut m3 = cp.ok
     mut w3: Result[bool, str] = wr(m3, 0, "zz")
     mut all = m3.read_all()

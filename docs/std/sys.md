@@ -497,7 +497,7 @@ binary-safe; failures raise with the OS error text.
 ### MemoryMap (`std.sys.mmap`)
 
 ```tauraro
-from std.sys.mmap import MemoryMap, MAP_READ, MAP_READ_WRITE, MAP_COPY
+from std.sys.mmap import MemoryMap, MAP_READ, MAP_READ_WRITE, MAP_COPY_ON_WRITE
 mut m = MemoryMap.open("big.log", MAP_READ)?
 mut pos = m.find("ERROR", 0)
 mut line = m.read(pos, 80)?
@@ -506,7 +506,7 @@ m.close()
 
 | Member | Description |
 |---|---|
-| `MemoryMap.open(path, mode)?` / `open_range(path, mode, offset, length)?` | `MAP_READ`, `MAP_READ_WRITE` (writes reach the file), `MAP_COPY` (private copy-on-write). |
+| `MemoryMap.open(path, mode)?` / `open_range(path, mode, offset, length)?` | `MAP_READ`, `MAP_READ_WRITE` (writes reach the file), `MAP_COPY_ON_WRITE` (private copy-on-write). |
 | `MemoryMap.anonymous(size)?` | Zero-filled private memory. |
 | `len()`, `read(off, n)?`, `read_all()`, `write(off, data)?`, `byte_at(i)`, `set_byte(i, v)?`, `find(needle, start)` | Bounds-checked access. |
 | `atomic_load/store/add/cas(off, ...)` | 64-bit atomics at 8-byte aligned offsets (for shared maps). |

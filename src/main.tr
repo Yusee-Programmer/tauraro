@@ -695,6 +695,15 @@ pub def slice_after_arch(triple: str) -> str:
 # True if a build's OUTPUT targets Windows (needs Winsock2 / -mconsole): the host
 # OS for a native build, or the TARGET triple when cross-compiling. Keying Windows
 # link libs on the host is wrong when cross-compiling FROM Windows TO Linux/wasm.
+# Shared libraries on macOS are .dylib. Only `--lib` asks, so the one-off
+# `uname` probe for a native build costs nothing elsewhere.
+pub def out_is_macos(target: str, triple: str) -> bool:
+    if target == "":
+        if _tr_is_windows(): return false
+        if _tr_is_macos_arm64(): return true
+        return _tr_system("test \"$(uname -s 2>/dev/null)\" = Darwin") == 0
+    return _tr_str_contains(triple, "apple") or _tr_str_contains(triple, "macos") or _tr_str_contains(triple, "darwin")
+
 pub def out_is_windows(target: str, triple: str) -> bool:
     if target == "": return _tr_is_windows()
     return _tr_str_contains(triple, "windows") or _tr_str_contains(triple, "mingw")
@@ -2431,6 +2440,7 @@ pub def main(args: Vec[str]):
     mut exe_ext = ""
     if lib_mode:
         if out_win: exe_ext = ".dll"
+        elif out_is_macos(target, tgt_triple): exe_ext = ".dylib"
         else: exe_ext = ".so"
     elif out_win:
         exe_ext = ".exe"

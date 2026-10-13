@@ -2,7 +2,7 @@
 #
 # A `MemoryMap` gives byte-level access to a file's contents without reading
 # it into a string first; writes to a MAP_READ_WRITE map go straight to the
-# file (call flush() to force them to disk). MAP_COPY maps are private:
+# file (call flush() to force them to disk). MAP_COPY_ON_WRITE maps are private:
 # writes are visible only to this process. Anonymous maps are zero-filled
 # scratch memory. Offsets are bounds-checked; out-of-range access raises.
 #
@@ -23,7 +23,7 @@ from std.crypto.native import _cn_alloc, _cn_take, _cn_free
 
 pub const MAP_READ = 0
 pub const MAP_READ_WRITE = 1
-pub const MAP_COPY = 2
+pub const MAP_COPY_ON_WRITE = 2
 
 pub class MemoryMap:
     _h: Pointer[char]
@@ -42,7 +42,7 @@ extend MemoryMap:
 
     # Map `length` bytes starting at `offset` (length 0 = to the end).
     pub def open_range(path: str, mode: int, offset: int, length: int) throws str -> MemoryMap:
-        if mode < 0 or mode > 2: raise("mmap: mode must be MAP_READ, MAP_READ_WRITE or MAP_COPY")
+        if mode < 0 or mode > 2: raise("mmap: mode must be MAP_READ, MAP_READ_WRITE or MAP_COPY_ON_WRITE")
         mut p = _ipc_cstr(path)
         mut pp = p as Pointer[char]
         mut h = trc_mmap_file(pp, mode, offset, length)
