@@ -1,0 +1,1918 @@
+# std.net.email — build and parse MIME email messages.
+#
+# Standards: RFC 5322 (message format), RFC 2045-2049 (MIME), RFC 2047
+# (encoded words), RFC 2231 (parameter continuations/charsets) and RFC 6532
+# (UTF-8 header values are passed through when parsing).
+#
+# Building:
+#   from std.net.email import EmailMessage, Address
+#
+#   mut m = EmailMessage.init()
+#   m.set_from("Zoë Example <zoe@example.com>")
+#   m.add_to("bob@example.com, \"Doe, Jane\" <jane@example.org>")
+#   m.add_cc("carol@example.net")
+#   m.add_bcc("audit@example.com")             # envelope only, never written
+#   m.set_subject("Quarterly report — draft")  # non-ASCII -> RFC 2047 words
+#   m.set_text("Hi Bob,\nthe report is attached.\n")
+#   m.set_html("<p>Hi Bob,<br>the report is <b>attached</b>.</p><img src=\"cid:logo\">")
+#   m.add_inline("logo", "logo.png", png_bytes)          # multipart/related
+#   m.attach("report.pdf", pdf_bytes)                    # type from std.net.mime
+#   m.attach_as("data.bin", "application/x-thing", raw)
+#   mut wire = m.to_string()                  # CRLF, folded at 78 columns
+#
+#   SmtpClient.send_message(m) (std.net.smtp) sends it: envelope sender from
+#   Sender/From, recipients from To + Cc + Bcc.
+#
+# Parsing:
+#   mut p = EmailMessage.parse(raw)            # lenient, never throws
+#   p.subject()                                # decoded UTF-8
+#   p.get_from()[0].name / .addr               # List[Address]
+#   p.to(); p.cc(); p.reply_to(); p.message_id(); p.timestamp()
+#   p.text_body(); p.html_body()               # UTF-8, '\n' line endings
+#   for a in p.attachments(): a.filename, a.content_type, a.data (bytes)
+#   p.root                                     # MimePart tree (headers, parts)
+#
+#   ImapClient.fetch_email(uid) / Pop3Client.retr_email(n) return a parsed
+#   EmailMessage directly.
+#
+# Structure built by to_string():
+#   text only                -> text/plain
+#   html only                -> text/html
+#   text + html              -> multipart/alternative
+#   html + inline images     -> multipart/related(html, images...)
+#   any attachments          -> multipart/mixed(body, attachments...)
+#
+# Transfer encodings are chosen per part: 7bit when the content is ASCII with
+# lines <= 998 bytes, otherwise the shorter of quoted-printable and base64 for
+# text (8bit instead when allow_8bit is set), base64 for attachments, and
+# 7bit/8bit for message/rfc822 attachments. Text bodies are converted to CRLF
+# line endings and labelled charset=utf-8.
+#
+# Charsets understood when decoding: UTF-8, US-ASCII, ISO-8859-1,
+# ISO-8859-15, Windows-1252, UTF-16 (LE/BE/BOM). Others are reported:
+# decoded_header_strict() / MimePart.text_strict() raise
+# "unsupported charset: X", while the lenient forms leave the encoded word
+# as it was / return the raw bytes.
+
+from std.core.string import StringBuilder
+from std.net.mime import Mime, MediaType
+from std.encoding.base64 import Base64
+from std.string.fmt import Fmt
+from std.sys.time import Clock
+from std.crypto.random import SecureRandom
+
+extern "C":
+    def _tr_next_seed_counter() -> int
+
+# ─── byte helpers ─────────────────────────────────────────────────────────────
+
+def _eb(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe: return (p.offset(i).read() as int) & 255
+
+def _ehex(c: int) -> int:
+    if c >= 48 and c <= 57: return c - 48
+    if c >= 65 and c <= 70: return c - 55
+    if c >= 97 and c <= 102: return c - 87
+    return -1
+
+def _ehexd(v: int) -> int:
+    if v < 10: return 48 + v
+    return 55 + v
+
+def _is_wsp(c: int) -> bool:
+    return c == 32 or c == 9
+
+def _is_ascii(s: str) -> bool:
+    mut i = 0
+    mut n = s.len()
+    while i < n:
+        if _eb(s, i) >= 128: return false
+        i = i + 1
+    return true
+
+# Index of the next '\n' at or after i, or len(s).
+def _eol(s: str, i: int) -> int:
+    mut n = s.len()
+    mut j = i
+    while j < n:
+        if _eb(s, j) == 10: return j
+        j = j + 1
+    return n
+
+# End of the line content (before an optional '\r') for a line ending at e.
+def _line_end(s: str, start: int, e: int) -> int:
+    if e > start and _eb(s, e - 1) == 13: return e - 1
+    return e
+
+def _starts_at(s: str, off: int, sub: str) -> bool:
+    mut k = sub.len()
+    if off + k > s.len(): return false
+    mut i = 0
+    while i < k:
+        if _eb(s, off + i) != _eb(sub, i): return false
+        i = i + 1
+    return true
+
+# '\r\n' and lone '\r' -> '\n'
+def _to_lf(s: str) -> str:
+    if s.find("\r") < 0: return s
+    mut n = s.len()
+    mut sb = StringBuilder.init(n + 1)
+    mut i = 0
+    while i < n:
+        mut c = _eb(s, i)
+        if c == 13:
+            sb.append_char(10)
+            if i + 1 < n and _eb(s, i + 1) == 10: i = i + 1
+        else:
+            sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Any line ending -> CRLF
+def _to_crlf(s: str) -> str:
+    mut lf = _to_lf(s)
+    mut n = lf.len()
+    mut sb = StringBuilder.init(n + n / 16 + 4)
+    mut i = 0
+    while i < n:
+        mut c = _eb(lf, i)
+        if c == 10: sb.append_char(13)
+        sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _max_line_len(s: str) -> int:
+    mut best = 0
+    mut cur = 0
+    mut i = 0
+    mut n = s.len()
+    while i < n:
+        mut c = _eb(s, i)
+        if c == 10 or c == 13:
+            if cur > best: best = cur
+            cur = 0
+        else:
+            cur = cur + 1
+        i = i + 1
+    if cur > best: best = cur
+    return best
+
+def _has_nul(s: str) -> bool:
+    mut i = 0
+    while i < s.len():
+        if _eb(s, i) == 0: return true
+        i = i + 1
+    return false
+
+def _lower(s: str) -> str:
+    return s.lower()
+
+# ─── transfer encodings ───────────────────────────────────────────────────────
+
+# Base64 with 76-character CRLF-terminated lines (RFC 2045 §6.8).
+def _b64_lines(data: str) -> str:
+    mut enc = Base64.encode(data)
+    mut n = enc.len()
+    mut sb = StringBuilder.init(n + n / 38 + 4)
+    mut i = 0
+    while i < n:
+        mut e = i + 76
+        if e > n: e = n
+        mut chunk = enc.slice(i, e)
+        sb.append(chunk)
+        sb.append("\r\n")
+        i = e
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _b64v(c: int) -> int:
+    if c >= 65 and c <= 90: return c - 65
+    if c >= 97 and c <= 122: return c - 71
+    if c >= 48 and c <= 57: return c + 4
+    if c == 43 or c == 45: return 62
+    if c == 47 or c == 95: return 63
+    return -1
+
+# Tolerant base64 decoder: ignores line breaks and other non-alphabet bytes,
+# stops at '=' padding.
+def _b64_decode(s: str) -> str:
+    mut n = s.len()
+    mut sb = StringBuilder.init(n * 3 / 4 + 4)
+    mut acc = 0
+    mut bits = 0
+    mut i = 0
+    while i < n:
+        mut c = _eb(s, i)
+        i = i + 1
+        if c == 61: break
+        mut v = _b64v(c)
+        if v < 0: continue
+        acc = ((acc << 6) | v) & 16777215
+        bits = bits + 6
+        if bits >= 8:
+            bits = bits - 8
+            sb.append_char((acc >> bits) & 255)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Quoted-printable encode (RFC 2045 §6.7) of text whose line breaks are CRLF
+# (hard breaks are kept as CRLF), soft-wrapping at 76 columns.
+def _qp_encode(data: str) -> str:
+    mut n = data.len()
+    mut sb = StringBuilder.init(n + n / 4 + 8)
+    mut col = 0
+    mut i = 0
+    while i < n:
+        mut c = _eb(data, i)
+        if c == 13 and i + 1 < n and _eb(data, i + 1) == 10:
+            sb.append("\r\n")
+            col = 0
+            i = i + 2
+            continue
+        mut at_eol = (i + 1 >= n) or (_eb(data, i + 1) == 13 and i + 2 < n and _eb(data, i + 2) == 10)
+        mut lit = (c >= 33 and c <= 126 and c != 61) or ((c == 32 or c == 9) and not at_eol)
+        mut w = 3
+        if lit: w = 1
+        # room for the token plus a possible trailing soft-break '='
+        mut limit = 75
+        if at_eol: limit = 76
+        if col + w > limit:
+            sb.append("=\r\n")
+            col = 0
+        if lit:
+            sb.append_char(c)
+        else:
+            sb.append_char(61)
+            sb.append_char(_ehexd(c >> 4))
+            sb.append_char(_ehexd(c & 15))
+        col = col + w
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Quoted-printable decode. Soft line breaks are removed, hard line breaks are
+# kept as they appear in the input, transport padding (trailing whitespace)
+# is dropped, malformed '=' sequences are kept literally.
+def _qp_decode(s: str) -> str:
+    mut n = s.len()
+    mut sb = StringBuilder.init(n + 1)
+    mut i = 0
+    while i < n:
+        mut e = _eol(s, i)
+        mut le = _line_end(s, i, e)
+        mut te = le
+        while te > i and _is_wsp(_eb(s, te - 1)): te = te - 1
+        mut soft = te > i and _eb(s, te - 1) == 61
+        mut stop = te
+        if soft: stop = te - 1
+        mut j = i
+        while j < stop:
+            mut c = _eb(s, j)
+            if c == 61 and j + 2 < stop and _ehex(_eb(s, j + 1)) >= 0 and _ehex(_eb(s, j + 2)) >= 0:
+                sb.append_char(_ehex(_eb(s, j + 1)) * 16 + _ehex(_eb(s, j + 2)))
+                j = j + 3
+                continue
+            sb.append_char(c)
+            j = j + 1
+        if not soft and e < n:
+            # keep the original line ending
+            mut k = le
+            while k <= e:
+                sb.append_char(_eb(s, k))
+                k = k + 1
+        i = e + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# ─── RFC 2047 encoded words ───────────────────────────────────────────────────
+
+def _q_safe(c: int) -> bool:
+    if c >= 48 and c <= 57: return true
+    if c >= 65 and c <= 90: return true
+    if c >= 97 and c <= 122: return true
+    return c == 33 or c == 42 or c == 43 or c == 45 or c == 47
+
+def _q_len(c: int) -> int:
+    if _q_safe(c) or c == 32: return 1
+    return 3
+
+def _q_put(sb: StringBuilder, c: int):
+    if c == 32:
+        sb.append_char(95)
+    elif _q_safe(c):
+        sb.append_char(c)
+    else:
+        sb.append_char(61)
+        sb.append_char(_ehexd(c >> 4))
+        sb.append_char(_ehexd(c & 15))
+
+# Length in bytes of the UTF-8 character starting at i (1 for invalid bytes).
+def _u8len(s: str, i: int) -> int:
+    mut b = _eb(s, i)
+    mut k = 1
+    if b >= 240: k = 4
+    elif b >= 224: k = 3
+    elif b >= 192: k = 2
+    if i + k > s.len(): k = s.len() - i
+    return k
+
+# Encode `s` as a space-separated sequence of UTF-8 encoded words, each at
+# most 75 characters, never splitting a character. Uses Q or B, whichever is
+# shorter overall.
+pub def encode_words(s: str) -> str:
+    return encode_words_fit(s, 75)
+
+# encode_words with the FIRST word limited to `first_max` characters (so it
+# fits on the line after a header name); the rest are at most 75.
+pub def encode_words_fit(s: str, first_max: int) -> str:
+    mut fm = first_max
+    if fm > 75: fm = 75
+    if fm < 24: fm = 24
+    mut n = s.len()
+    mut qlen = 0
+    mut i = 0
+    while i < n:
+        qlen = qlen + _q_len(_eb(s, i))
+        i = i + 1
+    mut use_b = qlen > (n + 2) / 3 * 4
+    mut sb = StringBuilder.init(n * 2 + 16)
+    mut first = true
+    i = 0
+    while i < n:
+        if not first: sb.append(" ")
+        first = false
+        mut start = i
+        mut used = 0
+        # payload budget: word limit - len("=?utf-8?q?") - len("?=")
+        mut budget = 63
+        if start == 0: budget = fm - 12
+        while i < n:
+            mut k = _u8len(s, i)
+            mut w = 0
+            if use_b:
+                w = (i + k - start + 2) / 3 * 4
+            else:
+                mut j = 0
+                while j < k:
+                    w = w + _q_len(_eb(s, i + j))
+                    j = j + 1
+                w = used + w
+            if w > budget and i > start: break
+            used = w
+            i = i + k
+        mut chunk = s.slice(start, i)
+        if use_b:
+            sb.append("=?utf-8?b?")
+            mut enc = Base64.encode(chunk)
+            sb.append(enc)
+        else:
+            sb.append("=?utf-8?q?")
+            mut j = 0
+            while j < chunk.len():
+                _q_put(sb, _eb(chunk, j))
+                j = j + 1
+        sb.append("?=")
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Unstructured header text (Subject, Comments, custom headers): unchanged when
+# it is printable ASCII, otherwise RFC 2047 encoded words.
+pub def encode_header_text(s: str) -> str:
+    return _encode_text_fit(s, 75)
+
+def _encode_text_fit(s: str, first_max: int) -> str:
+    mut ok = true
+    mut i = 0
+    while i < s.len():
+        mut c = _eb(s, i)
+        if c >= 127 or (c < 32 and c != 9): ok = false
+        i = i + 1
+    if ok and s.find("=?") < 0: return s
+    return encode_words_fit(s, first_max)
+
+# Decode one encoded word starting at `i` ("=?cs?e?text?="). Returns the end
+# index (exclusive) or -1 when the text there is not an encoded word; the
+# decoded UTF-8 text goes to `out`. Unsupported charsets: strict -> error
+# text in out.err, lenient -> -1.
+class _EwResult:
+    pub end:  int
+    pub text: str
+    pub err:  str
+
+def _decode_word(s: str, i: int) -> _EwResult:
+    mut r = _EwResult()
+    r.end = -1
+    r.text = ""
+    r.err = ""
+    mut n = s.len()
+    if not _starts_at(s, i, "=?"): return r
+    mut j = i + 2
+    mut cs_start = j
+    while j < n and _eb(s, j) != 63 and not _is_wsp(_eb(s, j)): j = j + 1
+    if j >= n or _eb(s, j) != 63 or j == cs_start: return r
+    mut charset = s.slice(cs_start, j)
+    mut star = charset.find("*")
+    if star >= 0: charset = charset.slice(0, star)
+    j = j + 1
+    if j + 1 >= n or _eb(s, j + 1) != 63: return r
+    mut enc = _eb(s, j)
+    if enc >= 97: enc = enc - 32
+    if enc != 66 and enc != 81: return r
+    j = j + 2
+    mut ts = j
+    while j + 1 < n and not (_eb(s, j) == 63 and _eb(s, j + 1) == 61):
+        if _is_wsp(_eb(s, j)) or _eb(s, j) == 10 or _eb(s, j) == 13: return r
+        j = j + 1
+    if j + 1 >= n: return r
+    mut payload = s.slice(ts, j)
+    mut raw = ""
+    if enc == 66:
+        raw = _b64_decode(payload)
+    else:
+        mut sb = StringBuilder.init(payload.len() + 1)
+        mut k = 0
+        while k < payload.len():
+            mut c = _eb(payload, k)
+            if c == 95:
+                sb.append_char(32)
+            elif c == 61 and k + 2 < payload.len() and _ehex(_eb(payload, k + 1)) >= 0 and _ehex(_eb(payload, k + 2)) >= 0:
+                sb.append_char(_ehex(_eb(payload, k + 1)) * 16 + _ehex(_eb(payload, k + 2)))
+                k = k + 2
+            else:
+                sb.append_char(c)
+            k = k + 1
+        raw = sb.to_owned()
+        sb.free()
+    if not Mime.is_supported_charset(charset):
+        r.err = "unsupported charset: " + charset
+        return r
+    r.text = Mime.decode_text(raw, charset)
+    r.end = j + 2
+    return r
+
+def _decode_header_impl(s: str, strict: bool) throws str -> str:
+    if s.find("=?") < 0: return s
+    mut n = s.len()
+    mut sb = StringBuilder.init(n + 1)
+    mut i = 0
+    mut last_ew_end = -1      # end of the previous encoded word
+    mut pending_ws = ""       # whitespace seen since then
+    while i < n:
+        mut c = _eb(s, i)
+        if c == 61 and i + 1 < n and _eb(s, i + 1) == 63:
+            mut r = _decode_word(s, i)
+            if r.end > 0:
+                # whitespace between two adjacent encoded words is dropped
+                pending_ws = ""
+                sb.append(r.text)
+                i = r.end
+                last_ew_end = i
+                continue
+            if r.err.len() > 0 and strict: raise(r.err)
+        if _is_wsp(c) or c == 13 or c == 10:
+            mut ws = i
+            while i < n and (_is_wsp(_eb(s, i)) or _eb(s, i) == 13 or _eb(s, i) == 10): i = i + 1
+            if last_ew_end >= 0:
+                pending_ws = s.slice(ws, i)
+            else:
+                sb.append(s.slice(ws, i))
+            continue
+        if last_ew_end >= 0:
+            sb.append(pending_ws)
+            pending_ws = ""
+            last_ew_end = -1
+        sb.append_char(c)
+        i = i + 1
+    sb.append(pending_ws)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Decode RFC 2047 encoded words in a header value to UTF-8. Encoded words in
+# unsupported charsets are left as they are.
+pub def decode_header(s: str) -> str:
+    mut r: Result[str, str] = _decode_header_impl(s, false)
+    if r.is_err: return s
+    return r.ok
+
+# Like decode_header but raises "unsupported charset: X".
+pub def decode_header_strict(s: str) throws str -> str:
+    return _decode_header_impl(s, true)?
+
+# ─── header folding ───────────────────────────────────────────────────────────
+
+# "Name: value" folded at whitespace so lines stay within 78 characters where
+# possible, CRLF-terminated.
+pub def fold_header(name: str, value: str) -> str:
+    mut line = name + ": " + value
+    mut n = line.len()
+    if n <= 78: return line + "\r\n"
+    mut sb = StringBuilder.init(n + 16)
+    mut start = 0
+    while n - start > 78:
+        # last whitespace in (start+1 .. start+78], not inside the header name
+        mut lim = start + 78
+        mut br = -1
+        mut j = lim
+        mut lo = start + 1
+        if start == 0: lo = name.len() + 2
+        while j >= lo:
+            if _is_wsp(_eb(line, j)):
+                br = j
+                break
+            j = j - 1
+        if br < 0:
+            j = lim + 1
+            while j < n:
+                if _is_wsp(_eb(line, j)):
+                    br = j
+                    break
+                j = j + 1
+        if br < 0: break
+        # don't leave a line holding only whitespace
+        mut seg = line.slice(start, br)
+        if seg.strip().len() == 0: break
+        sb.append(seg)
+        sb.append("\r\n")
+        start = br
+    sb.append(line.slice(start, n))
+    sb.append("\r\n")
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# ─── dates ────────────────────────────────────────────────────────────────────
+
+def _days_from_civil(y0: int, m: int, d: int) -> int:
+    mut y = y0
+    if m <= 2: y = y - 1
+    mut era = y / 400
+    if y < 0: era = (y - 399) / 400
+    mut yoe = y - era * 400
+    mut mp = m - 3
+    if m <= 2: mp = m + 9
+    mut doy = (153 * mp + 2) / 5 + d - 1
+    mut doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    return era * 146097 + doe - 719468
+
+def _two(sb: StringBuilder, v: int):
+    if v < 10: sb.append_char(48)
+    sb.append_int(v)
+
+# RFC 5322 date ("Tue, 13 Oct 2026 09:05:00 +0200") for a Unix timestamp
+# and a UTC offset in minutes.
+pub def format_date(ts: int, offset_min: int) -> str:
+    mut t = ts + offset_min * 60
+    mut days = t / 86400
+    mut rem = t - days * 86400
+    if rem < 0:
+        rem = rem + 86400
+        days = days - 1
+    mut hh = rem / 3600
+    mut mm = (rem - hh * 3600) / 60
+    mut ss = rem - hh * 3600 - mm * 60
+    mut dow = (days + 4) % 7
+    if dow < 0: dow = dow + 7
+    mut z = days + 719468
+    mut era = z / 146097
+    if z < 0: era = (z - 146096) / 146097
+    mut doe = z - era * 146097
+    mut yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    mut y = yoe + era * 400
+    mut doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    mut mp = (5 * doy + 2) / 153
+    mut d = doy - (153 * mp + 2) / 5 + 1
+    mut m = mp + 3
+    if mp >= 10: m = mp - 9
+    if m <= 2: y = y + 1
+    mut dn = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    mut mn = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    mut sb = StringBuilder.init(32)
+    sb.append(dn[dow])
+    sb.append(", ")
+    sb.append_int(d)
+    sb.append(" ")
+    sb.append(mn[m - 1])
+    sb.append(" ")
+    sb.append_int(y)
+    sb.append(" ")
+    _two(sb, hh)
+    sb.append(":")
+    _two(sb, mm)
+    sb.append(":")
+    _two(sb, ss)
+    mut off = offset_min
+    if off < 0:
+        sb.append(" -")
+        off = 0 - off
+    else:
+        sb.append(" +")
+    _two(sb, off / 60)
+    _two(sb, off % 60)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _month_num(m: str) -> int:
+    mut l = m.lower()
+    mut names = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+    mut i = 0
+    while i < 12:
+        if l.starts_with(names[i]): return i + 1
+        i = i + 1
+    return 0
+
+def _int_of(s: str) -> int:
+    mut v = 0
+    mut i = 0
+    if s.len() == 0: return -1
+    while i < s.len():
+        mut c = _eb(s, i)
+        if c < 48 or c > 57: return -1
+        v = v * 10 + (c - 48)
+        i = i + 1
+    return v
+
+# Parse an RFC 5322 date (including the obsolete forms: two-digit years,
+# missing seconds, named zones like GMT/EST/PDT, comments) to a Unix
+# timestamp. Returns -1 when it cannot be parsed.
+pub def parse_date(s: str) -> int:
+    # Strip comments, replace ',' and ':' with spaces-aware tokenisation.
+    mut sb = StringBuilder.init(s.len() + 1)
+    mut depth = 0
+    mut i = 0
+    while i < s.len():
+        mut c = _eb(s, i)
+        if c == 40: depth = depth + 1
+        elif c == 41 and depth > 0: depth = depth - 1
+        elif depth == 0:
+            if c == 44: sb.append_char(32)
+            else: sb.append_char(c)
+        i = i + 1
+    mut clean = sb.to_owned()
+    sb.free()
+    mut toks = clean.split(" ")
+    mut words: List[str] = []
+    mut k = 0
+    while k < len(toks):
+        mut t = toks[k].strip()
+        if t.len() > 0: words.append(t)
+        k = k + 1
+    mut w = 0
+    if len(words) > 0 and _int_of(words[0]) < 0 and _month_num(words[0]) == 0: w = 1    # day name
+    if len(words) - w < 4: return -1
+    mut day = _int_of(words[w])
+    mut mon = _month_num(words[w + 1])
+    mut year = _int_of(words[w + 2])
+    if day < 0:
+        # "Oct 13 2026" order
+        day = _int_of(words[w + 1])
+        mon = _month_num(words[w])
+    if day < 1 or day > 31 or mon == 0 or year < 0: return -1
+    if words[w + 2].len() <= 2:
+        if year < 50: year = year + 2000
+        else: year = year + 1900
+    elif words[w + 2].len() == 3:
+        year = year + 1900
+    mut tm = words[w + 3]
+    mut parts = tm.split(":")
+    if len(parts) < 2: return -1
+    mut hh = _int_of(parts[0])
+    mut mi = _int_of(parts[1])
+    mut se = 0
+    if len(parts) > 2: se = _int_of(parts[2])
+    if hh < 0 or mi < 0 or se < 0: return -1
+    mut off = 0
+    if len(words) > w + 4:
+        mut z = words[w + 4]
+        mut zc = _eb(z, 0)
+        if (zc == 43 or zc == 45) and z.len() == 5:
+            mut zv = _int_of(z.slice(1, 5))
+            if zv >= 0:
+                off = (zv / 100) * 60 + zv % 100
+                if zc == 45: off = 0 - off
+        else:
+            mut zu = z.upper()
+            if zu == "EDT": off = -240
+            elif zu == "EST" or zu == "CDT": off = -300
+            elif zu == "CST" or zu == "MDT": off = -360
+            elif zu == "MST" or zu == "PDT": off = -420
+            elif zu == "PST": off = -480
+    mut days = _days_from_civil(year, mon, day)
+    return days * 86400 + hh * 3600 + mi * 60 + se - off * 60
+
+# ─── Address ──────────────────────────────────────────────────────────────────
+
+# One mailbox. `name` is the decoded display name (UTF-8), `addr` the
+# addr-spec ("local@domain", a quoted local part keeps its quotes), `group`
+# the name of the RFC 5322 group it was listed in ("" when none).
+pub class Address:
+    pub name:  str
+    pub addr:  str
+    pub group: str
+
+# Lexer token kinds
+const _TK_ATOM = 1
+const _TK_QUOTED = 2
+const _TK_SPECIAL = 3
+const _TK_COMMENT = 4
+const _TK_DLIT = 5
+
+class _Tok:
+    pub kind: int
+    pub text: str     # atom text / unescaped quoted content / special char / comment text
+    pub raw:  str     # as written (quoted strings keep their quotes)
+
+def _atext(c: int) -> bool:
+    if c >= 128: return true    # RFC 6532 UTF-8
+    if c >= 48 and c <= 57: return true
+    if c >= 65 and c <= 90: return true
+    if c >= 97 and c <= 122: return true
+    if c == 33 or c == 35 or c == 36 or c == 37 or c == 38 or c == 39 or c == 42 or c == 43: return true
+    if c == 45 or c == 47 or c == 61 or c == 63 or c == 94 or c == 95 or c == 96: return true
+    if c == 123 or c == 124 or c == 125 or c == 126 or c == 46: return true
+    return false
+
+def _mk_tok(kind: int, text: str, raw: str) -> _Tok:
+    mut t = _Tok()
+    t.kind = kind
+    t.text = text
+    t.raw = raw
+    return t
+
+def _lex_addr(s: str) -> List[_Tok]:
+    mut out: List[_Tok] = []
+    mut n = s.len()
+    mut i = 0
+    while i < n:
+        mut c = _eb(s, i)
+        if _is_wsp(c) or c == 13 or c == 10:
+            i = i + 1
+            continue
+        if c == 34:
+            mut st = i
+            i = i + 1
+            mut sb = StringBuilder.init(32)
+            while i < n:
+                mut q = _eb(s, i)
+                if q == 92 and i + 1 < n:
+                    sb.append_char(_eb(s, i + 1))
+                    i = i + 2
+                    continue
+                if q == 34:
+                    i = i + 1
+                    break
+                if q != 13 and q != 10: sb.append_char(q)
+                i = i + 1
+            mut txt = sb.to_owned()
+            sb.free()
+            out.append(_mk_tok(_TK_QUOTED, txt, s.slice(st, i)))
+            continue
+        if c == 40:
+            mut depth = 1
+            i = i + 1
+            mut sb = StringBuilder.init(32)
+            while i < n and depth > 0:
+                mut q = _eb(s, i)
+                if q == 92 and i + 1 < n:
+                    sb.append_char(_eb(s, i + 1))
+                    i = i + 2
+                    continue
+                if q == 40: depth = depth + 1
+                if q == 41:
+                    depth = depth - 1
+                    if depth == 0:
+                        i = i + 1
+                        break
+                sb.append_char(q)
+                i = i + 1
+            mut txt = sb.to_owned()
+            sb.free()
+            out.append(_mk_tok(_TK_COMMENT, txt, ""))
+            continue
+        if c == 91:
+            mut st = i
+            while i < n and _eb(s, i) != 93: i = i + 1
+            if i < n: i = i + 1
+            mut lit = s.slice(st, i)
+            out.append(_mk_tok(_TK_DLIT, lit, lit))
+            continue
+        if _atext(c):
+            mut st = i
+            while i < n and _atext(_eb(s, i)): i = i + 1
+            mut a = s.slice(st, i)
+            out.append(_mk_tok(_TK_ATOM, a, a))
+            continue
+        mut sp = s.slice(i, i + 1)
+        out.append(_mk_tok(_TK_SPECIAL, sp, sp))
+        i = i + 1
+    return out
+
+def _is_sp(t: _Tok, ch: str) -> bool:
+    return t.kind == _TK_SPECIAL and t.text == ch
+
+def _is_ew(s: str) -> bool:
+    return s.starts_with("=?") and s.ends_with("?=")
+
+# Display name from phrase tokens (atoms and quoted strings), RFC 2047 decoded;
+# no space between two adjacent encoded words.
+def _phrase(toks: List[_Tok], a: int, b: int) -> str:
+    mut sb = StringBuilder.init(32)
+    mut prev_ew = false
+    mut first = true
+    mut i = a
+    while i < b:
+        mut t = toks[i]
+        if t.kind == _TK_ATOM or t.kind == _TK_QUOTED:
+            mut ew = t.kind == _TK_ATOM and _is_ew(t.text)
+            if not first and not (ew and prev_ew): sb.append(" ")
+            if ew or (t.kind == _TK_QUOTED and t.text.find("=?") >= 0):
+                mut d = decode_header(t.text)
+                sb.append(d)
+            else:
+                sb.append(t.text)
+            prev_ew = ew
+            first = false
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _first_comment(toks: List[_Tok], a: int, b: int) -> str:
+    mut i = a
+    while i < b:
+        if toks[i].kind == _TK_COMMENT:
+            mut c = toks[i].text.strip()
+            if c.len() > 0: return decode_header(c)
+        i = i + 1
+    return ""
+
+# addr-spec text from tokens [a, b): atoms/quoted/specials concatenated
+# without whitespace (comments dropped).
+def _spec(toks: List[_Tok], a: int, b: int) -> str:
+    mut sb = StringBuilder.init(32)
+    mut i = a
+    while i < b:
+        mut t = toks[i]
+        if t.kind != _TK_COMMENT:
+            if t.kind == _TK_QUOTED:
+                # keep quotes only when needed
+                mut plain = t.text.len() > 0
+                mut k = 0
+                while k < t.text.len():
+                    mut c = _eb(t.text, k)
+                    if not _atext(c): plain = false
+                    k = k + 1
+                if plain and not t.text.starts_with(".") and not t.text.ends_with(".") and t.text.find("..") < 0: sb.append(t.text)
+                else: sb.append(Mime.quote(t.text))
+            else:
+                sb.append(t.raw)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _mk_addr(name: str, addr: str, group: str) -> Address:
+    mut a = Address()
+    a.name = name
+    a.addr = addr
+    a.group = group
+    return a
+
+# Parse one mailbox starting at token i; appends to out; returns next index.
+def _parse_mailbox(toks: List[_Tok], i0: int, group: str, out: List[Address]) -> int:
+    mut n = len(toks)
+    mut i = i0
+    # scan to the first structural special
+    while i < n and not (_is_sp(toks[i], "<") or _is_sp(toks[i], ",") or _is_sp(toks[i], ";") or _is_sp(toks[i], ">")):
+        i = i + 1
+    if i < n and _is_sp(toks[i], "<"):
+        mut name = _phrase(toks, i0, i)
+        mut lt = i + 1
+        mut j = lt
+        while j < n and not _is_sp(toks[j], ">"): j = j + 1
+        # obsolete route "<@a,@b:local@domain>"
+        mut st = lt
+        if st < j and _is_sp(toks[st], "@"):
+            mut r = st
+            while r < j and not _is_sp(toks[r], ":"): r = r + 1
+            if r < j: st = r + 1
+        mut addr = _spec(toks, st, j)
+        if name.len() == 0: name = _first_comment(toks, i0, i)
+        out.append(_mk_addr(name, addr, group))
+        if j < n: j = j + 1
+        while j < n and not (_is_sp(toks[j], ",") or _is_sp(toks[j], ";")): j = j + 1
+        return j
+    # addr-spec (with an optional comment as the old-style display name)
+    mut addr = _spec(toks, i0, i)
+    if addr.len() > 0 or i > i0:
+        mut cm = _first_comment(toks, i0, i)
+        if addr.len() > 0: out.append(_mk_addr(cm, addr, group))
+    return i
+
+extend Address:
+    pub def init(name: str, addr: str) -> Address:
+        return _mk_addr(name, addr, "")
+
+    # Parse an address list ("a@x, Bob <b@y>, Team: c@z, d@z;"); groups are
+    # flattened (each member's `group` is set); malformed entries are skipped.
+    pub def parse_list(s: str) -> List[Address]:
+        mut out: List[Address] = []
+        mut toks = _lex_addr(s)
+        mut n = len(toks)
+        mut i = 0
+        while i < n:
+            if _is_sp(toks[i], ",") or _is_sp(toks[i], ";") or _is_sp(toks[i], ">"):
+                i = i + 1
+                continue
+            # group?  phrase ":" ... ";"
+            mut j = i
+            while j < n and (toks[j].kind == _TK_ATOM or toks[j].kind == _TK_QUOTED or toks[j].kind == _TK_COMMENT): j = j + 1
+            if j < n and j > i and _is_sp(toks[j], ":"):
+                mut gname = _phrase(toks, i, j)
+                j = j + 1
+                while j < n and not _is_sp(toks[j], ";"):
+                    if _is_sp(toks[j], ","):
+                        j = j + 1
+                        continue
+                    mut nj = _parse_mailbox(toks, j, gname, out)
+                    if nj == j: nj = j + 1
+                    j = nj
+                i = j + 1
+                continue
+            mut ni = _parse_mailbox(toks, i, "", out)
+            if ni == i: ni = i + 1
+            i = ni
+        return out
+
+    # Parse a single mailbox; throws when there is none.
+    pub def parse(s: str) throws str -> Address:
+        mut l = Address.parse_list(s)
+        if len(l) == 0: raise("email: no address in '" + s + "'")
+        return l[0]
+
+    pub def local_part(self) -> str:
+        mut at = self.addr.len() - 1
+        while at >= 0 and _eb(self.addr, at) != 64: at = at - 1
+        if at < 0: return self.addr
+        return self.addr.slice(0, at)
+
+    pub def domain(self) -> str:
+        mut at = self.addr.len() - 1
+        while at >= 0 and _eb(self.addr, at) != 64: at = at - 1
+        if at < 0: return ""
+        return self.addr.slice(at + 1, self.addr.len())
+
+    # Human-readable form, not encoded: "Zoë <zoe@example.com>".
+    pub def display(self) -> str:
+        if self.name.len() == 0: return self.addr
+        return self.name + " <" + self.addr + ">"
+
+    # Header form: display name as atoms, a quoted string or RFC 2047 encoded
+    # words; "addr" alone when there is no name.
+    pub def to_str(self) -> str:
+        if self.name.len() == 0: return self.addr
+        return format_phrase(self.name) + " <" + self.addr + ">"
+
+# A display name as it must appear in a header.
+pub def format_phrase(name: str) -> str:
+    if not _is_ascii(name): return encode_words_fit(name, 64)
+    mut plain = name.len() > 0
+    mut i = 0
+    while i < name.len():
+        mut c = _eb(name, i)
+        if not (c == 32 or (_atext(c) and c != 46)): plain = false
+        if c < 32 or c == 127: plain = false
+        i = i + 1
+    if name.starts_with(" ") or name.ends_with(" ") or name.find("  ") >= 0: plain = false
+    if name.find("=?") >= 0: return encode_words_fit(name, 64)
+    if plain: return name
+    return Mime.quote(name)
+
+pub def format_address_list(addrs: List[Address]) -> str:
+    mut sb = StringBuilder.init(64)
+    mut i = 0
+    while i < len(addrs):
+        if i > 0: sb.append(", ")
+        mut a = addrs[i].to_str()
+        sb.append(a)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# ─── Attachment ───────────────────────────────────────────────────────────────
+
+pub class Attachment:
+    pub filename:     str     # decoded (UTF-8); may be ""
+    pub content_type: str     # essence, e.g. "image/png"
+    pub data:         str     # decoded bytes
+    pub content_id:   str     # without angle brackets; "" when none
+    pub is_inline:    bool    # Content-Disposition: inline (or a related part)
+
+def _mk_att(filename: str, ctype: str, data: str, cid: str, inline_: bool) -> Attachment:
+    mut a = Attachment()
+    a.filename = filename
+    a.content_type = ctype
+    a.data = data
+    a.content_id = cid
+    a.is_inline = inline_
+    return a
+
+# ─── MimePart ─────────────────────────────────────────────────────────────────
+
+# One entity of a parsed message: its headers (names as written, values
+# unfolded but not decoded), its content type, the decoded payload of a leaf
+# part, and the sub-parts of a multipart.
+pub class MimePart:
+    pub names:    List[str]
+    pub values:   List[str]
+    pub ctype:    MediaType
+    pub body:     str            # leaf: payload with the transfer encoding removed
+    pub raw_body: str            # body as it appeared on the wire
+    pub parts:    List[MimePart]
+    pub preamble: str
+    pub epilogue: str
+
+def _new_part() -> MimePart:
+    mut p = MimePart()
+    mut a: List[str] = []
+    mut b: List[str] = []
+    mut c: List[MimePart] = []
+    p.names = a
+    p.values = b
+    p.parts = c
+    p.ctype = MediaType.init("text", "plain")
+    p.body = ""
+    p.raw_body = ""
+    p.preamble = ""
+    p.epilogue = ""
+    return p
+
+# Parse an entity (headers + body). `digest` makes message/rfc822 the
+# default type (inside multipart/digest).
+def _parse_entity(data: str, digest: bool) -> MimePart:
+    mut p = _new_part()
+    mut n = data.len()
+    mut i = 0
+    # mbox "From " separator line
+    if _starts_at(data, 0, "From "):
+        i = _eol(data, 0) + 1
+    mut cur_name = ""
+    mut sbv = StringBuilder.init(128)
+    mut have = false
+    mut body_start = n
+    while i < n:
+        mut e = _eol(data, i)
+        mut le = _line_end(data, i, e)
+        if le == i:
+            body_start = e + 1
+            break
+        mut c = _eb(data, i)
+        if _is_wsp(c) and have:
+            sbv.append(data.slice(i, le))
+            i = e + 1
+            continue
+        mut colon = -1
+        mut k = i
+        while k < le:
+            mut ch = _eb(data, k)
+            if ch == 58:
+                colon = k
+                break
+            if ch <= 32 or ch >= 127: break
+            k = k + 1
+        if colon <= i:
+            # not a header line: the body starts here
+            body_start = i
+            break
+        if have:
+            mut v = sbv.as_str().strip()
+            p.names.append(cur_name)
+            p.values.append(v)
+            sbv.clear()
+        cur_name = data.slice(i, colon)
+        sbv.append(data.slice(colon + 1, le))
+        have = true
+        i = e + 1
+        body_start = n
+    if have:
+        mut v = sbv.as_str().strip()
+        p.names.append(cur_name)
+        p.values.append(v)
+    sbv.free()
+    if body_start > n: body_start = n
+    mut body = data.slice(body_start, n)
+    p.raw_body = body
+    # content type
+    mut ct = p.header("content-type")
+    mut ok = false
+    if ct.len() > 0:
+        mut r: Result[MediaType, str] = MediaType.parse(ct)
+        if r.is_ok:
+            p.ctype = r.ok
+            ok = true
+    if not ok:
+        if digest: p.ctype = MediaType.init("message", "rfc822")
+        else: p.ctype = MediaType.init("text", "plain")
+    mut boundary = p.ctype.param("boundary")
+    if p.ctype.type_ == "multipart" and boundary.len() > 0:
+        _split_multipart(p, body, boundary, p.ctype.subtype == "digest")
+        return p
+    mut cte = p.header("content-transfer-encoding").strip().lower()
+    if cte == "base64":
+        p.body = _b64_decode(body)
+    elif cte == "quoted-printable":
+        p.body = _qp_decode(body)
+    else:
+        p.body = body
+    return p
+
+def _split_multipart(p: MimePart, body: str, boundary: str, digest: bool):
+    mut delim = "--" + boundary
+    mut n = body.len()
+    mut i = 0
+    mut part_start = -1
+    mut last_end = -1
+    mut pre_end = -1
+    mut closed = false
+    while i < n:
+        mut e = _eol(body, i)
+        mut le = _line_end(body, i, e)
+        if _starts_at(body, i, delim):
+            mut k = i + delim.len()
+            mut is_close = _starts_at(body, k, "--")
+            if is_close: k = k + 2
+            mut tail_ok = true
+            while k < le:
+                if not _is_wsp(_eb(body, k)): tail_ok = false
+                k = k + 1
+            if tail_ok:
+                if part_start < 0:
+                    if last_end >= 0: p.preamble = body.slice(0, last_end)
+                else:
+                    mut content = ""
+                    if last_end >= 0: content = body.slice(part_start, last_end)
+                    p.parts.append(_parse_entity(content, digest))
+                if is_close:
+                    closed = true
+                    if e + 1 < n: p.epilogue = body.slice(e + 1, n)
+                    break
+                part_start = e + 1
+                last_end = -1
+                i = e + 1
+                continue
+        last_end = le
+        i = e + 1
+    if not closed and part_start >= 0 and part_start <= n:
+        mut content = body.slice(part_start, n)
+        p.parts.append(_parse_entity(content, digest))
+
+extend MimePart:
+    # First value of header `name` (case-insensitive), raw; "" when absent.
+    pub def header(self, name: str) -> str:
+        mut ln = name.lower()
+        mut i = 0
+        while i < len(self.names):
+            if self.names[i].lower() == ln: return self.values[i]
+            i = i + 1
+        return ""
+
+    pub def has_header(self, name: str) -> bool:
+        mut ln = name.lower()
+        mut i = 0
+        while i < len(self.names):
+            if self.names[i].lower() == ln: return true
+            i = i + 1
+        return false
+
+    pub def header_all(self, name: str) -> List[str]:
+        mut out: List[str] = []
+        mut ln = name.lower()
+        mut i = 0
+        while i < len(self.names):
+            if self.names[i].lower() == ln: out.append(self.values[i])
+            i = i + 1
+        return out
+
+    # Header value with RFC 2047 encoded words decoded.
+    pub def decoded_header(self, name: str) -> str:
+        return decode_header(self.header(name))
+
+    pub def content_type(self) -> str:
+        return self.ctype.essence()
+
+    pub def is_multipart(self) -> bool:
+        return self.ctype.type_ == "multipart"
+
+    # Declared charset (normalised), "us-ascii" for text without one.
+    pub def charset(self) -> str:
+        mut cs = self.ctype.charset()
+        if cs.len() == 0 and self.ctype.type_ == "text": return "us-ascii"
+        return cs
+
+    pub def transfer_encoding(self) -> str:
+        mut t = self.header("content-transfer-encoding").strip().lower()
+        if t.len() == 0: return "7bit"
+        return t
+
+    # "attachment", "inline" or "" (no Content-Disposition).
+    pub def disposition(self) -> str:
+        mut d = self.header("content-disposition")
+        if d.len() == 0: return ""
+        mut semi = d.find(";")
+        if semi >= 0: d = d.slice(0, semi)
+        return d.strip().lower()
+
+    # Filename from Content-Disposition (RFC 2231 aware), else Content-Type's
+    # name parameter; RFC 2047 words inside it are decoded too.
+    pub def filename(self) -> str:
+        mut d = self.header("content-disposition")
+        mut fname = ""
+        if d.len() > 0:
+            mut semi = d.find(";")
+            if semi >= 0:
+                mut params = MediaType.parse_params(d.slice(semi + 1, d.len()))
+                fname = params.param("filename")
+        if fname.len() == 0: fname = self.ctype.param("name")
+        if fname.find("=?") >= 0: fname = decode_header(fname)
+        return fname
+
+    # Content-ID without the angle brackets.
+    pub def content_id(self) -> str:
+        mut c = self.header("content-id").strip()
+        if c.starts_with("<") and c.ends_with(">") and c.len() >= 2: c = c.slice(1, c.len() - 1)
+        return c
+
+    # The payload converted to UTF-8 with '\n' line endings. An unsupported
+    # charset gives the raw bytes.
+    pub def text(self) -> str:
+        mut t = Mime.decode_text(self.body, self.charset())
+        return _to_lf(t)
+
+    pub def text_strict(self) throws str -> str:
+        mut t = Mime.to_utf8(self.body, self.charset())?
+        return _to_lf(t)
+
+    # This part and all its descendants, depth first.
+    pub def walk(self) -> List[MimePart]:
+        mut out: List[MimePart] = []
+        _walk_into(self, out)
+        return out
+
+    # Parse the payload of a message/rfc822 part as a message.
+    pub def as_message(self) -> EmailMessage:
+        return EmailMessage.parse(self.body)
+
+def _walk_into(p: MimePart, out: List[MimePart]):
+    out.append(p)
+    mut i = 0
+    while i < len(p.parts):
+        _walk_into(p.parts[i], out)
+        i = i + 1
+
+# First non-attachment leaf of `essence`, depth first (skips attachments and
+# does not descend into message/rfc822 parts).
+def _find_body(p: MimePart, essence: str) -> MimePart:
+    mut none_part = _new_part()
+    none_part.ctype = MediaType.init("", "")
+    if p.is_multipart():
+        mut i = 0
+        while i < len(p.parts):
+            mut r = _find_body(p.parts[i], essence)
+            if r.ctype.type_.len() > 0: return r
+            i = i + 1
+        return none_part
+    if p.content_type() == essence and p.disposition() != "attachment":
+        return p
+    return none_part
+
+def _collect_atts(p: MimePart, tb: MimePart, hb: MimePart, in_related: bool, out: List[Attachment]):
+    if p.is_multipart():
+        mut rel = p.ctype.subtype == "related"
+        mut i = 0
+        while i < len(p.parts):
+            _collect_atts(p.parts[i], tb, hb, rel, out)
+            i = i + 1
+        return
+    if p == tb or p == hb: return
+    mut disp = p.disposition()
+    mut fname = p.filename()
+    mut cid = p.content_id()
+    mut ess = p.content_type()
+    mut is_att = disp == "attachment" or fname.len() > 0 or (in_related and cid.len() > 0)
+    if not is_att and ess != "text/plain" and ess != "text/html": is_att = true
+    if not is_att and disp == "inline" and fname.len() > 0: is_att = true
+    if not is_att: return
+    mut inl = disp == "inline" or (disp.len() == 0 and in_related)
+    out.append(_mk_att(fname, ess, p.body, cid, inl))
+
+# ─── EmailMessage ─────────────────────────────────────────────────────────────
+
+pub class EmailMessage:
+    pub root:        MimePart          # headers + body tree (parsed, or rebuilt by build())
+    pub allow_8bit:  bool              # permit 8bit transfer encoding for text
+    pub boundary_seed: str             # fixed boundary base (tests); "" = random
+    pub _built:      bool              # root holds a built tree (vs builder state only)
+    pub _parsed:     bool
+    pub _text:       str
+    pub _html:       str
+    pub _has_text:   bool
+    pub _has_html:   bool
+    pub _atts:       List[Attachment]  # attachments
+    pub _inl:        List[Attachment]  # inline (related) parts
+    pub _bcount:     int
+
+extend EmailMessage:
+    pub def init() -> EmailMessage:
+        mut m = EmailMessage()
+        m.root = _new_part()
+        m.allow_8bit = false
+        m.boundary_seed = ""
+        m._built = false
+        m._parsed = false
+        m._text = ""
+        m._html = ""
+        m._has_text = false
+        m._has_html = false
+        mut a: List[Attachment] = []
+        mut b: List[Attachment] = []
+        m._atts = a
+        m._inl = b
+        m._bcount = 0
+        return m
+
+    # Parse a complete message (CRLF or LF line endings). Never fails: like
+    # Python's email package, defects are tolerated.
+    pub def parse(raw: str) -> EmailMessage:
+        mut m = EmailMessage.init()
+        m.root = _parse_entity(raw, false)
+        m._parsed = true
+        m._built = true
+        return m
+
+    # ── headers ──────────────────────────────────────────────────────────────
+
+    pub def header(self, name: str) -> str:
+        return self.root.header(name)
+
+    pub def header_all(self, name: str) -> List[str]:
+        return self.root.header_all(name)
+
+    pub def has_header(self, name: str) -> bool:
+        return self.root.has_header(name)
+
+    pub def decoded_header(self, name: str) -> str:
+        return decode_header(self.root.header(name))
+
+    pub def decoded_header_strict(self, name: str) throws str -> str:
+        return decode_header_strict(self.root.header(name))?
+
+    # Header names in order (repeated names repeat).
+    pub def header_names(self) -> List[str]:
+        return self.root.names
+
+    pub def remove_header(self, name: str):
+        mut ln = name.lower()
+        mut nn: List[str] = []
+        mut nv: List[str] = []
+        mut i = 0
+        while i < len(self.root.names):
+            if self.root.names[i].lower() != ln:
+                nn.append(self.root.names[i])
+                nv.append(self.root.values[i])
+            i = i + 1
+        self.root.names = nn
+        self.root.values = nv
+
+    # Append a header; `value` is taken as wire text (no encoding) — use
+    # set_header for human text.
+    pub def add_raw_header(self, name: str, value: str):
+        mut v = value.replace("\r", "").replace("\n", " ")
+        self.root.names.append(name)
+        self.root.values.append(v)
+
+    # Replace header `name` with unstructured text (RFC 2047-encoded when
+    # it is not plain ASCII).
+    pub def set_header(self, name: str, value: str):
+        self.remove_header(name)
+        mut enc = _encode_text_fit(value.replace("\r", "").replace("\n", " "), 76 - name.len() - 2)
+        self.root.names.append(name)
+        self.root.values.append(enc)
+
+    def _set_addrs(self, name: str, addrs: List[Address]):
+        self.remove_header(name)
+        if len(addrs) == 0: return
+        self.root.names.append(name)
+        mut v = format_address_list(addrs)
+        self.root.values.append(v)
+
+    def _get_addrs(self, name: str) -> List[Address]:
+        mut out: List[Address] = []
+        mut vals = self.root.header_all(name)
+        mut i = 0
+        while i < len(vals):
+            mut l = Address.parse_list(vals[i])
+            mut j = 0
+            while j < len(l):
+                out.append(l[j])
+                j = j + 1
+            i = i + 1
+        return out
+
+    def _add_addrs(self, name: str, list_text: str):
+        mut cur = self._get_addrs(name)
+        mut more = Address.parse_list(list_text)
+        mut j = 0
+        while j < len(more):
+            cur.append(more[j])
+            j = j + 1
+        self._set_addrs(name, cur)
+
+    # Address setters take RFC 5322 list text: "a@x, Name <b@y>, \"L, F\" <c@z>".
+    # Display names may be UTF-8; they are encoded on output.
+    pub def set_from(self, addrs: str):
+        mut l = Address.parse_list(addrs)
+        self._set_addrs("From", l)
+
+    pub def set_sender(self, addr: str):
+        mut l = Address.parse_list(addr)
+        self._set_addrs("Sender", l)
+
+    pub def set_to(self, addrs: str):
+        mut l = Address.parse_list(addrs)
+        self._set_addrs("To", l)
+
+    pub def add_to(self, addrs: str): self._add_addrs("To", addrs)
+    pub def add_cc(self, addrs: str): self._add_addrs("Cc", addrs)
+    pub def add_bcc(self, addrs: str): self._add_addrs("Bcc", addrs)
+
+    pub def set_reply_to(self, addrs: str):
+        mut l = Address.parse_list(addrs)
+        self._set_addrs("Reply-To", l)
+
+    # Add one address from separate parts (no parsing of the name).
+    pub def add_address(self, field: str, name: str, addr: str):
+        mut cur = self._get_addrs(field)
+        cur.append(Address.init(name, addr))
+        self._set_addrs(field, cur)
+
+    pub def set_subject(self, s: str): self.set_header("Subject", s)
+
+    # Date from a Unix timestamp (UTC).
+    pub def set_date(self, ts: int):
+        self.set_date_tz(ts, 0)
+
+    # Date with a UTC offset in minutes (e.g. 120 for +0200).
+    pub def set_date_tz(self, ts: int, offset_min: int):
+        self.remove_header("Date")
+        self.root.names.append("Date")
+        mut d = format_date(ts, offset_min)
+        self.root.values.append(d)
+
+    pub def set_message_id(self, id: str):
+        self.remove_header("Message-ID")
+        self.root.names.append("Message-ID")
+        mut v = _angle(id)
+        self.root.values.append(v)
+
+    pub def set_in_reply_to(self, id: str):
+        self.remove_header("In-Reply-To")
+        self.root.names.append("In-Reply-To")
+        mut v = _angle(id)
+        self.root.values.append(v)
+
+    pub def add_reference(self, id: str):
+        mut cur = self.root.header("References")
+        mut v = _angle(id)
+        if cur.len() > 0: v = cur + " " + v
+        self.remove_header("References")
+        self.root.names.append("References")
+        self.root.values.append(v)
+
+    # A fresh "<...@domain>" id (domain from From, else "localhost").
+    pub def make_message_id(self) -> str:
+        mut dom = "localhost"
+        mut fr = self.get_from()
+        if len(fr) > 0 and fr[0].domain().len() > 0: dom = fr[0].domain()
+        mut rnd: Result[str, str] = SecureRandom.token_hex(8)
+        mut r = Fmt.int_to_hex(_tr_next_seed_counter() * 7919 + Clock.now_ms() % 1000003)
+        if rnd.is_ok: r = rnd.ok
+        mut t = Fmt.int_to_hex(Clock.now_ms())
+        mut seq = Fmt.int_to_hex(_tr_next_seed_counter())
+        return "<" + t.lower() + "." + seq.lower() + "." + r.lower() + "@" + dom + ">"
+
+    # ── header getters ───────────────────────────────────────────────────────
+
+    pub def get_from(self) -> List[Address]: return self._get_addrs("From")
+    pub def sender(self) -> List[Address]: return self._get_addrs("Sender")
+    pub def to(self) -> List[Address]: return self._get_addrs("To")
+    pub def cc(self) -> List[Address]: return self._get_addrs("Cc")
+    pub def bcc(self) -> List[Address]: return self._get_addrs("Bcc")
+    pub def reply_to(self) -> List[Address]: return self._get_addrs("Reply-To")
+
+    pub def subject(self) -> str: return decode_header(self.root.header("Subject"))
+    pub def date(self) -> str: return self.root.header("Date")
+
+    # Date header as a Unix timestamp, -1 when absent/unparseable.
+    pub def timestamp(self) -> int:
+        mut d = self.root.header("Date")
+        if d.len() == 0: return -1
+        return parse_date(d)
+
+    # Message-ID without angle brackets.
+    pub def message_id(self) -> str:
+        return _unangle(self.root.header("Message-ID"))
+
+    pub def in_reply_to(self) -> str:
+        return _unangle(self.root.header("In-Reply-To"))
+
+    pub def references(self) -> List[str]:
+        mut out: List[str] = []
+        mut v = self.root.header("References")
+        mut n = v.len()
+        mut i = 0
+        while i < n:
+            if _eb(v, i) == 60:
+                mut j = i + 1
+                while j < n and _eb(v, j) != 62: j = j + 1
+                out.append(v.slice(i + 1, j))
+                i = j + 1
+                continue
+            i = i + 1
+        return out
+
+    # Envelope sender: Sender, else the first From address.
+    pub def envelope_from(self) -> str:
+        mut s = self.sender()
+        if len(s) > 0: return s[0].addr
+        mut f = self.get_from()
+        if len(f) > 0: return f[0].addr
+        return ""
+
+    # Envelope recipients: To + Cc + Bcc addresses, duplicates removed
+    # (case-insensitively).
+    pub def recipients(self) -> List[str]:
+        mut out: List[str] = []
+        mut low: List[str] = []
+        mut fields = ["To", "Cc", "Bcc"]
+        mut f = 0
+        while f < 3:
+            mut l = self._get_addrs(fields[f])
+            mut i = 0
+            while i < len(l):
+                mut a = l[i].addr
+                mut la = a.lower()
+                mut dup = false
+                mut k = 0
+                while k < len(low):
+                    if low[k] == la: dup = true
+                    k = k + 1
+                if not dup and a.len() > 0:
+                    out.append(a)
+                    low.append(la)
+                i = i + 1
+            f = f + 1
+        return out
+
+    # ── body (builder) ───────────────────────────────────────────────────────
+
+    pub def set_text(self, text: str):
+        self._text = text
+        self._has_text = true
+        self._built = false
+
+    pub def set_html(self, html: str):
+        self._html = html
+        self._has_html = true
+        self._built = false
+
+    # Attachment with the type guessed from the file name (std.net.mime).
+    pub def attach(self, filename: str, data: str):
+        mut ct = Mime.type_for_path(filename)
+        self.attach_as(filename, ct, data)
+
+    pub def attach_as(self, filename: str, content_type: str, data: str):
+        self._atts.append(_mk_att(filename, content_type, data, "", false))
+        self._built = false
+
+    # Inline part (e.g. an image the HTML references as "cid:<cid>").
+    # Returns the Content-ID used.
+    pub def add_inline(self, cid: str, filename: str, data: str) -> str:
+        mut ct = Mime.type_for_path(filename)
+        return self.add_inline_as(cid, filename, ct, data)
+
+    pub def add_inline_as(self, cid: str, filename: str, content_type: str, data: str) -> str:
+        mut id = _unangle(cid)
+        self._inl.append(_mk_att(filename, content_type, data, id, true))
+        self._built = false
+        return id
+
+    # ── body (reading) ───────────────────────────────────────────────────────
+
+    def _ensure_tree(self):
+        if self._built: return
+        self.build()
+
+    # First text/plain body, UTF-8 with '\n' line endings ("" when none).
+    pub def text_body(self) -> str:
+        self._ensure_tree()
+        mut p = _find_body(self.root, "text/plain")
+        if p.ctype.type_.len() == 0: return ""
+        return p.text()
+
+    pub def html_body(self) -> str:
+        self._ensure_tree()
+        mut p = _find_body(self.root, "text/html")
+        if p.ctype.type_.len() == 0: return ""
+        return p.text()
+
+    pub def has_text_body(self) -> bool:
+        self._ensure_tree()
+        return _find_body(self.root, "text/plain").ctype.type_.len() > 0
+
+    pub def has_html_body(self) -> bool:
+        self._ensure_tree()
+        return _find_body(self.root, "text/html").ctype.type_.len() > 0
+
+    # Attachments and inline (related) parts other than the text/HTML bodies.
+    pub def attachments(self) -> List[Attachment]:
+        self._ensure_tree()
+        mut out: List[Attachment] = []
+        mut tb = _find_body(self.root, "text/plain")
+        mut hb = _find_body(self.root, "text/html")
+        _collect_atts(self.root, tb, hb, false, out)
+        return out
+
+    # Every part, depth first (the root first).
+    pub def parts(self) -> List[MimePart]:
+        self._ensure_tree()
+        return self.root.walk()
+
+    pub def content_type(self) -> str:
+        self._ensure_tree()
+        return self.root.content_type()
+
+    pub def is_multipart(self) -> bool:
+        self._ensure_tree()
+        return self.root.is_multipart()
+
+    # ── serialisation ────────────────────────────────────────────────────────
+
+    def _next_boundary(self) -> str:
+        self._bcount = self._bcount + 1
+        if self.boundary_seed.len() > 0:
+            return self.boundary_seed + "_" + self._bcount.to_str() + "."
+
+        mut rnd: Result[str, str] = SecureRandom.token_hex(9)
+        mut r = Fmt.int_to_hex(Clock.now_ms() * 31 + _tr_next_seed_counter())
+        if rnd.is_ok: r = rnd.ok
+        return "=_tr_" + r.lower() + "_" + self._bcount.to_str() + "."
+
+
+    # Build the MIME tree from the builder state (called by to_string; call it
+    # yourself to inspect `root` before sending). Adds Date, Message-ID and
+    # MIME-Version when missing.
+    pub def build(self):
+        if self._parsed and not (self._has_text or self._has_html or len(self._atts) > 0 or len(self._inl) > 0):
+            self._built = true
+            return
+        self._bcount = 0
+        # body tree
+        mut body = self._body_tree()
+        # top-level headers: user headers (minus MIME ones) + body's MIME headers
+        mut hn: List[str] = []
+        mut hv: List[str] = []
+        mut i = 0
+        while i < len(self.root.names):
+            mut ln = self.root.names[i].lower()
+            if not ln.starts_with("content-") and ln != "mime-version":
+                hn.append(self.root.names[i])
+                hv.append(self.root.values[i])
+            i = i + 1
+        mut has_date = false
+        mut has_mid = false
+        i = 0
+        while i < len(hn):
+            mut ln = hn[i].lower()
+            if ln == "date": has_date = true
+            if ln == "message-id": has_mid = true
+            i = i + 1
+        if not has_date:
+            hn.append("Date")
+            mut d = format_date(Clock.timestamp(), 0)
+            hv.append(d)
+        if not has_mid:
+            hn.append("Message-ID")
+            mut mid = self.make_message_id()
+            hv.append(mid)
+        hn.append("MIME-Version")
+        hv.append("1.0")
+        i = 0
+        while i < len(body.names):
+            hn.append(body.names[i])
+            hv.append(body.values[i])
+            i = i + 1
+        body.names = hn
+        body.values = hv
+        self.root = body
+        self._built = true
+
+    def _leaf(self, ctype: str, disp: str, data: str, is_text: bool) -> MimePart:
+        mut p = _new_part()
+        mut payload = data
+        mut cte = "7bit"
+        if is_text:
+            payload = _to_crlf(data)
+            if _is_ascii(payload) and _max_line_len(payload) <= 998 and not _has_nul(payload):
+                cte = "7bit"
+            elif self.allow_8bit and _max_line_len(payload) <= 998 and not _has_nul(payload):
+                cte = "8bit"
+            else:
+                mut q = _qp_encode(payload)
+                mut b = _b64_lines(payload)
+                if q.len() <= b.len(): cte = "quoted-printable"
+                else: cte = "base64"
+        else:
+            cte = "base64"
+            mut ess = Mime.essence_of(ctype)
+            if ess == "message/rfc822" or ess == "message/global":
+                payload = _to_crlf(data)
+                if _is_ascii(payload): cte = "7bit"
+                else: cte = "8bit"
+        mut mt: Result[MediaType, str] = MediaType.parse(ctype)
+        if mt.is_ok: p.ctype = mt.ok
+        else: p.ctype = MediaType.init("application", "octet-stream")
+        p.names.append("Content-Type")
+        mut ctv = p.ctype.to_str()
+        p.values.append(ctv)
+        p.names.append("Content-Transfer-Encoding")
+        p.values.append(cte)
+        if disp.len() > 0:
+            p.names.append("Content-Disposition")
+            p.values.append(disp)
+        p.body = payload
+        if cte == "base64": p.raw_body = _b64_lines(payload)
+        elif cte == "quoted-printable": p.raw_body = _qp_encode(payload)
+        else: p.raw_body = payload
+        return p
+
+    def _text_part(self, sub: str, text: str) -> MimePart:
+        return self._leaf("text/" + sub + "; charset=utf-8", "", text, true)
+
+    def _att_part(self, a: Attachment) -> MimePart:
+        mut mt: Result[MediaType, str] = MediaType.parse(a.content_type)
+        mut ctype = "application/octet-stream"
+        if mt.is_ok:
+            mut m = mt.ok
+            if a.filename.len() > 0 and not m.has_param("name"): m.set_param("name", a.filename)
+            ctype = m.to_str()
+        mut disp = "attachment"
+        if a.is_inline: disp = "inline"
+        if a.filename.len() > 0:
+            mut fp = Mime.format_param("filename", a.filename)
+            disp = disp + "; " + fp
+        mut p = self._leaf(ctype, disp, a.data, false)
+        if a.content_id.len() > 0:
+            p.names.append("Content-ID")
+            p.values.append("<" + a.content_id + ">")
+        return p
+
+    def _multi(self, sub: str, kids: List[MimePart]) -> MimePart:
+        mut p = _new_part()
+        mut b = self._next_boundary()
+        mut tries = 0
+        while tries < 8 and _collides(kids, "--" + b):
+            b = self._next_boundary()
+            tries = tries + 1
+        p.ctype = MediaType.init("multipart", sub)
+        p.ctype.set_param("boundary", b)
+        p.parts = kids
+        p.names.append("Content-Type")
+        mut ctv = p.ctype.to_str()
+        p.values.append(ctv)
+        return p
+
+    def _body_tree(self) -> MimePart:
+        # text/html alternative
+        mut main_html = _new_part()
+        mut have_html = self._has_html
+        if have_html:
+            mut h = self._text_part("html", self._html)
+            if len(self._inl) > 0:
+                mut kids: List[MimePart] = []
+                kids.append(h)
+                mut i = 0
+                while i < len(self._inl):
+                    mut ip = self._att_part(self._inl[i])
+                    kids.append(ip)
+                    i = i + 1
+                main_html = self._multi("related", kids)
+            else:
+                main_html = h
+        mut body = _new_part()
+        if self._has_text and have_html:
+            mut t = self._text_part("plain", self._text)
+            mut kids: List[MimePart] = []
+            kids.append(t)
+            kids.append(main_html)
+            body = self._multi("alternative", kids)
+        elif have_html:
+            body = main_html
+        else:
+            body = self._text_part("plain", self._text)
+        # attachments (and inline parts when there is no HTML to relate them to)
+        mut extra: List[MimePart] = []
+        if not have_html:
+            mut i = 0
+            while i < len(self._inl):
+                mut ip = self._att_part(self._inl[i])
+                extra.append(ip)
+                i = i + 1
+        mut i = 0
+        while i < len(self._atts):
+            mut ap = self._att_part(self._atts[i])
+            extra.append(ap)
+            i = i + 1
+        if len(extra) == 0: return body
+        mut kids: List[MimePart] = []
+        kids.append(body)
+        i = 0
+        while i < len(extra):
+            kids.append(extra[i])
+            i = i + 1
+        return self._multi("mixed", kids)
+
+    # The message in wire form: CRLF line endings, headers folded at 78
+    # columns, Bcc omitted. Builds the MIME tree first when needed.
+    pub def to_string(self) -> str:
+        self._ensure_tree()
+        mut sb = StringBuilder.init(4096)
+        _write_part(sb, self.root, true)
+        if sb.len() > 0 and _eb(sb.as_str(), sb.len() - 1) != 10: sb.append("\r\n")
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+# Write a part's headers and body. Boundaries that collide with content are
+# replaced before writing.
+def _write_part(sb: StringBuilder, p: MimePart, top: bool):
+    mut i = 0
+    while i < len(p.names):
+        mut ln = p.names[i].lower()
+        if not (top and ln == "bcc"):
+            mut f = fold_header(p.names[i], p.values[i])
+            sb.append(f)
+        i = i + 1
+    sb.append("\r\n")
+    if p.is_multipart() and len(p.parts) > 0:
+        mut b = p.ctype.param("boundary")
+        if p.preamble.len() > 0:
+            sb.append(p.preamble)
+            sb.append("\r\n")
+        mut k = 0
+        while k < len(p.parts):
+            sb.append("--")
+            sb.append(b)
+            sb.append("\r\n")
+            _write_part(sb, p.parts[k], false)
+            sb.append("\r\n")
+            k = k + 1
+        sb.append("--")
+        sb.append(b)
+        sb.append("--\r\n")
+        if p.epilogue.len() > 0: sb.append(p.epilogue)
+        return
+    sb.append(p.raw_body)
+
+def _collides(kids: List[MimePart], delim: str) -> bool:
+    mut i = 0
+    while i < len(kids):
+        if kids[i].raw_body.find(delim) >= 0: return true
+        i = i + 1
+    return false
+
+def _angle(id: str) -> str:
+    mut t = id.strip()
+    if t.starts_with("<"): return t
+    return "<" + t + ">"
+
+def _unangle(v: str) -> str:
+    mut t = v.strip()
+    mut a = t.find("<")
+    if a >= 0:
+        mut rest = t.slice(a + 1, t.len())
+        mut b = rest.find(">")
+        if b >= 0: return rest.slice(0, b)
+    return t

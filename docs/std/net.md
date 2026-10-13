@@ -11,6 +11,8 @@ from std.net.cookie    import CookieJar, Cookie
 from std.net.multipart import FormBuilder, MultipartBuilder
 from std.net.imap      import ImapClient
 from std.net.pop3      import Pop3Client
+from std.net.mime      import Mime, MediaType
+from std.net.email     import EmailMessage, Address, Attachment, MimePart
 from std.net.dnsmsg    import Dns, DnsMessage
 from std.net.ntp       import Ntp
 from std.net.mdns      import Mdns
@@ -522,6 +524,9 @@ A parsed (possibly multi-line) SMTP reply.
 | `mail_from` | `(addr: str) -> SmtpResponse` | `SmtpResponse` | Send `MAIL FROM:<addr>`. |
 | `rcpt_to` | `(addr: str) -> SmtpResponse` | `SmtpResponse` | Send `RCPT TO:<addr>`. Call once per recipient. |
 | `data` | `(body: str) -> SmtpResponse` | `SmtpResponse` | Send `DATA`, then `body` (CRLF-translated and dot-stuffed per RFC 5321 — a body line starting with `.` is sent as `..`), then the terminating `.` line. Returns the server's final response. |
+| `send_message` | `(msg: EmailMessage) -> SmtpResponse` | `SmtpResponse` | Send a `std.net.email` message: `MAIL FROM` the Sender/From address, `RCPT TO` every To + Cc + Bcc address (deduplicated), then `DATA` with `msg.to_string()` (Bcc is never written). Adds `BODY=8BITMIME` when the data has 8-bit bytes and `SMTPUTF8` when an envelope address is not ASCII, if the server advertises them. Stops at the first failing reply. |
+| `send_message_to` | `(msg: EmailMessage, envelope_from: str, rcpts: List[str]) -> SmtpResponse` | `SmtpResponse` | Same with an explicit envelope. |
+| `supports` | `(extension: str) -> bool` | `bool` | `true` if the last `ehlo()` advertised the extension (e.g. `"8BITMIME"`). |
 | `send_mail` | `(from_addr: str, to: List[str], subject: str, body: str) -> SmtpResponse` | `SmtpResponse` | Convenience wrapper: `mail_from` + `rcpt_to` for each address in `to` + builds a `From`/`To`/`Subject`/`Date` message and calls `data`. Stops at the first error response. |
 | `rset` | `() -> SmtpResponse` | `SmtpResponse` | Send `RSET` (abort the current mail transaction). |
 | `noop` | `() -> SmtpResponse` | `SmtpResponse` | Send `NOOP`. |
@@ -578,7 +583,7 @@ if client.connected:
 ### Limitations (v1)
 
 - TLS is TLS 1.3 only; a server limited to TLS 1.2 fails the handshake.
-- **No MIME / multipart / attachment support.** `send_mail`/`data` send a single `text/plain` body (headers + blank line + body text). Building a `multipart/mixed` message with attachments is left to the caller (construct the full body string yourself, including boundaries, and pass it to `data()` directly) or a future module.
+- `send_mail` sends a single `text/plain` body. For HTML, attachments or non-ASCII headers build an `EmailMessage` (`std.net.email`, below) and call `send_message`.
 
 ---
 
@@ -630,8 +635,126 @@ p.quit()
 | `retr(n)?`, `top(n, lines)?` | Message text, dot-unstuffed, CRLF-terminated lines. |
 | `dele(n)?`, `rset()?`, `noop()?`, `quit()` | `quit` commits deletions and closes. |
 
+`ImapClient.fetch_email(uid)?` and `Pop3Client.retr_email(n)?` return the message already parsed as
+a `std.net.email.EmailMessage` (`subject()`, `text_body()`, `attachments()`, ...).
+
 Not supported: IMAP IDLE/NOTIFY push, CONDSTORE/QRESYNC, BODYSTRUCTURE parsing; OAuth2
 (`XOAUTH2`) is available through `command(...)` with your own token.
+
+---
+
+## Media types — `std.net.mime`
+
+**When**: picking a `Content-Type` for a file (static file servers, uploads, attachments), checking
+what some bytes really are, or parsing/formatting a `Content-Type` header.
+
+```tauraro
+from std.net.mime import Mime, MediaType
+
+Mime.type_for_path("site/app.wasm")        # "application/wasm"
+Mime.type_for_path("notes")                # "application/octet-stream" (unknown)
+Mime.guess_type("x.unknown")               # "" (no default)
+Mime.content_type_for("index.html")        # "text/html; charset=utf-8"
+Mime.extension_for_type("image/jpeg")      # "jpg"
+Mime.sniff(first_bytes)                    # "image/png", "text/html", "application/json", ...
+Mime.matches("image/webp", "image/*")      # true
+
+mut mt = Mime.parse("Text/HTML; Charset=\"UTF-8\"")?
+mt.essence()                               # "text/html"
+mt.charset()                               # "utf-8"
+mt.set_param("name", "résumé.pdf")
+mt.to_str()                                # "text/html; charset=UTF-8; name*=utf-8''r%C3%A9sum%C3%A9.pdf"
+```
+
+| `Mime` | Description |
+|---|---|
+| `type_for_path(path)` / `guess_type(path)` / `type_for_ext(ext)` | Type from the last extension (case-insensitive; URL query/fragment ignored; dot-files have no extension). `type_for_path` defaults to `application/octet-stream`, the others return `""`. |
+| `content_type_for(path)` | `type_for_path` plus `; charset=utf-8` for textual types. |
+| `extension_for_type(t)` / `extensions_for_type(t)` | Preferred extension (no dot) / all of them, preferred first. |
+| `default_charset(t)`, `is_text(t)` | `"utf-8"` for text/*, JSON, XML, JavaScript, YAML, TOML, `+json`, `+xml` (not SVG). |
+| `sniff(data)` | WHATWG MIME Sniffing "unknown type" algorithm: HTML tags / `<?xml` / PDF / PostScript, BOMs, GIF/PNG/JPEG/WebP/BMP/ICO/TIFF/PSD/QOI/JPEG XL, MP4-family brands (MP4, QuickTime, 3GP, AVIF, HEIC/HEIF, M4A), WebM/Matroska, Ogg (Opus/Vorbis/Theora), MP3 (ID3 and frame sync), AAC, FLAC, WAV, AIFF, MIDI, AVI, fonts (WOFF/WOFF2/OTF/TTF/TTC/EOT), gzip/ZIP (EPUB/ODF via their `mimetype` entry)/RAR/7z/xz/bzip2/zstd/lz4/tar, wasm, SQLite, ELF/PE/Java class, a JSON heuristic, then `text/plain` or `application/octet-stream` by the binary-byte test. Pass at least 512 leading bytes. |
+| `sniff_with_hint(data, declared)` | Keep a specific declared type; sniff when it is missing or generic. |
+| `parse(s)?` / `MediaType.parse(s)?` | Throws on a malformed type/subtype; parameters are lenient (bad ones skipped). |
+| `matches(t, pattern)` | `*`, `*/*`, `image/*`, `*/json` (also matches `+json`), or exact; parameters ignored. |
+| `is_token(s)`, `quote(s)`, `format_param(name, value)`, `pct_encode_2231(v)` | RFC 9110 token / quoted-string / RFC 2231 helpers. |
+| `normalize_charset(cs)`, `is_supported_charset(cs)` | Canonical names (`latin1` → `iso-8859-1`, `cp1252` → `windows-1252`, ...). |
+| `to_utf8(bytes, cs)?` / `decode_text(bytes, cs)` | Convert UTF-8, US-ASCII, ISO-8859-1, ISO-8859-15, Windows-1252, UTF-16/LE/BE to UTF-8 (invalid UTF-8 → U+FFFD). `to_utf8` throws `"unsupported charset: X"`; `decode_text` returns other charsets' bytes unchanged. |
+| `sanitize_utf8(s)`, `is_valid_utf8(s)` | UTF-8 validation (overlongs and surrogates rejected). |
+
+`MediaType` fields: `type_`, `subtype` (lower case), `names` (lower case), `values` (unquoted, RFC 2231
+continuations `name*0*=` … joined and converted to UTF-8). Methods: `essence()`, `suffix()`,
+`param(name)`, `has_param`, `set_param`, `remove_param`, `charset()`, `is_multipart()`, `is_text()`,
+`matches(pattern)`, `to_str()`, and `MediaType.parse_params("; a=1; b=\"x\"")` for headers such as
+`Content-Disposition`.
+
+The table is Python 3.14's `mimetypes` table merged with the Debian media-types list and a
+hand-picked modern set; `.tr` maps to `text/x-tauraro`. Sniffing never returns `text/html` for
+data that starts with a BOM (WHATWG rule).
+
+---
+
+## Email messages — `std.net.email`
+
+**When**: sending anything beyond a plain-text note (HTML, attachments, inline images, non-ASCII
+names and subjects), or reading what IMAP / POP3 fetched. RFC 5322, MIME (RFC 2045-2049),
+encoded words (RFC 2047), parameter continuations (RFC 2231) and UTF-8 headers (RFC 6532, read side).
+
+```tauraro
+from std.net.email import EmailMessage, Address
+from std.net.smtp import SmtpClient
+
+mut m = EmailMessage.init()
+m.set_from("Zoë Example <zoe@example.com>")
+m.add_to("bob@example.com, \"Doe, Jane\" <jane@example.org>")
+m.add_bcc("archive@example.com")                 # envelope only
+m.set_subject("Quarterly report — draft")         # encoded words when not ASCII
+m.set_text("Hi Bob,\nthe report is attached.\n")
+m.set_html("<p>Hi Bob</p><img src=\"cid:logo\">")
+m.add_inline("logo", "logo.png", png_bytes)       # multipart/related
+m.attach("report.pdf", pdf_bytes)                 # type from std.net.mime
+mut c = SmtpClient.connect("smtp.example.com", 587)
+c.ehlo("me")
+c.send_message(m)
+
+mut p = EmailMessage.parse(raw)                   # lenient, never throws
+p.subject()                                       # decoded UTF-8
+p.get_from()[0].name                              # "Zoë Example"
+p.text_body()                                     # UTF-8, '\n' line ends
+for a in p.attachments():
+    print(a.filename + " " + a.content_type + " " + str(a.data.len()))
+```
+
+| Building (`EmailMessage`) | Description |
+|---|---|
+| `init()` | Empty message. Fields: `allow_8bit` (use 8bit instead of QP/base64 for text), `boundary_seed` (fixed boundaries, for tests). |
+| `set_from`, `set_sender`, `set_to`, `add_to`, `add_cc`, `add_bcc`, `set_reply_to` | Take address-list text (`"a@x, Name <b@y>"`); display names may be UTF-8 and are written as atoms, quoted strings or encoded words. `add_address(field, name, addr)` skips parsing. |
+| `set_subject(s)`, `set_header(name, text)`, `add_raw_header(name, wire)`, `remove_header(name)` | Unstructured text is RFC 2047-encoded when not plain ASCII (first word sized to fit after the header name). |
+| `set_date(ts)`, `set_date_tz(ts, offset_min)` | RFC 5322 date; added automatically (now, UTC) when missing. |
+| `set_message_id(id)`, `set_in_reply_to(id)`, `add_reference(id)`, `make_message_id()` | Angle brackets added; a random `<...@from-domain>` id is generated when missing. |
+| `set_text(s)`, `set_html(s)` | Both → `multipart/alternative`. Text is labelled `charset=utf-8` and sent with CRLF line ends. |
+| `attach(filename, data)`, `attach_as(filename, type, data)` | Attachments (`multipart/mixed`, base64; message/rfc822 as 7bit/8bit). Non-ASCII filenames use RFC 2231 `filename*=utf-8''…`. |
+| `add_inline(cid, filename, data)`, `add_inline_as(...)` | Inline parts with `Content-ID`, related to the HTML body. |
+| `build()`, `to_string()` | Build the MIME tree into `root` / serialise: CRLF, headers folded at 78 columns, Bcc omitted, MIME-Version added. Transfer encoding per part: 7bit for ASCII with lines ≤ 998, else the shorter of quoted-printable and base64. `root`, `message_id()` etc. reflect generated values only after `build()` / `to_string()`. |
+| `recipients()`, `envelope_from()` | Envelope for SMTP: To + Cc + Bcc (deduplicated) / Sender or first From. |
+
+| Reading | Description |
+|---|---|
+| `EmailMessage.parse(raw)` | CRLF or LF input; a leading mbox `From ` line is skipped; malformed parts degrade like Python's parser. Re-serialising with `to_string()` is lossless. |
+| `subject()`, `get_from()`, `sender()`, `to()`, `cc()`, `bcc()`, `reply_to()` | Decoded; addresses are `Address` (`name`, `addr`, `group`; `local_part()`, `domain()`, `display()`, `to_str()`). A trailing comment (`a@x (Name)`) is used as the name, as `email.utils.getaddresses` does. |
+| `date()`, `timestamp()`, `message_id()`, `in_reply_to()`, `references()` | `timestamp()` parses RFC 5322 dates incl. obsolete forms (2-digit years, named zones), `-1` when unparseable. |
+| `header(name)`, `header_all(name)`, `decoded_header(name)`, `decoded_header_strict(name)?`, `header_names()` | Raw (unfolded) / decoded values. The strict form raises `"unsupported charset: X"`. |
+| `text_body()`, `html_body()`, `has_text_body()`, `has_html_body()` | First non-attachment `text/plain` / `text/html` part converted to UTF-8 with `\n` line ends. |
+| `attachments()` | `Attachment` (`filename`, `content_type`, `data` bytes, `content_id`, `is_inline`) for every leaf that is not the text/HTML body: attachment dispositions, named parts, related images and non-text parts. Unlike Python's `iter_attachments`, related (inline) images are included. |
+| `parts()`, `root`, `content_type()`, `is_multipart()` | The `MimePart` tree: `names`/`values`, `ctype` (`MediaType`), `body` (transfer encoding removed), `raw_body`, `parts`, `preamble`, `epilogue`; methods `header`, `charset()`, `transfer_encoding()`, `disposition()`, `filename()` (RFC 2231 and 2047), `content_id()`, `text()`, `text_strict()?`, `walk()`, `as_message()` for message/rfc822 parts. |
+
+Free functions: `decode_header(s)`, `decode_header_strict(s)?`, `encode_words(s)`,
+`encode_header_text(s)`, `fold_header(name, value)`, `format_phrase(name)`,
+`format_address_list(addrs)`, `format_date(ts, offset_min)`, `parse_date(s)`.
+
+Charsets decoded: UTF-8, US-ASCII, ISO-8859-1, ISO-8859-15, Windows-1252, UTF-16. Others are
+reported: encoded words in them stay as written in `decode_header`, `text()` returns the raw bytes,
+and the strict variants raise. Not supported: S/MIME and PGP, DKIM signing, `message/partial`
+reassembly.
 
 ---
 

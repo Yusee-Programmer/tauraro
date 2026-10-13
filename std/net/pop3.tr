@@ -7,6 +7,7 @@
 #   c.login("user", "secret")?
 #   mut st = c.stat()?                     # st.count, st.size
 #   mut msg = c.retr(1)?                   # full RFC 5322 message (dot-unstuffed)
+#   mut em = c.retr_email(1)?              # ... parsed (std.net.email)
 #   c.dele(1)?
 #   c.quit()
 #
@@ -18,6 +19,7 @@ from std.net.tls import TlsOptions
 from std.crypto.hash import Hash
 from std.encoding.base64 import Base64
 from std.core.string import StringBuilder
+from std.net.email import EmailMessage
 
 pub class Pop3Stat:
     pub count: int
@@ -178,6 +180,11 @@ extend Pop3Client:
         self._cmd(cmd)?
         mut lines = self._multiline()?
         return Pop3Client._join(lines)
+
+    # retr parsed with std.net.email (headers, bodies, attachments).
+    pub def retr_email(self, n: int) throws str -> EmailMessage:
+        mut raw = self.retr(n)?
+        return EmailMessage.parse(raw)
 
     # Headers plus the first `lines` body lines of message n.
     pub def top(self, n: int, lines: int) throws str -> str:
