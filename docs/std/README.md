@@ -32,7 +32,7 @@ building libraries with `taupkg`)
 | [`std.term`](term.md) | Terminal UI: ANSI SGR styling/colors (`Term`/`Style`/`Color`), cursor control, terminal size query, progress bar and spinner |
 | [`std.test`](test.md) | Lightweight unit-testing framework |
 | [`std.text`](text.md) | Text processing: line diff + unified diff, Levenshtein distance, word-wrap/indent, Markdown, shell word splitting/quoting (`Shlex`) |
-| [`std.unicode`](unicode.md) | UTF-8 codepoint iteration, slicing, case conversion, Unicode classification |
+| [`std.unicode`](unicode.md) | UTF-8 codepoint iteration, slicing, Unicode 16 classification; normalization (NFC/NFD/NFKC/NFKD), full case mapping and case folding, grapheme/word/sentence segmentation (UAX #29), terminal display width |
 
 ## Import conventions
 

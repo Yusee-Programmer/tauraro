@@ -49,6 +49,7 @@ bootstrap/*.zip
 # The ownership fuzzer generator and the bare-metal platform harness are source,
 # not build artifacts. (git check-ignore was hiding them from CI.)
 !tests/fuzz/gen.py
+!scripts/gen_unicode_tables.py
 !tests/freestanding/platform.c
 # The native backend's runtime shim + leak probe are hand-written source (extern entry
 # points / a destructor), not generated C — must be tracked despite the broad *.c rule.

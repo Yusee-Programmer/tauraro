@@ -1,0 +1,43 @@
+# std.unicode.casemap -- full Unicode case mapping and case folding.
+#
+# Full (one-to-many) mappings from UnicodeData.txt plus the unconditional
+# entries of SpecialCasing.txt: "ß".upper() == "SS", "ŉ" -> "ʼN",
+# "ﬁ".upper() == "FI", "İ".lower() == "i̇". The context-sensitive Greek
+# final sigma is applied when lowercasing ("ΟΔΟΣ" -> "οδος"). Locale-specific
+# rules (Turkish/Azeri dotted i, Lithuanian) are not applied.
+#
+# casefold() implements full case folding (CaseFolding.txt status C + F) for
+# caseless matching; caseless_eq() is the canonical caseless match of
+# Unicode §3.13 (D145): NFD(casefold(NFD(x))).
+#
+# Usage:
+#   from std.unicode.casemap import to_upper, casefold, caseless_eq
+#   to_upper("straße")                 # "STRASSE"
+#   caseless_eq("Straße", "STRASSE")   # true
+
+from std.unicode.native import uni_transform, trc_uni_simple_case, UNI_OP_LOWER, UNI_OP_UPPER, UNI_OP_FOLD, UNI_OP_TITLE
+from std.unicode.normalize import nfd
+
+# Full uppercase mapping.
+pub def to_upper(s: str) -> str: return uni_transform(UNI_OP_UPPER, s)
+
+# Full lowercase mapping (with Final_Sigma).
+pub def to_lower(s: str) -> str: return uni_transform(UNI_OP_LOWER, s)
+
+# Titlecase: the first cased character of every word (UAX #29 word
+# boundaries) is titlecased, the rest of the word lowercased.
+pub def to_title(s: str) -> str: return uni_transform(UNI_OP_TITLE, s)
+
+# Full case folding (C + F) for caseless comparison and indexing.
+pub def casefold(s: str) -> str: return uni_transform(UNI_OP_FOLD, s)
+
+# Canonical caseless match: equal after NFD + case folding.
+pub def caseless_eq(a: str, b: str) -> bool:
+    if a == b: return true
+    return nfd(casefold(nfd(a))) == nfd(casefold(nfd(b)))
+
+# Simple (single code point) mappings from UnicodeData.txt / CaseFolding.txt.
+pub def simple_lower(cp: int) -> int: return trc_uni_simple_case(0, cp)
+pub def simple_upper(cp: int) -> int: return trc_uni_simple_case(1, cp)
+pub def simple_title(cp: int) -> int: return trc_uni_simple_case(2, cp)
+pub def simple_fold(cp: int) -> int: return trc_uni_simple_case(3, cp)

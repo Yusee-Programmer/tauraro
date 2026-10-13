@@ -2,6 +2,13 @@
 #
 # All functions operate on UTF-8 encoded strings.
 # Codepoint indices (not byte indices) are used in slice/char_at.
+# Character properties and case mappings come from the Unicode Character
+# Database tables in unicode_native.c (linked via std.unicode.native).
+#
+# Sub-modules (also re-exported here):
+#   from std.unicode.normalize import nfc, nfd, nfkc, nfkd, normalize, is_normalized, ...
+#   from std.unicode.casemap   import to_upper, to_lower, to_title, casefold, caseless_eq, ...
+#   from std.unicode.segment   import graphemes, grapheme_count, words, sentences, display_width, ...
 #
 # Usage:
 #   from std.unicode import Unicode
@@ -13,13 +20,48 @@ extern "C":
     def _tr_utf8_valid(s: str) -> bool
     def _tr_utf8_char_at(s: str, idx: int) -> int
     def _tr_utf8_slice(s: str, start: int, end_: int) -> str
-    def _tr_unicode_is_letter(cp: int) -> bool
-    def _tr_unicode_is_digit(cp: int) -> bool
-    def _tr_unicode_to_upper(cp: int) -> int
-    def _tr_unicode_to_lower(cp: int) -> int
-    def _tr_utf8_to_upper(s: str) -> str
-    def _tr_utf8_to_lower(s: str) -> str
-    def _tr_unicode_category(cp: int) -> str
+
+from std.unicode.native import trc_uni_gc, trc_uni_simple_case, uni_transform, uni_chr, UNI_OP_UPPER, UNI_OP_LOWER
+from std.unicode.normalize import nfc
+from std.unicode.normalize import nfd
+from std.unicode.normalize import nfkc
+from std.unicode.normalize import nfkd
+from std.unicode.normalize import normalize
+from std.unicode.normalize import is_normalized
+from std.unicode.normalize import is_nfc
+from std.unicode.normalize import is_nfd
+from std.unicode.normalize import is_nfkc
+from std.unicode.normalize import is_nfkd
+from std.unicode.normalize import canonical_eq
+from std.unicode.normalize import combining_class
+from std.unicode.normalize import unicode_version
+from std.unicode.casemap import to_upper
+from std.unicode.casemap import to_lower
+from std.unicode.casemap import to_title
+from std.unicode.casemap import casefold
+from std.unicode.casemap import caseless_eq
+from std.unicode.casemap import simple_lower
+from std.unicode.casemap import simple_upper
+from std.unicode.casemap import simple_title
+from std.unicode.casemap import simple_fold
+from std.unicode.segment import graphemes
+from std.unicode.segment import grapheme_count
+from std.unicode.segment import grapheme_offsets
+from std.unicode.segment import word_segments
+from std.unicode.segment import words
+from std.unicode.segment import word_offsets
+from std.unicode.segment import sentences
+from std.unicode.segment import sentence_offsets
+from std.unicode.segment import display_width
+from std.unicode.segment import char_width
+from std.unicode.segment import truncate_width
+from std.unicode.segment import truncate_width_ellipsis
+from std.unicode.segment import pad_width
+
+# General_Category codes in the order of the C table (index = trc_uni_gc).
+const _GC_NAMES = "CnLuLlLtLmLoMnMcMeNdNlNoPcPdPsPePiPfPoSmScSkSoZsZlZpCcCfCsCo"
+
+def _is_letter_gc(g: int) -> bool: return g >= 1 and g <= 5
 
 pub class Unicode:
     _dummy: int
@@ -43,13 +85,29 @@ extend Unicode:
     pub def slice(s: str, start: int, end_: int) -> str:
         return _tr_utf8_slice(s, start, end_)
 
-    # Convert all codepoints to their upper-case equivalents.
+    # Full uppercase mapping ("ß" -> "SS"); see std.unicode.casemap.
     pub def to_upper(s: str) -> str:
-        return _tr_utf8_to_upper(s)
+        return uni_transform(UNI_OP_UPPER, s)
 
-    # Convert all codepoints to their lower-case equivalents.
+    # Full lowercase mapping (with Greek final sigma).
     pub def to_lower(s: str) -> str:
-        return _tr_utf8_to_lower(s)
+        return uni_transform(UNI_OP_LOWER, s)
+
+    # NFC normalization; see std.unicode.normalize for the other forms.
+    pub def normalize_nfc(s: str) -> str:
+        return nfc(s)
+
+    # Full case folding for caseless comparison.
+    pub def casefold(s: str) -> str:
+        return casefold(s)
+
+    # User-perceived characters (extended grapheme clusters).
+    pub def graphemes(s: str) -> List[str]:
+        return graphemes(s)
+
+    # Terminal display width in columns.
+    pub def width(s: str) -> int:
+        return display_width(s)
 
     # True when the string contains only letter codepoints.
     pub def is_alpha(s: str) -> bool:
@@ -57,7 +115,7 @@ extend Unicode:
         if n == 0: return false
         mut i = 0
         while i < n:
-            if not _tr_unicode_is_letter(_tr_utf8_char_at(s, i)): return false
+            if not _is_letter_gc(trc_uni_gc(_tr_utf8_char_at(s, i))): return false
             i = i + 1
         return true
 
@@ -67,7 +125,7 @@ extend Unicode:
         if n == 0: return false
         mut i = 0
         while i < n:
-            if not _tr_unicode_is_digit(_tr_utf8_char_at(s, i)): return false
+            if not trc_uni_gc(_tr_utf8_char_at(s, i)) == 9: return false
             i = i + 1
         return true
 
@@ -77,30 +135,45 @@ extend Unicode:
         if n == 0: return false
         mut i = 0
         while i < n:
-            mut cp = _tr_utf8_char_at(s, i)
-            if not _tr_unicode_is_letter(cp) and not _tr_unicode_is_digit(cp): return false
+            mut g = trc_uni_gc(_tr_utf8_char_at(s, i))
+            if not _is_letter_gc(g) and g != 9: return false
             i = i + 1
         return true
 
     # ── Codepoint-level operations ────────────────────────────────────────────
 
-    # True when `cp` is a Unicode letter.
+    # True when `cp` is a Unicode letter (General_Category L*).
     pub def is_letter(cp: int) -> bool:
-        return _tr_unicode_is_letter(cp)
+        return _is_letter_gc(trc_uni_gc(cp))
 
-    # True when `cp` is a Unicode decimal digit.
+    # True when `cp` is a Unicode decimal digit (General_Category Nd).
     pub def is_digit_cp(cp: int) -> bool:
-        return _tr_unicode_is_digit(cp)
+        return trc_uni_gc(cp) == 9
 
-    # Upper-case mapping of a single codepoint.
+    # Simple (single code point) upper-case mapping.
     pub def upper(cp: int) -> int:
-        return _tr_unicode_to_upper(cp)
+        return trc_uni_simple_case(1, cp)
 
-    # Lower-case mapping of a single codepoint.
+    # Simple (single code point) lower-case mapping.
     pub def lower(cp: int) -> int:
-        return _tr_unicode_to_lower(cp)
+        return trc_uni_simple_case(0, cp)
 
     # One-letter Unicode general category: "L"=letter, "N"=number,
-    # "Z"=separator, "C"=control, "P"=punctuation, "S"=symbol, "M"=mark.
+    # "Z"=separator, "C"=other (control, format, unassigned, ...),
+    # "P"=punctuation, "S"=symbol, "M"=mark.
     pub def category(cp: int) -> str:
-        return _tr_unicode_category(cp)
+        mut g = trc_uni_gc(cp)
+        return _GC_NAMES.slice(2 * g, 2 * g + 1)
+
+    # Two-letter General_Category value, e.g. "Lu", "Mn", "Zs", "Cn".
+    pub def general_category(cp: int) -> str:
+        mut g = trc_uni_gc(cp)
+        return _GC_NAMES.slice(2 * g, 2 * g + 2)
+
+    # UTF-8 string holding the single code point `cp`.
+    pub def chr(cp: int) -> str:
+        return uni_chr(cp)
+
+    # Terminal columns of one code point: 0, 1 or 2.
+    pub def char_width(cp: int) -> int:
+        return char_width(cp)
