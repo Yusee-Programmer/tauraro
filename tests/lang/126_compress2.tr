@@ -1,0 +1,346 @@
+# tests/lang/126_compress2.tr
+# std.compress.bzip2 / xz / brotli: the vendored libbzip2, XZ Embedded and
+# Google brotli decoders plus the LZMA-alone decoder. Every vector below was
+# produced by Python's bz2 and lzma modules, the `xz` CLI and the `brotli`
+# Python package (1.2.0); the 5 MiB vectors decode to the big_data() rows.
+# Covers multi-stream input, all xz check types, BCJ, multiple blocks, empty
+# input, streaming in small chunks, corrupt / truncated input and max_out.
+
+from std.test import TestRunner
+from std.compress.bzip2 import Bzip2, Bzip2Decoder, Bzip2Encoder
+from std.compress.xz import Xz, XzDecoder, Lzma, LzmaDecoder
+from std.compress.brotli import Brotli, BrotliDecoder
+from std.compress import Compress
+from std.encoding.hex import Hex
+from std.io.archive import Crc32
+from std.core.string import StringBuilder
+from std.io.tar import TarWriter, TarReader
+
+const T1_HEX = "68656c6c6f2068656c6c6f2068656c6c6f2068656c6c6f20776f726c64"
+const BIN_HEX = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+const T2 = "The information in this document is provided for the purpose of international development. Please contact the government office for more details about the application process, the available services and the following requirements."
+const BIG_LEN = 5242880
+const BIG_CRC = 1897977516
+const BZ_T1 = "425a6839314159265359c91bd5b700000491804000064490802000310c081281ea08286646e820773e2ee48a70a1219237ab6e"
+const BZ_BIN_1 = "425a6831314159265359e5a3c1ec000001ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc0021c000126000980009800000000000000000000000000000000000000000000000000000000930004c0004c000000000000000000000000000000000000000000000000000000004980026000260000000000000000000000000000000000000000000000000000000005555404c04c000000000000000000000000000000000000000000000000000000000000fe90120440c821053fe20c41c8410921442c861ff90d21c43c8811122444c8a11522c45c8c11923446c8e11d23c47c9012124448c9212524c49c941292544ac9612d25c4bc981312644cc9a13526c4dc9c1392744ec9e13d27c4fca014128450ca214528c51ca414929452ca614d29c53ca81512a454caa1552ac55cac1592b456cae15d2bc57cb01612c458cb21652cc59cb41692d45acb616d2dc5bcb81712e45ccba1752ec5dcbc1792f45ecbe17d2fc5fcc018130460cc218530c61cc418931462cc618d31c63cc819132464cca19532c65ccc19933466cce19d33c67cd01a134468cd21a534c69cd41a93546acd61ad35c6bcd81b13646ccda1b536c6dcdc1b93746ecde1bd37c6fce01c138470ce21c538c71ce41c939472ce61cd39c73ce81d13a474cea1d53ac75cec1d93b476cee1dd3bc77cf01e13c478cf21e53cc79cf41e93d47acf61ed3dc7bcf81f13e47ccfa1f53ec7dcfc1f93f47ecfe1fd3fc2ee48a70a121cb4783d80"
+const BZ_EMPTY = "425a683917724538509000000000"
+const BZ_MULTI = "425a6839314159265359c91bd5b700000491804000064490802000310c081281ea08286646e820773e2ee48a70a1219237ab6e425a6839314159265359e5a3c1ec000001ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc0021c000126000980009800000000000000000000000000000000000000000000000000000000930004c0004c000000000000000000000000000000000000000000000000000000004980026000260000000000000000000000000000000000000000000000000000000005555404c04c000000000000000000000000000000000000000000000000000000000000fe90120440c821053fe20c41c8410921442c861ff90d21c43c8811122444c8a11522c45c8c11923446c8e11d23c47c9012124448c9212524c49c941292544ac9612d25c4bc981312644cc9a13526c4dc9c1392744ec9e13d27c4fca014128450ca214528c51ca414929452ca614d29c53ca81512a454caa1552ac55cac1592b456cae15d2bc57cb01612c458cb21652cc59cb41692d45acb616d2dc5bcb81712e45ccba1752ec5dcbc1792f45ecbe17d2fc5fcc018130460cc218530c61cc418931462cc618d31c63cc819132464cca19532c65ccc19933466cce19d33c67cd01a134468cd21a534c69cd41a93546acd61ad35c6bcd81b13646ccda1b536c6dcdc1b93746ecde1bd37c6fce01c138470ce21c538c71ce41c939472ce61cd39c73ce81d13a474cea1d53ac75cec1d93b476cee1dd3bc77cf01e13c478cf21e53cc79cf41e93d47acf61ed3dc7bcf81f13e47ccfa1f53ec7dcfc1f93f47ecfe1fd3fc2ee48a70a121cb4783d80"
+const BZ_BIG_LEN = 26690
+const XZ_T2_NONE = "fd377a585a000000ff12d9410200210116000000742fe5a3e000e500a95d002a1a08a202e35724582ac9d87bb458a3093657322a1909b86bfc0bf8eea3e6c9b73402b14a4c664248067108e4e88b6666a06349dc9080bcc8924a605609b6ba25fcc59ba6ee8926d07ceeab0e9fb13f24e45ac069931dd59c896ea6de962a08a7d64947c43ccc46f6684cf702d57225a0dd65c119d1edda908ddad9d8083026c003f8f7d37ae226c28eedc346313f3597a2e97db879aed5c5a80657d6b1412d142b11b6acd30ddd00000000000001bd01e60100001589b7aaa8000afc020000000000595a"
+const XZ_T2_CRC32 = "fd377a585a0000016922de360200210116000000742fe5a3e000e500a95d002a1a08a202e35724582ac9d87bb458a3093657322a1909b86bfc0bf8eea3e6c9b73402b14a4c664248067108e4e88b6666a06349dc9080bcc8924a605609b6ba25fcc59ba6ee8926d07ceeab0e9fb13f24e45ac069931dd59c896ea6de962a08a7d64947c43ccc46f6684cf702d57225a0dd65c119d1edda908ddad9d8083026c003f8f7d37ae226c28eedc346313f3597a2e97db879aed5c5a80657d6b1412d142b11b6acd30ddd0000000000051c42ca0001c101e6010000af4457d63e300d8b020000000001595a"
+const XZ_T2_CRC64 = "fd377a585a000004e6d6b4460200210116000000742fe5a3e000e500a95d002a1a08a202e35724582ac9d87bb458a3093657322a1909b86bfc0bf8eea3e6c9b73402b14a4c664248067108e4e88b6666a06349dc9080bcc8924a605609b6ba25fcc59ba6ee8926d07ceeab0e9fb13f24e45ac069931dd59c896ea6de962a08a7d64947c43ccc46f6684cf702d57225a0dd65c119d1edda908ddad9d8083026c003f8f7d37ae226c28eedc346313f3597a2e97db879aed5c5a80657d6b1412d142b11b6acd30ddd000000000055aed851e86b72800001c501e6010000b906c64db1c467fb020000000004595a"
+const XZ_T2_SHA256 = "fd377a585a00000ae1fb0ca10200210116000000742fe5a3e000e500a95d002a1a08a202e35724582ac9d87bb458a3093657322a1909b86bfc0bf8eea3e6c9b73402b14a4c664248067108e4e88b6666a06349dc9080bcc8924a605609b6ba25fcc59ba6ee8926d07ceeab0e9fb13f24e45ac069931dd59c896ea6de962a08a7d64947c43ccc46f6684cf702d57225a0dd65c119d1edda908ddad9d8083026c003f8f7d37ae226c28eedc346313f3597a2e97db879aed5c5a80657d6b1412d142b11b6acd30ddd00000000004ba83811ee2937a614889999788688dde6561502cfa2077e6e0f7c929a6c89a70001dd01e60100004f8643a2b6e9df1c02000000000a595a"
+const XZ_EMPTY = "fd377a585a000004e6d6b446000000001cdf44211fb6f37d010000000004595a"
+const XZ_MULTI = "fd377a585a000004e6d6b4460200210116000000742fe5a3e0001c00115d00341949ee8de9560c612a6f6bd3043be000000000002d176be463f895c800012d1d1d83aa631fb6f37d010000000004595a00000000fd377a585a00000ae1fb0ca10200210116000000742fe5a3e003ff00f15d00000052500a84f99bb28021a969d627e03e065a5f048d53d404ba39570509c15524de9db871593160a19ff96f4973f2c8ea8cba1a8b29692180fe338366af466dec9e898a0b83f03c0e898e3fed5fe79e90d91cff32f4b2e03951b2d21415b4c571badb06e3799a9fbb38c1b000ac930baa0619031208155b9bc848f0322efe2da087c8f0a4e0d251eb8d675692b24d84c5f18631df6a625bc2792dd9f73c73ba747407d83ca9562224a166f85a845f3067d2f64b492e7f20ebdbf8100e947877c73f6befb4cd95e26ff6446e06cf0b821acbdb7af0578d98ff90c03ee6c1124175ee032896eb13fba728ccaf2cd03c000000000000785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c90001a5028008000063e00e13b6e9df1c02000000000a595a"
+const XZ_X86 = "fd377a585a000004e6d6b44602010400210116000d86351fe003ff00f15d00000052500a84f99bb28021a969d627e03e065a5f048d53d404ba39570509c15524de9db871593160a19ff96f4973f2c8ea8cba1a8b29692180fe338366af466dec9e898a0b83f03c0e898e3fed5fe79e90d91cff32f4b2e03951b2d21415b4c571badb06e3799a9fbb38c1b000ac930baa0619031208155b9bc848f0322efe2da087c8f0a4e0d251eb8d675692b24d84c5f18631df6a625bc2792dd9f73c73ba747407d83ca9562224a166f85a845f3067d2f64b492e7f20ebdbf8100e947877c73f6befb4cd95e26ff6446e06cf0b821acbdb7af0578d98ff90c03ee6c1124175ee032896eb13fba728ccaf2cd03c00000000000000c489c78db51fd500018d02800800003867f1f8b1c467fb020000000004595a"
+const XZ_BLOCKS = "fd377a585a000004e6d6b4460200210116000000742fe5a3e003e700f15d00000052500a84f99bb28021a969d627e03e065a5f048d53d404ba39570509c15524de9db871593160a19ff96f4973f2c8ea8cba1a8b29692180fe338366af466dec9e898a0b83f03c0e898e3fed5fe79e90d91cff32f4b2e03951b2d21415b4c571badb06e3799a9fbb38c1b000ac930baa0619031208155b9bc848f0322efe2da087c8f0a4e0d251eb8d675692b24d84c5f18631df6a625bc2792dd9f73c73ba747407d83ca9562224a166f85a845f3067d2f64b492e7f20ebdbf8100e947877c73f6befb4cd95e26ff6446e06cf0b821acbdb7af0578d98ff90c03ee6c1124175ee032896eb13fba728ccaf2a37ce6000000000004e4e3b10d8d46eec0200210116000000742fe5a3e003e700f25d00743a5915be0ee2e2385aa962898c4ef08d7706b5385cdfcff7451fe92f7c6df2c67ecd1ae97176e5558e91c21c3a979cd197e2ba863e822cebcc8a602d14c56c27d7e1c1913b9dca45b59086d249e64002419928d702538296996119e849d619842b05593141bf9dceba1a6c4cb3b3d296a3027359b608f67d81a2b53d70b176e7b39a9f3c80584f362a15ec4a033988349ba8df3502bd7147fe3c853bdc60c1557df24b1ecba5d674e8010b8f9bcf367be94c878b6d7cc32b9342abe4434ac729c8dfbfee45e9f2231adf8cc98c2d0df9141656036ab71c5d12b3350f994c23a1784aded25b94f120fecb1fc26f0fa50000000000f2ef13d6c50961910200210116000000742fe5a3e003e700f25d00683455fc6713b20a9c6fade23de23536653d41f03adea3c8bed8930d0d615bbce38c03014e8095de836d07910f0ac567468211d28e1f48b17703d10be6de6202b7d945f0bfaa876af6efe4d576457326ad1ada52bc0ab642d43220267d74c2bf26083c8f7a9b4c44fa6714194ff165a1d39b7cc9d9465e76463eb660f520161e6dc47ae6ad8e705a78891a15a5945e223b1f6f55ab00f688edcceb30798e00eff1f5ff8b2be108aa4ee59dcf431589ea7cd7ae97d1408d4cd092636a07edc06b943287f01d6566594b97e5649320d030daf83418ec4a13529808a88ac587a1769c615fd930b13a984f265caaf0886366800000000039b4bd2352585d770200210116000000742fe5a3010047b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff00bb65cc76da42b75a00048d02e8078e02e8078e02e8076048a08e1c43ac273e2d040000000004595a"
+const XZ_BIG = "fd377a585a000004e6d6b4460200210116000000742fe5a3ffffe7049a5d00391bcb50209fad903bec8110031784545f84e2466f3602913f5571554707a35796efae19860dabeb17f5c5052f49b04b92c73b40d25e640ce9a44927dfe3f080fcf3d110a9b65042fd6c2a4223894735b37ed182cbc50e731a37b75a40130da84abfa7815e2af3616c715d3531cc69b7a87f787c5efe2c756ca07974411a6ebdc114863b4b231f74696bb07e7be2a5e82e239e12f9e84ff5f690ef12f39347f6d15bad421f8287d01a309e060ae913886bf584cbccdeb81fee7428cddd950d203de73da350b1b45145194ce5ac56e0f4e13f85dd6056d127bbf83d73933fcb4356e9496509df20ada073d30564dda44ef988ff73684b1597624b43ed6aac94bfe4ad052aba14536ead4349a4bc2b5d99994a7040380a37266d44cd33b5de0031c2a386fc6986a26a10f68af1e3f06237cfdd473608938ba257bd3678a095d2f4227e329920977a66ff4955a5003a30632e0e23e6d421006485949cfd10c2faa1b1e42191f091c93f71e425c6c9b8acbaf0d605ac6cf965c449434307519bfcf48f16e37c9ba349641ecabb36650520fd79a1297b1f014dbfaf703d5c5a497b3cfc4d3a00d3efe604ea7af3ea5553624ef09a52c5f6bbdccdb91ebbbb4f69e1fd9533946ce25ee694e6fb5549f3f2499a7e5db3bfd8586e58fcd43c28096e8a3f6cd14149f258bdf7824c648104199877e6b8cd4419267e56f14199e6dccd2fb63f9e1c7baf2cf4b862bce5b6efd231c52cef32f20ec1c104c27452262d95eabff0f75a6148f4282a23a309f29b6b5b05c0c894bd8d1239ee0e0260ff6bad6b71050af775fdc28bf185d049fc2a021c84934d06ebf1887bf08ae3f738a9dc426e49097187c2687a81370205df17ee411e3bcb653de4b9a298e5be42f1932ab07d75f333220c3448866ba5c060fa2d32bed48755cad47ccaa5ef727e57a233d9da0cfb42f99f773310d1a14331789901fc08dfa608eae143118c38b17eb21d6ada98b7ef13aa18199dfc13ccca452f38eed427681757ba2516cd88b305849c3b60c1c625d305faff4d21a05b541e62e049d405d577673fc0f27d34526bdeea5953184e9d9cf82cf0c0de4d900255ad6c466bb0258df15cbe45a5ac76c1aa3297269a31b3f0575056f4dc20778cee83812f1796fce6c60c94ab59242127277df499084f84980d595ae285b186b849e7a6e474b82fedcba8cb9112a67496ffc92f2ededd60bf3866252e39511c0112adbcb4f1d1c2b1468d9c097fb323adb19f1e0be0cd82d996554351edef44f01257736da6e1c8fe7921b5a8338f62847d5a51629274495cc46db292e7a0c8ce0704ee9fdea542cb883f5c008fd04eaf262894711f3d8f24e1709ea7235fec28cb85d195988a7e2a91f22775f719c006984d98fdd8afd5900fc42553f8f591363105a5b0ee6fc1704d470cd19111aaad601dbaceb127185c5986e9665258bee976ac59e4e55b0508f9c7daadfcfb522b74cd1e5b2042f9dd533df82964093b80cb2a6cdfb53bf0c4bd2e5faa0f3e4b664290130eff1093f8717859f80bcdff9528460fa9fc7cdefb9a302e56c08f85f38381c065c42553f8f591363105a5b0ee6fc1704d470cd19111aaad601dbaceb127185c5986e9665258bee976ac59e4e55b0508f9c7daadfcfb52296d0e179fff10012b00ec7353a7fdbeae7c311a9fb78d316e709ea7235fec28cb85d195988a7e2a91f22775f719c006984d98fdd8afd5900fc42553f8f591363105a5b0ee6fc1704d470cd19111aaad601dbaceb127185c5986e9665258bee976ac59e4e55b0508f9c7daadfcfb522b74cd1e5b2042f9dd533df82964093b80cb2a6cdfb53bf0c4bd2e5faa0f3e4b664290130eff1093f8717859f80bcdff9528460fa9fc7cdefb9a302e56c08f85f38381c065c42553f8f591363105a5b0ee6fc1704d470cd19111aaad601dbaceb127185c5986e9665258bee976ac59e4e55b0508f9c7daadfcfb522b74cd1e5b2042f9dd533df82964093b80cb2a6cdfb53bf0c4bd2e5faa0f3e4b664290130eff1093f8717859f80bcdff9528460fa9fc7cdefb9a302e56c08f85f38381c065c425510f3fb2900106009900ec7353a7fdbeae7c311a9fb78d316e709ea7235fec28cb85d195988a7e2a91f22775f719c006984d98fdd8afd5900fc42553f8f591363105a5b0ee6fc1704d470cd19111aaad601dbaceb127185c5986e9665258bee976ac59e4e55b0508f9c7daadfcfb522b74cd1e5b2042f9dd533df82964093b80cb2a6cdfb53bf0c4bd2e5faa0f3e4b664290130eff1093f8717859f80bccb5d423000000000093a6c2dcdcdcc5210001860d8080c00270fcb4dab1c467fb020000000004595a"
+const LZ_T2 = "5d00008000ffffffffffffffff002a1a08a202e35724582ac9d87bb458a3093657322a1909b86bfc0bf8eea3e6c9b73402b14a4c664248067108e4e88b6666a06349dc9080bcc8924a605609b6ba25fcc59ba6ee8926d07ceeab0e9fb13f24e45ac069931dd59c896ea6de962a08a7d64947c43ccc46f6684cf702d57225a0dd65c119d1edda908ddad9d8083026c003f8f7d37ae226c28eedc346313f3597a2e97db879aed5c5a80657d6b1412d142b11b6ad39d04853ffb3fac000"
+const LZ_T1_SIZED = "5d00008000ffffffffffffffff00341949ee8de9560c612a6f6bd329a6215fffef720000"
+const LZ_BIN_LC0 = "1200008000ffffffffffffffff00000042444581950f4273c429d2fdf18ba8839eb0aa30750b1ef39366b417f900b49e789e98bc474382f928cfe37622c25a86fb9b7913476677a1a69ed85abc425d44e56ae701cdffff41b6f8645d9fa08c942f723af175ecfe0679cfc7b4656dae93994d644313bde273f3b279af54c902bc44ec965448bd014318dcb27589697509c4131d765bdbc2851cf0ef963f4143b91c314cc0a2df326a7ab3a90bfe857785d58fe2d092531d0e495056c315faf9e8816ea81875b62956c155201353f5f807381760ff183a2c77456fb4a387347cbb0ff3783958d4a017faf7e2e5b732f207c59d4ba29aa5dd200dcd2df2dfff258e827c3c63d8a3fc1414ad42cd2da6974896f241ab56691bb603ffffa68b1880"
+const LZ_BIG = "5d00008000ffffffffffffffff00391bcb50209fad903bec8110031784545f84e2466f3602913f5571554707a35796efae19860dabeb17f5c5052f49b04b92c73b40d25e640ce9a44927dfe3f080fcf3d110a9b65042fd6c2a4223894735b37ed182cbc50e731a37b75a40130da84abfa7815e2af3616c715d3531cc69b7a87f787c5efe2c756ca07974411a6ebdc114863b4b231f74696bb07e7be2a5e82e239e12f9e84ff5f690ef12f39347f6d15bad421f8287d01a309e060ae913886bf584cbccdeb81fee7428cddd950d203de73da350b1b45145194ce5ac56e0f4e13f85dd6056d127bbf83d73933fcb4356e9496509df20ada073d30564dda44ef988ff73684b1597624b43ed6aac94bfe4ad052aba14536ead4349a4bc2b5d99994a7040380a37266d44cd33b5de0031c2a386fc6986a26a10f68af1e3f06237cfdd473608938ba257bd3678a095d2f4227e329920977a66ff4955a5003a30632e0e23e6d421006485949cfd10c2faa1b1e42191f091c93f71e425c6c9b8acbaf0d605ac6cf965c449434307519bfcf48f16e37c9ba349641ecabb36650520fd79a1297b1f014dbfaf703d5c5a497b3cfc4d3a00d3efe604ea7af3ea5553624ef09a52c5f6bbdccdb91ebbbb4f69e1fd9533946ce25ee694e6fb5549f3f2499a7e5db3bfd8586e58fcd43c28096e8a3f6cd14149f258bdf7824c648104199877e6b8cd4419267e56f14199e6dccd2fb63f9e1c7baf2cf4b862bce5b6efd231c52cef32f20ec1c104c27452262d95eabff0f75a6148f4282a23a309f29b6b5b05c0c894bd8d1239ee0e0260ff6bad6b71050af775fdc28bf185d049fc2a021c84934d06ebf1887bf08ae3f738a9dc426e49097187c2687a81370205df17ee411e3bcb653de4b9a298e5be42f1932ab07d75f333220c3448866ba5c060fa2d32bed48755cad47ccaa5ef727e57a233d9da0cfb42f99f773310d1a14331789901fc08dfa608eae143118c38b17eb21d6ada98b7ef13aa18199dfc13ccca452f38eed427681757ba2516cd88b305849c3b60c1c625d305faff4d21a05b541e62e049d405d577673fc0f27d34526bdeea5953184e9d9cf82cf0c0de4d900255ad6c466bb0258df15cbe45a5ac76c1aa3297269a31b3f0575056f4dc20778cee83812f1796fce6c60c94ab59242127277df499084f84980d595ae285b186b849e7a6e474b82fedcba8cb9112a67496ffc92f2ededd60bf3866252e39511c0112adbcb4f1d1c2b1468d9c097fb323adb19f1e0be0cd82d996554351edef44f01257736da6e1c8fe7921b5a8338f62847d5a51629274495cc46db292e7a0c8ce0704ee9fdea542cb883f5c008fd04eaf262894711f3d8f24e1709ea7235fec28cb85d195988a7e2a91f22775f719c006984d98fdd8afd5900fc42553f8f591363105a5b0ee6fc1704d470cd19111aaad601dbaceb127185c5986e9665258bee976ac59e4e55b0508f9c7daadfcfb522b74cd1e5b2042f9dd533df82964093b80cb2a6cdfb53bf0c4bd2e5faa0f3e4b664290130eff1093f8717859f80bcdff9528460fa9fc7cdefb9a302e56c08f85f38381c065c42553f8f591363105a5b0ee6fc1704d470cd19111aaad601dbaceb127185c5986e9665258bee976ac59e4e55b0508f9c7daadfcfb522b74cd1e5b2042f9dd533df82964093b80cb2a6cdfb53bf0c4bd2e5faa0f3e4b664290130eff1093f8717859f80bcdff9528460fa9fc7cdefb9a302e56c08f85f38381c065c42553f8f591363105a5b0ee6fc1704d470cd19111aaad601dbaceb127185c5986e9665258bee976ac59e4e55b0508f9c7daadfcfb522b74cd1e5b2042f9dd533df82964093b80cb2a6cdfb53bf0c4bd2e5faa0f3e4b664290130eff1093f8717859f80bcdff9528460fa9fc7cdefb9a302e56c08f85f38381c065c42553f8f591363105a5b0ee6fc1704d470cd19111aaad601dbaceb127185c5986e9665258bee976ac59e4e55b0508f9c7daadfcfb522b74cd1e5b2042f9dd533df82964093b80cb2a6cdfb53bf0c4bd2e5faa0f3e4b664290130eff1093f8717859f80bcdff9528460fa9fc7cdefb9a302e56c08f85f38381c065c42553f8f591363105a5b0ee6fc1704d470cd19111aaad601dbaceb127185c5986e9665258bee976ac59e4e55b0508f9c7daadfcfb522b74cd1e5b2042f9dd533df82964093b80cb2a6cdfb53bf0c4bd2e5faa0f3e4b664290130eff1093f8717859f80bcdff9528460fa9fc7cdefb9a302e56c08f85f38381c065c42553f8f5912d47d9a9416b9fff5d0a5500"
+# T2 as t2.txt, made by `tar --format=ustar -cJf`
+const TAR_XZ = "fd377a585a000004e6d6b44604c09a028050210116000000000000008fc615fee027ff01125d003a0c81c78430166b02f614d8071345d1835f3391f69863442289d0d810186746029fdf6aeb2efedd34fec73e03b2b07ecc688fa4b934d8e8d40f4ed3cd0c0e193323608846d0629f218a559bbd5e33c2956f73c34cec8000a8925e5e32ec4bf27035169edce4c9d230403b131c225968161a3e4a3a14199a68db04d35c2eca3bca56acac0142ff08ac907c86c18c15ba9d0bc514b2d97acd5f6d43d0db755c904f75d719f4cba011d7640a79ded00ce2ac2717a69e4cec1e04e8ab4b1b3a96ec0b75275825bbe7eafa05665e502a6b59333e9c63de4a8dfc68284d430c9ec4c483cc68cc6ee20945d4db19542819c81e1c232d253d2edd35853d685b2c06f0940b28c96181e20be6d5b4f55f6910a25d540000000036b065db632f14350001b602805000005eefe3f4b1c467fb020000000004595a"
+const BR_T1_Q0 = "0b0e8068656c6c6f2068656c6c6f2068656c6c6f2068656c6c6f20776f726c6403"
+const BR_T2_Q11 = "1be500401d89b18d8a7d734825be442ba34a9036ba647149031d9c06ea75090a2ce21a51a0277e4f49e621c6cf7600cc6e546e8f1f501c006c6f71418b1e8a53fc4062e90a21c725a988b99d2b594619213f27d60c"
+const BR_T2_Q5 = "1be5000004fedb66aa8f2eb66428a2a77ed0ddf0d8ce1dc101d3175dcfd61626b59d45813c946046c1fbbb7273973e6f65c785b72c6374f35fc44941f7660a43411e43fbb93c3c43e0f3ddd7c3f0c19d645c5febc685d44b06dfe98005025b1f6ab6ec387e0d22059c0bb6c84280dea7c9f6576da9898c45c419a2dcf44c920fb45f8e0c"
+const BR_BIN_Q9 = "1bff030064406e969f979a4ca421be349ae0c7050004812150187c7e0c00618f2e041285c6607178029144a650697406462666165636760e4e2e6e1e5e3e7e0141216111513171094929691959397905452565155535750d4d2d6d1d5d3d7d03432363135333730b4b2b6b1b5b3b7b07472767175737770f4f2f6f1f5f3fff80c0a0e090d0b0f088c8a8e898d8b8f884c4a4e494d4b4f48cccacec9cdcbcfc82c2a2e292d2b2f28acaaaea9adabafa86c6a6e696d6b6f68eceaeee9edebefe81c1a1e191d1b1f189c9a9e999d9b9f985c5a5e595d5b5f58dcdaded9dddbdfd83c3a3e393d3b3f38bcbabeb9bdbbbfb87c7a7e797d7b7f78fcfafef9fdfbfff06"
+const BR_EMPTY = "3b"
+const BR_BIG = "9bffff4f5114f301403307941bfb733fca684211455a1a3253a58d667598c93c1065b963e7a9118818eda9a58bb7a61e9af38599cc0f312d77ecfcb50211ab5dc8054000201c8dba928438dc1b2001d0202c6f7702200060c2dcf90668b50008b9000880000880000880000880000800d801bb472100022000f827fea23790b256ec7b94d238a11007ecb7bdb289d10ac052b136167eb8903419c4e65fcd936fa65ff7fcf1c6ffcc130dd7ff74dd7b7debbe8bba3fd779f7f7faf7fd7bd9f7df75fffd7feddcef6a0e784abf3f3ff07440730e30ff018603cc3dc0ec00e301e63dc1af82738a4fc1213837387f700cce1b9c05a7e0e7131a427342f387c6d0dcd02c3485e60d3d85e684337f38433873c399853386336f38cf09670ae7f315ce10eedc70e70f770c77de7067e14ee17e3ee13e853b27dcf9c33b86776e7867e19dc23b6f789f13de39e1fd7c857708efdcf0cdc237866fdef03d856f0adfe72b7c43f8e6846ffef08de19f37fcb3f04fe1ff7cc2ff14fe39e19f3ffc43f8e7867f163685cd1bf69cb039619fafb0216c6ed8fc6163d8bcdfe34bfddcbec7bec7bec7bec7bec7bec7bec7fe017be5e7de78e38d37de78e38d9f5b60810516586081051658608105165860810516586081732cb0c0020b2cb0c002e758608105165860810516586081732cb0c0020b2cb0c002e7586081051658608105ceb1c0020b2cb0c0020b2cb0c002e7586081051658608105ceb1c0020b2cb0c0020b7441100441100441b00b82200882601704411004411004411004411004bb20088220087641100441100441b00b82200882601704411004c12e08822008822008764110044110ec8220088220d883200882200882a01e04411004413d08822008822008822008822008ea4110044110d483200882200882a01e04411004413d08822008827a10044110044110d48320088220a80741100441503f70e043201008040281407a201008040281f4402010080402814020100804028140203d1008040281407a2010080402814020901e0804028140203d1008040281407a2010080402814020901e0804028140203d1008040281403a00000000000000d00100000000a003000000000000000000000000001d00000000003a00000000000000d00100000000a003000000004007000000000000003a0000000000740000000000e882200882200882601704411004c12e08822008822008822008822008764110044110ec82200882200882601704411004c12e08822008825d10044110044110ec8220088220d80541100441b0170a8542a15028140aed8542a1502814da0b8542a15028140a8542a15028140a85f642a15028140aed8542a15028140a85427ba15028140a85f642a15028140aed8542a15028140a85427ba15028140a85f642a15028140aed83c16030180c0683c1fa6030180c0683f5c16030180c0683c16030180c0683c1607d30180c0683c1fa6030180c0683c160b03e180c0683c1607d30180c0683c1fa6030180c0683c160b03e180c0683c1607d30180c0683c1fae170381c0e87c3e1f07e381c3c0c0683c1fa6030180c0683c16030180c0683c160b03e180c0683c1607d30180c0683c16030581f0c0683c160b03e180c0683c1607d30180c0683c16030581f0c0683c160b03e180c0683c160ffc3fd3dfd4918"
+
+
+def hx(s: str) -> str:
+    return Hex.decode(s)
+
+# 5 MiB of table rows (the same generator produced the Python vectors).
+def big_data() -> str:
+    mut sb = StringBuilder.init(5300000)
+    mut i = 0
+    while sb.len() < BIG_LEN:
+        sb.append("row ")
+        sb.append_int(i % 1000)
+        sb.append(" of the table, value ")
+        sb.append_int((i * 37) % 100)
+        sb.append("\n")
+        i = i + 1
+    mut s = sb.to_owned()
+    sb.free()
+    return s.slice(0, BIG_LEN)
+
+# `s` with the byte at `i` XOR-ed with `mask`.
+def flip(s: str, i: int, mask: int) -> str:
+    mut h = Hex.encode(s)
+    mut b = Hex.decode(h)
+    mut p = b as Pointer[char]
+    unsafe:
+        mut v = p.offset(i).read() as int & 0xFF
+        p.offset(i).write(((v ^ mask) & 0xFF) as char)
+    return b
+
+def test_bzip2(t: TestRunner) throws str:
+    t.section("bzip2")
+    mut t1 = hx(T1_HEX)
+    mut bin = hx(BIN_HEX)
+    t.assert_eq_str(Bzip2.decompress(hx(BZ_T1))?, t1, "decode Python bz2 level 9")
+    t.assert_eq_str(Hex.encode(Bzip2.decompress(hx(BZ_BIN_1))?), BIN_HEX, "decode binary level 1")
+    t.assert_eq_str(Hex.encode(Bzip2.compress(t1, 9)?), BZ_T1, "encoder output is byte-identical to Python bz2")
+    t.assert_eq_str(Hex.encode(Bzip2.compress(bin, 1)?), BZ_BIN_1, "level 1 identical too")
+    t.assert_eq_str(Hex.encode(Bzip2.decompress(hx(BZ_MULTI))?), T1_HEX + BIN_HEX, "two concatenated streams")
+    t.assert_eq_int(Bzip2.decompress(hx(BZ_EMPTY))?.len(), 0, "stream of empty data")
+    t.assert_eq_str(Hex.encode(Bzip2.compress("", 9)?), BZ_EMPTY, "compress empty")
+    t.assert_eq_int(Bzip2.decompress("")?.len(), 0, "empty input decodes to empty (like Python)")
+    t.assert_true(Bzip2.is_bzip2(hx(BZ_T1)), "is_bzip2")
+    t.assert_false(Bzip2.is_bzip2(t1), "is_bzip2 on text")
+
+    mut bad: Result[str, str] = Bzip2.decompress("not bzip2 at all")
+    t.assert_true(bad.is_err, "bad magic raises")
+    if bad.is_err: t.assert_contains(bad.err, "bad header magic", "bad magic message")
+    mut c = hx(BZ_T1)
+    mut tr: Result[str, str] = Bzip2.decompress(c.slice(0, c.len() - 5))
+    t.assert_true(tr.is_err, "truncated raises")
+    if tr.is_err: t.assert_contains(tr.err, "truncated", "truncated message")
+    mut cr: Result[str, str] = Bzip2.decompress(flip(c, 20, 0x10))
+    t.assert_true(cr.is_err, "corrupt block raises (CRC)")
+    mut trail: Result[str, str] = Bzip2.decompress(c + "garbage")
+    t.assert_true(trail.is_err, "trailing garbage raises")
+    mut lim: Result[str, str] = Bzip2.decompress_max(c, 10)
+    t.assert_true(lim.is_err, "max_out limit raises")
+    if lim.is_err: t.assert_contains(lim.err, "max_out", "limit message")
+    t.assert_eq_int(Bzip2.decompress_max(c, t1.len())?.len(), t1.len(), "limit equal to the size is fine")
+
+    # streaming: one byte at a time
+    mut d = Bzip2Decoder.init(0)?
+    mut sb = StringBuilder.init(64)
+    mut m = hx(BZ_MULTI)
+    mut i = 0
+    while i < m.len():
+        sb.append(d.feed(m.slice(i, i + 1))?)
+        i = i + 1
+    t.assert_eq_int(d.streams(), 2, "decoder counted two streams")
+    sb.append(d.finish()?)
+    t.assert_eq_str(Hex.encode(sb.to_owned()), T1_HEX + BIN_HEX, "byte-at-a-time decode")
+    sb.free()
+    mut d2 = Bzip2Decoder.init(0)?
+    d2.feed(c.slice(0, 10))?
+    mut fin: Result[str, str] = d2.finish()
+    t.assert_true(fin.is_err, "finish on a partial stream raises")
+    mut again: Result[str, str] = d2.feed("x")
+    t.assert_true(again.is_err, "feed after close raises")
+
+    mut e = Bzip2Encoder.init(9)?
+    mut enc = e.feed("hello hello ")?
+    enc = enc + e.feed("hello hello world")?
+    enc = enc + e.finish()?
+    t.assert_eq_str(Hex.encode(enc), BZ_T1, "streaming encoder")
+
+def test_bzip2_big(t: TestRunner, big: str) throws str:
+    t.section("bzip2 5 MiB")
+    mut c = Bzip2.compress(big, 9)?
+    t.assert_eq_int(c.len(), BZ_BIG_LEN, "same size as Python's bz2 (6 blocks)")
+    mut d = Bzip2.decompress(c)?
+    t.assert_eq_int(d.len(), BIG_LEN, "round trip length")
+    t.assert_true(d == big, "round trip content")
+    # streaming in 64 KiB pieces
+    mut dec = Bzip2Decoder.init(0)?
+    mut total = 0
+    mut i = 0
+    while i < c.len():
+        mut part = dec.feed(c.slice(i, i + 65536))?
+        total = total + part.len()
+        i = i + 65536
+    total = total + dec.finish()?.len()
+    t.assert_eq_int(total, BIG_LEN, "streamed output size")
+    mut lim: Result[str, str] = Bzip2.decompress_max(c, 1000000)
+    t.assert_true(lim.is_err, "bomb limit on the 5 MiB stream")
+
+def test_xz(t: TestRunner) throws str:
+    t.section("xz")
+    mut t1 = hx(T1_HEX)
+    t.assert_eq_str(Xz.decompress(hx(XZ_T2_NONE))?, T2, "check none")
+    t.assert_eq_str(Xz.decompress(hx(XZ_T2_CRC32))?, T2, "check CRC32")
+    t.assert_eq_str(Xz.decompress(hx(XZ_T2_CRC64))?, T2, "check CRC64")
+    t.assert_eq_str(Xz.decompress(hx(XZ_T2_SHA256))?, T2, "check SHA-256")
+    t.assert_eq_int(Xz.decompress(hx(XZ_EMPTY))?.len(), 0, "stream of empty data")
+    t.assert_eq_str(Hex.encode(Xz.decompress(hx(XZ_MULTI))?), T1_HEX + BIN_HEX, "two streams with padding")
+    t.assert_eq_str(Hex.encode(Xz.decompress(hx(XZ_X86))?), BIN_HEX, "BCJ x86 filter")
+    t.assert_eq_str(Hex.encode(Xz.decompress(hx(XZ_BLOCKS))?), BIN_HEX + BIN_HEX + BIN_HEX, "multiple blocks (xz --block-size)")
+    t.assert_true(Xz.is_xz(hx(XZ_EMPTY)), "is_xz")
+    t.assert_false(Xz.is_xz(t1), "is_xz on text")
+
+    mut e0: Result[str, str] = Xz.decompress("")
+    t.assert_true(e0.is_err, "empty input raises")
+    mut bad: Result[str, str] = Xz.decompress("plain text, not xz")
+    t.assert_true(bad.is_err, "bad magic raises")
+    if bad.is_err: t.assert_contains(bad.err, "bad header magic", "bad magic message")
+    mut c = hx(XZ_T2_SHA256)
+    mut tr: Result[str, str] = Xz.decompress(c.slice(0, c.len() - 20))
+    t.assert_true(tr.is_err, "truncated raises")
+    if tr.is_err: t.assert_contains(tr.err, "truncated", "truncated message")
+    # corrupt one byte of the SHA-256 check value (just before the index)
+    mut cks: Result[str, str] = Xz.decompress(flip(c, c.len() - 40, 1))
+    t.assert_true(cks.is_err, "SHA-256 mismatch raises")
+    mut c32 = hx(XZ_T2_CRC32)
+    mut payload: Result[str, str] = Xz.decompress(flip(c32, 40, 0x40))
+    t.assert_true(payload.is_err, "corrupt payload raises")
+    mut trail: Result[str, str] = Xz.decompress(c32 + "junk")
+    t.assert_true(trail.is_err, "trailing junk raises")
+    mut lim: Result[str, str] = Xz.decompress_max(c32, 100)
+    t.assert_true(lim.is_err, "max_out limit raises")
+    t.assert_eq_str(Xz.decompress_max(c32, T2.len())?, T2, "limit equal to the size is fine")
+
+    mut d = XzDecoder.init(0)?
+    mut sb = StringBuilder.init(64)
+    mut m = hx(XZ_MULTI)
+    mut i = 0
+    while i < m.len():
+        sb.append(d.feed(m.slice(i, i + 3))?)
+        i = i + 3
+    sb.append(d.finish()?)
+    t.assert_eq_str(Hex.encode(sb.to_owned()), T1_HEX + BIN_HEX, "streaming, 3-byte chunks")
+    sb.free()
+
+def test_lzma(t: TestRunner) throws str:
+    t.section("lzma (LZMA alone)")
+    mut t1 = hx(T1_HEX)
+    t.assert_eq_str(Lzma.decompress(hx(LZ_T2))?, T2, "Python FORMAT_ALONE")
+    t.assert_eq_str(Lzma.decompress(hx(LZ_T1_SIZED))?, t1, "xz --format=lzma")
+    t.assert_eq_str(Hex.encode(Lzma.decompress(hx(LZ_BIN_LC0))?), BIN_HEX, "lc=0 lp=2 pb=0")
+    # the same stream with its size written into the header (size + end marker)
+    mut c = hx(LZ_T2)
+    mut sized = c.slice(0, 5) + hx("e600000000000000") + c.slice(13, c.len())
+    t.assert_eq_str(Lzma.decompress(sized)?, T2, "known size followed by an end marker")
+    mut wrong = c.slice(0, 5) + hx("e500000000000000") + c.slice(13, c.len())
+    mut ws: Result[str, str] = Lzma.decompress(wrong)
+    t.assert_true(ws.is_err, "wrong declared size raises")
+    mut e0: Result[str, str] = Lzma.decompress("")
+    t.assert_true(e0.is_err, "empty input raises")
+    mut hdr: Result[str, str] = Lzma.decompress(hx("ff00008000ffffffffffffffff00"))
+    t.assert_true(hdr.is_err, "invalid properties byte raises")
+    mut tr: Result[str, str] = Lzma.decompress(c.slice(0, c.len() - 4))
+    t.assert_true(tr.is_err, "truncated raises")
+    mut lim: Result[str, str] = Lzma.decompress_max(c, 50)
+    t.assert_true(lim.is_err, "max_out limit raises")
+    mut d = LzmaDecoder.init(0)?
+    mut sb = StringBuilder.init(64)
+    mut i = 0
+    while i < c.len():
+        sb.append(d.feed(c.slice(i, i + 5))?)
+        i = i + 5
+    sb.append(d.finish()?)
+    t.assert_eq_str(sb.to_owned(), T2, "streaming, 5-byte chunks")
+    sb.free()
+
+def test_brotli(t: TestRunner) throws str:
+    t.section("brotli")
+    mut t1 = hx(T1_HEX)
+    t.assert_eq_str(Brotli.decompress(hx(BR_T1_Q0))?, t1, "quality 0")
+    t.assert_eq_str(Brotli.decompress(hx(BR_T2_Q11))?, T2, "quality 11 (static dictionary + transforms)")
+    t.assert_eq_str(Brotli.decompress(hx(BR_T2_Q5))?, T2, "quality 5 text mode")
+    t.assert_eq_str(Hex.encode(Brotli.decompress(hx(BR_BIN_Q9))?), BIN_HEX, "binary quality 9")
+    t.assert_eq_int(Brotli.decompress(hx(BR_EMPTY))?.len(), 0, "stream of empty data")
+    mut e0: Result[str, str] = Brotli.decompress("")
+    t.assert_true(e0.is_err, "empty input raises")
+    mut c = hx(BR_T2_Q11)
+    mut tr: Result[str, str] = Brotli.decompress(c.slice(0, c.len() - 3))
+    t.assert_true(tr.is_err, "truncated raises")
+    if tr.is_err: t.assert_contains(tr.err, "truncated", "truncated message")
+    mut trail: Result[str, str] = Brotli.decompress(c + "x")
+    t.assert_true(trail.is_err, "trailing data raises")
+    mut junk: Result[str, str] = Brotli.decompress("this is not brotli data, honestly")
+    t.assert_true(junk.is_err, "garbage raises")
+    mut lim: Result[str, str] = Brotli.decompress_max(c, 64)
+    t.assert_true(lim.is_err, "max_out limit raises")
+    mut d = BrotliDecoder.init(0)?
+    mut sb = StringBuilder.init(64)
+    mut i = 0
+    while i < c.len():
+        sb.append(d.feed(c.slice(i, i + 1))?)
+        i = i + 1
+    t.assert_true(d.done, "decoder saw the end of the stream")
+    sb.append(d.finish()?)
+    t.assert_eq_str(sb.to_owned(), T2, "byte-at-a-time decode")
+    sb.free()
+
+def test_big(t: TestRunner, big: str) throws str:
+    t.section("5 MiB vectors")
+    mut x = Xz.decompress(hx(XZ_BIG))?
+    t.assert_eq_int(x.len(), BIG_LEN, "xz length")
+    t.assert_true(x == big, "xz content")
+    mut l = Lzma.decompress(hx(LZ_BIG))?
+    t.assert_true(l == big, "lzma content")
+    mut b = Brotli.decompress(hx(BR_BIG))?
+    t.assert_true(b == big, "brotli content")
+    t.assert_eq_int(Crc32.compute(b, b.len()), BIG_CRC, "CRC32 matches Python's zlib.crc32")
+    mut lx: Result[str, str] = Xz.decompress_max(hx(XZ_BIG), 4194304)
+    t.assert_true(lx.is_err, "xz bomb limit")
+    mut lb: Result[str, str] = Brotli.decompress_max(hx(BR_BIG), 4194304)
+    t.assert_true(lb.is_err, "brotli bomb limit")
+    mut ll: Result[str, str] = Lzma.decompress_max(hx(LZ_BIG), 4194304)
+    t.assert_true(ll.is_err, "lzma bomb limit")
+
+# The docs' example: open a .tar.bz2 / .tar.xz by name.
+def open_tarball(data: str, name: str) throws str -> TarReader:
+    mut raw = data
+    if name.ends_with(".tar.bz2") or name.ends_with(".tbz2"):
+        raw = Bzip2.decompress(data)?
+    elif name.ends_with(".tar.xz") or name.ends_with(".txz"):
+        raw = Xz.decompress(data)?
+    return TarReader.open(raw, raw.len())
+
+def test_tarball(t: TestRunner) throws str:
+    t.section("tar.bz2 / tar.xz")
+    mut w = TarWriter.init()
+    w.add_entry("a.txt", T2, T2.len())
+    mut bin = hx(BIN_HEX)
+    w.add_entry("b.bin", bin, bin.len())
+    mut tarb = w.finish()
+    mut r = open_tarball(Bzip2.compress(tarb, 9)?, "x.tar.bz2")?
+    t.assert_eq_int(r.entry_count(), 2, "tar.bz2 entries")
+    t.assert_eq_str(r.read_entry(r.find_entry("a.txt")), T2, "tar.bz2 text entry")
+    t.assert_eq_str(Hex.encode(r.read_entry(r.find_entry("b.bin"))), BIN_HEX, "tar.bz2 binary entry")
+    mut rx = open_tarball(hx(TAR_XZ), "y.tar.xz")?
+    t.assert_eq_int(rx.entry_count(), 1, "tar.xz from the tar + xz CLIs")
+    t.assert_eq_str(rx.entry_name(0), "t2.txt", "tar.xz entry name")
+    t.assert_eq_str(rx.read_entry(0), T2, "tar.xz entry content")
+
+def test_by_name(t: TestRunner):
+    t.section("Compress by name")
+    t.assert_eq_str(Compress.detect(hx(BZ_T1)), "bzip2", "detect bzip2")
+    t.assert_eq_str(Compress.detect(hx(XZ_EMPTY)), "xz", "detect xz")
+    t.assert_eq_str(Compress.detect(hx(BR_T1_Q0)), "", "brotli has no magic")
+    t.assert_true(Compress.supports("brotli"), "supports brotli")
+    mut c = hx(XZ_T2_CRC64)
+    mut r = Compress.decompress("xz", c, c.len(), 1 << 20)
+    t.assert_true(r.ok, "by-name xz")
+    t.assert_eq_str(r.to_str(), T2, "by-name xz output")
+    r.free()
+    mut b = Compress.compress("bzip2", T2, T2.len())
+    t.assert_true(b.ok, "by-name bzip2 compress")
+    mut bs = b.to_str()
+    mut back = Compress.decompress("bzip2", bs, bs.len(), 1 << 20)
+    t.assert_eq_str(back.to_str(), T2, "by-name bzip2 round trip")
+    b.free()
+    back.free()
+    mut bad = Compress.decompress("brotli", "zz", 2, 100)
+    t.assert_false(bad.ok, "by-name failure")
+    t.assert_contains(bad.err, "brotli", "failure names the codec")
+
+def main():
+    mut t = TestRunner.init("126_compress2")
+    mut r1: Result[bool, str] = run_all(t)
+    t.assert_true(r1.is_ok, "no unexpected error")
+    if r1.is_err: print(r1.err)
+    test_by_name(t)
+    t.summary()
+
+def run_all(t: TestRunner) throws str -> bool:
+    test_bzip2(t)?
+    test_xz(t)?
+    test_lzma(t)?
+    test_brotli(t)?
+    test_tarball(t)?
+    mut big = big_data()
+    t.assert_eq_int(Crc32.compute(big, big.len()), BIG_CRC, "generator matches Python")
+    test_big(t, big)?
+    test_bzip2_big(t, big)?
+    return true
