@@ -7,6 +7,8 @@ from std.math.bits   import Bits          # bitwise operations (static methods)
 from std.math.random import Random        # pseudo-random number generation
 from std.math.stats  import Stats         # descriptive statistics (static methods)
 from std.math.bigint import BigInt        # arbitrary-precision integers
+from std.math.fft    import fft, rfft     # FFT of any length (C-backed)
+from std.math.dsp    import Biquad, stft  # windows, filters, spectra
 ```
 
 ---
@@ -466,3 +468,82 @@ print(b.sum_axis(0, false)?.to_str())
 - **Join**: `Tensor.concat(parts, axis)?`, `Tensor.stack(parts, axis)?`. Text: `to_str()`.
 
 GPU execution is not wired in; use `std.gpu` kernels on `to_list()` data for that. Tested by `tests/lang/113_tensor.tr`.
+
+---
+
+## FFT — `std.math.fft`
+
+Fast Fourier transforms of **any length** in O(n log n), with the loops in C (`std/math/fft_native.c`). Complex
+sequences are interleaved `List[float]` (`z[2k]` = re, `z[2k+1]` = im); real sequences are plain `List[float]`.
+Lengths made of 2/3/4/5 use radix-4/2/3/5 Stockham passes, other small primes a generic odd-radix pass, and lengths
+with large prime factors (e.g. primes) Bluestein's algorithm. Real transforms of even length run a half-length
+complex FFT. Results match NumPy to ~1e-16 relative (checked up to n = 2^20).
+
+```tauraro
+from std.math.fft import fft, ifft, rfft, irfft, rfftfreq, magnitudes, FftPlan
+mut spec = rfft(signal)?                         # n/2+1 complex bins
+mut mags = magnitudes(spec)
+mut freqs = rfftfreq(len(signal), 1.0 / 48000.0)
+mut back = irfft(spec, len(signal))?
+mut plan = FftPlan.new(1009)?                    # explicit plan (Bluestein here)
+mut z = plan.forward(data)?                      # data: 2 * 1009 floats
+plan.dispose()
+```
+
+- **Transforms**: `fft(z)?`, `ifft(z)?` (1/n), `rfft(x)?`, `irfft(spec, n)?` (`n = 0` means `2*(bins-1)`; missing bins
+  are zero, the imaginary parts of DC/Nyquist are ignored like NumPy), `fft_real(x)?` (full spectrum of real input),
+  `fft2(z, rows, cols)?` / `ifft2(...)?` (row-major). `fft_norm`, `ifft_norm`, `rfft_norm`, `irfft_norm`, `fft2_norm`
+  take NumPy's `norm`: `"backward"` (default), `"ortho"`, `"forward"`.
+- **Plans**: one-shot functions keep a per-thread cache of the last 8 lengths' twiddles (`fft_clear_cache()` frees it).
+  `FftPlan.new(n)?` — `forward`, `inverse`, `execute(z, inverse, scale)?`, `execute_in_place(...)?`, `uses_bluestein()`,
+  `dispose()`; `RfftPlan.new(n)?` — `forward(x)?`, `inverse(spec)?`, `dispose()`. A plan owns scratch memory: do not
+  run one plan on two threads at once.
+- **Axes**: `fftfreq(n, d)`, `rfftfreq(n, d)`, `fftshift` / `ifftshift` (real lists), `fftshift_complex` /
+  `ifftshift_complex`, `next_fast_len(n)`, `next_fast_len_real(n)`.
+- **Complex helpers**: `to_complex(re)`, `complex_from(re, im)?`, `real_parts`, `imag_parts`, `magnitudes`, `power`,
+  `phases`, `conjugate`, `complex_mul(a, b)?`, `fft_zeros(n)`.
+
+Speed (this machine, µs per call including the Tauraro wrapper; NumPy 2.4 `np.fft` in brackets):
+n = 1024: 12.8 (22.8) · 4096: 70 (83) · 1000: 21 (24) · 1009 (prime): 76 (100) · 2^20: 44 000 (54 000);
+`rfft` 1024: 8.3 (16.7) · 2^20: 27 000 (26 000).
+
+## Signal processing — `std.math.dsp`
+
+Built on `std.math.fft`; semantics follow NumPy/SciPy and are checked against them in `tests/lang/125_fft.tr`.
+
+```tauraro
+from std.math.dsp import hann, stft, istft, Biquad, firwin, convolve, filtfilt, welch
+mut bq = Biquad.lowpass(48000.0, 1000.0, 0.7071)
+mut y = bq.filter(x)
+mut taps = firwin(101, [3000.0], true, 48000.0, "hamming")?
+mut z = convolve(x, taps, "same")?
+mut s = stft(x, hann(512, false), 128, 512, true)?
+mut x2 = istft(s, len(x))?
+mut psd = welch(x, 48000.0, 1024)?
+```
+
+- **Windows** (`sym = true` for filter design, `false` = periodic for spectra, like SciPy): `hann`, `hamming`,
+  `blackman`, `blackman_harris`, `flattop`, `kaiser(n, beta, sym)`, `tukey(n, alpha, sym)`, `boxcar(n)`,
+  `general_cosine(n, coeffs, sym)`, `get_window(name, n, sym)?`, `bessel_i0(x)`.
+- **Convolution**: `convolve(a, b, mode)?` / `correlate(a, v, mode)?` with NumPy's `"full" | "same" | "valid"`;
+  FFT-based when cheaper, direct for short kernels; `convolve_method(a, b, mode, "auto" | "direct" | "fft")?`.
+- **Filtering**: `lfilter(b, a, x)?` (direct form II transposed), `lfilter_state(b, a, x, zi)?` (streaming, `zi`
+  updated in place), `lfilter_zi(b, a)?`, `filtfilt(b, a, x)?` / `filtfilt_pad(..., padlen)?` (SciPy's odd extension),
+  `freqz(b, a, n, fs)` → `FreqResponse` (`freqs`, complex `h`, `magnitude()`, `magnitude_db()`), `response_at`.
+- **FIR design**: `firwin(numtaps, cutoffs_hz, pass_zero, fs, window)?` (SciPy `firwin`, scale=True),
+  `firwin_window(..., win)?` (any window, e.g. Kaiser), `fir_lowpass/highpass(numtaps, cutoff, fs)?`,
+  `fir_bandpass/bandstop(numtaps, low, high, fs)?`.
+- **Biquads** (RBJ Audio EQ Cookbook): `Biquad.lowpass/highpass/bandpass/notch/allpass(fs, f0, q)`,
+  `Biquad.peaking/lowshelf/highshelf(fs, f0, q, gain_db)`, `Biquad.from_coeffs(...)`; `filter(x)`, `filtfilt(x)?`,
+  streaming `process(block)` / `reset()`, `coeffs_b()`, `coeffs_a()`, `magnitude_at(f, fs)`, `gain_db_at(f, fs)`.
+- **Spectra**: `stft(x, window, hop, nfft, center)?` → `Stft` (unscaled, frames × bins, `get(t, k)`, `times(fs)`,
+  `freqs(fs)`); `istft(s, length)?` (weighted overlap-add); `spectrogram(x, fs, window, hop, nfft, mode)?` with mode
+  `"magnitude" | "power" | "db"` → `Spectrogram` (`get`, `times`, `freqs`, `to_tensor()` → `[frames, bins]` `Tensor`);
+  `welch(x, fs, nperseg)?` (SciPy defaults) and `welch_window(x, fs, window, noverlap, nfft, detrend, scaling)?` → `Psd`
+  (`freqs`, `values`, `segments`, `peak_freq()`); `goertzel(x, freq, fs)` (complex DFT at any frequency),
+  `goertzel_power`.
+- **Misc**: `resample_poly(x, up, down)?` (SciPy's polyphase Kaiser(5) design), `find_peaks(x, min_height, distance,
+  min_prominence)` (plateaus report their middle; pass `-1e300` / `0` / `0.0` to skip a criterion),
+  `local_maxima(x)`, `peak_prominences(x, peaks)`.
+
+For `AudioBuffer`s see [`std.audio.dsp`](audio.md#spectra-and-filters--stdaudiodsp).

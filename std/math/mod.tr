@@ -12,6 +12,8 @@
 #   from std.math.rational import Rational
 #   from std.math.bigfloat import BigFloat
 #   from std.math.tensor   import Tensor   (links std/math/tensor_native.c)
+#   from std.math.fft      import fft, rfft, FftPlan   (links std/math/fft_native.c)
+#   from std.math.dsp      import Biquad, stft, firwin, welch
 
 from std.math.int    import Math
 from std.math.float  import FloatMath

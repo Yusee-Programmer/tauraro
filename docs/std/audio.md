@@ -35,3 +35,21 @@ mut wav = Wav.encode(speech, 16, false)?
 ```
 
 Tested by `tests/lang/115_audio.tr` (MP3 against ISO conformance vectors, FLAC bit-exact).
+
+## Spectra and filters — `std.audio.dsp`
+
+`AudioDsp` connects `AudioBuffer` to [`std.math.fft` / `std.math.dsp`](math.md#fft--stdmathfft). Analysis works on
+the mono mix-down; filters run on every channel and return a new buffer.
+
+```tauraro
+from std.audio.dsp import AudioDsp
+mut f = AudioDsp.dominant_frequency(buf)?               # Hz, parabolic-interpolated peak
+mut sg = AudioDsp.spectrogram(buf, 1024, 256, "db")?    # Spectrogram (to_tensor() for a Tensor)
+mut warm = AudioDsp.eq(AudioDsp.highpass(buf, 80.0, 0.7071), 3000.0, 1.0, -3.0)
+```
+
+`spectrum(buf)?` (Hann-windowed magnitudes, a full-scale sine reads its amplitude) → `Spectrum` (`freqs`,
+`magnitudes`, `peak_freq()`), `dominant_frequency(buf)?`, `spectrogram(buf, nperseg, hop, mode)?`, `welch(buf,
+nperseg)?`, `biquad(buf, bq)`, `lowpass/highpass(buf, cutoff, q)`, `eq(buf, freq, q, gain_db)`, `lfilter(buf, b, a)?`,
+`filtfilt(buf, b, a)?`, `fir(buf, taps, compensate)?` (compensate removes a linear-phase FIR's delay),
+`mono_samples(buf)`. Tested by `tests/lang/125_fft.tr`.
