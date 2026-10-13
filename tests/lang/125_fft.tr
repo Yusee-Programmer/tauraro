@@ -1,0 +1,1158 @@
+# tests/lang/125_fft.tr
+# std.math.fft + std.math.dsp + std.audio.dsp. Reference vectors (bottom of
+# the file) were computed with NumPy / SciPy; FFTs of every length class
+# (radix-2/4, mixed radix, generic odd radix, Bluestein) are also checked
+# against a naive DFT computed here.
+
+from std.test import TestRunner
+from std.math.fft import fft, ifft, fft_norm, ifft_norm, rfft, irfft, rfft_norm, irfft_norm, fft2, ifft2
+from std.math.fft import fftfreq, rfftfreq, fftshift, ifftshift, fftshift_complex, FftPlan, RfftPlan
+from std.math.fft import fft_zeros, to_complex, complex_from, real_parts, imag_parts, magnitudes, power, phases
+from std.math.fft import conjugate, complex_mul, next_fast_len, next_fast_len_real, fft_real, fft_clear_cache
+from std.math.dsp import hann, hamming, blackman, blackman_harris, flattop, kaiser, tukey, boxcar, get_window
+from std.math.dsp import convolve, convolve_method, correlate, lfilter, lfilter_state, lfilter_zi, filtfilt, freqz
+from std.math.dsp import firwin, firwin_window, fir_lowpass, fir_highpass, fir_bandpass, fir_bandstop, Biquad
+from std.math.dsp import Spectrogram, stft, istft, spectrogram, welch, welch_window, goertzel, goertzel_power
+from std.math.dsp import resample_poly, find_peaks, peak_prominences, local_maxima
+from std.audio import Audio, AudioBuffer
+from std.audio.dsp import AudioDsp
+
+extern "C":
+    def sin(x: float) -> float
+    def cos(x: float) -> float
+    def fabs(x: float) -> float
+    def sqrt(x: float) -> float
+    def log10(x: float) -> float
+
+const TWO_PI_T = 6.283185307179586
+
+def sig(n: int) -> List[float]:
+    mut z = fft_zeros(2 * n)
+    mut k = 0
+    while k < n:
+        z[2 * k] = (((k * 37 + 11) % 101) as float) / 50.0 - 1.0
+        z[2 * k + 1] = (((k * 53 + 7) % 89) as float) / 44.0 - 1.0
+        k = k + 1
+    return z
+
+def rsig(n: int) -> List[float]:
+    mut x = fft_zeros(n)
+    mut k = 0
+    while k < n:
+        x[k] = (((k * 37 + 11) % 101) as float) / 50.0 - 1.0
+        k = k + 1
+    return x
+
+def max_abs(xs: List[float]) -> float:
+    mut m = 0.0
+    mut i = 0
+    while i < len(xs):
+        if fabs(xs[i]) > m: m = fabs(xs[i])
+        i = i + 1
+    return m
+
+# max |got - want| / max(1, max |want|); -1 on a length mismatch
+def err(got: List[float], want: List[float]) -> float:
+    if len(got) != len(want): return -1.0
+    mut m = 0.0
+    mut i = 0
+    while i < len(got):
+        mut d = fabs(got[i] - want[i])
+        if d > m: m = d
+        i = i + 1
+    mut s = max_abs(want)
+    if s < 1.0: s = 1.0
+    return m / s
+
+def close(t: TestRunner, got: List[float], want: List[float], tol: float, msg: str):
+    mut e = err(got, want)
+    if e < 0.0:
+        t.fail(f"{msg}: length {len(got)} != {len(want)}")
+        return
+    if e <= tol: t.assert_true(true, msg)
+    else: t.fail(f"{msg}: error {e} > {tol}")
+
+def ints_eq(t: TestRunner, got: List[int], want: List[int], msg: str):
+    mut same = len(got) == len(want)
+    mut i = 0
+    while same and i < len(got):
+        if got[i] != want[i]: same = false
+        i = i + 1
+    if same: t.assert_true(true, msg)
+    else: t.fail(f"{msg}: got {got} want {want}")
+
+def naive_dft(z: List[float]) -> List[float]:
+    mut n = len(z) / 2
+    mut out = fft_zeros(2 * n)
+    mut k = 0
+    while k < n:
+        mut re = 0.0
+        mut im = 0.0
+        mut m = 0
+        while m < n:
+            mut a = 0.0 - TWO_PI_T * (((k * m) % n) as float) / (n as float)
+            mut c = cos(a)
+            mut s = sin(a)
+            re = re + z[2 * m] * c - z[2 * m + 1] * s
+            im = im + z[2 * m] * s + z[2 * m + 1] * c
+            m = m + 1
+        out[2 * k] = re
+        out[2 * k + 1] = im
+        k = k + 1
+    return out
+
+def pick_bins(z: List[float], n: int) -> List[float]:
+    mut bins: List[int] = [0, 1, 2, n / 3, n / 2, n - 1]
+    mut out: List[float] = []
+    mut i = 0
+    while i < len(bins):
+        out.append(z[2 * bins[i]])
+        out.append(z[2 * bins[i] + 1])
+        i = i + 1
+    return out
+
+def head(xs: List[float], n: int) -> List[float]:
+    mut out: List[float] = []
+    mut i = 0
+    while i < n and i < len(xs):
+        out.append(xs[i])
+        i = i + 1
+    return out
+
+def test_fft(t: TestRunner) throws str -> bool:
+    t.section("complex FFT vs NumPy")
+    close(t, fft(sig(8))?, ref_fft8(), 1e-13, "fft n=8 (radix 2/4)")
+    close(t, fft(sig(12))?, ref_fft12(), 1e-13, "fft n=12 (mixed 4*3)")
+    close(t, fft(sig(15))?, ref_fft15(), 1e-13, "fft n=15 (3*5)")
+    close(t, fft(sig(17))?, ref_fft17(), 1e-13, "fft n=17 (generic prime radix)")
+    close(t, pick_bins(fft(sig(97))?, 97), ref_fftbins97(), 1e-12, "fft n=97 (Bluestein) bins")
+    close(t, pick_bins(fft(sig(1000))?, 1000), ref_fftbins1000(), 1e-12, "fft n=1000 bins")
+    close(t, pick_bins(fft(sig(1009))?, 1009), ref_fftbins1009(), 1e-12, "fft n=1009 (prime, Bluestein) bins")
+    close(t, pick_bins(fft(sig(1024))?, 1024), ref_fftbins1024(), 1e-12, "fft n=1024 bins")
+    close(t, pick_bins(fft(sig(4096))?, 4096), ref_fftbins4096(), 1e-12, "fft n=4096 bins")
+
+    t.section("complex FFT vs naive DFT, every length class")
+    mut lens: List[int] = [1, 2, 3, 5, 6, 7, 9, 11, 13, 16, 18, 25, 49, 53, 64, 77, 101, 121, 210, 243, 256, 1000, 1009]
+    mut li = 0
+    while li < len(lens):
+        mut n = lens[li]
+        mut z = sig(n)
+        mut got = fft(z)?
+        close(t, got, naive_dft(z), 1e-12, f"fft == DFT for n={n}")
+        close(t, ifft(got)?, z, 1e-13, f"ifft(fft(x)) == x for n={n}")
+        li = li + 1
+
+    t.section("normalisation")
+    mut z12 = sig(12)
+    close(t, ifft(z12)?, ref_ifft12(), 1e-13, "ifft")
+    close(t, fft_norm(z12, "ortho")?, ref_fft12_ortho(), 1e-13, "fft ortho")
+    close(t, fft_norm(z12, "forward")?, ref_fft12_forward(), 1e-13, "fft forward")
+    close(t, ifft_norm(z12, "ortho")?, ref_ifft12_ortho(), 1e-13, "ifft ortho")
+    mut back = ifft_norm(fft_norm(z12, "forward")?, "forward")?
+    close(t, back, z12, 1e-13, "forward-norm round trip")
+    mut bad: Result[List[float], str] = fft_norm(z12, "sideways")
+    t.assert_true(bad.is_err, "unknown norm is rejected")
+    mut odd: List[float] = [1.0, 2.0, 3.0]
+    mut bad2: Result[List[float], str] = fft(odd)
+    t.assert_true(bad2.is_err, "odd interleaved length is rejected")
+    mut empty: List[float] = []
+    mut bad3: Result[List[float], str] = rfft(empty)
+    t.assert_true(bad3.is_err, "empty rfft is rejected")
+
+    t.section("real FFT")
+    close(t, head(rfft(rsig(16))?, 18), ref_rfft16(), 1e-13, "rfft n=16")
+    close(t, head(rfft(rsig(15))?, 18), ref_rfft15(), 1e-13, "rfft n=15 (odd)")
+    close(t, head(rfft(rsig(1000))?, 18), ref_rfft1000(), 1e-12, "rfft n=1000")
+    t.assert_eq_int(len(rfft(rsig(15))?), 16, "rfft n=15 gives 8 bins")
+    mut rl: List[int] = [2, 3, 4, 10, 15, 30, 97, 128, 1000, 1009, 1026]
+    li = 0
+    while li < len(rl):
+        mut n = rl[li]
+        mut x = rsig(n)
+        mut full = fft(to_complex(x))?
+        close(t, rfft(x)?, head(full, 2 * (n / 2 + 1)), 1e-12, f"rfft == fft half for n={n}")
+        close(t, irfft(rfft(x)?, n)?, x, 1e-13, f"irfft round trip n={n}")
+        li = li + 1
+    mut sp16 = rfft(rsig(16))?
+    mut sp8 = head(sp16, 16)
+    close(t, irfft(sp8, 9)?, ref_irfft9_from8(), 1e-13, "irfft with n=9 from 8 bins")
+    mut rot: List[float] = []
+    mut k = 0
+    while k < 9:
+        rot.append(sp16[2 * k] - 0.5 * sp16[2 * k + 1])
+        rot.append(0.5 * sp16[2 * k] + sp16[2 * k + 1])
+        k = k + 1
+    close(t, irfft(rot, 0)?, ref_irfft16(), 1e-13, "irfft ignores imaginary DC / Nyquist parts")
+    mut ro = rfft_norm(rsig(16), "ortho")?
+    close(t, irfft_norm(ro, 16, "ortho")?, rsig(16), 1e-13, "rfft / irfft ortho round trip")
+    close(t, fft_real(rsig(12))?, fft(to_complex(rsig(12)))?, 1e-15, "fft_real")
+
+    t.section("2-D, frequency axes, shifts")
+    mut z34 = sig(12)
+    close(t, fft2(z34, 3, 4)?, ref_fft2_3x4(), 1e-13, "fft2 3x4")
+    close(t, ifft2(z34, 3, 4)?, ref_ifft2_3x4(), 1e-13, "ifft2 3x4")
+    close(t, ifft2(fft2(z34, 3, 4)?, 3, 4)?, z34, 1e-13, "fft2 round trip")
+    mut bad4: Result[List[float], str] = fft2(z34, 4, 4)
+    t.assert_true(bad4.is_err, "fft2 checks the size")
+    close(t, fftfreq(7, 0.25), ref_fftfreq7(), 1e-15, "fftfreq odd")
+    close(t, fftfreq(8, 0.25), ref_fftfreq8(), 1e-15, "fftfreq even")
+    close(t, rfftfreq(9, 0.5), ref_rfftfreq9(), 1e-15, "rfftfreq")
+    mut ar: List[float] = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    close(t, fftshift(ar), ref_fftshift7(), 0.0, "fftshift")
+    close(t, ifftshift(ar), ref_ifftshift7(), 0.0, "ifftshift")
+    close(t, ifftshift(fftshift(ar)), ar, 0.0, "ifftshift undoes fftshift")
+    mut zc: List[float] = [0.0, 10.0, 1.0, 11.0, 2.0, 12.0, 3.0, 13.0]
+    mut zs: List[float] = [2.0, 12.0, 3.0, 13.0, 0.0, 10.0, 1.0, 11.0]
+    close(t, fftshift_complex(zc), zs, 0.0, "fftshift_complex")
+    t.assert_eq_int(next_fast_len(1009), 1024, "next_fast_len(1009)")
+    t.assert_eq_int(next_fast_len(1025), 1080, "next_fast_len(1025)")
+    t.assert_eq_int(next_fast_len_real(1001), 1024, "next_fast_len_real(1001)")
+
+    t.section("complex helpers")
+    mut re: List[float] = [3.0, 0.0]
+    mut im: List[float] = [4.0, -2.0]
+    mut cz = complex_from(re, im)?
+    close(t, magnitudes(cz), [5.0, 2.0], 1e-15, "magnitudes")
+    close(t, power(cz), [25.0, 4.0], 1e-15, "power")
+    close(t, phases(cz), [0.9272952180016122, -1.5707963267948966], 1e-15, "phases")
+    close(t, real_parts(cz), re, 0.0, "real_parts")
+    close(t, imag_parts(cz), im, 0.0, "imag_parts")
+    close(t, conjugate(cz), [3.0, -4.0, 0.0, 2.0], 0.0, "conjugate")
+    close(t, complex_mul(cz, cz.clone())?, [-7.0, 24.0, -4.0, 0.0], 1e-15, "complex_mul")
+
+    t.section("plans")
+    mut p = FftPlan.new(1009)?
+    t.assert_true(p.uses_bluestein(), "1009 uses Bluestein")
+    close(t, p.forward(sig(1009))?, fft(sig(1009))?, 1e-15, "FftPlan.forward == fft")
+    close(t, p.inverse(p.forward(sig(1009))?)?, sig(1009), 1e-13, "FftPlan inverse")
+    mut zz = sig(1009)
+    p.execute_in_place(zz, false, 1.0)?
+    close(t, zz, fft(sig(1009))?, 1e-15, "execute_in_place")
+    mut wrong: Result[List[float], str] = p.forward(sig(10))
+    t.assert_true(wrong.is_err, "plan checks the length")
+    p.dispose()
+    mut gone: Result[List[float], str] = p.forward(sig(1009))
+    t.assert_true(gone.is_err, "disposed plan is rejected")
+    mut p2 = FftPlan.new(1024)?
+    t.assert_false(p2.uses_bluestein(), "1024 is direct")
+    p2.dispose()
+    mut rp = RfftPlan.new(1000)?
+    close(t, rp.forward(rsig(1000))?, rfft(rsig(1000))?, 1e-15, "RfftPlan.forward == rfft")
+    close(t, rp.inverse(rp.forward(rsig(1000))?)?, rsig(1000), 1e-13, "RfftPlan inverse")
+    rp.dispose()
+
+    t.section("large transforms")
+    mut big = 65536
+    mut zb = sig(big)
+    mut fb = fft(zb)?
+    mut e_t = 0.0
+    mut e_f = 0.0
+    mut i = 0
+    while i < 2 * big:
+        e_t = e_t + zb[i] * zb[i]
+        e_f = e_f + fb[i] * fb[i]
+        i = i + 1
+    t.assert_eq_float(e_f / (big as float) / e_t, 1.0, 1e-12, "Parseval n=65536")
+    close(t, ifft(fb)?, zb, 1e-13, "round trip n=65536")
+    mut np = 65537
+    close(t, ifft(fft(sig(np))?)?, sig(np), 1e-12, "round trip n=65537 (prime)")
+    fft_clear_cache()
+    close(t, fft(sig(8))?, ref_fft8(), 1e-13, "works after clearing the cache")
+    return true
+
+def test_windows(t: TestRunner) throws str -> bool:
+    t.section("windows vs SciPy")
+    close(t, hann(9, true), ref_win_hann_s(), 1e-15, "hann sym")
+    close(t, hann(9, false), ref_win_hann_p(), 1e-15, "hann periodic")
+    close(t, hamming(9, true), ref_win_hamming_s(), 1e-15, "hamming sym")
+    close(t, hamming(9, false), ref_win_hamming_p(), 1e-15, "hamming periodic")
+    close(t, blackman(9, true), ref_win_blackman_s(), 1e-15, "blackman sym")
+    close(t, blackman(9, false), ref_win_blackman_p(), 1e-15, "blackman periodic")
+    close(t, blackman_harris(9, true), ref_win_bh_s(), 1e-15, "blackman-harris sym")
+    close(t, blackman_harris(9, false), ref_win_bh_p(), 1e-15, "blackman-harris periodic")
+    close(t, flattop(9, true), ref_win_flattop_s(), 1e-15, "flattop sym")
+    close(t, flattop(9, false), ref_win_flattop_p(), 1e-15, "flattop periodic")
+    close(t, kaiser(9, 8.6, true), ref_win_kaiser_s(), 1e-14, "kaiser sym")
+    close(t, kaiser(9, 8.6, false), ref_win_kaiser_p(), 1e-14, "kaiser periodic")
+    close(t, tukey(10, 0.4, true), ref_win_tukey_s(), 1e-15, "tukey sym")
+    close(t, tukey(10, 0.4, false), ref_win_tukey_p(), 1e-15, "tukey periodic")
+    close(t, get_window("hamming", 9, true)?, ref_win_hamming_s(), 1e-15, "get_window")
+    mut bw: Result[List[float], str] = get_window("nope", 9, true)
+    t.assert_true(bw.is_err, "unknown window is rejected")
+    close(t, boxcar(3), [1.0, 1.0, 1.0], 0.0, "boxcar")
+    close(t, hann(1, true), [1.0], 0.0, "length-1 window")
+    return true
+
+def test_convolve(t: TestRunner) throws str -> bool:
+    t.section("convolution and correlation vs NumPy")
+    mut a = rsig(23)
+    mut b: List[float] = [0.5, -1.25, 2.0, 0.75, -0.3]
+    close(t, convolve(a, b, "full")?, ref_conv_full(), 1e-14, "convolve full")
+    close(t, convolve(a, b, "same")?, ref_conv_same(), 1e-14, "convolve same")
+    close(t, convolve(a, b, "valid")?, ref_conv_valid(), 1e-14, "convolve valid")
+    close(t, convolve(b, a, "same")?, ref_conv_same(), 1e-14, "convolve same is symmetric")
+    close(t, correlate(a, b, "full")?, ref_corr_full(), 1e-14, "correlate full")
+    close(t, correlate(a, b, "same")?, ref_corr_same(), 1e-14, "correlate same")
+    close(t, correlate(a, b, "valid")?, ref_corr_valid(), 1e-14, "correlate valid")
+    close(t, convolve_method(a, b, "full", "fft")?, ref_conv_full(), 1e-13, "forced FFT path")
+    mut la = rsig(3000)
+    mut lb = fft_zeros(700)
+    mut i = 0
+    while i < 700:
+        lb[i] = cos((i as float) * 0.01)
+        i = i + 1
+    mut cf = convolve_method(la, lb, "full", "fft")?
+    mut cd = convolve_method(la, lb, "full", "direct")?
+    close(t, cf, cd, 1e-12, "FFT and direct paths agree (3000 x 700)")
+    mut sel: List[int] = [0, 1, 699, 1500, 2999, 3698]
+    mut picked: List[float] = []
+    i = 0
+    while i < len(sel):
+        picked.append(cf[sel[i]])
+        i = i + 1
+    close(t, picked, ref_conv_long_bins(), 1e-12, "long convolution vs NumPy")
+    mut ca = convolve(la, lb, "full")?
+    close(t, ca, cd, 1e-12, "auto method")
+    mut e: List[float] = []
+    mut be: Result[List[float], str] = convolve(e, b, "full")
+    t.assert_true(be.is_err, "empty input is rejected")
+    mut bm: Result[List[float], str] = convolve(a, b, "middle")
+    t.assert_true(bm.is_err, "unknown mode is rejected")
+    return true
+
+def bq_vec(q: Biquad) -> List[float]:
+    mut v: List[float] = [q.b0, q.b1, q.b2, q.a1, q.a2]
+    return v
+
+def test_filters(t: TestRunner) throws str -> bool:
+    t.section("RBJ biquads")
+    close(t, bq_vec(Biquad.lowpass(48000.0, 1000.0, 0.7071)), ref_rbj_lp(), 1e-15, "lowpass")
+    close(t, bq_vec(Biquad.highpass(48000.0, 200.0, 0.5)), ref_rbj_hp(), 1e-15, "highpass")
+    close(t, bq_vec(Biquad.bandpass(44100.0, 3000.0, 2.0)), ref_rbj_bp(), 1e-15, "bandpass")
+    close(t, bq_vec(Biquad.notch(8000.0, 50.0, 10.0)), ref_rbj_notch(), 1e-15, "notch")
+    close(t, bq_vec(Biquad.allpass(48000.0, 5000.0, 0.9)), ref_rbj_ap(), 1e-15, "allpass")
+    close(t, bq_vec(Biquad.peaking(48000.0, 2000.0, 1.4, 6.0)), ref_rbj_peak(), 1e-15, "peaking")
+    close(t, bq_vec(Biquad.lowshelf(48000.0, 300.0, 0.7071, -4.5)), ref_rbj_ls(), 1e-15, "low shelf")
+    close(t, bq_vec(Biquad.highshelf(48000.0, 8000.0, 0.7071, 3.0)), ref_rbj_hs(), 1e-15, "high shelf")
+    mut pk = Biquad.peaking(48000.0, 2000.0, 1.4, 6.0)
+    t.assert_eq_float(pk.gain_db_at(2000.0, 48000.0), 6.0, 1e-9, "peaking gain at f0")
+    t.assert_eq_float(Biquad.lowpass(48000.0, 1000.0, 0.7071).gain_db_at(1000.0, 48000.0), -3.0103, 0.001, "lowpass -3 dB at f0")
+    t.assert_true(Biquad.notch(8000.0, 50.0, 10.0).magnitude_at(50.0, 8000.0) < 1e-9, "notch nulls f0")
+    t.assert_eq_float(Biquad.allpass(48000.0, 5000.0, 0.9).magnitude_at(1234.0, 48000.0), 1.0, 1e-12, "allpass is flat")
+
+    t.section("lfilter / filtfilt vs SciPy")
+    mut x = rsig(64)
+    mut lp = Biquad.lowpass(48000.0, 4000.0, 0.7071)
+    close(t, lp.filter(x), ref_lfilter_lp(), 1e-13, "biquad filter")
+    close(t, lp.filtfilt(x)?, ref_filtfilt_lp(), 1e-12, "biquad filtfilt")
+    mut s1 = lp.process(head(x, 20))
+    mut rest: List[float] = []
+    mut i = 20
+    while i < 64:
+        rest.append(x[i])
+        i = i + 1
+    mut s2 = lp.process(rest)
+    mut joined = s1
+    i = 0
+    while i < len(s2):
+        joined.append(s2[i])
+        i = i + 1
+    close(t, joined, ref_lfilter_lp(), 1e-13, "streaming process across blocks")
+    lp.reset()
+    close(t, lp.process(x), ref_lfilter_lp(), 1e-13, "reset")
+    mut b4 = ref_butter4_b()
+    mut a4 = ref_butter4_a()
+    close(t, lfilter(b4, a4, x)?, ref_lfilter_b4(), 1e-12, "lfilter order 4")
+    close(t, lfilter_zi(b4, a4)?, ref_lfilter_zi_b4(), 1e-12, "lfilter_zi")
+    close(t, filtfilt(b4, a4, x)?, ref_filtfilt_b4(), 1e-11, "filtfilt order 4")
+    mut fir: List[float] = [0.1, 0.2, 0.4, 0.2, 0.1]
+    mut one: List[float] = [1.0]
+    close(t, lfilter(fir, one, x)?, ref_lfilter_fir(), 1e-14, "lfilter FIR")
+    mut zi = fft_zeros(8)
+    mut y1 = lfilter_state(b4, a4, head(x, 30), zi)?
+    mut tail: List[float] = []
+    i = 30
+    while i < 64:
+        tail.append(x[i])
+        i = i + 1
+    mut y2 = lfilter_state(b4, a4, tail, zi)?
+    t.assert_eq_float(y2[0], ref_lfilter_b4()[30], 1e-12, "lfilter_state carries state")
+    mut fr = freqz(b4, a4, 8, 1000.0)
+    close(t, fr.h, ref_freqz_b4(), 1e-12, "freqz")
+    t.assert_eq_float(fr.freqs[1], 62.5, 1e-12, "freqz frequencies")
+    t.assert_eq_float(fr.magnitude_db()[0], 0.0, 1e-9, "Butterworth DC gain 0 dB")
+    mut short: Result[List[float], str] = filtfilt(b4, a4, head(x, 10))
+    t.assert_true(short.is_err, "filtfilt needs len > padlen")
+    mut zero_a: List[float] = [0.0, 1.0]
+    mut bz: Result[List[float], str] = lfilter(fir, zero_a, x)
+    t.assert_true(bz.is_err, "a[0] == 0 is rejected")
+
+    t.section("FIR design vs SciPy firwin")
+    mut c1: List[float] = [1000.0]
+    close(t, fir_lowpass(21, 1000.0, 8000.0)?, ref_firwin_lp(), 1e-15, "lowpass")
+    close(t, fir_highpass(21, 1000.0, 8000.0)?, ref_firwin_hp(), 1e-15, "highpass")
+    close(t, fir_bandpass(31, 1000.0, 2000.0, 8000.0)?, ref_firwin_bp(), 1e-15, "bandpass")
+    close(t, fir_bandstop(31, 1000.0, 2000.0, 8000.0)?, ref_firwin_bs(), 1e-15, "bandstop")
+    mut c3: List[float] = [0.3]
+    close(t, firwin_window(15, c3, true, 2.0, kaiser(15, 6.0, true))?, ref_firwin_kaiser(), 1e-14, "kaiser window")
+    close(t, firwin(15, c3, true, 2.0, "blackmanharris")?, ref_firwin_bh(), 1e-15, "named window")
+    mut even_hp: Result[List[float], str] = firwin(20, c1, false, 8000.0, "hamming")
+    t.assert_true(even_hp.is_err, "even-length highpass is rejected")
+    return true
+
+def test_spectral(t: TestRunner) throws str -> bool:
+    t.section("STFT / ISTFT")
+    mut xs = rsig(50)
+    mut s = stft(xs, hann(16, false), 4, 16, true)?
+    t.assert_eq_int(s.frames, 14, "frame count")
+    t.assert_eq_int(s.bins, 9, "bins")
+    mut f3: List[float] = []
+    mut k = 0
+    while k < 9:
+        mut v = s.get(3, k)
+        f3.append(v[0])
+        f3.append(v[1])
+        k = k + 1
+    close(t, f3, ref_stft_frame3(), 1e-13, "frame 3 vs NumPy")
+    mut fl: List[float] = []
+    k = 0
+    while k < 9:
+        mut v = s.get(s.frames - 1, k)
+        fl.append(v[0])
+        fl.append(v[1])
+        k = k + 1
+    close(t, fl, ref_stft_last(), 1e-13, "last (padded) frame")
+    close(t, istft(s, 50)?, xs, 1e-13, "istft inverts stft (hann, hop nwin/4)")
+    mut s2 = stft(rsig(300), hann(64, false), 16, 128, false)?
+    mut back = istft(s2, 300)?
+    # sample 0 only ever sees the window's zero, so it cannot be recovered
+    t.assert_eq_float(back[0], 0.0, 0.0, "unrecoverable first sample is 0")
+    mut xr300 = rsig(300)
+    mut e_ist = 0.0
+    mut j = 1
+    while j < 290:
+        if fabs(back[j] - xr300[j]) > e_ist: e_ist = fabs(back[j] - xr300[j])
+        j = j + 1
+    t.assert_true(e_ist < 1e-12, "istft with nfft > nwin, no centring")
+    t.assert_eq_float(s2.freqs(1000.0)[1], 7.8125, 1e-12, "stft freqs")
+    t.assert_eq_float(s2.times(1000.0)[2], 0.064, 1e-12, "stft times")
+
+    t.section("spectrogram")
+    mut sp = spectrogram(xs, 100.0, hann(16, false), 4, 16, "power")?
+    mut sm = spectrogram(xs, 100.0, hann(16, false), 4, 16, "magnitude")?
+    mut sd = spectrogram(xs, 100.0, hann(16, false), 4, 16, "db")?
+    t.assert_eq_int(sp.frames, 10, "frames without centring")
+    t.assert_eq_float(sm.get(2, 3) * sm.get(2, 3), sp.get(2, 3), 1e-12, "magnitude^2 == power")
+    t.assert_eq_float(sd.get(2, 3), 10.0 * log10(sp.get(2, 3)), 1e-9, "db == 10 log10 power")
+    mut ten = sp.to_tensor()
+    t.assert_eq_str(ten.shape_str(), "(10, 9)", "to_tensor shape")
+    t.assert_eq_float(sp.times[0], 0.08, 1e-12, "times are frame centres")
+    mut bmode: Result[Spectrogram, str] = spectrogram(xs, 100.0, hann(16, false), 4, 16, "loud")
+    t.assert_true(bmode.is_err, "unknown mode is rejected")
+
+    t.section("Welch PSD vs SciPy")
+    mut xw = rsig(1000)
+    mut i = 0
+    while i < 1000:
+        xw[i] = xw[i] + 0.3 * sin((i as float) * 0.5)
+        i = i + 1
+    mut pw = welch(xw, 100.0, 64)?
+    mut sel: List[int] = [0, 1, 5, 8, 20, 32]
+    mut got: List[float] = []
+    i = 0
+    while i < len(sel):
+        got.append(pw.values[sel[i]])
+        i = i + 1
+    close(t, got, ref_welch_density_bins(), 1e-12, "welch density (hann, 50%)")
+    t.assert_eq_int(pw.segments, 30, "segment count")
+    mut pw2 = welch_window(xw, 100.0, hamming(50, false), 10, 64, false, "spectrum")?
+    mut got2: List[float] = []
+    i = 0
+    while i < len(sel):
+        got2.append(pw2.values[sel[i]])
+        i = i + 1
+    close(t, got2, ref_welch_spectrum_bins(), 1e-12, "welch spectrum, nfft > nperseg, no detrend")
+
+    t.section("Goertzel")
+    mut xg = rsig(200)
+    close(t, goertzel(xg, 7.0, 100.0), ref_goertzel_7_0(), 1e-11, "goertzel at a bin")
+    close(t, goertzel(xg, 12.345, 100.0), ref_goertzel_12_345(), 1e-11, "goertzel between bins")
+    mut gv = ref_goertzel_7_0()
+    t.assert_eq_float(goertzel_power(xg, 7.0, 100.0), gv[0] * gv[0] + gv[1] * gv[1], 1e-9, "goertzel_power")
+    mut spec = rfft(xg)?
+    t.assert_eq_float(goertzel(xg, 7.0, 100.0)[0], spec[2 * 14], 1e-11, "goertzel == rfft bin")
+    return true
+
+def test_misc(t: TestRunner) throws str -> bool:
+    t.section("resample_poly vs SciPy")
+    mut xr = rsig(40)
+    close(t, resample_poly(xr, 3, 2)?, ref_resample_3_2(), 1e-13, "up 3 down 2")
+    close(t, resample_poly(xr, 1, 3)?, ref_resample_1_3(), 1e-13, "down 3")
+    close(t, resample_poly(xr, 4, 6)?, ref_resample_4_6(), 1e-13, "4/6 reduces to 2/3")
+    close(t, resample_poly(xr, 5, 5)?, xr, 0.0, "identity ratio")
+
+    t.section("find_peaks vs SciPy")
+    mut xp = fft_zeros(200)
+    mut i = 0
+    while i < 200:
+        mut fi = i as float
+        xp[i] = sin(fi * 0.21) + 0.6 * sin(fi * 0.047) + 0.25 * cos(fi * 1.3)
+        i = i + 1
+    ints_eq(t, find_peaks(xp, -1e300, 0, 0.0), ref_peaks_all(), "all local maxima")
+    ints_eq(t, find_peaks(xp, 0.5, 0, 0.0), ref_peaks_h(), "height")
+    ints_eq(t, find_peaks(xp, -1e300, 20, 0.0), ref_peaks_d(), "distance")
+    ints_eq(t, find_peaks(xp, -1e300, 0, 0.6), ref_peaks_p(), "prominence")
+    close(t, peak_prominences(xp, local_maxima(xp)), ref_prominences(), 1e-12, "peak_prominences")
+    mut plat: List[float] = [0.0, 1.0, 1.0, 1.0, 0.0, 2.0, 2.0, 0.0, 3.0, 1.0, 1.0, 4.0, 4.0, 4.0, 4.0, 0.0]
+    ints_eq(t, local_maxima(plat), ref_peaks_plateau(), "plateaus report their middle")
+
+    t.section("std.audio integration")
+    mut tone = Audio.sine(440.0, 0.5, 48000, 0.5)
+    t.assert_eq_float(AudioDsp.dominant_frequency(tone)?, 440.0, 0.5, "dominant frequency of a 440 Hz sine")
+    mut sp = AudioDsp.spectrum(tone)?
+    mut pk = 0.0
+    i = 0
+    while i < len(sp.magnitudes):
+        if sp.magnitudes[i] > pk: pk = sp.magnitudes[i]
+        i = i + 1
+    t.assert_eq_float(pk, 0.5, 0.01, "spectrum amplitude scaling")
+    mut lo = AudioDsp.lowpass(tone, 100.0, 0.7071)
+    t.assert_true(lo.rms() < 0.03, "lowpass at 100 Hz attenuates 440 Hz")
+    mut hi = AudioDsp.highpass(tone, 100.0, 0.7071)
+    t.assert_true(hi.rms() > 0.34, "highpass at 100 Hz keeps 440 Hz")
+    mut st = tone.to_channels(2)
+    mut st_lp = AudioDsp.lowpass(st, 100.0, 0.7071)
+    t.assert_eq_int(st_lp.channels, 2, "filters keep the channel count")
+    t.assert_eq_float(st_lp.get(1000, 1), lo.get(1000, 0), 1e-12, "each channel is filtered")
+    mut sg = AudioDsp.spectrogram(tone, 1024, 256, "db")?
+    t.assert_eq_int(sg.bins, 513, "spectrogram bins")
+    mut taps = fir_lowpass(101, 1000.0, 48000.0)?
+    mut ff = AudioDsp.fir(tone, taps, true)?
+    t.assert_eq_float(ff.get(12000, 0), tone.get(12000, 0), 0.01, "linear-phase FIR with delay compensation passes 440 Hz")
+    mut wl = AudioDsp.welch(tone, 4096)?
+    t.assert_eq_float(wl.peak_freq(), 440.0, 12.0, "welch peak near 440 Hz")
+    mut ys = AudioDsp.filtfilt(tone, ref_butter4_b(), ref_butter4_a())?
+    t.assert_eq_int(ys.frames(), tone.frames(), "filtfilt keeps the length")
+    return true
+
+def run(t: TestRunner, which: int):
+    mut r: Result[bool, str] = Result.ok(true)
+    if which == 0: r = test_fft(t)
+    elif which == 1: r = test_windows(t)
+    elif which == 2: r = test_convolve(t)
+    elif which == 3: r = test_filters(t)
+    elif which == 4: r = test_spectral(t)
+    else: r = test_misc(t)
+    if r.is_err: t.fail(f"unexpected error: {r.err}")
+
+def main():
+    mut t = TestRunner.init("125_fft")
+    mut i = 0
+    while i < 6:
+        run(t, i)
+        i = i + 1
+    t.summary()
+
+# ── reference vectors (NumPy / SciPy) ───────────────────────────────────────
+# numpy 2.4.0 scipy 1.17.1
+def ref_fft8() -> List[float]:
+    mut v: List[float] = [0.33999999999999975, -1.3181818181818183, 0.05503968023909667, -0.523366524096563,
+        -1.7127272727272729, -1.8527272727272726, 1.6004942256936416, 1.6366334759034369, -0.9400000000000001,
+        -0.7727272727272728, -3.4804942256936418, -3.1820880213579823, -0.16727272727272724,
+        0.30727272727272714, -1.9350396802390961, -1.0220880213579822]
+    return v
+
+def ref_fft12() -> List[float]:
+    mut v: List[float] = [-0.9200000000000005, -1.3863636363636365, -0.6793333667626957, -1.6852723349621281,
+        1.095862061082212, -0.46627058606335847, -3.579090909090909, -0.7563636363636361, -3.0892014483788848,
+        -0.07167107245083026, 3.331151548580878, -3.075636755946963, -0.40000000000000013, -1.159090909090909,
+        1.3875910827082545, -4.768738741180993, -1.750798551621116, 1.7989437997235573, -1.260909090909091,
+        2.4836363636363634, -1.8958620610822121, -1.85191123211846, -1.5994092645264364, 0.847829650271902]
+    return v
+
+def ref_fft15() -> List[float]:
+    mut v: List[float] = [-0.6600000000000003, -1.431818181818182, 0.16241405958206068, -0.8300269901878568,
+        -1.5680086248526457, 0.9316372921345801, -1.0062060033119278, -3.4650443403043, -3.4244669686437983,
+        -0.8110058598619538, -2.4806352089188897, -1.975638134749457, 6.342435816628312, -0.8823150798764274,
+        0.34252802229707724, -0.8070293608167929, 0.32819562657903, 0.9433929971804297, -2.054007159353524,
+        -5.049503101941754, -2.5593647910811104, 2.1120017711130936, -3.5472493383207766, 0.9473694962255904,
+        0.7777773460371399, -2.4667738415138816, -1.8742863667486742, -0.7952736557709437, -0.4791264098922736,
+        0.966390626551493]
+    return v
+
+def ref_fft17() -> List[float]:
+    mut v: List[float] = [0.5199999999999996, -2.1818181818181825, 1.639611860833281, -0.5453274332917635,
+        -0.695636491690651, 0.1929564101037018, 2.7579103958818307, -0.6161140396348845, -2.0194375217468576,
+        0.17749226240400873, -2.408347593337336, 3.2363636826623505, -6.248176183770034, 2.8375806851441308,
+        2.5827077144782535, -4.685232664367733, -0.51667227383503, -2.20785327938987, -0.7019976273862834,
+        -0.29212579619278867, -0.35866208409581435, -6.152609868074913, -4.78539060593224, -0.3999112307782775,
+        -0.9953686734936701, -1.8652772038071124, 1.094317204414251, 2.161070230573681, -1.5990096516048236,
+        -2.5815766415977848, -2.0113089042395362, -1.2026506181223444, 0.4854604355246628,
+        -0.17042085926676595]
+    return v
+
+def ref_fftbins97() -> List[float]:
+    mut v: List[float] = [0.42000000000000004, -1.3181818181818186, 0.5779686346265783, 0.0844761415412898,
+        -1.4767000252053473, -6.7433721433342315, -1.4557155200283343, -2.6793867508561076, 1.9642396869131717,
+        0.28023697722702234, -0.6942924486445664, -2.1988716292186434]
+    return v
+
+def ref_fftbins1000() -> List[float]:
+    mut v: List[float] = [0.019999999999997797, -1.3636363636363642, 0.08451089873728712, -1.3973747591665493,
+        0.1522988628446118, -1.4333242381867777, -0.8613396557474271, -1.3179354133759844, -0.3399999999999978,
+        -3.5454545454545507, -0.042773081810771885, -1.330787475854594]
+    return v
+
+def ref_fftbins1009() -> List[float]:
+    mut v: List[float] = [-0.49999999999999645, -0.8636363636363669, -0.42771992768700406, -0.8630260660219582,
+        -0.35376851262362746, -0.8564230223294871, 0.19407376053252845, -4.239644832684032, -2.635124571227648,
+        -0.12336697740090297, -0.5719411248125299, -0.8585017425508561]
+    return v
+
+def ref_fftbins1024() -> List[float]:
+    mut v: List[float] = [-0.14000000000000012, -0.31818181818182034, -0.15110770932218331,
+        -0.3179726484451699, -0.16764768286775378, -0.30708696541267044, 0.7440652228155367,
+        -0.999941748227192, -1.1399999999999983, -1.818181818181819, -0.1333107923479559, -0.309236738948796]
+    return v
+
+def ref_fftbins4096() -> List[float]:
+    mut v: List[float] = [-0.9399999999999933, -0.4772727272727142, -0.9409595323093809, -0.4967726325080122,
+        -0.9425849845331715, -0.5163412366758444, -0.10845985931312896, -0.04795441358363206, 1.5,
+        -1.2045454545454528, -0.939704809248, -0.45779356998148707]
+    return v
+
+def ref_ifft12() -> List[float]:
+    mut v: List[float] = [-0.0766666666666667, -0.11553030303030304, -0.133284105377203, 0.07065247085599187,
+        -0.1579885050901843, -0.15432593600987166, -0.10507575757575757, 0.20696969696969691,
+        -0.14589987930175966, 0.14991198331029643, 0.11563259022568786, -0.3973948950984161,
+        -0.03333333333333334, -0.09659090909090909, 0.2775959623817398, -0.25630306299558026,
+        -0.2574334540315737, -0.005972589370902522, -0.2982575757575758, -0.06303030303030302,
+        0.09132183842351767, -0.038855882171946535, -0.05661111389689131, -0.14043936124684397]
+    return v
+
+def ref_fft12_ortho() -> List[float]:
+    mut v: List[float] = [-0.26558112382722804, -0.40020870932462704, -0.1961066510849686, -0.486496218124107,
+        0.3163481279802567, -0.1346007241894423, -1.0331945499088895, -0.2183433745298948, -0.8917756439012656,
+        -0.020689656486298016, 0.9616206216423044, -0.8878598544877433, -0.1154700538379252,
+        -0.3346007241894422, 0.40056304256336756, -1.376616297957922, -0.5054120075376292, 0.5193103435137021,
+        -0.363993101530005, 0.716964061557299, -0.5472882356561071, -0.5346007241894423, -0.46170968470935975,
+        0.2447473384057145]
+    return v
+
+def ref_fft12_forward() -> List[float]:
+    mut v: List[float] = [-0.0766666666666667, -0.11553030303030304, -0.05661111389689131, -0.140439361246844,
+        0.09132183842351767, -0.038855882171946535, -0.2982575757575757, -0.063030303030303,
+        -0.2574334540315737, -0.005972589370902522, 0.2775959623817398, -0.25630306299558026,
+        -0.03333333333333334, -0.09659090909090907, 0.11563259022568786, -0.3973948950984161,
+        -0.14589987930175966, 0.14991198331029643, -0.10507575757575757, 0.20696969696969694,
+        -0.15798850509018433, -0.15432593600987166, -0.13328410537720303, 0.07065247085599183]
+    return v
+
+def ref_ifft12_ortho() -> List[float]:
+    mut v: List[float] = [-0.26558112382722804, -0.40020870932462704, -0.4617096847093597, 0.2447473384057146,
+        -0.547288235656107, -0.5346007241894423, -0.363993101530005, 0.7169640615572989, -0.5054120075376292,
+        0.5193103435137021, 0.40056304256336756, -1.376616297957922, -0.1154700538379252, -0.33460072418944226,
+        0.9616206216423044, -0.8878598544877433, -0.8917756439012656, -0.020689656486298016,
+        -1.0331945499088897, -0.21834337452989486, 0.3163481279802567, -0.1346007241894423,
+        -0.1961066510849686, -0.48649621812410687]
+    return v
+
+def ref_rfft16() -> List[float]:
+    mut v: List[float] = [-0.44000000000000017, 0.0, 0.13999999999999985, -0.7038275288976185, -1.88,
+        0.49872149726141846, 0.14000000000000007, -0.2095248067731687, -1.8800000000000003, -2.16,
+        0.14000000000000012, -0.09354500930870202, -1.8800000000000003, 4.818721497261419, 0.14,
+        -0.027847731433152112, -1.8800000000000001, 0.0]
+    return v
+
+def ref_rfft15() -> List[float]:
+    mut v: List[float] = [-0.6600000000000004, 0.0, -0.15835617515510658, -0.898208808369675,
+        -1.72114749580066, 0.8634554739527621, -0.11421432863739381, -0.49913524939520926, -3.4858581534822872,
+        -0.8791876780437721, -2.52, -2.0438199529312753, 2.144214328637394, 2.0835940110326634,
+        0.33536182443805385, -0.8752111789986114]
+    return v
+
+def ref_rfft1000() -> List[float]:
+    mut v: List[float] = [0.020000000000002016, 0.0, 0.02086890846325795, -0.0332936416559733,
+        0.02354461672430505, -0.06811438709439535, 0.028257195426327264, -0.10633422069372253,
+        0.03548311194886733, -0.1506932805553279, 0.04616026483076752, -0.20585633473593123,
+        0.06225298097210408, -0.28102317546057165, 0.08850415725016456, -0.39789140866846073,
+        0.13974410455793648, -0.6237318717839829]
+    return v
+
+def ref_irfft9_from8() -> List[float]:
+    mut v: List[float] = [-0.8222222222222223, 0.47530975731270053, -0.21923193647899109, 1.0315673062498558,
+        -0.7939144097047199, -0.17860963206751762, -0.26267841736096686, 0.24624052265107937,
+        0.08353903162078202]
+    return v
+
+def ref_irfft16() -> List[float]:
+    mut v: List[float] = [-0.9126686198818874, 0.45353078800432356, 0.5839418635051169, -0.7222487373415293,
+        0.6273401871576773, 0.6414692119956765, -0.5339418635051169, 0.20257717006573908, -1.1820117544334676,
+        0.27564706099408975, 0.4060581364948832, -0.8622487373415292, 0.48734018715767735, 0.5393529390059103,
+        -0.6360581364948831, 0.1919203046173191]
+    return v
+
+def ref_fft2_3x4() -> List[float]:
+    mut v: List[float] = [-0.9200000000000002, -1.3863636363636365, -3.579090909090909, -0.7563636363636359,
+        -0.3999999999999999, -1.1590909090909092, -1.260909090909091, 2.4836363636363634, -1.5150725904061049,
+        -1.5714038832496633, -2.761733203109433, -2.7607349520082023, 2.7617332031094324, -1.2847195934463431,
+        -2.761733203109433, -2.7607349520082023, 0.3350725904061044, 2.412312974158754, 0.7417332031094326,
+        0.7380076792809289, -0.7417332031094324, -4.783462224735475, 0.741733203109433, 0.7380076792809298]
+    return v
+
+def ref_ifft2_3x4() -> List[float]:
+    mut v: List[float] = [-0.07666666666666667, -0.11553030303030304, -0.10507575757575757,
+        0.20696969696969694, -0.033333333333333326, -0.09659090909090909, -0.2982575757575757,
+        -0.06303030303030299, 0.027922715867175363, 0.20102608117989618, 0.061811100259119414,
+        0.061500639940077484, -0.06181110025911936, -0.3986218520612895, 0.06181110025911938,
+        0.06150063994007741, -0.12625604920050873, -0.1309503236041386, -0.23014443359245274,
+        -0.2300612460006835, 0.23014443359245268, -0.1070599661205286, -0.23014443359245274,
+        -0.2300612460006835]
+    return v
+
+def ref_fftfreq7() -> List[float]:
+    mut v: List[float] = [0.0, 0.5714285714285714, 1.1428571428571428, 1.7142857142857142, -1.7142857142857142,
+        -1.1428571428571428, -0.5714285714285714]
+    return v
+
+def ref_fftfreq8() -> List[float]:
+    mut v: List[float] = [0.0, 0.5, 1.0, 1.5, -2.0, -1.5, -1.0, -0.5]
+    return v
+
+def ref_rfftfreq9() -> List[float]:
+    mut v: List[float] = [0.0, 0.2222222222222222, 0.4444444444444444, 0.6666666666666666, 0.8888888888888888]
+    return v
+
+def ref_fftshift7() -> List[float]:
+    mut v: List[float] = [4.0, 5.0, 6.0, 0.0, 1.0, 2.0, 3.0]
+    return v
+
+def ref_ifftshift7() -> List[float]:
+    mut v: List[float] = [3.0, 4.0, 5.0, 6.0, 0.0, 1.0, 2.0]
+    return v
+
+def ref_win_hann_s() -> List[float]:
+    mut v: List[float] = [0.0, 0.14644660940672627, 0.5, 0.8535533905932737, 1.0, 0.8535533905932737, 0.5,
+        0.14644660940672627, 0.0]
+    return v
+
+def ref_win_hamming_s() -> List[float]:
+    mut v: List[float] = [0.08000000000000007, 0.21473088065418822, 0.54, 0.865269119345812, 1.0,
+        0.865269119345812, 0.54, 0.21473088065418822, 0.08000000000000007]
+    return v
+
+def ref_win_blackman_s() -> List[float]:
+    mut v: List[float] = [-1.3877787807814457e-17, 0.06644660940672624, 0.34, 0.7735533905932738,
+        0.9999999999999999, 0.7735533905932738, 0.34, 0.06644660940672624, -1.3877787807814457e-17]
+    return v
+
+def ref_win_bh_s() -> List[float]:
+    mut v: List[float] = [6.0000000000001025e-05, 0.021735837018679628, 0.21747000000000008,
+        0.6957641629813204, 1.0, 0.6957641629813204, 0.21747000000000008, 0.021735837018679628,
+        6.0000000000001025e-05]
+    return v
+
+def ref_win_flattop_s() -> List[float]:
+    mut v: List[float] = [-0.0004210510000000013, -0.026872193286334545, -0.05473684, 0.4441353572863345,
+        1.000000003, 0.4441353572863345, -0.05473684, -0.026872193286334545, -0.0004210510000000013]
+    return v
+
+def ref_win_kaiser_s() -> List[float]:
+    mut v: List[float] = [0.0013325139979024198, 0.06747207920440855, 0.34039362244018856, 0.7738293810170912,
+        1.0, 0.7738293810170912, 0.34039362244018856, 0.06747207920440855, 0.0013325139979024198]
+    return v
+
+def ref_win_tukey_s() -> List[float]:
+    mut v: List[float] = [0.0, 0.5868240888334653, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.5868240888334649, 0.0]
+    return v
+
+def ref_win_hann_p() -> List[float]:
+    mut v: List[float] = [0.0, 0.11697777844051105, 0.41317591116653485, 0.75, 0.9698463103929542,
+        0.9698463103929542, 0.7500000000000002, 0.41317591116653496, 0.11697777844051105]
+    return v
+
+def ref_win_hamming_p() -> List[float]:
+    mut v: List[float] = [0.08000000000000007, 0.1876195561652702, 0.46012183827321207, 0.77,
+        0.9722586055615179, 0.9722586055615179, 0.7700000000000002, 0.4601218382732122, 0.1876195561652702]
+    return v
+
+def ref_win_blackman_p() -> List[float]:
+    mut v: List[float] = [-1.3877787807814457e-17, 0.05086963265386543, 0.25800050150366216,
+        0.6299999999999999, 0.9511298658424724, 0.9511298658424724, 0.6300000000000002, 0.25800050150366227,
+        0.05086963265386543]
+    return v
+
+def ref_win_bh_p() -> List[float]:
+    mut v: List[float] = [6.0000000000001025e-05, 0.015071173410218162, 0.1470395578623815, 0.5205749999999999,
+        0.9316592687274005, 0.9316592687274005, 0.5205750000000002, 0.14703955786238157, 0.015071173410218162]
+    return v
+
+def ref_win_flattop_p() -> List[float]:
+    mut v: List[float] = [-0.0004210510000000013, -0.02017203150948593, -0.07019904206318871,
+        0.19821052999999986, 0.8624763440726745, 0.8624763440726745, 0.1982105300000003, -0.07019904206318868,
+        -0.02017203150948593]
+    return v
+
+def ref_win_kaiser_p() -> List[float]:
+    mut v: List[float] = [0.0013325139979024198, 0.05223535747574751, 0.2583161662740322, 0.6304119273359405,
+        0.9511895659143617, 0.9511895659143617, 0.6304119273359405, 0.2583161662740322, 0.05223535747574751]
+    return v
+
+def ref_win_tukey_p() -> List[float]:
+    mut v: List[float] = [0.0, 0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.5]
+    return v
+
+def ref_conv_full() -> List[float]:
+    mut v: List[float] = [-0.39, 0.9550000000000001, -1.1600000000000001, -1.83, 2.409, -0.3730000000000002,
+        -1.6400000000000001, 2.749, -1.0430000000000001, 1.2250000000000003, -0.9509999999999998, -2.218,
+        2.1710000000000003, -0.611, -1.878, 2.511, -0.2709999999999999, -1.538, 2.8509999999999995,
+        -0.9409999999999998, 1.327, -0.8490000000000002, -2.116, 2.233, -0.8189999999999997,
+        -0.6809999999999999, 0.19799999999999998]
+    return v
+
+def ref_corr_full() -> List[float]:
+    mut v: List[float] = [0.23399999999999999, -0.573, -1.8, 1.5939999999999999, 0.5770000000000001, -2.205,
+        2.1839999999999997, 0.9169999999999999, -1.259, 1.009, -2.783000000000001, 1.606, 0.3390000000000001,
+        -2.4429999999999996, 1.946, 0.679, -2.1029999999999998, 2.286, 1.0190000000000001, -1.1569999999999998,
+        1.1109999999999998, -2.6809999999999996, 1.708, 0.46500000000000025, -2.1550000000000002, 1.135,
+        -0.32999999999999996]
+    return v
+
+def ref_conv_same() -> List[float]:
+    mut v: List[float] = [-1.1600000000000001, -1.83, 2.409, -0.3730000000000002, -1.6400000000000001, 2.749,
+        -1.0430000000000001, 1.2250000000000003, -0.9509999999999998, -2.218, 2.1710000000000003, -0.611,
+        -1.878, 2.511, -0.2709999999999999, -1.538, 2.8509999999999995, -0.9409999999999998, 1.327,
+        -0.8490000000000002, -2.116, 2.233, -0.8189999999999997]
+    return v
+
+def ref_corr_same() -> List[float]:
+    mut v: List[float] = [-1.8, 1.5939999999999999, 0.5770000000000001, -2.205, 2.1839999999999997,
+        0.9169999999999999, -1.259, 1.009, -2.783000000000001, 1.606, 0.3390000000000001, -2.4429999999999996,
+        1.946, 0.679, -2.1029999999999998, 2.286, 1.0190000000000001, -1.1569999999999998, 1.1109999999999998,
+        -2.6809999999999996, 1.708, 0.46500000000000025, -2.1550000000000002]
+    return v
+
+def ref_conv_valid() -> List[float]:
+    mut v: List[float] = [2.409, -0.3730000000000002, -1.6400000000000001, 2.749, -1.0430000000000001,
+        1.2250000000000003, -0.9509999999999998, -2.218, 2.1710000000000003, -0.611, -1.878, 2.511,
+        -0.2709999999999999, -1.538, 2.8509999999999995, -0.9409999999999998, 1.327, -0.8490000000000002,
+        -2.116]
+    return v
+
+def ref_corr_valid() -> List[float]:
+    mut v: List[float] = [0.5770000000000001, -2.205, 2.1839999999999997, 0.9169999999999999, -1.259, 1.009,
+        -2.783000000000001, 1.606, 0.3390000000000001, -2.4429999999999996, 1.946, 0.679, -2.1029999999999998,
+        2.286, 1.0190000000000001, -1.1569999999999998, 1.1109999999999998, -2.6809999999999996, 1.708]
+    return v
+
+def ref_conv_long_bins() -> List[float]:
+    mut v: List[float] = [-0.78, -0.819961000324999, 0.040431416177173274, -0.10682622049744972,
+        -0.06806192874045591, 0.3954258443380342]
+    return v
+
+def ref_rbj_lp() -> List[float]:
+    mut v: List[float] = [0.003916123487156441, 0.007832246974312881, 0.003916123487156441,
+        -1.8153396116625289, 0.8310041056111547]
+    return v
+
+def ref_rbj_hp() -> List[float]:
+    mut v: List[float] = [0.9743238377518206, -1.9486476755036413, 0.9743238377518206, -1.948313741843362,
+        0.9489816091639206]
+    return v
+
+def ref_rbj_bp() -> List[float]:
+    mut v: List[float] = [0.09390151753352927, 0.0, -0.09390151753352927, -1.6491628664342959,
+        0.8121969649329414]
+    return v
+
+def ref_rbj_notch() -> List[float]:
+    mut v: List[float] = [0.9980408549956423, -1.9945428033323256, 0.9980408549956423, -1.9945428033323256,
+        0.9960817099912846]
+    return v
+
+def ref_rbj_ap() -> List[float]:
+    mut v: List[float] = [0.49454402442898243, -1.1857014939930386, 1.0, -1.1857014939930386,
+        0.49454402442898243]
+    return v
+
+def ref_rbj_peak() -> List[float]:
+    mut v: List[float] = [1.0611289694811814, -1.813197405414853, 0.8160311147261803, -1.813197405414853,
+        0.8771600842073618]
+    return v
+
+def ref_rbj_ls() -> List[float]:
+    mut v: List[float] = [0.9928145340357477, -1.9371977116988037, 0.9455366432249381, -1.9368062231697178,
+        0.9387426657897718]
+    return v
+
+def ref_rbj_hs() -> List[float]:
+    mut v: List[float] = [1.2538288971222793, -0.8890929825572494, 0.32837705893643654, -0.5282163460223501,
+        0.22132931952381674]
+    return v
+
+def ref_lfilter_lp() -> List[float]:
+    mut v: List[float] = [-0.03860206919211067, -0.12858006734946625, -0.1540172781959241,
+        -0.09707457254060907, -0.06550952081300006, -0.005792700101307051, 0.10206802369424448,
+        0.15812066888440998, 0.12488520607779846, 0.0021370163943198583, -0.09254183496334051,
+        -0.10855208750285877, -0.137270758129827, -0.11985325257569895, -0.037329152950723185,
+        0.006503676164838755, 0.06970132246035766, 0.1761572623821424, 0.22874990264128245, 0.1917578251167083,
+        0.06585502020717572, -0.03106645279885197, -0.04843982142037062, -0.07783172479708711,
+        -0.060624698909727305, 0.02195159303544772, 0.06595173164756409, 0.029369084368015858,
+        -0.09190612124495712, -0.18310152217126763, -0.19535773007852558, -0.2209362715386757,
+        -0.20129345367735396, -0.1174214691331073, -0.07292663076554272, -0.0095255924900128,
+        0.09687444571449924, 0.14929841482223502, 0.11211719878385318, -0.013947077884076462,
+        -0.11098484448196082, -0.1284299087189103, -0.15785801541228306, -0.14066307534183653,
+        -0.05808495847166441, -0.0140767125844383, 0.049319604119961016, 0.1559459914606053,
+        0.20866185850506003, 0.17174606184019606, 0.04588201644607666, -0.0510262896165784,
+        -0.06840132053334139, -0.09780163941300071, -0.08060458835593048, 0.001962958652783328,
+        0.045956670853402784, 0.1093394378725467, 0.21595542776231677, 0.26866446109934095,
+        0.23174488552624467, 0.1058792682311475, 0.008970755481369524, -0.008403789196368503]
+    return v
+
+def ref_filtfilt_lp() -> List[float]:
+    mut v: List[float] = [-0.7833486794926572, -0.46372345043435587, -0.19825199423647644,
+        -0.014121477139357408, 0.08672569974122173, 0.1111270445901848, 0.07506798418074485,
+        0.009947324780542709, -0.04754703490655258, -0.07375399312935554, -0.06608731830447352,
+        -0.03206801105816982, 0.01927843462311878, 0.07356487140889956, 0.11634277274461174,
+        0.13816378741699453, 0.13002124858937145, 0.09085243293970664, 0.03717361169180511,
+        -0.006178649356432187, -0.0248161312804493, -0.023627110994797886, -0.016123253123634263,
+        -0.015059643442717886, -0.03396328629190534, -0.07774221844412423, -0.13200975102563184,
+        -0.17187754579289952, -0.18067807414336043, -0.1591721672352997, -0.1158723568696487,
+        -0.05953502798375663, -0.003790115774689351, 0.03771859038732617, 0.056242321252554385,
+        0.043444284888249404, -0.0008549954334330081, -0.05869685665231192, -0.10288138337348358,
+        -0.11549139144014671, -0.09679703004802513, -0.05528666656439129, 7.066749737542639e-05,
+        0.0553511319350306, 0.0966282408935042, 0.11493144184993973, 0.10179117284769502, 0.05700774135299318,
+        -0.0013389405469581856, -0.04575149034907764, -0.05780981718919848, -0.037077640984519385,
+        0.008792380457869942, 0.07159471790902455, 0.13770778449766036, 0.1924228116650038,
+        0.22404565933501946, 0.21845095289639813, 0.16599001420438916, 0.07126901407201469,
+        -0.05453055692270854, -0.2084927933422992, -0.39755987199538834, -0.6166908077475581]
+    return v
+
+def ref_butter4_b() -> List[float]:
+    mut v: List[float] = [0.004824343357716228, 0.019297373430864913, 0.02894606014629737,
+        0.019297373430864913, 0.004824343357716228]
+    return v
+
+def ref_butter4_a() -> List[float]:
+    mut v: List[float] = [1.0, -2.369513007182038, 2.313988414415881, -1.054665405878568, 0.18737949236818502]
+    return v
+
+def ref_lfilter_b4() -> List[float]:
+    mut v: List[float] = [-0.003762987819018658, -0.02416137359341556, -0.06851596028513073,
+        -0.11590876502690571, -0.1355724685219686, -0.11680729376816724, -0.060119440302693644,
+        0.027316938167337858, 0.11570310380009421, 0.1582378519023682, 0.1249979201781746, 0.03303895976241576,
+        -0.07124964619888663, -0.14994884725212612, -0.17746809718837345, -0.14493028257007262,
+        -0.06896287699731954, 0.029868125454110262, 0.13612918289367534, 0.22214963171916116,
+        0.24924709039179113, 0.1968595176743867, 0.0892292832925048, -0.023723079056502155,
+        -0.10398974026757252, -0.12811535079832906, -0.09011006760828975, -0.01881517571766847,
+        0.03092992907844705, 0.017333560447277064, -0.053527605182978964, -0.14247262142551248,
+        -0.2142687263013224, -0.2423655754801817, -0.21494101515697495, -0.1453475915107183,
+        -0.05169048353999506, 0.0517757417977345, 0.13738183224938955, 0.16570229844476117,
+        0.11519334742515193, 0.009271191131383211, -0.10261346082721357, -0.1825504905004914,
+        -0.20691626859824433, -0.16943681073439734, -0.08893936629491454, 0.012748518310835085,
+        0.11991742194755757, 0.20532994461649112, 0.23105038716504744, 0.1772288437638018, 0.06857592610599438,
+        -0.04481988439331034, -0.12502515920339313, -0.1487890719498426, -0.11034484812623009,
+        -0.028953836391988785, 0.07330394049054494, 0.18066023498076048, 0.26595969574634065,
+        0.2914122258636468, 0.23730833293126835, 0.12845197496766952]
+    return v
+
+def ref_lfilter_zi_b4() -> List[float]:
+    mut v: List[float] = [0.9951756566422797, -1.3936347239706135, 0.8914076302989605, -0.18255514901046802]
+    return v
+
+def ref_filtfilt_b4() -> List[float]:
+    mut v: List[float] = [-0.7782114256363882, -0.38925049135343504, -0.06438813030850263, 0.14967440725609452,
+        0.2354218161853752, 0.20655147809059346, 0.10152977970535487, -0.0287047672357634,
+        -0.13556266192236402, -0.18582610981687375, -0.16873446114220478, -0.09550699195060572,
+        0.007166305390386052, 0.10667978749455746, 0.17436564026221404, 0.19350134330802926,
+        0.16379195644774747, 0.10097194238263751, 0.030776421825903396, -0.02150334166761117,
+        -0.041739532995210986, -0.03266582611294793, -0.011628882430665894, -0.0016301666525370786,
+        -0.01990360388787131, -0.06916601556572644, -0.13567963929805818, -0.19518187628103478,
+        -0.22355966047507964, -0.2068394819869897, -0.14637047183372123, -0.05821359763070673,
+        0.03207935516346796, 0.09740159471499729, 0.11761677126680287, 0.08644155160546417,
+        0.014442537851863562, -0.07366736464139331, -0.14734269561336144, -0.18099902293493392,
+        -0.16258522159268182, -0.09678539127781446, -0.002693790403916134, 0.09237341647366766,
+        0.16093696370474017, 0.18335998775328455, 0.15393305916594593, 0.08319085109091325,
+        -0.005040236543103593, -0.08162048943688124, -0.12203202795019848, -0.11385974217144686,
+        -0.05914945714609261, 0.027956704172866643, 0.126205556059498, 0.21276798862614577,
+        0.26789209680377263, 0.2779275199852738, 0.23641065329719996, 0.1431295433138327,
+        0.0019374597735576594, -0.1807224858865379, -0.3951423648194987, -0.626822235903064]
+    return v
+
+def ref_lfilter_fir() -> List[float]:
+    mut v: List[float] = [-0.07800000000000001, -0.16000000000000003, -0.25000000000000006,
+        -0.09000000000000007, 0.09399999999999992, 0.025999999999999926, 0.15999999999999995, 0.294,
+        0.023999999999999966, -0.044, -0.31400000000000006, -0.18, -0.045999999999999985, -0.11399999999999993,
+        0.020000000000000046, 0.15400000000000003, 0.08600000000000001, 0.22, 0.354, 0.084,
+        0.015999999999999997, -0.25400000000000006, -0.11999999999999995, 0.014000000000000068,
+        -0.05399999999999988, 0.08000000000000011, 0.21400000000000008, -0.05599999999999995,
+        -0.12399999999999997, -0.394, -0.26, -0.12600000000000006, -0.19400000000000006, -0.06000000000000008,
+        0.07399999999999993, 0.005999999999999964, 0.13999999999999993, 0.27399999999999997,
+        0.003999999999999962, -0.06399999999999997, -0.33399999999999996, -0.19999999999999996,
+        -0.06599999999999998, -0.13399999999999995, 0.0, 0.13399999999999995, 0.06599999999999996,
+        0.19999999999999998, 0.33399999999999996, 0.06399999999999999, -0.004000000000000021,
+        -0.2740000000000001, -0.13999999999999996, -0.00599999999999995, -0.0739999999999999,
+        0.06000000000000008, 0.19400000000000006, 0.12600000000000006, 0.26, 0.394, 0.12399999999999997,
+        0.05599999999999995, -0.21400000000000008, -0.08000000000000004]
+    return v
+
+def ref_freqz_b4() -> List[float]:
+    mut v: List[float] = [0.9999999999999974, 0.0, -0.13641637622464856, -0.9808384725048022,
+        -0.23916454254339095, 0.26111600170963584, 0.013855848608014098, 0.0540817585031244,
+        0.007251524968304738, 0.008463141045463907, 0.0018690489254506832, 0.0012009723468443707,
+        0.0003079134720338395, 0.0001132982960675083, 1.7199692755753437e-05, 2.9344828046420115e-06]
+    return v
+
+def ref_firwin_lp() -> List[float]:
+    mut v: List[float] = [0.0025362829972155267, 0.002553485559883376, -1.629241922241793e-18,
+        -0.00863465184119862, -0.021022202627121338, -0.024211209235579723, 6.6212056594178014e-18,
+        0.060556509822468976, 0.14459156251565708, 0.21913072231684683, 0.24899900098365602,
+        0.21913072231684683, 0.14459156251565708, 0.060556509822468976, 6.6212056594178014e-18,
+        -0.024211209235579723, -0.021022202627121338, -0.00863465184119862, -1.629241922241793e-18,
+        0.002553485559883376, 0.0025362829972155267]
+    return v
+
+def ref_firwin_hp() -> List[float]:
+    mut v: List[float] = [-0.002552682886021456, -0.0025699966823786147, -4.9193303468042424e-18,
+        0.00869048446327945, 0.02115813453453029, 0.02436776161548232, -3.3320095569343e-17,
+        -0.06094807497062227, -0.14552650768941539, -0.22054764601341534, 0.7518271689065044,
+        -0.22054764601341534, -0.14552650768941539, -0.06094807497062227, -3.3320095569343e-17,
+        0.02436776161548232, 0.02115813453453029, 0.00869048446327945, -4.9193303468042424e-18,
+        -0.0025699966823786147, -0.002552682886021456]
+    return v
+
+def ref_firwin_bp() -> List[float]:
+    mut v: List[float] = [-0.0004957362710712783, 0.002041307719185191, 0.004991197258361243,
+        -4.892623070026334e-18, -0.011435962459741168, -0.009837943969051235, 0.004108953279864776,
+        -4.779530755609316e-18, -0.0078089496336162, 0.03608027960384161, 0.08343034880080981,
+        -2.4712018402001212e-17, -0.16472036918748972, -0.1523660950807015, 0.09201620225348152,
+        0.24924848789999515, 0.09201620225348152, -0.1523660950807015, -0.16472036918748972,
+        -2.4712018402001215e-17, 0.08343034880080984, 0.03608027960384161, -0.007808949633616204,
+        -4.7795307556093186e-18, 0.004108953279864776, -0.009837943969051247, -0.011435962459741177,
+        -4.892623070026334e-18, 0.004991197258361245, 0.002041307719185191, -0.0004957362710712783]
+    return v
+
+def ref_firwin_bs() -> List[float]:
+    mut v: List[float] = [0.000497857642949789, -0.0020500429541146256, -0.0050125557631183456,
+        -1.6378532508970524e-18, 0.011484899627710106, 0.009880042840762021, -0.004126536455530212,
+        -1.4399950469136637e-17, 0.00784236596225724, -0.03623467559014835, -0.08378736684868662,
+        -8.272588976638173e-18, 0.16542524631551517, 0.1530181053696457, -0.09240996118382004,
+        0.7509452420731564, -0.09240996118382004, 0.1530181053696457, 0.16542524631551517,
+        -8.272588976638173e-18, -0.08378736684868665, -0.03623467559014835, 0.007842365962257243,
+        -1.4399950469136644e-17, -0.004126536455530212, 0.009880042840762033, 0.011484899627710115,
+        -1.6378532508970524e-18, -0.005012555763118348, -0.0020500429541146256, 0.000497857642949789]
+    return v
+
+def ref_firwin_kaiser() -> List[float]:
+    mut v: List[float] = [0.0002086881123756793, -0.002432906584815741, -0.012699634198721485,
+        -0.01768009894628062, 0.019358999172549622, 0.12036407095430586, 0.24310354709773369,
+        0.2995546687857059, 0.24310354709773369, 0.12036407095430586, 0.019358999172549622,
+        -0.01768009894628062, -0.012699634198721485, -0.002432906584815741, 0.0002086881123756793]
+    return v
+
+def ref_firwin_bh() -> List[float]:
+    mut v: List[float] = [8.863101441608262e-07, -0.00014107173655470697, -0.0022346987007076887,
+        -0.006396590096817977, 0.011471977656860383, 0.09885094514701907, 0.24076322651334203,
+        0.31537064981342955, 0.24076322651334203, 0.09885094514701907, 0.011471977656860383,
+        -0.006396590096817977, -0.0022346987007076887, -0.00014107173655470697, 8.863101441608262e-07]
+    return v
+
+def ref_stft_frame3() -> List[float]:
+    mut v: List[float] = [0.15999999999999998, 0.0, -0.08000000000000035, 0.951761559232662,
+        -2.299347170293093e-17, -0.3590125634452459, -1.1102230246251565e-16, -0.28108707970511304,
+        -5.551115123125783e-17, -1.0042325459795323, 2.220446049250313e-16, 2.73690281902712,
+        1.3401577416544657e-16, -2.4370024621774795, 1.6653345369377348e-16, 0.20975145796489536,
+        5.551115123125783e-17, 0.0]
+    return v
+
+def ref_stft_last() -> List[float]:
+    mut v: List[float] = [-0.3680526671473804, 0.0, 0.29702975982615587, 0.35877273895720985,
+        0.3097791399183666, -0.4990259841821165, -0.55954222502044, -0.17735027963199956, 0.06234018715767728,
+        0.49582484699383356, 0.3648618507050854, -0.3826699053166448, -0.7097791399183665, -0.2237063584974712,
+        -0.10234938551080122, 0.9534531132725644, 1.0433722928320255, 0.0]
+    return v
+
+def ref_welch_density_bins() -> List[float]:
+    mut v: List[float] = [0.0001479116411433144, 0.000506858515044152, 0.017819747919705253,
+        0.0008835261933901603, 0.0007547860010524246, 0.0004005454917748239]
+    return v
+
+def ref_welch_spectrum_bins() -> List[float]:
+    mut v: List[float] = [0.00025935374237487206, 0.0014294900506712255, 0.04504366373135075,
+        0.0031228898836087975, 0.002244398481510689, 0.0010872785048149517]
+    return v
+
+def ref_goertzel_7_0() -> List[float]:
+    mut v: List[float] = [0.856790303551741, -8.103322512581187]
+    return v
+
+def ref_goertzel_12_345() -> List[float]:
+    mut v: List[float] = [0.16762693854034072, -0.04575706262159551]
+    return v
+
+def ref_resample_3_2() -> List[float]:
+    mut v: List[float] = [-0.7804728153719462, -0.5033365029851405, 0.43398593186842593, 0.700424321487644,
+        -0.14064039783120894, -0.7162793169933638, 0.16009698776860432, 1.0779902711640172,
+        0.36974623047927635, -0.3802303459504353, 0.1769561772077767, 0.14024685025900177, -0.9205576796694751,
+        -0.7900173108426514, 0.410874264257832, 0.5603394571901154, -0.382388729922655, -0.7478437163672513,
+        0.020012123471075564, 0.7878315928961759, 0.4223766064515794, -0.5203152102479642,
+        -0.37088638772890753, 0.8307665510869057, 0.9605819266116261, -0.10322981864628715,
+        -0.13063853057066602, 0.4202545928925863, -0.3445396050181265, -1.017399411854881,
+        -0.12007274082645333, 0.71942830201395, 0.229520612947182, -0.6604000745454929, -0.4834138340099103,
+        0.6718947178348599, 0.8204970623140974, -0.2354558510745444, -0.2780180065703859, 0.2801697285950576,
+        -0.4745810388023787, -1.172820222367498, -0.2601576051239821, 0.6120901814679391, 0.04431127621874782,
+        -0.8004849388430219, -0.5392441381326679, 0.4172486457870124, 0.6804121980165685, -0.15558597386195416,
+        -0.7439245497943149, 0.14008486429752878, 1.0741530097758674, 0.326947801318291, -0.40024246942151087,
+        0.20278132306954647, 0.05617225944348389, -0.9405698031405505, -0.6625111595676674,
+        0.10082252877333511]
+    return v
+
+def ref_resample_1_3() -> List[float]:
+    mut v: List[float] = [-0.25149901892056525, 0.19132139156286931, 0.05921314616100965, -0.23707001845525869,
+        0.014514296922457943, 0.28951243168466545, -0.03652742505658888, -0.12129205454515193,
+        0.1738995936501442, -0.32866286295694147, -0.1498104824029386, 0.13553524093219582,
+        0.06573697707364404, -0.3310424009530709]
+    return v
+
+def ref_resample_4_6() -> List[float]:
+    mut v: List[float] = [-0.6163010330609202, 0.34821725687353855, -0.1666993106618015, 0.34419957566932285,
+        0.3334825380715158, -0.5806988771721385, -0.021219654323492654, -0.15067083545788856,
+        0.01838427796891771, 0.19481139048283558, 0.0538071641439404, 0.6338136874729999, -0.31610706853835935,
+        -0.2675177479154472, 0.146485523370972, -0.20626961459547255, 0.43582507182741037,
+        -0.06768596102856528, -0.6661786134165252, 0.09415859622225049, -0.42799135166958363,
+        0.24879438137960525, -0.16510870853241075, 0.3495274606862564, 0.23728191115957153,
+        -0.4512871625662228, -0.36509062286962574]
+    return v
+
+def ref_peaks_all() -> List[int]:
+    mut v: List[int] = [1, 5, 10, 14, 19, 24, 30, 34, 39, 43, 48, 53, 58, 63, 68, 72, 77, 82, 87, 92, 97, 101, 106, 111, 117, 121, 126, 130, 135, 140, 145, 150, 155, 159, 164, 169, 174, 179, 184, 188, 193, 198]
+    return v
+
+def ref_peaks_h() -> List[int]:
+    mut v: List[int] = [5, 10, 14, 30, 34, 39, 43, 63, 68, 72, 97, 126, 130, 150, 155, 159, 164, 179, 184, 188, 193]
+    return v
+
+def ref_peaks_d() -> List[int]:
+    mut v: List[int] = [10, 39, 68, 97, 126, 159, 188]
+    return v
+
+def ref_peaks_p() -> List[int]:
+    mut v: List[int] = [10, 39, 68, 97, 126, 159, 188]
+    return v
+
+def ref_prominences() -> List[float]:
+    mut v: List[float] = [0.053524225848911144, 0.2994238795761621, 1.1119475902340485, 0.11439998313759658,
+        0.17804803570809524, 0.190595091542512, 0.06907700457534316, 0.28394269519017845, 2.467319778699773,
+        0.09581174206010856, 0.07113500499483286, 0.33167184263793403, 0.10659081022960587, 0.269316975223323,
+        1.9735480946901722, 0.1025930980985782, 0.045274431936681236, 0.32594762595947824, 0.10651795968795996,
+        0.17595140546839647, 2.182841159678785, 0.21904796394351098, 0.07192980077968736, 0.3200736326792337,
+        0.07223683300393058, 0.06467942406922808, 1.9383121253021534, 0.3461376978200841, 0.11895763294258926,
+        0.2815726553854609, 0.11422822602313254, 0.04344876139435727, 0.35322643962452815, 2.3307394782585575,
+        0.09187058006397042, 0.16580395756924765, 0.2425271827313014, 0.09852277230126183, 0.34703540978221104,
+        2.140410416062885, 0.06230590035225725, 0.06543035958264504]
+    return v
+
+def ref_peaks_plateau() -> List[int]:
+    mut v: List[int] = [2, 5, 8, 12]
+    return v
+

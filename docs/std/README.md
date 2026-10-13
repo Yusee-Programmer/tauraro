@@ -18,11 +18,11 @@ building libraries with `taupkg`)
 | [`std.encoding`](encoding.md) | Data encoding: JSON, CSV, TOML, INI, YAML, XML, Base64, Base32, Hex, CBOR, Protocol Buffers wire format, PDF writer |
 | [`std.gpu`](gpu.md) | GPU compute: CUDA/OpenCL/CPU device API (`Device`/`Buffer[T]`/`Module`/`Kernel`), Tauraro `@kernel` → PTX/SPIR-V, and OpenMP CPU dispatch (`Gpu.parallel`) |
 | [`std.image`](image.md) | Raster images: BMP, QOI, PNG, JPEG (baseline + progressive decode, encode), GIF (animated decode/encode); resizing, colour adjustments, blur/sharpen/edges, geometry; shared `Image` (RGBA8) type and format-sniffing `decode()` |
-| [`std.audio`](audio.md) | Audio: `AudioBuffer`, WAV decode/encode, MP3 and FLAC decoding, resampling, channel mixing, level and edit helpers, tone generators |
+| [`std.audio`](audio.md) | Audio: `AudioBuffer`, WAV decode/encode, MP3 and FLAC decoding, resampling, channel mixing, level and edit helpers, tone generators; spectra and filters via `std.audio.dsp` |
 | [`std.io`](io.md) | File I/O, directory operations, path manipulation, console, buffered I/O, ZIP archive read/write (`ZipWriter`/`ZipReader`), tar archive read/write (`TarWriter`/`TarReader`) |
 | [`std.iter`](iter.md) | Range construction, int/float vector transforms, folds, prefix sums, normalization |
 | [`std.log`](log.md) | Leveled structured logging: text/JSON formats, stdout/file sinks, per-target filtering (`Logger`/`Fields`) |
-| [`std.math`](math.md) | Integer/float math, bit ops, statistics, random, `BigInt`, linear algebra, exact `Decimal`/`Rational`, `BigFloat`, n-dimensional `Tensor` with broadcasting |
+| [`std.math`](math.md) | Integer/float math, bit ops, statistics, random, `BigInt`, linear algebra, exact `Decimal`/`Rational`, `BigFloat`, n-dimensional `Tensor` with broadcasting, any-length FFT (`std.math.fft`), DSP: windows, STFT, filters, FIR/IIR design, Welch (`std.math.dsp`) |
 | [`std.net`](net.md) | TCP, UDP, DNS, URL, HTTP client, `HttpSession`, verified TLS 1.3 client (`std.net.tls`), HTTPS client, HTTP/2 client + HPACK, HTTP server + router, WebSocket, SMTP (STARTTLS), MIME email messages (`std.net.email`), media types + content sniffing (`std.net.mime`), IMAP and POP3 clients, DNS wire protocol (any record type), mDNS / DNS-SD browsing, NTP client |
 | [`std.prof`](prof.md) | Profiling: statistical CPU sampling (`CpuProfiler`), process memory stats (`MemProf`), metrics (`Counter`/`Gauge`/`Histogram`/`Registry`); also `tauraroc --prof` |
 | [`std.regex`](regex.md) | POSIX extended regex: match, find, replace, split, count, capture groups (numbered + named), `Match`/`Captures`, backreference replace |

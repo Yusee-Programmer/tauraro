@@ -118,6 +118,16 @@ added here as each phase lands.
   `email` package in both directions. `SmtpClient.send_message(msg)` sends one (envelope from
   Sender/From, recipients To + Cc + Bcc, Bcc never written, BODY=8BITMIME / SMTPUTF8 when
   needed); `ImapClient.fetch_email(uid)` and `Pop3Client.retr_email(n)` return parsed messages.
+- **`std.math.fft`** — FFT of any length in O(n log n): radix-4/2/3/5 Stockham passes, a generic odd radix and
+  Bluestein for large prime factors, in C (`std/math/fft_native.c`). Complex (interleaved) and real transforms
+  (`fft`, `ifft`, `rfft`, `irfft`, `fft2`, `ifft2`) with NumPy's `backward`/`ortho`/`forward` norms, per-thread
+  plan caching plus explicit `FftPlan` / `RfftPlan`, `fftfreq`, `rfftfreq`, `fftshift`, `next_fast_len`. Matches
+  NumPy to ~1e-16 and is on par with or faster than `np.fft` at n = 1024, 4096, 1000, 1009 and 2^20.
+  **`std.math.dsp`** — windows (Hann, Hamming, Blackman, Blackman-Harris, flat-top, Kaiser, Tukey), FFT/direct
+  `convolve` / `correlate`, `lfilter`, `lfilter_zi`, `filtfilt`, `freqz`, `firwin` FIR design, RBJ cookbook
+  `Biquad`s, STFT / ISTFT, spectrograms (with `Tensor` export), Welch PSD, Goertzel, `resample_poly`, `find_peaks`
+  — checked against SciPy. **`std.audio.dsp`** — `AudioDsp` spectra, dominant frequency and per-channel filters
+  for `AudioBuffer`s.
 - **`tauraroc doc`** — API documentation from source (public constants, functions, classes with
   their fields and `extend` methods, enums, interfaces, and their comments) as Markdown or HTML,
   per file or for whole directory trees. **`tauraroc cov`** / **`--coverage`** — line coverage:
