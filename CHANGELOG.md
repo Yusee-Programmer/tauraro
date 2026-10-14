@@ -87,6 +87,12 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.compress.flate`** — built-in DEFLATE decoder and encoder with raw / zlib / gzip framing,
+  checksums, multi-member gzip and output limits. `std.compress.zlib` and `std.compress.gzip` now
+  work without `-lz` (they used to return empty strings on such builds).
+- **HTTP compression** — `HttpSession` sends `Accept-Encoding: gzip, deflate, br` for in-memory
+  requests and decodes the body (`reply.content_encoding`, `set_decompress(false)`); downloads and
+  streaming keep the raw bytes.
 - String escapes `\xHH` (a byte), `\uXXXX` and `\UXXXXXXXX` (a code point as UTF-8); `str.rfind`
   (alias of `last_index_of`); `str.split_exact(sep)`, Python-style splitting on a whole substring
   that keeps empty parts (`split` splits on any byte of `sep` and drops empty parts).

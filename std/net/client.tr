@@ -51,15 +51,16 @@
 #     certificate chain and host name are verified against the system roots
 #     (plus any set_ca_pem() roots). set_allow_unverified_tls(true) turns
 #     verification off (testing only). TLS 1.2-only servers are not supported.
-#   * No compression: requests send "Accept-Encoding: identity".
+#   * Compression: in-memory requests send "Accept-Encoding: gzip, deflate, br"
+#     and decode the body (reply.content_encoding says which); downloads and
+#     stream_get callbacks send "identity" and get the raw bytes.
+#     set_decompress(false) turns this off.
 #   * No keep-alive / connection reuse, no proxies, no Expect: 100-continue,
 #     no userinfo ("user:pw@host") or IPv6-literal URLs, IPv4 only (the
 #     runtime resolver is AF_INET).
-#   * In-memory bodies are Tauraro `str` (NUL-terminated): a body containing NUL
-#     bytes is cut at the first NUL. download_to_file is binary-safe (bytes go
-#     to disk from raw buffers); callbacks receive `str` chunks, so they are
-#     only NUL-safe for text.
-#   * Request bodies are `str` too (same NUL limit).
+#   * Bodies are binary-safe in every direction: reply.body, request bodies,
+#     stream_get chunks and downloads keep embedded NUL bytes (strs carry their
+#     length).
 
 from std.core.vec import Vec
 from std.core.string import StringBuilder
@@ -75,6 +76,8 @@ from std.net.multipart import FormBuilder
 from std.net.multipart import MultipartBuilder
 from std.net.tls import trc_tls_connect, trc_tls_ok, trc_tls_error, trc_tls_set_timeout, trc_tls_write, trc_tls_read, trc_tls_close
 from std.crypto.x509 import TrustStore
+from std.compress.flate import Flate
+from std.compress.brotli import Brotli
 
 extern "C":
     def _tr_c_malloc(size: int) -> Pointer[char]
@@ -257,6 +260,7 @@ pub class HttpReply:
     pub bytes:     int          # body bytes received (also for streamed/downloaded bodies)
     pub chunked:   bool         # body used Transfer-Encoding: chunked
     pub saved_to:  str          # path written by download_to_file ("" otherwise)
+    pub content_encoding: str   # Content-Encoding that was decoded into body ("" = none)
     pub headers:   HeaderList
     pub history:   Vec[str]     # every URL requested, in order (last == url)
 
@@ -273,6 +277,7 @@ extend HttpReply:
         r.bytes     = 0
         r.chunked   = false
         r.saved_to  = ""
+        r.content_encoding = ""
         r.headers   = HeaderList.init()
         r.history   = Vec[str].init(4)
         return r
@@ -322,6 +327,18 @@ def _hdr_parse_len(v_in: str) -> int:
         if c < 48 or c > 57: return -1
         i = i + 1
     return Str.parse_int(v)
+
+# Decode a Content-Encoding (gzip / x-gzip / deflate / br). Raises
+# "unsupported" for other codings (the body is then returned undecoded).
+def _decode_body(body: str, enc: str, max_out: int) throws str -> str:
+    if Str.eq(enc, "gzip") or Str.eq(enc, "x-gzip"): return Flate.gunzip_max(body, max_out)?
+    if Str.eq(enc, "br"): return Brotli.decompress_max(body, max_out)?
+    if Str.eq(enc, "deflate"):
+        # RFC 9110 deflate is a zlib stream; some servers send raw DEFLATE
+        mut z: Result[str, str] = Flate.zlib_decompress_max(body, max_out)
+        if z.is_ok: return z.ok
+        return Flate.inflate_max(body, max_out)?
+    raise("unsupported")
 
 # ---------------------------------------------------------------------------
 # Raw growable byte buffer + body sink + chunked decoder
@@ -686,6 +703,7 @@ pub class HttpSession:
     pub allow_unverified_tls: bool
     pub ca_pem:           str      # extra trusted roots (PEM) for https
     pub max_body_bytes:   int      # cap for in-memory bodies (0 = unlimited)
+    pub decompress:       bool     # ask for and decode gzip / deflate / br bodies (in-memory requests)
 
 extend HttpSession:
     pub def init() -> HttpSession:
@@ -702,6 +720,7 @@ extend HttpSession:
         s.allow_unverified_tls = false
         s.ca_pem           = ""
         s.max_body_bytes   = 67108864
+        s.decompress       = true
         return s
 
     # -- configuration --
@@ -741,6 +760,11 @@ extend HttpSession:
 
     pub def set_rewrite_post_on_301_302(self, v: bool):
         self.rewrite_post_on_301_302 = v
+
+    # Send "Accept-Encoding: gzip, deflate, br" and decode compressed bodies
+    # (default on). Downloads and streaming callbacks always get the raw bytes.
+    pub def set_decompress(self, v: bool):
+        self.decompress = v
 
     pub def set_max_body_bytes(self, n: int):
         self.max_body_bytes = n
@@ -844,7 +868,7 @@ extend HttpSession:
         return r
 
     # Build the request text for one hop.
-    def _build_request(self, method: str, url: Url, req_headers: HeaderList, body: str, ctype: str, strip_auth: bool) -> str:
+    def _build_request(self, method: str, url: Url, req_headers: HeaderList, body: str, ctype: str, strip_auth: bool, accept_enc: str) -> str:
         mut target = url.request_target()
         mut hosth  = url.host_header()
         mut sb = StringBuilder.init(512)
@@ -853,7 +877,7 @@ extend HttpSession:
         sb.append(target)
         sb.append(" HTTP/1.1\r\nHost: ")
         sb.append(hosth)
-        sb.append("\r\nConnection: close\r\nAccept-Encoding: identity\r\n")
+        sb.append("\r\nConnection: close\r\n")
         # Effective headers: session defaults overridden by per-request ones.
         mut eff = self.headers.copy()
         mut i = 0
@@ -865,6 +889,7 @@ extend HttpSession:
         if not eff.has("User-Agent") and Str.len(self.user_agent) > 0:
             eff.set("User-Agent", self.user_agent)
         if not eff.has("Accept"): eff.set("Accept", "*/*")
+        if not eff.has("Accept-Encoding"): eff.set("Accept-Encoding", accept_enc)
         if strip_auth:
             eff.remove("Authorization")
             eff.remove("Proxy-Authorization")
@@ -961,7 +986,9 @@ extend HttpSession:
         mut reply = HttpReply.init()
         reply.url = url.to_string()
         mut use_tls = url.is_https()
-        mut wire = self._build_request(method, url, req_headers, body, ctype, strip_auth)
+        mut accept_enc = "identity"
+        if self.decompress and mode == 0: accept_enc = "gzip, deflate, br"
+        mut wire = self._build_request(method, url, req_headers, body, ctype, strip_auth, accept_enc)
         mut ctimeout = idle_ms
         if ctimeout <= 0: ctimeout = 30000
         mut conn = ClientConn.connect_tls(url.host, url.port, use_tls, not self.allow_unverified_tls, self.ca_pem, ctimeout)
@@ -1124,6 +1151,15 @@ extend HttpSession:
                 Fs.delete(part_path)
         reply.bytes = sink.total
         if sink.kind == 0: reply.body = sink.mem.to_str()
+        if sink.kind == 0 and failed == "" and self.decompress and reply.body.len() > 0:
+            mut denc = Str.to_lower(Str.trim(reply.headers.get("Content-Encoding")))
+            if Str.len(denc) > 0 and not Str.eq(denc, "identity"):
+                mut dr: Result[str, str] = _decode_body(reply.body, denc, self.max_body_bytes)
+                if dr.is_ok:
+                    reply.body = dr.ok
+                    reply.content_encoding = denc
+                elif not Str.eq(dr.err, "unsupported"):
+                    failed = "cannot decode Content-Encoding " + denc + ": " + dr.err
         sink.release()
         hb.release()
         _tr_c_free(rbuf)

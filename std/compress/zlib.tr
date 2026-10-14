@@ -1,7 +1,7 @@
 # std.compress.zlib — zlib/deflate compression and decompression.
 #
-# Requires: compile with -DTAURARO_COMPRESS_ZLIB -lz
-# Without that flag all methods return safe stub results (empty or original input).
+# Uses the system zlib when built with -DTAURARO_COMPRESS_ZLIB -lz; otherwise
+# the built-in codec in std.compress.flate (same results, no library needed).
 #
 # Usage:
 #   from std.compress.zlib import Zlib
@@ -16,6 +16,8 @@ extern "C":
     def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
     def _tr_c_malloc(size: int) -> Pointer[char]
     def _tr_c_free(ptr: Pointer[char])
+
+from std.compress.flate import Flate
 
 pub class Zlib:
     _dummy: int
@@ -39,6 +41,8 @@ extend Zlib:
         mut n = 0
         unsafe: n = out_len_buf.read() as int
         _tr_c_free(out_len_buf as Pointer[char])
+        # runtime built without zlib: the built-in encoder (std.compress.flate)
+        if raw as int == 0 and ilen > 0: return Flate.zlib_compress(input.slice(0, ilen), 6)
         return _wrap_exact(raw, n)
 
     # Decompress a zlib-wrapped stream back to at most `max_out` bytes. The result is
@@ -50,6 +54,12 @@ extend Zlib:
         mut n = 0
         unsafe: n = out_len_buf.read() as int
         _tr_c_free(out_len_buf as Pointer[char])
+        if n <= 0 and ilen > 0:
+            # runtime built without zlib (its stub returns an empty buffer)
+            if raw as int != 0: _tr_c_free(raw)
+            mut fr: Result[str, str] = Flate.zlib_decompress_max(input.slice(0, ilen), max_out)
+            if fr.is_ok: return fr.ok
+            return ""
         return _wrap_exact(raw, n)
 
     # Raw deflate (no zlib header). Useful for gzip member data.
@@ -60,6 +70,7 @@ extend Zlib:
         mut n = 0
         unsafe: n = out_len_buf.read() as int
         _tr_c_free(out_len_buf as Pointer[char])
+        if raw as int == 0 and ilen > 0: return Flate.deflate(input.slice(0, ilen), 6)
         return _wrap_exact(raw, n)
 
     # Raw inflate. Matches deflate output. Length-tracked like decompress().
@@ -70,6 +81,11 @@ extend Zlib:
         mut n = 0
         unsafe: n = out_len_buf.read() as int
         _tr_c_free(out_len_buf as Pointer[char])
+        if n <= 0 and ilen > 0:
+            if raw as int != 0: _tr_c_free(raw)
+            mut fr: Result[str, str] = Flate.inflate_max(input.slice(0, ilen), max_out)
+            if fr.is_ok: return fr.ok
+            return ""
         return _wrap_exact(raw, n)
 
     # Exact byte length of a result of compress()/deflate()/decompress()/inflate()

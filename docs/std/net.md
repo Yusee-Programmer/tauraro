@@ -476,12 +476,20 @@ mut r = HttpSession.init().post_multipart("http://127.0.0.1:8080/upload", m)
 
 `build()` returns the body and `content_type()` the header value (`multipart/form-data; boundary=...`); `with_boundary()` pins the boundary. Field/file names are quoted-escaped (`"` → `%22`, CR/LF removed). The server-side counterpart is watax's `req.multipart()`.
 
+### Compression
+
+In-memory requests (`get`, `post`, `request`, `send`, ...) send `Accept-Encoding: gzip, deflate, br`
+and decode the response body: `reply.body` is the decoded content, `reply.content_encoding` names
+the coding that was removed (`""` when none) and `reply.bytes` is the size on the wire. A body that
+fails to decode sets `reply.error`. `download_to_file` and `stream_get` ask for `identity` and get the
+bytes unchanged. `s.set_decompress(false)` turns it off; an explicit `Accept-Encoding` header is
+sent as given. Decoded bodies are capped by `set_max_body_bytes`.
+
 ### Limitations
 
 - `https://` uses `std.net.tls` (TLS 1.3 only, verified against the system roots); servers that only speak TLS 1.2 fail with a handshake error.
 - TCP connect is blocking with no connect timeout; IPv4 only; no proxies, no keep-alive/connection reuse, no `Expect: 100-continue`, no `user:pass@host` or IPv6-literal URLs.
-- No compression (`Accept-Encoding: identity` is sent).
-- In-memory bodies and callback chunks are `str` (NUL-terminated): a body with embedded NUL bytes is cut at the first NUL. Request bodies have the same limit. `download_to_file` is NUL-safe.
+- Bodies are binary-safe everywhere (response bodies, request bodies, `stream_get` chunks and downloads keep NUL bytes).
 - No public-suffix list for cookies (a dot-less `Domain` is rejected as a heuristic); `SameSite` is stored but not enforced; `Secure` cookies set over plain http are accepted but only sent over https.
 - A closure passed as `on_chunk` cannot re-assign a captured `str` local (compiler limitation); accumulate into a class field instead.
 

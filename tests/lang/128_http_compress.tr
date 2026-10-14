@@ -1,0 +1,193 @@
+# tests/lang/128_http_compress.tr
+# std.compress.flate (built-in DEFLATE / zlib / gzip) and HttpSession's
+# Content-Encoding support, against a fake HTTP server on 127.0.0.1.
+# The gzip / zlib / raw-deflate / brotli bodies were produced by Python
+# (gzip, zlib, brotli 1.2.0) for the payload built by payload() below.
+
+from std.test import TestRunner
+from std.net.tcp import TcpStream, TcpListener
+from std.net.client import HttpSession, HttpReply
+from std.compress.flate import Flate, FLATE_AUTO
+from std.compress.zlib import Zlib
+from std.compress.gzip import Gzip
+from std.encoding.hex import Hex
+from std.io.file import File
+from std.sys.fs import Fs
+
+def payload() -> str:
+    mut s = ""
+    mut i = 0
+    while i < 20:
+        s = s + "Hello, compressed world! "
+        i = i + 1
+    return s + "\x00\x01\x02 end"
+
+def gz_vec() -> str: return Hex.decode("1f8b08000000000000fff348cdc9c9d75148cecf2d284a2d2e4e4d5128cf2fca495154f0189518ae120c8c4c0aa979290071ae7f14fb010000")
+def zl_vec() -> str: return Hex.decode("789cf348cdc9c9d75148cecf2d284a2d2e4e4d5128cf2fca495154f0189518ae120c8c4c0aa97929002b2db533")
+def raw_vec() -> str: return Hex.decode("f348cdc9c9d75148cecf2d284a2d2e4e4d5128cf2fca495154f0189518ae120c8c4c0aa9792900")
+def br_vec() -> str: return Hex.decode("1bfa0100c41d0c6be55bc3f96a0236e0c03dd000b389f8acb08f9eb5c2fcf61521af4ce09a077404")
+
+def test_flate(t: TestRunner):
+    t.section("std.compress.flate")
+    mut p = payload()
+    t.assert_eq_int(p.len(), 507, "payload with NUL bytes")
+    mut a: Result[str, str] = Flate.gunzip(gz_vec())
+    t.assert_true(a.is_ok and a.ok == p, "gunzip a Python gzip member")
+    mut b: Result[str, str] = Flate.zlib_decompress(zl_vec())
+    t.assert_true(b.is_ok and b.ok == p, "zlib stream from Python")
+    mut c: Result[str, str] = Flate.inflate(raw_vec())
+    t.assert_true(c.is_ok and c.ok == p, "raw DEFLATE from Python")
+    mut d: Result[str, str] = Flate.decompress_auto(gz_vec())
+    t.assert_true(d.is_ok and d.ok == p, "auto-detected gzip")
+    mut lvl = 1
+    while lvl <= 9:
+        mut z: Result[str, str] = Flate.zlib_decompress(Flate.zlib_compress(p, lvl))
+        t.assert_true(z.is_ok and z.ok == p, f"zlib round trip at level {lvl}")
+        lvl = lvl + 4
+    mut gzr: Result[str, str] = Flate.gunzip(Flate.gzip(p, 9))
+    t.assert_true(gzr.is_ok and gzr.ok == p, "gzip round trip")
+    mut two: Result[str, str] = Flate.gunzip(Flate.gzip("ab", 6) + Flate.gzip("cd", 6))
+    t.assert_true(two.is_ok and two.ok == "abcd", "multi-member gzip")
+    t.assert_eq_str(Flate.inflate(Flate.deflate("", 6)).ok, "", "empty input")
+    mut big = ""
+    mut k = 0
+    while k < 2000:
+        big = big + "0123456789"
+        k = k + 1
+    mut lim: Result[str, str] = Flate.zlib_decompress_max(Flate.zlib_compress(big, 6), 1000)
+    t.assert_true(lim.is_err, "size limit enforced")
+    if lim.is_err: t.assert_contains(lim.err, "size limit", "limit message")
+    mut zv = zl_vec()
+    mut trunc: Result[str, str] = Flate.zlib_decompress(zv.slice(0, 20))
+    t.assert_true(trunc.is_err, "truncated stream rejected")
+    mut bad_sum = zv.slice(0, zv.len() - 1) + "x"
+    mut cs: Result[str, str] = Flate.zlib_decompress(bad_sum)
+    t.assert_true(cs.is_err, "bad Adler-32 rejected")
+    t.assert_eq_int(Flate.crc32("123456789"), 0xCBF43926, "CRC-32 check value")
+    t.assert_eq_int(Flate.adler32("Wikipedia"), 0x11E60398, "Adler-32 check value")
+    mut zz = Zlib.compress(p, p.len())
+    t.assert_eq_str(Zlib.decompress(zz, zz.len(), 4096), p, "Zlib works without -lz")
+    mut gg = Gzip.compress(p, p.len())
+    t.assert_eq_str(Gzip.decompress(gg, gg.len(), 4096), p, "Gzip works without -lz")
+    t.assert_true(gg.len() < p.len(), "Gzip output is really compressed")
+
+class Srv implements Sendable:
+    pub port:       int
+    pub ae_full:    Atomic[int]     # requests that advertised gzip, deflate, br
+    pub ae_ident:   Atomic[int]     # requests that asked for identity
+    pub served:     Atomic[int]
+
+extend Srv:
+    pub def init(port: int) -> Srv:
+        mut s = Srv()
+        s.port = port
+        s.ae_full = Atomic.new(0)
+        s.ae_ident = Atomic.new(0)
+        s.served = Atomic.new(0)
+        return s
+
+def read_request(c: TcpStream) -> str:
+    mut buf = ""
+    while buf.find("\r\n\r\n") < 0:
+        mut chunk = c.recv(4096)
+        if chunk.len() == 0: return buf
+        buf = buf + chunk
+    return buf
+
+def hexnum(n: int) -> str:
+    mut digits = "0123456789abcdef"
+    if n == 0: return "0"
+    mut out = ""
+    mut v = n
+    while v > 0:
+        out = digits.slice(v % 16, v % 16 + 1) + out
+        v = v / 16
+    return out
+
+def respond(c: TcpStream, enc: str, body: str, chunked: bool):
+    mut head = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n"
+    if enc.len() > 0: head = head + "Content-Encoding: " + enc + "\r\n"
+    if chunked:
+        head = head + "Transfer-Encoding: chunked\r\n\r\n"
+        mut half = body.len() / 2
+        mut a = body.slice(0, half)
+        mut b = body.slice(half, body.len())
+        c.send(head)
+        c.send(hexnum(a.len()) + "\r\n" + a + "\r\n" + hexnum(b.len()) + "\r\n" + b + "\r\n0\r\n\r\n")
+    else:
+        mut n = body.len()
+        c.send(head + f"Content-Length: {n}\r\n\r\n" + body)
+
+def serve(f: Shared[Srv]):
+    mut l = TcpListener.listen("127.0.0.1", f.port)
+    mut k = 0
+    while k < 9:
+        mut c = l.accept()
+        mut req = read_request(c)
+        if req.find("Accept-Encoding: gzip, deflate, br") >= 0: f.ae_full.add(1)
+        if req.find("Accept-Encoding: identity") >= 0: f.ae_ident.add(1)
+        mut sp = req.find(" ")
+        mut rest = req.slice(sp + 1, req.len())
+        mut path = rest.slice(0, rest.find(" "))
+        if path == "/plain": respond(c, "", payload(), false)
+        elif path == "/gzip": respond(c, "gzip", gz_vec(), false)
+        elif path == "/zlib": respond(c, "deflate", zl_vec(), false)
+        elif path == "/raw": respond(c, "deflate", raw_vec(), false)
+        elif path == "/br": respond(c, "br", br_vec(), false)
+        elif path == "/chunked": respond(c, "gzip", gz_vec(), true)
+        elif path == "/bad": respond(c, "gzip", "this is not gzip", false)
+        elif path == "/dl": respond(c, "gzip", gz_vec(), false)
+        else: respond(c, "gzip", gz_vec(), false)
+        c.close()
+        f.served.add(1)
+        k = k + 1
+    l.close()
+
+def test_http(t: TestRunner):
+    t.section("HttpSession Content-Encoding")
+    shared f = Srv.init(18951)
+    mut th = Thread.spawn(serve, f)
+    Thread.sleep(200)
+    mut base = "http://127.0.0.1:18951"
+    mut s = HttpSession.init()
+    s.set_timeout(5000)
+    mut p = payload()
+    mut r = s.get(base + "/plain")
+    t.assert_true(r.is_ok(), "plain request ok")
+    t.assert_eq_int(r.body.len(), 507, "binary body keeps its NUL bytes")
+    t.assert_true(r.body == p, "plain body bytes")
+    t.assert_eq_str(r.content_encoding, "", "nothing decoded")
+    mut g = s.get(base + "/gzip")
+    t.assert_true(g.body == p, "gzip body decoded")
+    t.assert_eq_str(g.content_encoding, "gzip", "content_encoding reports gzip")
+    t.assert_eq_int(g.bytes, gz_vec().len(), "bytes counts the wire size")
+    mut z = s.get(base + "/zlib")
+    t.assert_true(z.body == p, "deflate (zlib) body decoded")
+    mut rw = s.get(base + "/raw")
+    t.assert_true(rw.body == p, "deflate (raw) body decoded")
+    mut br = s.get(base + "/br")
+    t.assert_true(br.body == p, "brotli body decoded")
+    t.assert_eq_str(br.content_encoding, "br", "content_encoding reports br")
+    mut ch = s.get(base + "/chunked")
+    t.assert_true(ch.chunked and ch.body == p, "chunked + gzip")
+    mut bad = s.get(base + "/bad")
+    t.assert_true(bad.error.len() > 0, "undecodable body is an error")
+    if bad.error.len() > 0: t.assert_contains(bad.error, "Content-Encoding gzip", "error names the coding")
+    mut path = "build/tauraro_128_dl.bin"
+    mut dl = s.download_to_file(base + "/dl", path)
+    t.assert_true(dl.error == "", "download ok")
+    t.assert_true(File.read_text(path) == gz_vec(), "download keeps the raw (encoded) bytes")
+    Fs.delete(path)
+    s.set_decompress(false)
+    mut off = s.get(base + "/off")
+    t.assert_true(off.body == gz_vec(), "set_decompress(false) leaves the body encoded")
+    th.join()
+    t.assert_eq_int(f.served.load(), 9, "all requests served")
+    t.assert_eq_int(f.ae_full.load(), 7, "in-memory requests advertise gzip, deflate, br")
+    t.assert_eq_int(f.ae_ident.load(), 2, "download and decompress-off requests ask for identity")
+
+def main():
+    mut t = TestRunner.init("128_http_compress")
+    test_flate(t)
+    test_http(t)
+    t.summary()

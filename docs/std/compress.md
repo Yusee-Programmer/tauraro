@@ -10,7 +10,39 @@ from std.compress.gzip import Gzip
 
 ---
 
+## std.compress.flate — built-in DEFLATE, zlib and gzip
+
+A DEFLATE decoder and encoder in C (no `-lz`), with raw, zlib (RFC 1950) and gzip (RFC 1952)
+framing. `std.compress.zlib` and `std.compress.gzip` fall back to it when the runtime is built
+without zlib, and `HttpSession` uses it for `Content-Encoding: gzip` / `deflate`.
+
+```tauraro
+from std.compress.flate import Flate
+
+mut z = Flate.zlib_compress(data, 6)          # level 1..9
+mut back = Flate.zlib_decompress(z)?
+mut page = Flate.decompress_auto(body)?       # gzip, zlib or raw, sniffed
+```
+
+| Method | Description |
+|---|---|
+| `inflate(data)?`, `inflate_max(data, max)?`, `deflate(data, level)` | Raw DEFLATE (RFC 1951). |
+| `zlib_decompress(data)?`, `zlib_decompress_max(data, max)?`, `zlib_compress(data, level)` | zlib streams; the Adler-32 is checked. |
+| `gunzip(data)?`, `gunzip_max(data, max)?`, `gzip(data, level)` | gzip; every member is decoded and CRC-32 / ISIZE checked. |
+| `decompress_auto(data)?`, `decompress_auto_max(data, max)?` | Detect gzip / zlib / raw from the first bytes. |
+| `crc32(data)`, `adler32(data)`, `is_gzip(data)` | Checksums and sniffing. |
+
+Decoding raises on corrupt, truncated or checksum-failing input, and when the output would pass
+the limit (`FLATE_DEFAULT_MAX_OUT` = 1 GiB for the plain variants; `max <= 0` = unlimited). The
+encoder uses LZ77 with hash chains and picks fixed or dynamic Huffman per block; output is within
+a few percent of zlib at the same level.
+
+---
+
 ## std.compress.zlib — Zlib
+
+Uses the system zlib when the runtime is built with `-DTAURARO_COMPRESS_ZLIB -lz`, otherwise
+`std.compress.flate` (same output format).
 
 | Method | Signature | Returns | Description |
 |---|---|---|---|
