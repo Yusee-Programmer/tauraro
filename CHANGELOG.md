@@ -17,6 +17,9 @@ codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
 ### Changed
+- `HttpConn.close()` only closes the socket; the request and response state are released with
+  the reference-counted `HttpConn`. Freeing them in `close()` as well was a use-after-free in the
+  documented `accept` / `close` loop.
 - `std.sys.subprocess`: on Windows, `env_clear()` keeps `SystemRoot` unless it is set or removed
   explicitly (child processes cannot initialise without it). `std.net.mime` tolerates a CRLF
   checkout; `.gitattributes` now keeps `*.tr` files LF on every platform.
@@ -34,6 +37,10 @@ added here as each phase lands.
   not reachable through these clients any more.
 
 ### Compiler limitations closed
+- Comparing strings with `==` / `!=` frees a fresh operand (a call result, slice, concat or
+  f-string); `if a != b.slice(...)` in a loop used to leak every slice.
+- String concatenation no longer shadows user locals named `_cl`, `_cr` or `_cres` (the generated
+  C used those names for its own temporaries).
 - Results returned by `throws` functions no longer leak: a `Result` local frees its boxed `str`
   (or value-type) payload and its `str` error at scope exit, `?` frees the box it unwraps, and
   `raise` / `return` box an owned reference (borrowed fields, parameters and list elements are
@@ -87,6 +94,11 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **TLS 1.3 server** in `std.net.tls`:
+  - `TlsServerConfig` (PEM chain + RSA / EC key, ALPN), `TlsListener` and `TlsStream.accept_fd`;
+    certificates RSA-PSS and ECDSA P-256 / P-384, key exchange X25519 / P-256 / P-384 with
+    HelloRetryRequest, all three cipher suites, ALPN and SNI. Checked against OpenSSL clients.
+  - `HttpServer.enable_tls(cfg)` serves HTTPS with no OpenSSL.
 - **`std.compress.flate`** — built-in DEFLATE decoder and encoder with raw / zlib / gzip framing,
   checksums, multi-member gzip and output limits. `std.compress.zlib` and `std.compress.gzip` now
   work without `-lz` (they used to return empty strings on such builds).

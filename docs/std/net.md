@@ -294,7 +294,7 @@ print(r3.header("Content-Type"))           # "application/json"
 
 ---
 
-## std.net.tls — TLS 1.3 client
+## std.net.tls — TLS 1.3 client and server
 
 A self-contained TLS 1.3 client (RFC 8446), no OpenSSL. Verifies the server's certificate chain and
 host name against the system trust store by default (`std.crypto.x509`). Key exchange X25519 /
@@ -321,6 +321,46 @@ s.close()
 | `write(data)?`, `read(cap)?`, `read_all()?`, `read_line(max)?` | I/O; `read` returns `""` at end of stream and raises on timeout. |
 | `alpn()`, `cipher_suite()`, `version()`, `peer_certificates()` | Connection details. |
 | `set_timeout(ms)`, `close()` | `close()` sends close_notify. |
+
+### Server side
+
+`std.net.tls` also accepts TLS 1.3 connections, no OpenSSL. The server supports:
+
+- RSA (RSA-PSS signatures) or ECDSA P-256 / P-384 certificates;
+- X25519, P-256 and P-384 key exchange, with HelloRetryRequest;
+- all three TLS 1.3 cipher suites;
+- ALPN (the server's preference wins) and SNI.
+
+It interoperates with OpenSSL clients and with this module's own client.
+
+```tauraro
+from std.net.tls import TlsServerConfig, TlsListener
+
+mut cfg = TlsServerConfig.from_pem(File.read_text("cert.pem"), File.read_text("key.pem"))?
+cfg.set_alpn("h2,http/1.1")?
+mut l = TlsListener.listen("0.0.0.0", 8443, cfg)?
+while true:
+    mut r: Result[TlsStream, str] = l.accept()     # handshake done (or it raised)
+    if r.is_ok:
+        mut c = r.ok
+        print(c.server_name() + " " + c.alpn())    # SNI, negotiated protocol
+        c.write("hello\n")?
+        c.close()
+```
+
+| Member | Description |
+|---|---|
+| `TlsServerConfig.from_pem(chain_pem, key_pem)?` | Certificate chain (leaf first) and the matching key: PKCS#8 `PRIVATE KEY`, `RSA PRIVATE KEY` or `EC PRIVATE KEY`. Encrypted keys are not supported. |
+| `cfg.set_alpn(protocols)?`, `cfg.dispose()` | Comma-separated ALPN preference; free the config. |
+| `TlsListener.listen(host, port, cfg)?`, `accept()?`, `close()`, `timeout_ms` | Accept loop. A client failing the handshake raises from `accept`; the listener keeps working. |
+| `TlsStream.accept_fd(fd, cfg, timeout_ms, owns_fd)?` | Server handshake on an already-accepted socket. |
+| `stream.server_name()` | The SNI host name the client sent. |
+
+Client certificates, session resumption and 0-RTT are not supported on either side.
+
+`std.net.http_server` serves HTTPS with `srv.enable_tls(cfg)`. Each connection is decrypted by a
+background thread that feeds a local socket, so handlers, keep-alive, chunked responses and SSE
+work unchanged.
 
 ---
 

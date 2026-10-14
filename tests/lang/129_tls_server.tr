@@ -1,0 +1,287 @@
+# tests/lang/129_tls_server.tr
+# std.net.tls server side (TlsServerConfig / TlsListener / accept_fd) against
+# std.net.tls clients on 127.0.0.1, and HTTPS from std.net.http_server
+# (enable_tls) to HttpSession. The certificates below are self-signed for
+# localhost / 127.0.0.1, valid until 2126 (RSA-2048 and ECDSA P-256).
+# Interoperability with OpenSSL (Python ssl, openssl s_client: all three
+# cipher suites, HelloRetryRequest, P-384, TLS 1.2 refusal) was checked when
+# the server was written.
+
+from std.test import TestRunner
+from std.net.tls import TlsStream, TlsOptions, TlsListener, TlsServerConfig
+from std.net.http_server import HttpServer, HttpConn
+from std.net.client import HttpSession, HttpReply
+
+def rsa_cert() -> str:
+    return """-----BEGIN CERTIFICATE-----
+MIIDPjCCAiagAwIBAgIUeAKs+8YjLl4a7sAlaivhrlUdGMkwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxNDE5NTM0MFoYDzIxMjYw
+OTIwMTk1MzQwWjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwggEiMA0GCSqGSIb3DQEB
+AQUAA4IBDwAwggEKAoIBAQDToWgqUJB5hPuhL0PELeEoyuSctEtQNQEOb5Gk66hK
++pTe/Hi8P8T/9cIKiMMt6RV9KLMqf0Sor+nuDcLuGdpdn6sKNW36p9DatFBbgYE+
++vFc69uL2dh8KosCbABod5jh24MvN7Lbv4riY1TLWmB+7LTQV0Ra0stWjEr3XntY
+Wyi1mzKSRpdMsvMAz+GPtiEwIHSSj99oe/0/sKhMNL4lnasxyjFvT63V+U+ijwYV
+gi6K5TiwYHNav9IlQTIY8VXQRYCg0/oKYD5WSMXHQCHnCTyFXP5W10RoEd1dimFa
+6KRVGomQZoS1x5zqi6oRcboxM0Hu2yCgKM2d1Rbj8BphAgMBAAGjgYUwgYIwHQYD
+VR0OBBYEFOx8kTmRRDx8rx2G1x/xweBjYzTxMB8GA1UdIwQYMBaAFOx8kTmRRDx8
+rx2G1x/xweBjYzTxMA8GA1UdEwEB/wQFMAMBAf8wGgYDVR0RBBMwEYIJbG9jYWxo
+b3N0hwR/AAABMBMGA1UdJQQMMAoGCCsGAQUFBwMBMA0GCSqGSIb3DQEBCwUAA4IB
+AQA9AkN7FszdaN6ZP7JNQ/Xouz0KiR970Z2TsiAXw/zDwICYsSVtWy3tyVgmBT22
+1b08dZqgzGQxC0xr8bH+iG131KnX68O+9v67phHak067FH9+VGInEF/kdl/xPMdV
+uhBCT5VdQQDV0Aa/FmzEeyaFiELaAWkhqr40dbkLlLrBk3NqaOVJwu4LdMmPfDIV
+Bf42N4+yc55HCvaafjb2wjUvTqMJ+uFn+zZBqr2uLtsdTbvUCbzGqNHWsnNOCsRB
+KbWJ/OcI52GoMmrbB5w5KTvMs5sdPP1HETCYDfZ0OZzhPsHtgxPHYC7hZksSrssD
+DGcrGc9RqPZKMiuTju4e/7sE
+-----END CERTIFICATE-----
+"""
+
+def rsa_key() -> str:
+    return """-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDToWgqUJB5hPuh
+L0PELeEoyuSctEtQNQEOb5Gk66hK+pTe/Hi8P8T/9cIKiMMt6RV9KLMqf0Sor+nu
+DcLuGdpdn6sKNW36p9DatFBbgYE++vFc69uL2dh8KosCbABod5jh24MvN7Lbv4ri
+Y1TLWmB+7LTQV0Ra0stWjEr3XntYWyi1mzKSRpdMsvMAz+GPtiEwIHSSj99oe/0/
+sKhMNL4lnasxyjFvT63V+U+ijwYVgi6K5TiwYHNav9IlQTIY8VXQRYCg0/oKYD5W
+SMXHQCHnCTyFXP5W10RoEd1dimFa6KRVGomQZoS1x5zqi6oRcboxM0Hu2yCgKM2d
+1Rbj8BphAgMBAAECggEABGBpfRE0IQSPskz97nKxyLGEJNF9tTzuC/8MA13Jmd4G
+HM5v2MTLgtecRFzWXH6zg7vHE3E/ruq5wG3nGBwkw0boDJ//lELK3kWtsRbD4NTj
+ukjjvh1VOCF7xSMNUcZsvPmt2YN3Xsqz8+vwoaakKZEk9CIPNymg1uYJLtsfWzu4
+Y+uGkawsiy9m79HhwxsmXnDfbzSps62nO9o9P5Zo8nDdv00ihp3s+tpEpHnJ4Lgz
+Xh9Ho+bU6W3oAbHDWXZwFxpDPPNkNqn+ZwfHWh0ZL8Kh3s3v0u8lsNqxVr2mwnfB
+gY8nPcJpiQf4Z12V4tS2LFR52ptA/wSrexiR8nxCIQKBgQD93ryj7oO8eJWG7EFK
+NTZF7YL/rGaO84IQXxKuwMvhUgevDWIsr5m/QVL2wvz0Mb7KAtbTYCLKpfzu6Ets
+zrD0J4MH2j7dDF1x5qj5MarHE9ATwMDdb9WBbN48qLxkw9FkLVs4O5dS/f+CwxgF
+imZwmzgHSlOf960BEpRwnA+OlQKBgQDVZ/KcxL0FgufBmkH7x2A5JkzDle42EyFr
+JReo3HEyy/CdCgxA/JJfQpCINJzVGWQt0fnqUOhBhsVi/63seOIGM1Vb1hPy7Hf0
+6l09blYl5saDidcxfEsOaI5BXTo/ju82VjbK7P0pw5X3Re1MjhvYb9SJQ/1QoV59
+oondfLnFnQKBgHb+848nmqo6H2SJ0yS0gocOiGvNZJk2/M0tszUke6xW5fEgpdbq
+THfAZ+Hwjd7sflB0OjwEAOraGQ/m5IvQ6lLXPmzs2LCGPjrIcoWzySfdWpgXro9c
+/0fWPulR8lSNENYTCIH4NLsbAaxKRDU8pT29E+se5MnDr10kV13dWNFtAoGAGDGu
+ucM8QtGygKqCbI8QA6qp7UqkNRE6KrGL2yMS2lVws/0dooh/97jONgLw/N/iEafK
+k5wUmMk0u6KND1AtH9LWDJFataHFf8jKRVqq/aUKQINyGDQlNj74UcTGA8qqqBhi
+IeN4WDHKYLxWyOUblxAmomFI6MlCsy+oPaoUTakCgYAnsV9dYg118kZkE26/Tb0F
+Qow9grFd5fpc3n5nDLmXgVbM16ZEF1+EwtmhtGTM2I6PCNYlNlGFdgKitxTksBzS
+IqFXX136obJf/kH2dz4Zt++AJJx9gr5GgwKqZ3LNGyy1/k6OAED90NvJ0ulyW7ko
+O44fiVPNAQCsdXpcArObGQ==
+-----END PRIVATE KEY-----
+"""
+
+def p256_cert() -> str:
+    return """-----BEGIN CERTIFICATE-----
+MIIBsjCCAVigAwIBAgIUU7tl7WBjRwdrTfyWzMZdTdikfzUwCgYIKoZIzj0EAwIw
+FDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxNDE5NTM0MFoYDzIxMjYwOTIw
+MTk1MzQwWjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO
+PQMBBwNCAAQdCJ3eOYgK2gTBx3OPO9/B5tZQdVIh3D0VsjqxgjcOtp9CpI1KWZnd
+nBadqY8TsSJ7B2LfRC2u7tsZnaT6Vlflo4GFMIGCMB0GA1UdDgQWBBQPjcJkAOLu
+fI7nmg1M3aACZLwMWzAfBgNVHSMEGDAWgBQPjcJkAOLufI7nmg1M3aACZLwMWzAP
+BgNVHRMBAf8EBTADAQH/MBoGA1UdEQQTMBGCCWxvY2FsaG9zdIcEfwAAATATBgNV
+HSUEDDAKBggrBgEFBQcDATAKBggqhkjOPQQDAgNIADBFAiEAkhGx7+vvqz1F4G0H
+5k23CIUWpXXJy0UeqB+Evqvir2YCICUk/n4ZpfRaO/rJ1eRa5ZpNffP0A4mB2iuL
+8T1X2xcf
+-----END CERTIFICATE-----
+"""
+
+def p256_key() -> str:
+    return """-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIPldM8G2a5OXyQI9ZFBS4MvV8O2T1nZ9LYJWYpwxsiEboAoGCCqGSM49
+AwEHoUQDQgAEHQid3jmICtoEwcdzjzvfwebWUHVSIdw9FbI6sYI3DrafQqSNSlmZ
+3ZwWnamPE7Eiewdi30Qtru7bGZ2k+lZX5Q==
+-----END EC PRIVATE KEY-----
+"""
+
+class Srv implements Sendable:
+    pub port:      int
+    pub kind:      int              # 0 RSA, 1 P-256
+    pub ok:        Atomic[int]      # handshakes that succeeded on the server
+    pub sni_ok:    Atomic[int]      # connections whose SNI was "localhost"
+    pub failed:    Atomic[int]      # handshakes that failed on the server
+    pub done:      Atomic[int]
+
+extend Srv:
+    pub def init(port: int, kind: int) -> Srv:
+        mut s = Srv()
+        s.port = port
+        s.kind = kind
+        s.ok = Atomic.new(0)
+        s.sni_ok = Atomic.new(0)
+        s.failed = Atomic.new(0)
+        s.done = Atomic.new(0)
+        return s
+
+def make_cfg(kind: int) throws str -> TlsServerConfig:
+    mut cfg = TlsServerConfig.from_pem(rsa_cert(), rsa_key())?
+    if kind == 1: cfg = TlsServerConfig.from_pem(p256_cert(), p256_key())?
+    cfg.set_alpn("h2,http/1.1")?
+    return cfg
+
+# Serves 4 connections: echo lines until EOF.
+def tls_server(f: Shared[Srv]):
+    mut r: Result[bool, str] = tls_serve(f)
+    if r.is_err: print("server: " + r.err)
+    f.done.store(1)
+
+def tls_serve(f: Shared[Srv]) throws str -> bool:
+    mut cfg = make_cfg(f.kind)?
+    mut l = TlsListener.listen("127.0.0.1", f.port, cfg)?
+    l.timeout_ms = 10000
+    mut n = 0
+    while n < 4:
+        mut ar: Result[TlsStream, str] = l.accept()
+        if ar.is_err:
+            f.failed.add(1)
+        else:
+            mut c = ar.ok
+            f.ok.add(1)
+            if c.server_name() == "localhost": f.sni_ok.add(1)
+            mut er: Result[bool, str] = echo(c)
+            c.close()
+        n = n + 1
+    l.close()
+    return true
+
+def echo(c: TlsStream) throws str -> bool:
+    while true:
+        mut chunk = c.read(65536)?
+        if chunk.len() == 0: break
+        c.write(chunk)?
+    return true
+
+def opts_for(cert: str) -> TlsOptions:
+    mut o = TlsOptions.default()
+    o.ca_pem = cert
+    o.only_ca_pem = true
+    o.alpn = "http/1.1,h2"
+    o.timeout_ms = 10000
+    return o
+
+def round_trip(t: TestRunner, port: int, cert: str, label: str) throws str:
+    mut s = TlsStream.connect_with("localhost", port, opts_for(cert))?
+    t.assert_eq_str(s.version(), "TLSv1.3", label + ": TLS 1.3")
+    t.assert_eq_str(s.alpn(), "h2", label + ": server preference wins ALPN")
+    t.assert_eq_str(s.cipher_suite(), "TLS_AES_128_GCM_SHA256", label + ": cipher suite")
+    t.assert_eq_int(len(s.peer_certificates()), 1, label + ": certificate sent")
+    s.write("hello\n")?
+    t.assert_eq_str(s.read_line(100)?, "hello\n", label + ": echo")
+    # 2 MiB both ways (many records)
+    mut big = ""
+    mut piece = "0123456789abcdef"
+    mut i = 0
+    while i < 16:
+        piece = piece + piece
+        i = i + 1
+    big = piece + piece
+    t.assert_eq_int(big.len(), 2097152, label + ": 2 MiB payload")
+    s.write(big)?
+    mut got = 0
+    mut same = true
+    while got < big.len():
+        mut part = s.read(65536)?
+        if part.len() == 0: break
+        if part != big.slice(got, got + part.len()): same = false
+        got = got + part.len()
+    t.assert_eq_int(got, big.len(), label + ": 2 MiB echoed back")
+    t.assert_true(same, label + ": echoed bytes match")
+    s.close()
+
+def test_tls(t: TestRunner, kind: int, port: int, cert: str, label: str):
+    t.section(label)
+    shared f = Srv.init(port, kind)
+    mut th = Thread.spawn(tls_server, f)
+    Thread.sleep(300)
+    mut r1: Result[bool, str] = rt(t, port, cert, label)
+    t.assert_true(r1.is_ok, label + ": round trip completed")
+    if r1.is_err: print(r1.err)
+    # untrusted: system roots only -> the client must refuse
+    mut o = TlsOptions.default()
+    o.timeout_ms = 10000
+    mut bad: Result[TlsStream, str] = TlsStream.connect_with("localhost", port, o)
+    t.assert_true(bad.is_err, label + ": unknown issuer rejected by the client")
+    # unverified (testing mode) still works
+    mut ins: Result[TlsStream, str] = TlsStream.connect_with("localhost", port, TlsOptions.insecure())
+    t.assert_true(ins.is_ok, label + ": insecure client connects")
+    if ins.is_ok:
+        mut c = ins.ok
+        c.close()
+    # no common ALPN: still connects, nothing selected
+    mut o2 = opts_for(cert)
+    o2.alpn = "spdy/3"
+    mut na: Result[TlsStream, str] = TlsStream.connect_with("localhost", port, o2)
+    t.assert_true(na.is_ok, label + ": connects without a common ALPN protocol")
+    if na.is_ok:
+        mut c2 = na.ok
+        t.assert_eq_str(c2.alpn(), "", label + ": no ALPN selected")
+        c2.close()
+    th.join()
+    t.assert_eq_int(f.ok.load(), 3, label + ": server handshakes completed")
+    t.assert_eq_int(f.failed.load(), 1, label + ": rejected handshake seen by the server")
+    t.assert_eq_int(f.sni_ok.load(), 3, label + ": SNI received")
+
+def rt(t: TestRunner, port: int, cert: str, label: str) throws str -> bool:
+    round_trip(t, port, cert, label)?
+    return true
+
+def test_config_errors(t: TestRunner):
+    t.section("configuration errors")
+    mut a: Result[TlsServerConfig, str] = TlsServerConfig.from_pem("not a pem", rsa_key())
+    t.assert_true(a.is_err, "certificate PEM required")
+    mut b: Result[TlsServerConfig, str] = TlsServerConfig.from_pem(rsa_cert(), "nope")
+    t.assert_true(b.is_err, "private key required")
+    if b.is_err: t.assert_contains(b.err, "PRIVATE KEY", "error names the missing key")
+    mut c: Result[TlsServerConfig, str] = TlsServerConfig.from_pem(rsa_cert(), rsa_key())
+    t.assert_true(c.is_ok, "valid RSA config")
+
+class HSrv implements Sendable:
+    pub port: int
+    pub hits: Atomic[int]
+
+def https_server(f: Shared[HSrv]):
+    mut cr: Result[TlsServerConfig, str] = make_cfg(0)
+    if cr.is_err:
+        print("https: " + cr.err)
+        return
+    mut srv = HttpServer.init("127.0.0.1", f.port)
+    srv.enable_tls(cr.ok)
+    srv.get("/hello", 1)
+    srv.post("/echo", 2)
+    if not srv.start(): return
+    mut n = 0
+    while n < 2:
+        mut conn = srv.accept()
+        if conn.request.route_id == 1:
+            conn.send_text(200, "hello over https")
+            f.hits.add(1)
+        elif conn.request.route_id == 2:
+            conn.send_text(200, "got:" + conn.request.body)
+            f.hits.add(1)
+        else:
+            conn.send_status(404)
+        conn.close()
+        n = n + 1
+    srv.stop()
+
+def test_https(t: TestRunner):
+    t.section("HttpServer.enable_tls + HttpSession")
+    shared f = HSrv()
+    f.port = 18983
+    f.hits = Atomic.new(0)
+    mut th = Thread.spawn(https_server, f)
+    Thread.sleep(300)
+    mut s = HttpSession.init()
+    s.set_ca_pem(rsa_cert())
+    s.set_timeout(10000)
+    mut r = s.get("https://localhost:18983/hello")
+    t.assert_eq_int(r.status, 200, "GET status")
+    t.assert_eq_str(r.body, "hello over https", "GET body")
+    if r.error.len() > 0: print(r.error)
+    mut p = s.post("https://localhost:18983/echo", "payload=1", "application/x-www-form-urlencoded")
+    t.assert_eq_str(p.body, "got:payload=1", "POST body reaches the handler")
+    th.join()
+    t.assert_eq_int(f.hits.load(), 2, "both requests handled")
+
+def main():
+    mut t = TestRunner.init("129_tls_server")
+    test_config_errors(t)
+    test_tls(t, 0, 18981, rsa_cert(), "RSA certificate")
+    test_tls(t, 1, 18982, p256_cert(), "ECDSA P-256 certificate")
+    test_https(t)
+    t.summary()

@@ -69,6 +69,11 @@ int64_t trc_x509_verify_chain(void* store_h, const char* ders, const int64_t* le
                               const char* host, int64_t hostlen, int64_t now, int64_t purpose);
 int64_t trc_x509_verify_tls_sig(const char* leaf_der, int64_t leaf_len, int64_t scheme, const char* msg, int64_t mlen, const char* sig, int64_t slen);
 int64_t trc_x509_error_text(int64_t code, char* out, int64_t cap);
+void* trc_pk_parse_der(const char* der_bytes, int64_t n, int64_t* err);
+int64_t trc_pk_kind(void* h);
+int64_t trc_pk_has_private(void* h);
+int64_t trc_pk_bits(void* h);
+int64_t trc_pk_sign(void* h, int64_t scheme, int64_t alg, const char* msg, int64_t mlen, char* out, int64_t cap, int64_t sig_raw);
 
 static void tw(void* p, size_t n) { volatile u8* v = (volatile u8*)p; while (n--) *v++ = 0; }
 
@@ -119,6 +124,7 @@ typedef struct {
     char alpn[64];
     u8* certs[TLS_MAX_CERTS]; int64_t cert_lens[TLS_MAX_CERTS]; int ncerts;
     int verify; void* store; char host[256];
+    int is_server;                       /* 1 for connections accepted by trc_tls_server_fd */
 } tls_conn;
 
 static void tls_fail(tls_conn* c, const char* msg) {
@@ -244,7 +250,7 @@ static int send_record(tls_conn* c, int type, const u8* data, size_t n) {
     while (1) {
         size_t chunk = n > TLS_MAX_REC ? TLS_MAX_REC : n;
         if (!c->wr.suite) {
-            rec[0] = (u8)type; rec[1] = 3; rec[2] = type == 22 ? 1 : 3;
+            rec[0] = (u8)type; rec[1] = 3; rec[2] = (type == 22 && !c->is_server) ? 1 : 3;
             rec[3] = (u8)(chunk >> 8); rec[4] = (u8)chunk;
             memcpy(rec + 5, data, chunk);
             if (sock_write_all(c, rec, 5 + chunk) < 0) { tls_fail(c, "TLS: write failed"); return -1; }
@@ -822,4 +828,490 @@ void trc_tls_close(void* h) {
     for (i = 0; i < c->ncerts; i++) free(c->certs[i]);
     free(c->hsbuf); free(c->transcript);
     tw(c, sizeof *c); free(c);
+}
+
+
+/* ═══════════════════════════ TLS 1.3 server ══════════════════════════════
+ *
+ *   key exchange ...... X25519, secp256r1, secp384r1 (HelloRetryRequest when
+ *                       the client offered the group without a key share)
+ *   cipher suites ..... TLS_AES_128_GCM_SHA256, TLS_CHACHA20_POLY1305_SHA256,
+ *                       TLS_AES_256_GCM_SHA384 (server preference order)
+ *   certificates ...... RSA (rsa_pss_rsae_sha256/384/512), ECDSA P-256 / P-384
+ *   extras ............ ALPN (server preference), SNI (recorded), KeyUpdate
+ *   not supported ..... client certificates, PSK / resumption, 0-RTT
+ */
+typedef struct {
+    u8* certs[TLS_MAX_CERTS]; int64_t cert_lens[TLS_MAX_CERTS]; int ncerts;
+    void* key; int key_kind;           /* 1 RSA, 2 P-256, 3 P-384 */
+    char alpn[256];                    /* comma-separated, server preference */
+    char err[160];
+} tls_srv_cfg;
+
+void trc_tls_server_config_free(void* h) {
+    tls_srv_cfg* g = (tls_srv_cfg*)h; int i;
+    if (!g) return;
+    for (i = 0; i < g->ncerts; i++) free(g->certs[i]);
+    if (g->key) trc_pk_free(g->key);
+    tw(g, sizeof *g); free(g);
+}
+
+/* Certificate chain (DER, leaf first, concatenated with lengths) + private key
+ * (DER: PKCS#8, PKCS#1 RSA or SEC1 EC). Always returns a handle; on failure
+ * trc_tls_server_config_error() is non-empty. */
+void* trc_tls_server_config(const char* ders, const int64_t* lens, int64_t count, const char* key_der, int64_t key_len, const char* alpn) {
+    tls_srv_cfg* g = (tls_srv_cfg*)calloc(1, sizeof(tls_srv_cfg)); int64_t i, off = 0, err = 0;
+    if (!g) return NULL;
+    if (count <= 0) { snprintf(g->err, sizeof g->err, "TLS server: no certificate"); return g; }
+    if (count > TLS_MAX_CERTS) count = TLS_MAX_CERTS;
+    for (i = 0; i < count; i++) {
+        g->certs[i] = (u8*)malloc(lens[i] ? (size_t)lens[i] : 1);
+        if (!g->certs[i]) { snprintf(g->err, sizeof g->err, "TLS server: out of memory"); return g; }
+        memcpy(g->certs[i], ders + off, (size_t)lens[i]); g->cert_lens[i] = lens[i]; off += lens[i];
+        g->ncerts++;
+    }
+    g->key = trc_pk_parse_der(key_der, key_len, &err);
+    if (!g->key || !trc_pk_has_private(g->key)) { snprintf(g->err, sizeof g->err, "TLS server: cannot use the private key (need RSA or EC P-256/P-384)"); return g; }
+    g->key_kind = (int)trc_pk_kind(g->key);
+    if (g->key_kind != 1 && g->key_kind != 2 && g->key_kind != 3) { snprintf(g->err, sizeof g->err, "TLS server: unsupported key type (need RSA or EC P-256/P-384)"); return g; }
+    if (alpn) { size_t al = strlen(alpn); if (al >= sizeof g->alpn) al = sizeof g->alpn - 1; memcpy(g->alpn, alpn, al); g->alpn[al] = 0; }
+    return g;
+}
+int64_t trc_tls_server_config_error(void* h, char* out, int64_t cap) {
+    tls_srv_cfg* g = (tls_srv_cfg*)h; size_t n;
+    if (!g) { memcpy(out, "TLS server: out of memory", 25); return 25; }
+    n = strlen(g->err); if ((int64_t)n > cap) n = (size_t)cap;
+    memcpy(out, g->err, n); return (int64_t)n;
+}
+
+typedef struct {
+    const u8* sid; size_t sid_len;
+    int suites[16]; int nsuites;
+    int groups[16]; int ngroups;
+    int sigalgs[32]; int nsigalgs;
+    int share_group[8]; const u8* share[8]; size_t share_len[8]; int nshares;
+    int tls13;
+    const u8* alpn; size_t alpn_len;            /* ProtocolNameList body */
+    char sni[256];
+} ch_info;
+
+static int parse_client_hello(tls_conn* c, const u8* m, size_t n, ch_info* h) {
+    size_t k = 0, l, end;
+    memset(h, 0, sizeof *h);
+    if (n < 2 + 32 + 1) goto bad;
+    k = 2 + 32;
+    h->sid_len = m[k++]; if (h->sid_len > 32 || k + h->sid_len > n) goto bad;
+    h->sid = m + k; k += h->sid_len;
+    if (k + 2 > n) goto bad;
+    l = ((size_t)m[k] << 8) | m[k + 1]; k += 2;
+    if (k + l > n || (l & 1)) goto bad;
+    { size_t i; for (i = 0; i < l; i += 2) if (h->nsuites < 16) h->suites[h->nsuites++] = (m[k + i] << 8) | m[k + i + 1]; }
+    k += l;
+    if (k + 1 > n) goto bad;
+    l = m[k++]; if (k + l > n) goto bad; k += l;           /* compression methods */
+    if (k == n) return 0;
+    if (k + 2 > n) goto bad;
+    l = ((size_t)m[k] << 8) | m[k + 1]; k += 2;
+    if (k + l != n) goto bad;
+    end = k + l;
+    while (k + 4 <= end) {
+        unsigned et = ((unsigned)m[k] << 8) | m[k + 1]; size_t el = ((size_t)m[k + 2] << 8) | m[k + 3];
+        const u8* d = m + k + 4;
+        k += 4;
+        if (k + el > end) goto bad;
+        if (et == 43) {                                     /* supported_versions */
+            size_t vl = el ? d[0] : 0, i;
+            if (1 + vl > el) goto bad;
+            for (i = 0; i + 1 < vl; i += 2) if (d[1 + i] == 3 && d[2 + i] == 4) h->tls13 = 1;
+        } else if (et == 10) {                              /* supported_groups */
+            size_t gl, i; if (el < 2) goto bad; gl = ((size_t)d[0] << 8) | d[1];
+            if (2 + gl > el) goto bad;
+            for (i = 0; i + 1 < gl; i += 2) if (h->ngroups < 16) h->groups[h->ngroups++] = (d[2 + i] << 8) | d[3 + i];
+        } else if (et == 13) {                              /* signature_algorithms */
+            size_t sl, i; if (el < 2) goto bad; sl = ((size_t)d[0] << 8) | d[1];
+            if (2 + sl > el) goto bad;
+            for (i = 0; i + 1 < sl; i += 2) if (h->nsigalgs < 32) h->sigalgs[h->nsigalgs++] = (d[2 + i] << 8) | d[3 + i];
+        } else if (et == 51) {                              /* key_share */
+            size_t kl, p = 2; if (el < 2) goto bad; kl = ((size_t)d[0] << 8) | d[1];
+            if (2 + kl > el) goto bad;
+            while (p + 4 <= 2 + kl) {
+                int g = (d[p] << 8) | d[p + 1]; size_t xl = ((size_t)d[p + 2] << 8) | d[p + 3];
+                if (p + 4 + xl > 2 + kl) goto bad;
+                if (h->nshares < 8) { h->share_group[h->nshares] = g; h->share[h->nshares] = d + p + 4; h->share_len[h->nshares] = xl; h->nshares++; }
+                p += 4 + xl;
+            }
+        } else if (et == 16) {                              /* ALPN */
+            size_t pl; if (el < 2) goto bad; pl = ((size_t)d[0] << 8) | d[1];
+            if (2 + pl > el) goto bad;
+            h->alpn = d + 2; h->alpn_len = pl;
+        } else if (et == 0) {                               /* server_name */
+            if (el >= 5 && d[2] == 0) {
+                size_t nl = ((size_t)d[3] << 8) | d[4];
+                if (5 + nl <= el && nl < sizeof h->sni) { memcpy(h->sni, d + 5, nl); h->sni[nl] = 0; }
+            }
+        }
+        k += el;
+    }
+    return 0;
+bad:
+    send_alert(c, 2, 50);
+    tls_fail(c, "TLS: malformed ClientHello");
+    return -1;
+}
+
+static int ch_has(const int* v, int n, int x) { int i; for (i = 0; i < n; i++) if (v[i] == x) return 1; return 0; }
+
+/* Server-preferred ALPN protocol also offered by the client; "" when none. */
+static void pick_alpn(const tls_srv_cfg* g, const ch_info* h, char* out) {
+    size_t pos = 0, al = strlen(g->alpn);
+    out[0] = 0;
+    if (!h->alpn) return;
+    while (pos < al) {
+        size_t e = pos, q = 0;
+        while (e < al && g->alpn[e] != ',') e++;
+        while (q < h->alpn_len) {
+            size_t pl = h->alpn[q];
+            if (q + 1 + pl > h->alpn_len) break;
+            if (pl == e - pos && memcmp(h->alpn + q + 1, g->alpn + pos, pl) == 0) { memcpy(out, g->alpn + pos, pl); out[pl] = 0; return; }
+            q += 1 + pl;
+        }
+        pos = e + 1;
+    }
+}
+
+static int server_handshake(tls_conn* c, tls_srv_cfg* g) {
+    u8 *msg = NULL; size_t mlen; int type, rc = -1, suite = 0, hash = 256, hl = 32, group = 0, scheme = 0, hrr = 0;
+    ch_info ch; u8 random[32], shared[48], x_priv[32], x_pub[32], base[32] = {9}, pub[97]; size_t publen = 0, slen = 0;
+    void* eck = NULL; const u8* peer = NULL; size_t peer_len = 0; u8 sid_copy[32]; size_t sid_len = 0;
+    u8 early[48], derived[48], hs_secret[48], c_hs[48], s_hs[48], master[48], c_ap[48], s_ap[48], zeros[48], th[48];
+    char alpn_sel[128];
+    memset(zeros, 0, sizeof zeros);
+    if (!g || g->err[0]) { tls_fail(c, g ? g->err : "TLS server: no configuration"); return -1; }
+
+    for (;;) {
+        int i;
+        if (next_hs(c, &type, &msg, &mlen) < 0) goto out;
+        if (type != 1) { send_alert(c, 2, 10); tls_fail(c, "TLS: expected ClientHello"); goto out; }
+        if (parse_client_hello(c, msg, mlen, &ch) < 0) goto out;
+        if (!ch.tls13) { send_alert(c, 2, 70); tls_fail(c, "TLS: client does not offer TLS 1.3"); goto out; }
+        if (hrr && (ch.sid_len != sid_len || memcmp(ch.sid, sid_copy, sid_len) != 0)) { send_alert(c, 2, 47); tls_fail(c, "TLS: ClientHello changed after HelloRetryRequest"); goto out; }
+        sid_len = ch.sid_len; memcpy(sid_copy, ch.sid, sid_len);
+        if (!suite) {
+            static const int pref[3] = {0x1301, 0x1303, 0x1302};
+            for (i = 0; i < 3 && !suite; i++) if (ch_has(ch.suites, ch.nsuites, pref[i])) suite = pref[i];
+            if (!suite) { send_alert(c, 2, 40); tls_fail(c, "TLS: no common cipher suite"); goto out; }
+        }
+        /* signature scheme for our key */
+        if (!scheme) {
+            if (g->key_kind == 2 && ch_has(ch.sigalgs, ch.nsigalgs, 0x0403)) scheme = 0x0403;
+            else if (g->key_kind == 3 && ch_has(ch.sigalgs, ch.nsigalgs, 0x0503)) scheme = 0x0503;
+            else if (g->key_kind == 1) {
+                if (ch_has(ch.sigalgs, ch.nsigalgs, 0x0804)) scheme = 0x0804;
+                else if (ch_has(ch.sigalgs, ch.nsigalgs, 0x0805)) scheme = 0x0805;
+                else if (ch_has(ch.sigalgs, ch.nsigalgs, 0x0806)) scheme = 0x0806;
+            }
+            if (!scheme) { send_alert(c, 2, 40); tls_fail(c, "TLS: client accepts no signature scheme for our certificate key"); goto out; }
+        }
+        /* key share: server preference X25519, P-256, P-384 */
+        {
+            static const int gp[3] = {0x1d, 0x17, 0x18};
+            int j;
+            group = 0; peer = NULL;
+            for (i = 0; i < 3 && !group; i++)
+                for (j = 0; j < ch.nshares; j++)
+                    if (ch.share_group[j] == gp[i] && (!hrr || gp[i] == hrr)) { group = gp[i]; peer = ch.share[j]; peer_len = ch.share_len[j]; break; }
+            if (!group) {
+                int want = 0;
+                if (hrr) { send_alert(c, 2, 47); tls_fail(c, "TLS: no key share for the requested group after HelloRetryRequest"); goto out; }
+                for (i = 0; i < 3 && !want; i++) if (ch_has(ch.groups, ch.ngroups, gp[i])) want = gp[i];
+                if (!want) { send_alert(c, 2, 40); tls_fail(c, "TLS: no common key exchange group"); goto out; }
+                /* HelloRetryRequest: transcript becomes message_hash(CH1) || HRR */
+                hash = suite == 0x1302 ? 384 : 256; hl = hash == 384 ? 48 : 32;
+                {
+                    u8 h1[48], mh[4 + 48], body[128]; size_t bk = 0;
+                    trc_digest(hash, (const char*)c->transcript, (int64_t)c->tlen, (char*)h1);
+                    mh[0] = 254; mh[1] = 0; mh[2] = 0; mh[3] = (u8)hl; memcpy(mh + 4, h1, (size_t)hl);
+                    c->tlen = 0;
+                    buf_append(&c->transcript, &c->tlen, &c->tcap, mh, (size_t)(4 + hl));
+                    bk = put16(body, bk, 0x0303);
+                    memcpy(body + bk, HRR_RANDOM, 32); bk += 32;
+                    body[bk++] = (u8)sid_len; memcpy(body + bk, sid_copy, sid_len); bk += sid_len;
+                    bk = put16(body, bk, (unsigned)suite); body[bk++] = 0;
+                    bk = put16(body, bk, 12);
+                    bk = put16(body, bk, 43); bk = put16(body, bk, 2); bk = put16(body, bk, 0x0304);
+                    bk = put16(body, bk, 51); bk = put16(body, bk, 2); bk = put16(body, bk, (unsigned)want);
+                    if (send_hs(c, 2, body, bk) < 0) goto out;
+                    if (sid_len) send_record(c, 20, (const u8*)"\x01", 1);
+                }
+                hrr = want;
+                free(msg); msg = NULL;
+                continue;
+            }
+        }
+        break;
+    }
+    hash = suite == 0x1302 ? 384 : 256; hl = hash == 384 ? 48 : 32;
+    pick_alpn(g, &ch, alpn_sel);
+    memcpy(c->host, ch.sni, sizeof c->host);
+    free(msg); msg = NULL;
+
+    /* our key share + shared secret */
+    if (trc_random((char*)random, 32) != 0) { tls_fail(c, "TLS: OS random generator unavailable"); goto out; }
+    if (group == 0x1d) {
+        if (peer_len != 32 || trc_random((char*)x_priv, 32) != 0) { send_alert(c, 2, 47); tls_fail(c, "TLS: bad X25519 key share"); goto out; }
+        trc_x25519((char*)x_pub, (const char*)x_priv, (const char*)base);
+        if (trc_x25519((char*)shared, (const char*)x_priv, (const char*)peer) != 0) { send_alert(c, 2, 47); tls_fail(c, "TLS: bad X25519 key share"); goto out; }
+        memcpy(pub, x_pub, 32); publen = 32; slen = 32;
+    } else {
+        int bits = group == 0x17 ? 256 : 384, want = group == 0x17 ? 65 : 97;
+        eck = trc_pk_ec_generate(bits);
+        if (!eck || trc_pk_public_raw(eck, (char*)pub, 97) != want) { tls_fail(c, "TLS: key generation failed"); goto out; }
+        publen = (size_t)want;
+        if (trc_pk_ecdh(eck, (const char*)peer, (int64_t)peer_len, (char*)shared) != (bits / 8)) { send_alert(c, 2, 47); tls_fail(c, "TLS: bad ECDHE key share"); goto out; }
+        slen = (size_t)(bits / 8);
+    }
+    /* ServerHello */
+    {
+        u8 body[256]; size_t bk = 0, ext;
+        bk = put16(body, bk, 0x0303);
+        memcpy(body + bk, random, 32); bk += 32;
+        body[bk++] = (u8)sid_len; memcpy(body + bk, sid_copy, sid_len); bk += sid_len;
+        bk = put16(body, bk, (unsigned)suite); body[bk++] = 0;
+        ext = bk; bk += 2;
+        bk = put16(body, bk, 43); bk = put16(body, bk, 2); bk = put16(body, bk, 0x0304);
+        bk = put16(body, bk, 51); bk = put16(body, bk, (unsigned)(4 + publen)); bk = put16(body, bk, (unsigned)group);
+        bk = put16(body, bk, (unsigned)publen); memcpy(body + bk, pub, publen); bk += publen;
+        put16(body, ext, (unsigned)(bk - ext - 2));
+        if (send_hs(c, 2, body, bk) < 0) goto out;
+    }
+    if (sid_len && !hrr) send_record(c, 20, (const u8*)"\x01", 1);   /* middlebox compatibility */
+    /* handshake secrets */
+    trc_hkdf_extract(hash, (const char*)zeros, hl, (const char*)zeros, hl, (char*)early);
+    derive_secret(c, hash, early, "derived", 0, derived);
+    trc_hkdf_extract(hash, (const char*)derived, hl, (const char*)shared, (int64_t)slen, (char*)hs_secret);
+    derive_secret(c, hash, hs_secret, "c hs traffic", 1, c_hs);
+    derive_secret(c, hash, hs_secret, "s hs traffic", 1, s_hs);
+    if (dir_set(&c->wr, suite, s_hs) < 0 || dir_set(&c->rd, suite, c_hs) < 0) goto out;
+    /* EncryptedExtensions */
+    {
+        u8 body[160]; size_t bk = 2, al = strlen(alpn_sel);
+        if (al) {
+            bk = put16(body, bk, 16); bk = put16(body, bk, (unsigned)(al + 3)); bk = put16(body, bk, (unsigned)(al + 1));
+            body[bk++] = (u8)al; memcpy(body + bk, alpn_sel, al); bk += al;
+            memcpy(c->alpn, alpn_sel, al + 1);
+        }
+        if (ch.sni[0]) { bk = put16(body, bk, 0); bk = put16(body, bk, 0); }   /* server_name acknowledged */
+        put16(body, 0, (unsigned)(bk - 2));
+        if (send_hs(c, 8, body, bk) < 0) goto out;
+    }
+    /* Certificate */
+    {
+        size_t tot = 1 + 3, bk = 0, i2; u8* body;
+        for (i2 = 0; i2 < (size_t)g->ncerts; i2++) tot += 3 + (size_t)g->cert_lens[i2] + 2;
+        body = (u8*)malloc(tot);
+        if (!body) goto out;
+        body[bk++] = 0;
+        body[bk++] = (u8)((tot - 4) >> 16); body[bk++] = (u8)((tot - 4) >> 8); body[bk++] = (u8)(tot - 4);
+        for (i2 = 0; i2 < (size_t)g->ncerts; i2++) {
+            size_t cl = (size_t)g->cert_lens[i2];
+            body[bk++] = (u8)(cl >> 16); body[bk++] = (u8)(cl >> 8); body[bk++] = (u8)cl;
+            memcpy(body + bk, g->certs[i2], cl); bk += cl;
+            body[bk++] = 0; body[bk++] = 0;
+        }
+        if (send_hs(c, 11, body, bk) < 0) { free(body); goto out; }
+        free(body);
+    }
+    /* CertificateVerify */
+    {
+        u8 content[64 + 34 + 48], sig[1024], body[4 + 1024]; static const char ctx[] = "TLS 1.3, server CertificateVerify";
+        int64_t sl; int salg = scheme == 0x0503 || scheme == 0x0805 ? 384 : scheme == 0x0806 ? 512 : 256;
+        transcript_hash(c, hash, th);
+        memset(content, 0x20, 64); memcpy(content + 64, ctx, 33); content[97] = 0; memcpy(content + 98, th, (size_t)hl);
+        sl = trc_pk_sign(g->key, g->key_kind == 1 ? 1 : 0, salg, (const char*)content, 98 + hl, (char*)sig, (int64_t)sizeof sig, 0);
+        if (sl <= 0) { send_alert(c, 2, 80); tls_fail(c, "TLS: signing CertificateVerify failed"); goto out; }
+        put16(body, 0, (unsigned)scheme); put16(body, 2, (unsigned)sl); memcpy(body + 4, sig, (size_t)sl);
+        if (send_hs(c, 15, body, 4 + (size_t)sl) < 0) goto out;
+    }
+    /* server Finished */
+    {
+        u8 fk[48], vd[48];
+        transcript_hash(c, hash, th);
+        hkdf_label(hash, s_hs, hl, "finished", NULL, 0, fk, hl);
+        trc_hmac(hash, (const char*)fk, hl, (const char*)th, hl, (char*)vd);
+        if (send_hs(c, 20, vd, (size_t)hl) < 0) goto out;
+    }
+    /* application secrets (transcript through server Finished) */
+    derive_secret(c, hash, hs_secret, "derived", 0, derived);
+    trc_hkdf_extract(hash, (const char*)derived, hl, (const char*)zeros, hl, (char*)master);
+    derive_secret(c, hash, master, "c ap traffic", 1, c_ap);
+    derive_secret(c, hash, master, "s ap traffic", 1, s_ap);
+    /* client Finished */
+    {
+        u8 fk[48], want[48];
+        transcript_hash(c, hash, th);
+        hkdf_label(hash, c_hs, hl, "finished", NULL, 0, fk, hl);
+        trc_hmac(hash, (const char*)fk, hl, (const char*)th, hl, (char*)want);
+        if (next_hs(c, &type, &msg, &mlen) < 0) goto out;
+        if (type != 20 || mlen != (size_t)hl || !trc_ct_eq((const char*)msg, hl, (const char*)want, hl)) {
+            send_alert(c, 2, 51); tls_fail(c, "TLS: client Finished does not verify"); goto out;
+        }
+        free(msg); msg = NULL;
+    }
+    if (dir_set(&c->wr, suite, s_ap) < 0 || dir_set(&c->rd, suite, c_ap) < 0) goto out;
+    c->state = 1;
+    rc = 0;
+out:
+    free(msg);
+    if (eck) trc_pk_free(eck);
+    tw(x_priv, sizeof x_priv); tw(shared, sizeof shared); tw(early, sizeof early); tw(hs_secret, sizeof hs_secret);
+    tw(master, sizeof master); tw(c_hs, sizeof c_hs); tw(s_hs, sizeof s_hs); tw(c_ap, sizeof c_ap); tw(s_ap, sizeof s_ap);
+    free(c->transcript); c->transcript = NULL; c->tlen = c->tcap = 0;
+    return rc;
+}
+
+/* Accept a TLS 1.3 handshake on a connected socket. Always returns a handle
+ * (check trc_tls_ok / trc_tls_error); the requested SNI host name is
+ * available through trc_tls_server_name. */
+void* trc_tls_server_fd(int64_t fd, void* cfg, int64_t timeout_ms, int64_t owns_fd) {
+    tls_conn* c = conn_new("", 0, NULL, 0, timeout_ms);
+    if (!c) return NULL;
+    c->fd = (tls_sock)fd; c->owns_fd = (int)owns_fd; c->is_server = 1;
+#if defined(_WIN32)
+    tls_wsa();
+#endif
+    server_handshake(c, (tls_srv_cfg*)cfg);
+    return c;
+}
+int64_t trc_tls_server_name(void* h, char* out, int64_t cap) {
+    tls_conn* c = (tls_conn*)h; size_t n;
+    if (!c) return 0;
+    n = strlen(c->host); if ((int64_t)n > cap) n = (size_t)cap;
+    memcpy(out, c->host, n); return (int64_t)n;
+}
+
+/* ── TLS termination proxy (HTTPS for servers written against plain sockets) ──
+ * trc_tls_server_proxy(fd, cfg, timeout) returns the plain end of a local
+ * socket pair at once; a detached thread runs the server handshake on `fd`
+ * and then copies bytes both ways until either side closes. A failed
+ * handshake closes the plain end, which the application sees as EOF. */
+#if defined(_WIN32)
+#  include <windows.h>
+#else
+#  include <pthread.h>
+#endif
+
+static int tp_socketpair(tls_sock sv[2]) {
+#if defined(_WIN32)
+    struct sockaddr_in a; int al = sizeof a; tls_sock l, c, s;
+    tls_wsa();
+    l = socket(AF_INET, SOCK_STREAM, 0);
+    if (l == TLS_BADSOCK) return -1;
+    memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); a.sin_port = 0;
+    if (bind(l, (struct sockaddr*)&a, sizeof a) != 0 || listen(l, 1) != 0 || getsockname(l, (struct sockaddr*)&a, &al) != 0) { closesocket(l); return -1; }
+    c = socket(AF_INET, SOCK_STREAM, 0);
+    if (c == TLS_BADSOCK || connect(c, (struct sockaddr*)&a, sizeof a) != 0) { closesocket(l); if (c != TLS_BADSOCK) closesocket(c); return -1; }
+    s = accept(l, NULL, NULL);
+    closesocket(l);
+    if (s == TLS_BADSOCK) { closesocket(c); return -1; }
+    sv[0] = c; sv[1] = s;
+    return 0;
+#else
+    int fds[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) return -1;
+    sv[0] = fds[0]; sv[1] = fds[1];
+    return 0;
+#endif
+}
+
+typedef struct { tls_sock net; tls_sock plain; tls_srv_cfg* cfg; int timeout_ms; } tp_job;
+
+static int tp_send_all(tls_sock s, const char* d, size_t n) {
+    size_t off = 0;
+    while (off < n) {
+#if defined(MSG_NOSIGNAL)
+        long r = (long)send(s, d + off, (int)(n - off), MSG_NOSIGNAL);
+#else
+        long r = (long)send(s, d + off, (int)(n - off), 0);
+#endif
+        if (r <= 0) {
+#if !defined(_WIN32)
+            if (r < 0 && errno == EINTR) continue;
+#endif
+            return -1;
+        }
+        off += (size_t)r;
+    }
+    return 0;
+}
+
+static void tp_run(tp_job* j) {
+    tls_conn* c = (tls_conn*)trc_tls_server_fd((int64_t)j->net, j->cfg, j->timeout_ms, 1);
+    char* buf = (char*)malloc(TLS_MAX_REC);
+    if (c && buf && trc_tls_ok(c)) {
+        c->timeout_ms = 0;                     /* block in reads once data is announced */
+        for (;;) {
+            int net_ready = 0, plain_ready = 0;
+            if (c->app_len > 0) net_ready = 1;
+            else {
+#if defined(_WIN32)
+                fd_set rs; FD_ZERO(&rs); FD_SET(c->fd, &rs); FD_SET(j->plain, &rs);
+                if (select(0, &rs, NULL, NULL, NULL) <= 0) break;
+                net_ready = FD_ISSET(c->fd, &rs); plain_ready = FD_ISSET(j->plain, &rs);
+#else
+                struct pollfd p[2]; int r;
+                p[0].fd = c->fd; p[0].events = POLLIN; p[0].revents = 0;
+                p[1].fd = j->plain; p[1].events = POLLIN; p[1].revents = 0;
+                do { r = poll(p, 2, -1); } while (r < 0 && errno == EINTR);
+                if (r <= 0) break;
+                net_ready = (p[0].revents & (POLLIN | POLLHUP | POLLERR)) != 0;
+                plain_ready = (p[1].revents & (POLLIN | POLLHUP | POLLERR)) != 0;
+#endif
+            }
+            if (net_ready) {
+                int64_t n = trc_tls_read(c, buf, TLS_MAX_REC);
+                if (n <= 0) break;
+                if (tp_send_all(j->plain, buf, (size_t)n) < 0) break;
+            }
+            if (plain_ready) {
+                long n = (long)recv(j->plain, buf, TLS_MAX_REC, 0);
+                if (n <= 0) break;
+                if (trc_tls_write(c, buf, n) < 0) break;
+            }
+        }
+    }
+    free(buf);
+    tls_closesock(j->plain);
+    if (c) trc_tls_close(c);                   /* close_notify + closes the network socket */
+    else tls_closesock(j->net);
+    free(j);
+}
+
+#if defined(_WIN32)
+static DWORD WINAPI tp_thread(LPVOID p) { tp_run((tp_job*)p); return 0; }
+#else
+static void* tp_thread(void* p) { tp_run((tp_job*)p); return NULL; }
+#endif
+
+int64_t trc_tls_server_proxy(int64_t fd, void* cfg, int64_t timeout_ms) {
+    tls_sock sv[2]; tp_job* j;
+    if (!cfg || ((tls_srv_cfg*)cfg)->err[0]) return -1;
+    if (tp_socketpair(sv) != 0) return -1;
+    j = (tp_job*)malloc(sizeof *j);
+    if (!j) { tls_closesock(sv[0]); tls_closesock(sv[1]); return -1; }
+    j->net = (tls_sock)fd; j->plain = sv[1]; j->cfg = (tls_srv_cfg*)cfg; j->timeout_ms = (int)timeout_ms;
+#if defined(_WIN32)
+    {
+        HANDLE t = CreateThread(NULL, 0, tp_thread, j, 0, NULL);
+        if (!t) { tls_closesock(sv[0]); tls_closesock(sv[1]); free(j); return -1; }
+        CloseHandle(t);
+    }
+#else
+    {
+        pthread_t t; pthread_attr_t at;
+        pthread_attr_init(&at); pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+        if (pthread_create(&t, &at, tp_thread, j) != 0) { pthread_attr_destroy(&at); tls_closesock(sv[0]); tls_closesock(sv[1]); free(j); return -1; }
+        pthread_attr_destroy(&at);
+    }
+#endif
+    return (int64_t)sv[0];
 }

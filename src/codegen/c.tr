@@ -4301,11 +4301,11 @@ pub class CGenerator:
             mut l_owned = (ls.starts_with("_tr_str_wrap(") and ls.ends_with(")")) or self._is_fresh_str_expr(l)
             mut r_owned = (rs.starts_with("_tr_str_wrap(") and rs.ends_with(")")) or self._is_fresh_str_expr(r)
             if l_owned and r_owned:
-                return "({ TrStr _cl = (" + ls + "); TrStr _cr = (" + rs + "); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })"
+                return "({ TrStr _tr_cl = (" + ls + "); TrStr _tr_cr = (" + rs + "); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })"
             elif l_owned:
-                return "({ TrStr _cl = (" + ls + "); TrStr _cres = _tr_strx_concatv(_cl, (" + rs + ")); _tr_str_release(_cl); _cres; })"
+                return "({ TrStr _tr_cl = (" + ls + "); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (" + rs + ")); _tr_str_release(_tr_cl); _tr_cres; })"
             elif r_owned:
-                return "({ TrStr _cr = (" + rs + "); TrStr _cres = _tr_strx_concatv((" + ls + "), _cr); _tr_str_release(_cr); _cres; })"
+                return "({ TrStr _tr_cr = (" + rs + "); TrStr _tr_cres = _tr_strx_concatv((" + ls + "), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })"
             return "_tr_strx_concatv((" + ls + "), (" + rs + "))"
         # String repetition: "ab" * 3  (or  3 * "ab"), Python-style.
         if op == "*" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
@@ -4372,6 +4372,19 @@ pub class CGenerator:
                 return self.cls_method_c_call(mono_l, dunder, ls, rs)
         if op == "**": return "((long long)pow((double)(" + ls + "), (double)(" + rs + ")))"
         if op == "//": return "((long long)(" + ls + ") / (long long)(" + rs + "))"
+        if (_is_str_type(lt_n) and _is_str_type(rt_n)) and (op == "==" or op == "!=") and (self._is_fresh_str_expr(l) or self._is_fresh_str_expr(r)):
+            # A fresh operand (call result, slice, concat, f-string) is owned by the
+            # comparison: bind it in a statement-expression and release it after
+            # comparing (evaluated in place, so `and` / `or` short-circuiting holds).
+            mut cmp_a = "_cmpa" + self.next_temp()
+            mut cmp_b = "_cmpb" + self.next_temp()
+            mut cmp_res = "_cmpr" + self.next_temp()
+            mut cmp_rel = ""
+            if self._is_fresh_str_expr(l): cmp_rel = cmp_rel + " _tr_str_release(" + cmp_a + ");"
+            if self._is_fresh_str_expr(r): cmp_rel = cmp_rel + " _tr_str_release(" + cmp_b + ");"
+            mut cmp_neg = ""
+            if op == "!=": cmp_neg = "!"
+            return "({ TrStr " + cmp_a + " = (" + ls + "); TrStr " + cmp_b + " = (" + rs + "); _Bool " + cmp_res + " = " + cmp_neg + "_tr_str_eqv(" + cmp_a + ", " + cmp_b + ");" + cmp_rel + " " + cmp_res + "; })"
         if (_is_str_type(lt_n) or _is_str_type(rt_n)) and (op == "==" or op == "!="):
             if op == "==": return "_tr_str_eqv(" + self.strv(ls) + ", " + self.strv(rs) + ")"
             return "(!_tr_str_eqv(" + self.strv(ls) + ", " + self.strv(rs) + "))"
