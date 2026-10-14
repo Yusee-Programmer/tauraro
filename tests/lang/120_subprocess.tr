@@ -174,12 +174,17 @@ def test_env_cwd(t: TestRunner) throws str:
     mut f = child("env").arg("SP_TEST_INHERITED").env("SP_TEST_INHERITED", "x").env_remove("SP_TEST_INHERITED").output()?
     t.assert_eq_str(f.stdout_data, "<unset>", "env_remove after env")
     mut cl = child("env").env_clear()
-    if subprocess_is_windows(): cl.env("SystemRoot", e.get_var("SystemRoot"))
+    # the MinGW-built child needs PATH to find its runtime DLLs on Windows
+    if subprocess_is_windows():
+        cl.env("SystemRoot", e.get_var("SystemRoot"))
+        cl.env("PATH", e.get_var("PATH"))
     cl.env("SP_ONLY", "1")
     mut g = cl.arg("SP_TEST_INHERITED").output()?
     t.assert_eq_str(g.stdout_data, "<unset>", "env_clear drops inherited vars")
     mut cl2 = child("env").env_clear()
-    if subprocess_is_windows(): cl2.env("SystemRoot", e.get_var("SystemRoot"))
+    if subprocess_is_windows():
+        cl2.env("SystemRoot", e.get_var("SystemRoot"))
+        cl2.env("PATH", e.get_var("PATH"))
     mut h = cl2.env("SP_ONLY", "1").arg("SP_ONLY").output()?
     t.assert_eq_str(h.stdout_data, "SP_ONLY=1", "env_clear keeps later env()")
     e.unset_var("SP_TEST_INHERITED")

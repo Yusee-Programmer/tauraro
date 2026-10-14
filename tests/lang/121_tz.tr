@@ -31,11 +31,16 @@ def check_vectors(t: TestRunner, z: Tz, label: str, after: int, u_ts: List[int],
     # vs rearguard data; distributions differ from Python's tzdata package).
     # Offsets and abbreviations agree everywhere, so only the flag is skipped.
     mut dst_varies = label.find("Casablanca") >= 0 or label.find("Dublin") >= 0
+    # Morocco's future transitions (DST paused for Ramadan) are predictions that
+    # change between tzdata releases, and systems ship different releases, so
+    # only transitions before 2025 are compared there.
+    mut until = 0
+    if label.find("Casablanca") >= 0: until = 1735689600
     mut bad = 0
     mut n = 0
     mut i = 0
     while i < len(u_ts):
-        if after < 0 or u_ts[i] > after:
+        if (after < 0 or u_ts[i] > after) and (until == 0 or u_ts[i] < until):
             n = n + 1
             mut off, dst, ab = z.offset_at(u_ts[i])
             mut want_dst = u_dst[i] != 0
@@ -48,7 +53,7 @@ def check_vectors(t: TestRunner, z: Tz, label: str, after: int, u_ts: List[int],
         i = i + 1
     i = 0
     while i < len(l_wall):
-        if after < 0 or l_wall[i] > after + 172800:
+        if (after < 0 or l_wall[i] > after + 172800) and (until == 0 or l_wall[i] < until):
             n = n + 1
             mut dt = DateTime.from_timestamp_utc(l_wall[i])
             mut r0: Result[int, str] = z.local_to_unix(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, TZ_EARLIER)
@@ -84,7 +89,8 @@ def check_zone(t: TestRunner, name: str, last: int, u_ts: List[int], u_off: List
     mut e: Result[Tz, str] = Tz.embedded(name)
     if e.is_ok:
         mut n = check_vectors(t, e.ok, name + " (embedded)", last, u_ts, u_off, u_dst, u_ab, l_wall, l_u0, l_u1)
-        t.assert_gt_int(n, 0, f"{name} (embedded): some vectors past the last transition")
+        # (Casablanca's post-2025 vectors are skipped, see check_vectors)
+        if name.find("Casablanca") < 0: t.assert_gt_int(n, 0, f"{name} (embedded): some vectors past the last transition")
     else:
         t.fail(f"Tz.embedded({name}): {e.err}")
     mut hex = ""

@@ -98,9 +98,14 @@ def main():
     # Drain the initial CREATED event (and maybe an immediate debounce-window
     # modify) before starting the rapid-fire burst, so it doesn't get counted
     # as one of the coalesced writes below.
+    # Drain until the watcher has been quiet for three polls in a row: macOS
+    # FSEvents can deliver the create late on a busy machine.
+    mut quiet = 0
     mut k = 0
-    while k < 6:
-        w2.poll(150)
+    while quiet < 3 and k < 40:
+        mut dev = w2.poll(150)
+        if dev.len == 0: quiet = quiet + 1
+        else: quiet = 0
         k = k + 1
 
     # 5 rapid writes, well within the 400ms debounce window (each poll below
