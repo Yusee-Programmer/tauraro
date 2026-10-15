@@ -1053,7 +1053,8 @@ static int server_handshake(tls_conn* c, tls_srv_cfg* g) {
     hash = suite == 0x1302 ? 384 : 256; hl = hash == 384 ? 48 : 32;
     pick_alpn(g, &ch, alpn_sel);
     memcpy(c->host, ch.sni, sizeof c->host);
-    free(msg); msg = NULL;
+    /* `peer` (and the other ch_info pointers) point into msg: keep it until
+     * the key exchange below is done. */
 
     /* our key share + shared secret */
     if (trc_random((char*)random, 32) != 0) { tls_fail(c, "TLS: OS random generator unavailable"); goto out; }
@@ -1070,6 +1071,7 @@ static int server_handshake(tls_conn* c, tls_srv_cfg* g) {
         if (trc_pk_ecdh(eck, (const char*)peer, (int64_t)peer_len, (char*)shared) != (bits / 8)) { send_alert(c, 2, 47); tls_fail(c, "TLS: bad ECDHE key share"); goto out; }
         slen = (size_t)(bits / 8);
     }
+    free(msg); msg = NULL; peer = NULL;
     /* ServerHello */
     {
         u8 body[256]; size_t bk = 0, ext;
