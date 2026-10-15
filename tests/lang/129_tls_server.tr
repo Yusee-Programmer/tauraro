@@ -171,14 +171,22 @@ def round_trip(t: TestRunner, port: int, cert: str, label: str) throws str:
         i = i + 1
     big = piece + piece
     t.assert_eq_int(big.len(), 2097152, label + ": 2 MiB payload")
-    s.write(big)?
+    # Send in 64 KiB pieces and drain the echo after each one: writing the
+    # whole 2 MiB first deadlocks wherever socket buffers are smaller than
+    # the payload (macOS, Windows), since the server blocks echoing back.
     mut got = 0
     mut same = true
-    while got < big.len():
-        mut part = s.read(65536)?
-        if part.len() == 0: break
-        if part != big.slice(got, got + part.len()): same = false
-        got = got + part.len()
+    mut sent = 0
+    while sent < big.len():
+        mut piece_end = sent + 65536
+        if piece_end > big.len(): piece_end = big.len()
+        s.write(big.slice(sent, piece_end))?
+        sent = piece_end
+        while got < sent:
+            mut part = s.read(65536)?
+            if part.len() == 0: break
+            if part != big.slice(got, got + part.len()): same = false
+            got = got + part.len()
     t.assert_eq_int(got, big.len(), label + ": 2 MiB echoed back")
     t.assert_true(same, label + ": echoed bytes match")
     s.close()
