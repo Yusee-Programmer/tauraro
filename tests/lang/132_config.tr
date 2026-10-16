@@ -1,0 +1,485 @@
+# tests/lang/132_config.tr
+# std.config: layer precedence (defaults < files < env < flags < overrides),
+# TOML / YAML / JSON / INI / .env files, typed getters, durations and sizes,
+# interpolation with cycle detection, specs, unknown keys, secrets masking,
+# std.validate.schema integration, argparse Namespace input and reload.
+# Files are written under build/ (always present while tests run).
+
+from std.test import TestRunner
+from std.config import Config, ConfigWatcher, LAYER_DEFAULT, LAYER_FILE, LAYER_ENV, LAYER_ARGS, LAYER_OVERRIDE
+from std.io.file import File
+from std.sys.env import Env
+from std.cli.argparse import ArgParser, Arg, Namespace
+from std.validate.schema import Schema
+from std.validate.result import ValidationResult
+
+def p(name: str) -> str: return "build/cfgtest_" + name
+
+def write(name: str, text: str):
+    File.write_text(p(name), text)
+
+def load(t: TestRunner, cfg: Config, name: str):
+    mut r: Result[bool, str] = cfg.load_file_optional(p(name))
+    t.assert_true(r.is_ok, f"load {name}")
+    if r.is_err: print(r.err)
+
+def test_layers(t: TestRunner):
+    t.section("layer precedence")
+    write("base.toml", "name = \"base\"\n[db]\nhost = \"filehost\"\nport = 6000\nuser = \"admin\"\n")
+    write("local.yaml", "db:\n  port: 6100\n")
+    mut cfg = Config.init()
+    cfg.set_default("db.host", "localhost")
+    cfg.set_default_int("db.port", 5432)
+    cfg.set_default_int("db.pool", 4)
+    cfg.set_default("name", "dflt")
+    cfg.set_default("level", "info")
+    load(t, cfg, "base.toml")
+    load(t, cfg, "local.yaml")
+    t.assert_eq_str(cfg.get_str("level", "?"), "info", "default survives")
+    t.assert_eq_str(cfg.source_of("level"), "default", "default source")
+    t.assert_eq_str(cfg.get_str("name", "?"), "base", "file beats default")
+    t.assert_eq_int(cfg.get_int("db.port", 0), 6100, "later file beats earlier")
+    t.assert_eq_str(cfg.source_of("db.port"), "file " + p("local.yaml"), "source names the file")
+    t.assert_eq_int(cfg.layer_of("db.port"), LAYER_FILE, "layer_of file")
+
+    mut env: Dict[str, str] = {}
+    env["APP_DB__HOST"] = "envhost"
+    env["APP_DB__MAX_CONN"] = "50"
+    env["APP_LEVEL"] = "warn"
+    env["OTHER_DB__HOST"] = "nope"
+    env["APP_BAD____X"] = "skip"
+    cfg.load_env_map(env, "APP_", "__")
+    t.assert_eq_str(cfg.get_str("db.host", "?"), "envhost", "env beats file")
+    t.assert_eq_str(cfg.source_of("db.host"), "env APP_DB__HOST", "env source")
+    t.assert_eq_int(cfg.get_int("db.max_conn", 0), 50, "single underscore kept, lowercased")
+    t.assert_false(cfg.has("bad"), "empty segment ignored")
+
+    mut rest = cfg.load_flags(["serve", "--level=debug", "--db.port=7000", "--verbose", "--no-color", "--log-format=json", "--", "--literal"])
+    t.assert_eq_int(len(rest), 2, "non-flags returned")
+    if len(rest) == 2:
+        t.assert_eq_str(rest[0], "serve", "positional kept")
+        t.assert_eq_str(rest[1], "--literal", "after -- kept")
+    t.assert_eq_str(cfg.get_str("level", "?"), "debug", "flag beats env")
+    t.assert_eq_int(cfg.get_int("db.port", 0), 7000, "flag beats file")
+    t.assert_true(cfg.get_bool("verbose", false), "--flag is true")
+    t.assert_false(cfg.get_bool("color", true), "--no-flag is false")
+    t.assert_eq_str(cfg.get_str("log_format", "?"), "json", "dash to underscore")
+    t.assert_eq_str(cfg.source_of("db.port"), "flag --db.port", "flag source")
+
+    cfg.set_int("db.port", 9999)
+    t.assert_eq_int(cfg.get_int("db.port", 0), 9999, "override beats all")
+    t.assert_eq_str(cfg.source_of("db.port"), "override", "override source")
+    t.assert_eq_int(cfg.layer_of("db.port"), LAYER_OVERRIDE, "layer_of override")
+    cfg.set_default_int("db.port", 1)
+    t.assert_eq_int(cfg.get_int("db.port", 0), 9999, "late default does not win")
+    t.assert_eq_int(cfg.get_int("db.pool", 0), 4, "untouched default")
+    t.assert_eq_str(cfg.source_of("missing"), "", "no source when unset")
+    t.assert_eq_int(cfg.layer_of("missing"), -1, "no layer when unset")
+    t.assert_true(cfg.has("db"), "table key exists")
+    t.assert_false(cfg.has("db.nothing"), "missing key")
+    mut sub = cfg.keys_under("db")
+    t.assert_true(len(sub) >= 5, "keys_under")
+    cfg.clear_layer(LAYER_OVERRIDE)
+    t.assert_eq_int(cfg.get_int("db.port", 0), 7000, "clear_layer falls back")
+
+def test_formats(t: TestRunner):
+    t.section("file formats")
+    write("app.json", "{\"server\": {\"port\": 8080, \"ratio\": 0.5, \"debug\": true, \"hosts\": [\"a\", \"b\"], \"routes\": [{\"path\": \"/x\"}, {\"path\": \"/y\"}], \"none\": null}}")
+    write("app.ini", "top = 1\n[server]\nname = web ; comment\n[server.tls]\ncert = \"/etc/c.pem\"\n")
+    write("app.env", "# comment\nAPP_SERVER__WORKERS=8\nAPP_SERVER__NAME=\"from env file\"\nUNRELATED=1\n")
+    write("app.yml", "server:\n  tags: [x, y, z]\n  limits:\n    max_body: 10MB\n")
+    mut cfg = Config.init()
+    cfg.env_mapping("APP_", "__")
+    load(t, cfg, "app.json")
+    load(t, cfg, "app.ini")
+    load(t, cfg, "app.env")
+    load(t, cfg, "app.yml")
+    t.assert_eq_int(cfg.get_int("server.port", 0), 8080, "json int")
+    t.assert_eq_float(cfg.get_float("server.ratio", 0.0), 0.5, 0.0001, "json float")
+    t.assert_true(cfg.get_bool("server.debug", false), "json bool")
+    mut hosts = cfg.get_list("server.hosts")
+    t.assert_eq_int(len(hosts), 2, "json array of scalars is a list")
+    t.assert_eq_str(cfg.get_str("server.routes.1.path", "?"), "/y", "array of tables -> indexed keys")
+    mut routes = cfg.get_list("server.routes")
+    t.assert_eq_int(len(routes), 0, "indexed tables are not a scalar list")
+    t.assert_true(cfg.has("server.none"), "json null present")
+    t.assert_eq_int(cfg.get_int("top", 0), 1, "ini default section")
+    t.assert_eq_str(cfg.get_str("server.tls.cert", "?"), "/etc/c.pem", "ini dotted section")
+    t.assert_eq_str(cfg.get_str("server.name", "?"), "from env file", ".env mapped with prefix (later file wins)")
+    t.assert_contains(cfg.source_of("server.name"), "APP_SERVER__NAME", ".env source names variable")
+    t.assert_eq_int(cfg.get_int("server.workers", 0), 8, ".env int")
+    t.assert_false(cfg.has("unrelated"), ".env without prefix skipped")
+    mut tags = cfg.get_list("server.tags")
+    t.assert_eq_int(len(tags), 3, "yaml flow list")
+    if len(tags) == 3: t.assert_eq_str(tags[2], "z", "yaml list item")
+    t.assert_eq_int(cfg.get_bytes("server.limits.max_body", 0), 10000000, "yaml size")
+
+    t.section("file errors")
+    mut c2 = Config.init()
+    mut r1: Result[bool, str] = c2.load_file_optional(p("does_not_exist.toml"))
+    t.assert_true(r1.is_ok and not r1.ok, "optional missing file skipped")
+    mut r2: Result[void, str] = c2.load_file(p("does_not_exist.toml"))
+    t.assert_true(r2.is_err, "missing file is an error")
+    if r2.is_err: t.assert_contains(r2.err, "not found", "missing file message")
+    mut r3: Result[void, str] = c2.load_file("app.xml")
+    t.assert_true(r3.is_err, "unknown extension")
+    write("bad.json", "[1, 2]")
+    mut r4: Result[void, str] = c2.load_file(p("bad.json"))
+    t.assert_true(r4.is_err, "json root must be an object")
+    mut r5: Result[void, str] = c2.load_text("a = 1", "xml", "inline")
+    t.assert_true(r5.is_err, "unsupported format")
+    mut r6: Result[void, str] = c2.load_text("[x]\ny = 2\n", "toml", "inline")
+    t.assert_true(r6.is_ok, "load_text")
+    t.assert_eq_str(c2.source_of("x.y"), "inline", "load_text source label")
+
+def test_typed(t: TestRunner):
+    t.section("typed getters")
+    mut cfg = Config.init()
+    cfg.set("a.int", " 42 ")
+    cfg.set("a.neg", "-7")
+    cfg.set("a.bad", "4x")
+    cfg.set("a.float", "2.5e3")
+    cfg.set("b.yes", "YES")
+    cfg.set("b.off", "off")
+    cfg.set("b.one", "1")
+    cfg.set("b.zero", "0")
+    cfg.set("b.no", "No")
+    cfg.set("b.junk", "maybe")
+    cfg.set("l.csv", "a, b,,c ")
+    cfg.set_list("l.real", ["x", "y"])
+    cfg.set("l.idx.0", "p")
+    cfg.set("l.idx.1", "q")
+    t.assert_eq_int(cfg.get_int("a.int", 0), 42, "int trimmed")
+    t.assert_eq_int(cfg.get_int("a.neg", 0), -7, "negative int")
+    t.assert_eq_int(cfg.get_int("a.bad", 13), 13, "bad int falls back")
+    t.assert_eq_int(cfg.get_int("a.none", 13), 13, "missing int falls back")
+    t.assert_eq_float(cfg.get_float("a.float", 0.0), 2500.0, 0.001, "float exponent")
+    t.assert_eq_float(cfg.get_float("a.int", 0.0), 42.0, 0.001, "int as float")
+    t.assert_true(cfg.get_bool("b.yes", false), "YES")
+    t.assert_false(cfg.get_bool("b.off", true), "off")
+    t.assert_true(cfg.get_bool("b.one", false), "1")
+    t.assert_false(cfg.get_bool("b.zero", true), "0")
+    t.assert_false(cfg.get_bool("b.no", true), "No")
+    t.assert_true(cfg.get_bool("b.junk", true), "junk bool falls back")
+    t.assert_eq_str(cfg.get_str("a.none", "dflt"), "dflt", "str fallback")
+    mut csv = cfg.get_list("l.csv")
+    t.assert_eq_int(len(csv), 3, "comma list drops empties")
+    if len(csv) == 3: t.assert_eq_str(csv[1], "b", "comma list trims")
+    t.assert_eq_int(len(cfg.get_list("l.real")), 2, "real list")
+    mut idx = cfg.get_list("l.idx")
+    t.assert_eq_int(len(idx), 2, "indexed list")
+    if len(idx) == 2: t.assert_eq_str(idx[1], "q", "indexed list order")
+    t.assert_eq_int(len(cfg.get_list("l.none")), 0, "missing list empty")
+
+    t.section("require errors")
+    mut e1: Result[str, str] = cfg.require("db.host")
+    t.assert_true(e1.is_err, "require missing")
+    if e1.is_err:
+        t.assert_contains(e1.err, "'db.host'", "error names key")
+        t.assert_contains(e1.err, "not set", "error says not set")
+    mut env: Dict[str, str] = {}
+    env["APP_DB__PORT"] = "abc"
+    cfg.load_env_map(env, "APP_", "__")
+    mut e2: Result[int, str] = cfg.require_int("db.port")
+    t.assert_true(e2.is_err, "require_int bad")
+    if e2.is_err:
+        t.assert_contains(e2.err, "db.port", "names key")
+        t.assert_contains(e2.err, "env APP_DB__PORT", "names layer source")
+        t.assert_contains(e2.err, "not an integer", "says why")
+    mut e3: Result[bool, str] = cfg.require_bool("b.junk")
+    if e3.is_err: t.assert_contains(e3.err, "override", "bool error names layer")
+    mut ok1: Result[int, str] = cfg.require_int("a.int")
+    t.assert_true(ok1.is_ok and ok1.ok == 42, "require_int ok")
+    mut ok2: Result[str, str] = cfg.require("b.yes")
+    t.assert_true(ok2.is_ok, "require ok")
+
+def dur(t: TestRunner, s: str, want: int):
+    mut r: Result[int, str] = Config.parse_duration_ms(s)
+    t.assert_true(r.is_ok, f"duration '{s}' parses")
+    if r.is_ok: t.assert_eq_int(r.ok, want, f"duration '{s}'")
+
+def dur_bad(t: TestRunner, s: str):
+    mut r: Result[int, str] = Config.parse_duration_ms(s)
+    t.assert_true(r.is_err, f"bad duration '{s}'")
+
+def size(t: TestRunner, s: str, want: int):
+    mut r: Result[int, str] = Config.parse_bytes(s)
+    t.assert_true(r.is_ok, f"size '{s}' parses")
+    if r.is_ok: t.assert_eq_int(r.ok, want, f"size '{s}'")
+
+def size_bad(t: TestRunner, s: str):
+    mut r: Result[int, str] = Config.parse_bytes(s)
+    t.assert_true(r.is_err, f"bad size '{s}'")
+
+def test_units(t: TestRunner):
+    t.section("durations")
+    dur(t, "5s", 5000)
+    dur(t, "250ms", 250)
+    dur(t, "2m", 120000)
+    dur(t, "1h", 3600000)
+    dur(t, "1h30m", 5400000)
+    dur(t, "1.5s", 1500)
+    dur(t, "0.25s", 250)
+    dur(t, "1d", 86400000)
+    dur(t, "1w", 604800000)
+    dur(t, "750", 750)
+    dur(t, " 10 s ", 10000)
+    dur(t, "2H", 7200000)
+    dur(t, "-5s", -5000)
+    dur(t, "1m30s500ms", 90500)
+    dur_bad(t, "")
+    dur_bad(t, "abc")
+    dur_bad(t, "5x")
+    dur_bad(t, "1h30")
+    dur_bad(t, "s")
+    t.section("sizes")
+    size(t, "512", 512)
+    size(t, "512B", 512)
+    size(t, "10MB", 10000000)
+    size(t, "512KiB", 524288)
+    size(t, "1KB", 1000)
+    size(t, "1kb", 1000)
+    size(t, "2GiB", 2147483648)
+    size(t, "64M", 67108864)
+    size(t, "1.5GB", 1500000000)
+    size(t, "1.5KiB", 1536)
+    size(t, "1TB", 1000000000000)
+    size(t, " 3 MiB ", 3145728)
+    size_bad(t, "")
+    size_bad(t, "MB")
+    size_bad(t, "10XB")
+    size_bad(t, "-1KB")
+    t.section("booleans")
+    mut b1: Result[bool, str] = Config.parse_bool("On")
+    t.assert_true(b1.is_ok and b1.ok, "parse_bool On")
+    mut b2: Result[bool, str] = Config.parse_bool("nah")
+    t.assert_true(b2.is_err, "parse_bool rejects")
+    mut cfg = Config.init()
+    cfg.set("t", "5s")
+    cfg.set("m", "512KiB")
+    cfg.set("bad", "soon")
+    t.assert_eq_int(cfg.get_duration_ms("t", 0), 5000, "get_duration_ms")
+    t.assert_eq_int(cfg.get_duration_ms("bad", 7), 7, "get_duration_ms fallback")
+    t.assert_eq_int(cfg.get_bytes("m", 0), 524288, "get_bytes")
+    mut e: Result[int, str] = cfg.require_duration_ms("bad")
+    if e.is_err:
+        t.assert_contains(e.err, "'bad' = 'soon'", "duration error names key and value")
+        t.assert_contains(e.err, "override", "duration error names layer")
+
+def test_interp(t: TestRunner):
+    t.section("interpolation")
+    mut env = Env.init()
+    env.set_var("TAURARO_CFG_TEST_HOME", "/home/tester")
+    mut cfg = Config.init()
+    cfg.set_default("paths.root", "${TAURARO_CFG_TEST_HOME}/app")
+    cfg.set_default("paths.data", "${paths.root}/data")
+    cfg.set_default("paths.logs", "${ paths.root }/logs")
+    cfg.set_default("forced", "${env:TAURARO_CFG_TEST_HOME}")
+    cfg.set_default("fb", "${TAURARO_CFG_TEST_UNSET_XYZ:-fallback value}")
+    cfg.set_default("fb_empty", "[${TAURARO_CFG_TEST_UNSET_XYZ:-}]")
+    cfg.set_default("literal", "cost: $5 and $${not.a.ref}")
+    cfg.set_default("missing", "${no.such.key.or.var}")
+    cfg.set_default("cyc.a", "${cyc.b}")
+    cfg.set_default("cyc.b", "x${cyc.c}")
+    cfg.set_default("cyc.c", "${cyc.a}")
+    cfg.set_default("self", "${self}")
+    cfg.set_default("open", "${oops")
+    cfg.set_default_list("list", ["${paths.root}", "plain"])
+    t.assert_eq_str(cfg.get_str("paths.root", "?"), "/home/tester/app", "env var reference")
+    t.assert_eq_str(cfg.get_str("paths.data", "?"), "/home/tester/app/data", "nested key reference")
+    t.assert_eq_str(cfg.get_str("paths.logs", "?"), "/home/tester/app/logs", "whitespace in reference")
+    t.assert_eq_str(cfg.get_str("forced", "?"), "/home/tester", "env: prefix")
+    t.assert_eq_str(cfg.get_str("fb", "?"), "fallback value", "fallback")
+    t.assert_eq_str(cfg.get_str("fb_empty", "?"), "[]", "empty fallback")
+    t.assert_eq_str(cfg.get_str("literal", "?"), "cost: $5 and ${not.a.ref}", "$${ escape")
+    t.assert_eq_str(cfg.raw("paths.data"), "${paths.root}/data", "raw is uninterpolated")
+    mut l = cfg.get_list("list")
+    if len(l) == 2: t.assert_eq_str(l[0], "/home/tester/app", "list items interpolated")
+    mut m: Result[str, str] = cfg.lookup("missing")
+    t.assert_true(m.is_err, "unresolved reference")
+    if m.is_err: t.assert_contains(m.err, "no.such.key.or.var", "unresolved names reference")
+    t.assert_eq_str(cfg.get_str("missing", "dflt"), "dflt", "getter falls back on bad reference")
+    mut c: Result[str, str] = cfg.lookup("cyc.a")
+    t.assert_true(c.is_err, "cycle detected")
+    if c.is_err: t.assert_contains(c.err, "cyc.a -> cyc.b -> cyc.c -> cyc.a", "cycle chain")
+    mut s: Result[str, str] = cfg.lookup("self")
+    t.assert_true(s.is_err, "self cycle")
+    mut o: Result[str, str] = cfg.lookup("open")
+    if o.is_err: t.assert_contains(o.err, "unterminated", "unterminated reference")
+    mut x: Result[str, str] = cfg.expand("root=${paths.root}")
+    t.assert_true(x.is_ok and x.ok == "root=/home/tester/app", "expand")
+    # a higher layer redefining a referenced key changes the result
+    cfg.set("paths.root", "/srv")
+    t.assert_eq_str(cfg.get_str("paths.data", "?"), "/srv/data", "lazy interpolation sees overrides")
+    env.unset_var("TAURARO_CFG_TEST_HOME")
+
+def test_validate(t: TestRunner):
+    t.section("specs and validation")
+    mut cfg = Config.init()
+    cfg.set_default_int("db.port", 5432)
+    cfg.set_default("db.host", "localhost")
+    cfg.expect("db.port", "int").range(1.0, 65535.0)
+    cfg.expect("db.host", "str").required()
+    cfg.expect("db.password", "str").required().secret()
+    cfg.expect("log.level", "str").one_of(["debug", "info", "warn"])
+    cfg.expect("http.timeout", "duration").range(1.0, 60000.0)
+    cfg.expect("cache.max", "bytes")
+    cfg.expect("features", "list").range(1.0, 3.0)
+    cfg.expect("plugins.*", "bool")
+    mut errs0 = cfg.validate()
+    t.assert_eq_int(len(errs0), 1, "only the missing required key")
+    if len(errs0) == 1: t.assert_contains(errs0[0], "db.password", "names missing key")
+    mut env: Dict[str, str] = {}
+    env["APP_DB__PORT"] = "70000"
+    env["APP_LOG__LEVEL"] = "loud"
+    env["APP_HTTP__TIMEOUT"] = "2m"
+    env["APP_CACHE__MAX"] = "lots"
+    env["APP_FEATURES"] = "a,b,c,d"
+    env["APP_PLUGINS__GZIP"] = "yes"
+    env["APP_PLUGINS__BROTLI"] = "perhaps"
+    env["APP_DB__PASSWORD"] = "hunter2"
+    env["APP_DB__HSOT"] = "typo"
+    env["APP_API_TOKEN"] = "tok"
+    cfg.load_env_map(env, "APP_", "__")
+    mut errs = cfg.validate()
+    t.assert_eq_int(len(errs), 6, "six violations")
+    mut all = ""
+    mut i = 0
+    while i < len(errs):
+        all = all + errs[i] + "\n"
+        i = i + 1
+    t.assert_contains(all, "'db.port' = '70000' (set by env APP_DB__PORT) must be between", "range error")
+    t.assert_contains(all, "must be one of: debug, info, warn", "choice error")
+    t.assert_contains(all, "'http.timeout' = '2m'", "duration range")
+    t.assert_contains(all, "'cache.max' = 'lots'", "bytes type")
+    t.assert_contains(all, "'features'", "list length")
+    t.assert_contains(all, "'plugins.brotli' = 'perhaps'", "wildcard spec")
+    mut ck: Result[void, str] = cfg.check()
+    t.assert_true(ck.is_err, "check raises")
+    if ck.is_err: t.assert_contains(ck.err, "\n", "check joins lines")
+    mut unk = cfg.unknown_keys()
+    t.assert_eq_int(len(unk), 2, "unknown keys")
+    if len(unk) == 2:
+        t.assert_eq_str(unk[0], "api_token", "unknown sorted 0")
+        t.assert_eq_str(unk[1], "db.hsot", "unknown sorted 1 (typo caught)")
+
+    t.section("secrets and dump")
+    cfg.mark_secret("db.host")
+    mut d = cfg.dump()
+    t.assert_false(d.contains("hunter2"), "declared secret masked")
+    t.assert_false(d.contains("= tok"), "token-named key masked")
+    t.assert_contains(d, "db.password = ******  # env APP_DB__PASSWORD", "masked line keeps source")
+    t.assert_contains(d, "db.host = ******  # default", "mark_secret")
+    t.assert_contains(d, "db.port = 70000  # env APP_DB__PORT", "plain line")
+    t.assert_contains(d, "features = a,b,c,d", "env list text")
+    t.assert_true(cfg.is_secret("aws.secret_access_key"), "name heuristic")
+    t.assert_false(cfg.is_secret("db.port"), "not secret")
+    cfg.mask = "<hidden>"
+    t.assert_contains(cfg.dump(), "db.password = <hidden>", "custom mask")
+
+    t.section("schema validation")
+    mut c2 = Config.init()
+    write("schema.toml", "[server]\nport = 8080\nname = \"web\"\n")
+    load(t, c2, "schema.toml")
+    mut env2: Dict[str, str] = {}
+    env2["S_SERVER__WORKERS"] = "16"
+    c2.load_env_map(env2, "S_", "__")
+    t.assert_eq_str(c2.to_json(), "{\"server\":{\"name\":\"web\",\"port\":8080,\"workers\":16}}", "to_json types")
+    mut srv = Schema.object()
+    srv.field("port", Schema.number().min(1.0).max(65535.0).required())
+    srv.field("workers", Schema.number().max(8.0))
+    srv.field("name", Schema.string().required())
+    mut root = Schema.object()
+    root.field("server", srv)
+    mut res = c2.validate_schema(root)
+    t.assert_false(res.is_valid(), "schema finds violation")
+    t.assert_eq_int(res.errors().len, 1, "one schema error")
+    if res.errors().len == 1: t.assert_contains(res.errors().get(0).path, "server.workers", "schema path")
+    c2.set_int("server.workers", 4)
+    mut res2 = c2.validate_schema(root)
+    t.assert_true(res2.is_valid(), "schema passes after override")
+    c2.set("quoted", "say \"hi\"\n")
+    t.assert_contains(c2.to_json(), "\"quoted\":\"say \\\"hi\\\"\\n\"", "json escaping")
+    c2.expect("zip", "str")
+    c2.set_layer("zip", "01234", LAYER_ENV, "env ZIP")
+    t.assert_contains(c2.to_json(), "\"zip\":\"01234\"", "declared str stays a string")
+
+def test_args(t: TestRunner):
+    t.section("argparse Namespace")
+    mut ap = ArgParser.init("tool", "test")
+    ap.add(Arg.option("db.host", "", "DB host").from_env("TAURARO_CFG_TEST_NOPE"))
+    ap.add(Arg.option("port", "p", "Port").of_int().default_value("1"))
+    ap.add(Arg.option("tag", "t", "Tag").repeatable())
+    ap.add(Arg.flag("debug", "", "Debug"))
+    mut r: Result[Namespace, str] = ap.parse(["--db.host", "cli-host", "-t", "a", "-t", "b", "--debug"])
+    t.assert_true(r.is_ok, "argparse parses")
+    if r.is_err: print(r.err)
+    if r.is_ok:
+        mut cfg = Config.init()
+        cfg.set_default("port", "5000")
+        cfg.set_default("db.host", "dflt")
+        cfg.load_args(r.ok)
+        t.assert_eq_str(cfg.get_str("db.host", "?"), "cli-host", "dotted argument name")
+        t.assert_eq_str(cfg.source_of("db.host"), "flag --db.host", "args source")
+        t.assert_eq_str(cfg.get_str("port", "?"), "5000", "argparse default does not override layers")
+        t.assert_eq_int(len(cfg.get_list("tag")), 2, "repeated option -> list")
+        t.assert_true(cfg.get_bool("debug", false), "flag")
+        t.assert_eq_int(cfg.layer_of("debug"), LAYER_ARGS, "args layer")
+
+def test_reload(t: TestRunner):
+    t.section("reload")
+    write("reload.toml", "a = 1\nb = 2\n")
+    mut cfg = Config.init()
+    cfg.set_default_int("a", 0)
+    cfg.set_default_int("c", 3)
+    load(t, cfg, "reload.toml")
+    cfg.set_int("pinned", 9)
+    mut env: Dict[str, str] = {}
+    env["R_E"] = "5"
+    cfg.load_env_map(env, "R_", "__")
+    t.assert_eq_int(cfg.get_int("b", 0), 2, "before reload")
+    write("reload.toml", "a = 10\n")
+    mut rr: Result[void, str] = cfg.reload()
+    t.assert_true(rr.is_ok, "reload ok")
+    t.assert_eq_int(cfg.get_int("a", 0), 10, "reloaded value")
+    t.assert_false(cfg.has("b"), "removed key gone after reload")
+    t.assert_eq_int(cfg.get_int("c", 0), 3, "defaults kept")
+    t.assert_eq_int(cfg.get_int("pinned", 0), 9, "overrides kept")
+    t.assert_eq_int(cfg.get_int("e", 0), 5, "env layer re-applied")
+
+    # Real process environment (via the environ shim).
+    mut pe = Env.init()
+    pe.set_var("TAURARO_CFGT_DB__NAME", "proc")
+    mut c3 = Config.init()
+    c3.load_env("TAURARO_CFGT_", "__")
+    t.assert_eq_str(c3.get_str("db.name", "?"), "proc", "process environment")
+    pe.set_var("TAURARO_CFGT_DB__NAME", "changed")
+    mut r3: Result[void, str] = c3.reload()
+    t.assert_eq_str(c3.get_str("db.name", "?"), "changed", "env reload")
+    pe.unset_var("TAURARO_CFGT_DB__NAME")
+
+    # File watching is best-effort across CI runners: only checked when the
+    # watcher reports an event.
+    mut cw = ConfigWatcher.init(cfg, 0)
+    if cw.active:
+        write("reload.toml", "a = 20\n")
+        mut got: Result[bool, str] = cw.poll(1500)
+        if got.is_ok and got.ok:
+            t.assert_eq_int(cfg.get_int("a", 0), 20, "watcher reloaded")
+        else:
+            t.skip("no file event delivered on this runner")
+    else:
+        t.skip("file watching unavailable")
+    cw.destroy()
+
+def main():
+    mut t = TestRunner.init("132_config")
+    test_layers(t)
+    test_formats(t)
+    test_typed(t)
+    test_units(t)
+    test_interp(t)
+    test_validate(t)
+    test_args(t)
+    test_reload(t)
+    t.summary()

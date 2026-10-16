@@ -87,6 +87,22 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.version`** — Semantic Versioning 2.0.0: `Version.parse` (exact spec grammar),
+  `parse_loose`, precedence (`compare`, `compare_build`, `sort`), npm-style `bump_major` /
+  `bump_minor` / `bump_patch` / `bump_prerelease`; `VersionReq` requirements with node-semver
+  semantics (`^`, `~`/`~>`, x-ranges, hyphen ranges, comparators, space or comma AND, `||` OR,
+  pre-release rule, `parse_opts(s, true)` for includePrerelease, `parse_cargo` for bare = caret),
+  `matches`, `max_satisfying` / `min_satisfying` / `filter`, normalized `to_str`. Includes the
+  taupkg `semver` API (`Version.init`, `satisfies`, `best_match`). Checked against the semver.org
+  test lists and node-semver range fixtures.
+- **`std.config`** — layered configuration: defaults < TOML / YAML / JSON / INI / `.env` files <
+  environment (`APP_DB__HOST` → `db.host`) < command line (`load_args` from an argparse
+  `Namespace`, or `load_flags`) < overrides. Dotted-path typed getters (`get_bool` word forms,
+  `get_duration_ms`, `get_bytes`, `get_list`), `require_*` errors naming the key and the layer
+  (`source_of`), lazy `${VAR}` / `${other.key}` / `${x:-fallback}` interpolation with cycle
+  detection, `expect(...)` specs with `validate` / `check`, `unknown_keys`,
+  `validate_schema` (std.validate.schema), masked `dump()`, `reload()` and `ConfigWatcher`
+  (std.io.watch).
 - String escapes `\xHH` (a byte), `\uXXXX` and `\UXXXXXXXX` (a code point as UTF-8); `str.rfind`
   (alias of `last_index_of`); `str.split_exact(sep)`, Python-style splitting on a whole substring
   that keeps empty parts (`split` splits on any byte of `sep` and drops empty parts).
