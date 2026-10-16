@@ -1,0 +1,1481 @@
+# std.config — layered application configuration.
+# tauraro-cpp-shim: config_native.c
+#
+# A Config collects values from several LAYERS. Every key is a dotted path
+# ("db.host", "server.tls.cert"); a lookup returns the value from the
+# highest layer that set it:
+#
+#   LAYER_DEFAULT  (0)  set_default(...) in code
+#   LAYER_FILE     (1)  load_file(...): TOML / YAML / JSON / INI / .env
+#   LAYER_ENV      (2)  load_env("APP_", "__"): APP_DB__HOST -> db.host
+#   LAYER_ARGS     (3)  load_args(argparse Namespace) / load_flags(argv)
+#   LAYER_OVERRIDE (4)  set(...) in code
+#
+# Within one layer the most recent write wins (a second config file overrides
+# the first). Each value remembers where it came from: `source_of("db.port")`
+# gives e.g. "env APP_DB__PORT" or "file conf/app.toml".
+#
+#   from std.config import Config
+#   mut cfg = Config.init()
+#   cfg.set_default("db.host", "localhost")
+#   cfg.set_default_int("db.port", 5432)
+#   cfg.load_file("app.toml")?                # error if missing / unknown type
+#   cfg.load_file_optional("app.local.yaml")?   # skipped when missing
+#   cfg.load_env("APP_", "__")                 # APP_DB__PORT=6543 -> db.port
+#   cfg.load_flags(args)                       # --db.port=7000, --no-debug
+#   mut host = cfg.get_str("db.host", "")
+#   mut port = cfg.require_int("db.port")?     # error names key + layer
+#   mut t = cfg.get_duration_ms("http.timeout", 5000)   # "5s", "250ms", "1h30m"
+#   mut m = cfg.get_bytes("cache.max", 0)               # "10MB", "512KiB"
+#
+# File formats (chosen by extension in load_file): .toml (std.encoding.toml),
+# .yaml/.yml (std.encoding.yaml), .json (std.encoding.json), .ini/.cfg/.conf
+# (std.encoding.ini; [section] key -> section.key) and .env (parsed by
+# std.sys.dotenv, then mapped with the same prefix/separator rules as
+# load_env; the process environment is NOT modified). Nested tables become
+# dotted keys; an array of scalars becomes a list value; an array containing
+# tables becomes indexed keys ("servers.0.host").
+#
+# Environment: variables named PREFIX + segments joined by SEP; segments are
+# lowercased, so APP_DB__MAX_CONN -> db.max_conn. load_env_map(...) takes a
+# Dict instead of the process environment (tests, sandboxes).
+#
+# Interpolation: a value may contain ${name}. The name is looked up as a
+# config key first, then as an environment variable; ${env:NAME} forces the
+# environment; ${name:-fallback} supplies a fallback; $${ is a literal "${".
+# Lookups are lazy (on every get) and cycles (a -> b -> a) are reported.
+#
+# Typed getters never fail: a missing or unparsable value gives the fallback.
+# The require_* forms raise "config: ..." errors naming the key and the layer
+# that set it. Booleans accept true/false, yes/no, on/off, 1/0 (any case).
+# Durations: integer or decimal amounts with units ms, s, m, h, d, w (compound
+# forms like "1h30m" work; a bare number is milliseconds). Sizes: B, KB/MB/GB/
+# TB (powers of 1000), KiB/MiB/GiB/TiB and the single letters K/M/G/T (powers
+# of 1024); case-insensitive; a bare number is bytes.
+#
+# Validation: expect(key, kind) declares a key ("str", "int", "float", "bool",
+# "duration", "bytes", "list", "any"; key "plugins.*" matches any sub-key)
+# and returns a ConfigSpec to chain .required(), .one_of([...]),
+# .range(lo, hi), .secret(). validate() returns every problem as a list of
+# strings, check() raises them; unknown_keys() lists keys that are neither
+# declared nor given a default. validate_schema(schema) runs a
+# std.validate.schema Schema over to_json().
+#
+# dump() renders "key = value  # source" lines with secrets masked (keys
+# declared .secret(), marked with mark_secret, or whose last segment contains
+# password/passwd/secret/token/apikey/api_key/private_key/credential).
+#
+# Reloading: reload() drops the file and environment layers and re-reads them
+# (defaults, flags and overrides are kept). ConfigWatcher wraps
+# std.io.watch.Watcher around the loaded files: poll(timeout_ms) reloads
+# when one of them changed and returns true.
+
+from std.core.vec import Vec
+from std.core.string import StringBuilder
+from std.io.file import File
+from std.io.watch import Watcher, FileEvent
+from std.sys.env import Env
+from std.sys.dotenv import Dotenv
+from std.encoding.toml import Toml, TomlValue
+from std.encoding.yaml import Yaml, YamlValue
+from std.encoding.json import Json, JsonDoc, JsonRef
+from std.encoding.ini import Ini, IniDoc, IniSection
+from std.cli.argparse import Namespace
+from std.validate.schema import Schema
+from std.validate.result import ValidationResult
+
+extern "C":
+    def trc_cfg_env_count() -> int
+    def trc_cfg_env_len(i: int) -> int
+    def trc_cfg_env_copy(i: int, buf: Pointer[char], cap: int) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+    def _tr_getenv(name: str) -> Pointer[char]
+
+pub const LAYER_DEFAULT = 0
+pub const LAYER_FILE = 1
+pub const LAYER_ENV = 2
+pub const LAYER_ARGS = 3
+pub const LAYER_OVERRIDE = 4
+
+# Value kinds. CFG_TEXT is text from an untyped source (env, INI, flags);
+# its JSON type is inferred by to_json().
+pub const CFG_TEXT = 0
+pub const CFG_STR = 1
+pub const CFG_INT = 2
+pub const CFG_FLOAT = 3
+pub const CFG_BOOL = 4
+pub const CFG_NULL = 5
+
+# ─── helpers ────────────────────────────────────────────────────────────────
+
+def _cf_byte(s: str, i: int) -> int:
+    return (s[i] as int) & 255
+
+def _cf_is_digit(c: int) -> bool:
+    return c >= 48 and c <= 57
+
+def _cf_layer_name(layer: int) -> str:
+    if layer == 0: return "defaults"
+    if layer == 1: return "files"
+    if layer == 2: return "environment"
+    if layer == 3: return "command line"
+    return "overrides"
+
+def _cf_getenv(name: str) -> (bool, str):
+    mut p = _tr_getenv(name)
+    if p as int == 0: return (false, "")
+    mut v = p as str
+    return (true, v + "")
+
+def _cf_join(parts: List[str], sep: str) -> str:
+    mut sb = StringBuilder.init(64)
+    mut i = 0
+    while i < len(parts):
+        if i > 0: sb.append(sep)
+        sb.append(parts[i])
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _cf_sort(xs: List[str]) -> List[str]:
+    # insertion sort over indices (see the List element-copy note in docs)
+    mut idx: List[int] = []
+    mut i = 0
+    while i < len(xs):
+        mut j = len(idx)
+        idx.append(i)
+        while j > 0 and _cf_cmp(xs[idx[j - 1]], xs[i]) > 0:
+            idx[j] = idx[j - 1]
+            j = j - 1
+        idx[j] = i
+        i = i + 1
+    mut out: List[str] = []
+    i = 0
+    while i < len(idx):
+        out.append(xs[idx[i]])
+        i = i + 1
+    return out
+
+def _cf_cmp(a: str, b: str) -> int:
+    mut i = 0
+    while i < a.len() and i < b.len():
+        mut ca = _cf_byte(a, i)
+        mut cb = _cf_byte(b, i)
+        if ca != cb:
+            if ca < cb: return -1
+            return 1
+        i = i + 1
+    if a.len() < b.len(): return -1
+    if a.len() > b.len(): return 1
+    return 0
+
+def _cf_contains(xs: List[str], s: str) -> bool:
+    mut i = 0
+    while i < len(xs):
+        if xs[i] == s: return true
+        i = i + 1
+    return false
+
+def _cf_is_int(s: str) -> bool:
+    mut t = s.trim()
+    if t.len() == 0: return false
+    mut i = 0
+    if _cf_byte(t, 0) == 45 or _cf_byte(t, 0) == 43: i = 1
+    if i >= t.len(): return false
+    if t.len() - i > 18: return false
+    while i < t.len():
+        if not _cf_is_digit(_cf_byte(t, i)): return false
+        i = i + 1
+    return true
+
+def _cf_is_float(s: str) -> bool:
+    mut t = s.trim()
+    if t.len() == 0: return false
+    mut i = 0
+    if _cf_byte(t, 0) == 45 or _cf_byte(t, 0) == 43: i = 1
+    mut digits = 0
+    mut dots = 0
+    mut has_exp = false
+    while i < t.len():
+        mut c = _cf_byte(t, i)
+        if _cf_is_digit(c):
+            digits = digits + 1
+        elif c == 46 and not has_exp:
+            dots = dots + 1
+        elif (c == 101 or c == 69) and not has_exp and digits > 0:
+            has_exp = true
+            if i + 1 < t.len() and (_cf_byte(t, i + 1) == 45 or _cf_byte(t, i + 1) == 43): i = i + 1
+            if i + 1 >= t.len(): return false
+        else:
+            return false
+        i = i + 1
+    return digits > 0 and dots <= 1
+
+# true / false / -1 (not a boolean word).
+def _cf_bool_val(s: str) -> int:
+    mut l = s.trim().lower()
+    if l == "true" or l == "yes" or l == "on" or l == "1": return 1
+    if l == "false" or l == "no" or l == "off" or l == "0": return 0
+    return -1
+
+def _cf_json_escape(s: str, sb: StringBuilder):
+    mut i = 0
+    while i < s.len():
+        mut c = _cf_byte(s, i)
+        if c == 34: sb.append("\\\"")
+        elif c == 92: sb.append("\\\\")
+        elif c == 10: sb.append("\\n")
+        elif c == 13: sb.append("\\r")
+        elif c == 9: sb.append("\\t")
+        elif c < 32:
+            mut hx = "0123456789abcdef"
+            sb.append("\\u00")
+            sb.append_char(_cf_byte(hx, c / 16))
+            sb.append_char(_cf_byte(hx, c % 16))
+        else: sb.append_char(c)
+        i = i + 1
+
+# Decimal number prefix of s starting at i: returns (value*1000 as int,
+# next index). Supports one '.'; at most 3 fractional digits are kept.
+def _cf_num_milli(s: str, start: int) -> (int, int):
+    mut i = start
+    mut whole = 0
+    mut frac = 0
+    mut fdig = 0
+    while i < s.len() and _cf_is_digit(_cf_byte(s, i)):
+        whole = whole * 10 + (_cf_byte(s, i) - 48)
+        i = i + 1
+    if i < s.len() and _cf_byte(s, i) == 46:
+        i = i + 1
+        while i < s.len() and _cf_is_digit(_cf_byte(s, i)):
+            if fdig < 3:
+                frac = frac * 10 + (_cf_byte(s, i) - 48)
+                fdig = fdig + 1
+            i = i + 1
+    while fdig < 3:
+        frac = frac * 10
+        fdig = fdig + 1
+    return (whole * 1000 + frac, i)
+
+# Secret-looking key (last segment).
+def _cf_secret_name(key: str) -> bool:
+    mut last = key
+    mut dot = -1
+    mut i = 0
+    while i < key.len():
+        if _cf_byte(key, i) == 46: dot = i
+        i = i + 1
+    if dot >= 0: last = key.slice(dot + 1, key.len())
+    mut l = last.lower()
+    return l.contains("password") or l.contains("passwd") or l.contains("secret") or l.contains("token") or l.contains("apikey") or l.contains("api_key") or l.contains("private_key") or l.contains("credential")
+
+# ─── entries and specs ──────────────────────────────────────────────────────
+
+# One value set by one layer.
+pub class ConfigEntry:
+    pub key:     str
+    pub value:   str          # scalar text (list: items joined with ",")
+    pub items:   List[str]    # list items (is_list)
+    pub is_list: bool
+    pub kind:    int          # CFG_* (type the source gave the value)
+    pub layer:   int          # LAYER_*
+    pub source:  str          # "default", "file app.toml", "env APP_X", ...
+
+# A declared key (see Config.expect).
+pub class ConfigSpec:
+    pub key:       str
+    pub kind:      str
+    pub req:       bool
+    pub choices:   List[str]
+    pub has_range: bool
+    pub lo:        float
+    pub hi:        float
+    pub is_secret: bool
+
+extend ConfigSpec:
+    pub def required(self) -> ConfigSpec:
+        self.req = true
+        return self
+
+    pub def one_of(self, values: List[str]) -> ConfigSpec:
+        mut i = 0
+        while i < len(values):
+            self.choices.append(values[i])
+            i = i + 1
+        return self
+
+    # Inclusive numeric range (int/float/duration/bytes kinds; list length
+    # for "list"; string length for "str").
+    pub def range(self, lo: float, hi: float) -> ConfigSpec:
+        self.has_range = true
+        self.lo = lo
+        self.hi = hi
+        return self
+
+    pub def secret(self) -> ConfigSpec:
+        self.is_secret = true
+        return self
+
+    pub def matches_key(self, key: str) -> bool:
+        if self.key == key: return true
+        if self.key.ends_with(".*"):
+            mut pre = self.key.slice(0, self.key.len() - 1)
+            return key.starts_with(pre)
+        return false
+
+# ─── Config ─────────────────────────────────────────────────────────────────
+
+pub class Config:
+    pub entries:     List[ConfigEntry]
+    pub specs:       List[ConfigSpec]
+    pub secrets:     List[str]
+    pub files:       List[str]      # files loaded (reload / watch)
+    pub file_opt:    List[bool]     # loaded with load_file_optional
+    pub env_prefix:  str
+    pub env_sep:     str
+    pub env_loaded:  bool
+    pub env_map_k:   List[str]      # load_env_map snapshot (reload)
+    pub env_map_v:   List[str]
+    pub env_from_map: bool
+    pub mask:        str
+
+extend Config:
+    pub def init() -> Config:
+        mut c = Config()
+        c.entries = []
+        c.specs = []
+        c.secrets = []
+        c.files = []
+        c.file_opt = []
+        c.env_prefix = ""
+        c.env_sep = "__"
+        c.env_loaded = false
+        c.env_map_k = []
+        c.env_map_v = []
+        c.env_from_map = false
+        c.mask = "******"
+        return c
+
+    # ── raw layer writes ──
+
+    def _slot(self, key: str, layer: int) -> int:
+        mut i = 0
+        while i < len(self.entries):
+            mut e = self.entries[i]
+            if e.layer == layer and e.key == key: return i
+            i = i + 1
+        return -1
+
+    def _put(self, key: str, value: str, items: List[str], is_list: bool, kind: int, layer: int, source: str):
+        mut e = ConfigEntry()
+        e.key = key
+        e.value = value
+        e.items = items
+        e.is_list = is_list
+        e.kind = kind
+        e.layer = layer
+        e.source = source
+        mut i = self._slot(key, layer)
+        if i >= 0:
+            self.entries[i].value = value
+            self.entries[i].items = items
+            self.entries[i].is_list = is_list
+            self.entries[i].kind = kind
+            self.entries[i].source = source
+            return
+        self.entries.append(e)
+
+    # Set a scalar on any layer with an explicit source label.
+    pub def set_layer(self, key: str, value: str, layer: int, source: str):
+        mut none_items: List[str] = []
+        self._put(key, value, none_items, false, CFG_TEXT, layer, source)
+
+    pub def set_layer_kind(self, key: str, value: str, kind: int, layer: int, source: str):
+        mut none_items: List[str] = []
+        self._put(key, value, none_items, false, kind, layer, source)
+
+    pub def set_layer_list(self, key: str, items: List[str], layer: int, source: str):
+        mut copy_items: List[str] = []
+        mut i = 0
+        while i < len(items):
+            copy_items.append(items[i])
+            i = i + 1
+        self._put(key, _cf_join(items, ","), copy_items, true, CFG_STR, layer, source)
+
+    # ── defaults (lowest layer) ──
+    pub def set_default(self, key: str, value: str):
+        self.set_layer_kind(key, value, CFG_STR, LAYER_DEFAULT, "default")
+    pub def set_default_int(self, key: str, value: int):
+        self.set_layer_kind(key, f"{value}", CFG_INT, LAYER_DEFAULT, "default")
+    pub def set_default_float(self, key: str, value: float):
+        self.set_layer_kind(key, f"{value}", CFG_FLOAT, LAYER_DEFAULT, "default")
+    pub def set_default_bool(self, key: str, value: bool):
+        mut s = "false"
+        if value: s = "true"
+        self.set_layer_kind(key, s, CFG_BOOL, LAYER_DEFAULT, "default")
+    pub def set_default_list(self, key: str, items: List[str]):
+        self.set_layer_list(key, items, LAYER_DEFAULT, "default")
+
+    # ── explicit overrides (highest layer) ──
+    pub def set(self, key: str, value: str):
+        self.set_layer_kind(key, value, CFG_STR, LAYER_OVERRIDE, "override")
+    pub def set_int(self, key: str, value: int):
+        self.set_layer_kind(key, f"{value}", CFG_INT, LAYER_OVERRIDE, "override")
+    pub def set_float(self, key: str, value: float):
+        self.set_layer_kind(key, f"{value}", CFG_FLOAT, LAYER_OVERRIDE, "override")
+    pub def set_bool(self, key: str, value: bool):
+        mut s = "false"
+        if value: s = "true"
+        self.set_layer_kind(key, s, CFG_BOOL, LAYER_OVERRIDE, "override")
+    pub def set_list(self, key: str, items: List[str]):
+        self.set_layer_list(key, items, LAYER_OVERRIDE, "override")
+
+    # Remove every value a layer set.
+    pub def clear_layer(self, layer: int):
+        mut keep: List[ConfigEntry] = []
+        mut i = 0
+        while i < len(self.entries):
+            if self.entries[i].layer != layer: keep.append(self.entries[i])
+            i = i + 1
+        self.entries = keep
+
+    # ── lookup ──
+
+    # Index of the winning entry for `key` (-1 if unset).
+    pub def _find(self, key: str) -> int:
+        mut best = -1
+        mut best_layer = -1
+        mut i = 0
+        while i < len(self.entries):
+            mut e = self.entries[i]
+            if e.key == key and e.layer >= best_layer:
+                best = i
+                best_layer = e.layer
+            i = i + 1
+        return best
+
+    # True when the key has a value, or is a table (has sub-keys).
+    pub def has(self, key: str) -> bool:
+        if self._find(key) >= 0: return true
+        mut pre = key + "."
+        mut i = 0
+        while i < len(self.entries):
+            if self.entries[i].key.starts_with(pre): return true
+            i = i + 1
+        return false
+
+    # "file app.toml", "env APP_DB__HOST", "default", "override", "flag
+    # --port", ... or "" when unset.
+    pub def source_of(self, key: str) -> str:
+        mut i = self._find(key)
+        if i < 0: return ""
+        return self.entries[i].source
+
+    # LAYER_* of the winning value (-1 when unset).
+    pub def layer_of(self, key: str) -> int:
+        mut i = self._find(key)
+        if i < 0: return -1
+        return self.entries[i].layer
+
+    # Every key with a value, sorted.
+    pub def keys(self) -> List[str]:
+        mut out: List[str] = []
+        mut i = 0
+        while i < len(self.entries):
+            if not _cf_contains(out, self.entries[i].key): out.append(self.entries[i].key)
+            i = i + 1
+        return _cf_sort(out)
+
+    # Keys directly or indirectly under `prefix` (without the prefix), sorted.
+    pub def keys_under(self, prefix: str) -> List[str]:
+        mut pre = prefix + "."
+        mut out: List[str] = []
+        mut all = self.keys()
+        mut i = 0
+        while i < len(all):
+            if all[i].starts_with(pre): out.append(all[i].slice(pre.len(), all[i].len()))
+            i = i + 1
+        return out
+
+    # The raw (uninterpolated) winning value text ("" if unset).
+    pub def raw(self, key: str) -> str:
+        mut i = self._find(key)
+        if i < 0: return ""
+        return self.entries[i].value
+
+    # ── interpolation ──
+
+    def _interp(self, text: str, stack: List[str]) throws str -> str:
+        if not text.contains("$"): return text
+        mut sb = StringBuilder.init(text.len() + 16)
+        mut i = 0
+        mut n = text.len()
+        while i < n:
+            mut c = _cf_byte(text, i)
+            if c == 36 and i + 2 < n and _cf_byte(text, i + 1) == 36 and _cf_byte(text, i + 2) == 123:
+                sb.append("${")
+                i = i + 3
+                continue
+            if c == 36 and i + 1 < n and _cf_byte(text, i + 1) == 123:
+                mut close = -1
+                mut j = i + 2
+                while j < n and close < 0:
+                    if _cf_byte(text, j) == 125: close = j
+                    j = j + 1
+                if close < 0:
+                    sb.free()
+                    raise(f"config: unterminated '${{' in value of '{stack[len(stack) - 1]}'")
+                mut name = text.slice(i + 2, close).trim()
+                mut fallback = ""
+                mut has_fb = false
+                mut fb = name.index_of(":-")
+                if fb >= 0:
+                    fallback = name.slice(fb + 2, name.len())
+                    name = name.slice(0, fb).trim()
+                    has_fb = true
+                mut rr: Result[str, str] = self._resolve_ref(name, stack)
+                if rr.is_err:
+                    if has_fb and rr.err.starts_with("config: unresolved"):
+                        sb.append(fallback)
+                    else:
+                        sb.free()
+                        raise(rr.err)
+                else:
+                    sb.append(rr.ok)
+                i = close + 1
+                continue
+            sb.append_char(c)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    def _resolve_ref(self, name: str, stack: List[str]) throws str -> str:
+        if name.starts_with("env:"):
+            mut ename = name.slice(4, name.len())
+            mut ok, v = _cf_getenv(ename)
+            if ok: return v
+            raise(f"config: unresolved reference '${{{name}}}' in '{stack[len(stack) - 1]}' (environment variable {ename} is not set)")
+        mut idx = self._find(name)
+        if idx >= 0:
+            if _cf_contains(stack, name):
+                mut chain = _cf_join(stack, " -> ")
+                raise(f"config: interpolation cycle {chain} -> {name}")
+            stack.append(name)
+            mut v2: str = self._interp(self.entries[idx].value, stack)?
+            stack.pop()
+            return v2
+        mut ok2, v3 = _cf_getenv(name)
+        if ok2: return v3
+        raise(f"config: unresolved reference '${{{name}}}' in '{stack[len(stack) - 1]}' (no such key or environment variable)")
+
+    # The interpolated value of a key; raises when unset or on a bad reference.
+    pub def lookup(self, key: str) throws str -> str:
+        mut i = self._find(key)
+        if i < 0:
+            raise(f"config: required key '{key}' is not set")
+        mut stack: List[str] = []
+        stack.append(key)
+        mut v: str = self._interp(self.entries[i].value, stack)?
+        return v
+
+    # Interpolate an arbitrary string against this config.
+    pub def expand(self, text: str) throws str -> str:
+        mut stack: List[str] = []
+        stack.append("<expand>")
+        mut v: str = self._interp(text, stack)?
+        return v
+
+    def _where(self, key: str) -> str:
+        mut i = self._find(key)
+        if i < 0: return "unset"
+        return f"set by {self.entries[i].source}"
+
+    # ── typed getters (never fail) ──
+
+    pub def get_str(self, key: str, fallback: str) -> str:
+        mut r: Result[str, str] = self.lookup(key)
+        if r.is_err: return fallback
+        return r.ok
+
+    pub def get_int(self, key: str, fallback: int) -> int:
+        mut r: Result[int, str] = self.require_int(key)
+        if r.is_err: return fallback
+        return r.ok
+
+    pub def get_float(self, key: str, fallback: float) -> float:
+        mut r: Result[float, str] = self.require_float(key)
+        if r.is_err: return fallback
+        return r.ok
+
+    pub def get_bool(self, key: str, fallback: bool) -> bool:
+        mut r: Result[bool, str] = self.require_bool(key)
+        if r.is_err: return fallback
+        return r.ok
+
+    pub def get_duration_ms(self, key: str, fallback: int) -> int:
+        mut r: Result[int, str] = self.require_duration_ms(key)
+        if r.is_err: return fallback
+        return r.ok
+
+    pub def get_bytes(self, key: str, fallback: int) -> int:
+        mut r: Result[int, str] = self.require_bytes(key)
+        if r.is_err: return fallback
+        return r.ok
+
+    # A list value. Scalars are split on "," (items trimmed, empty ones
+    # dropped); indexed keys key.0, key.1, ... are collected; unset -> [].
+    pub def get_list(self, key: str) -> List[str]:
+        mut r: Result[List[str], str] = self.require_list(key)
+        if r.is_ok: return r.ok
+        mut empty: List[str] = []
+        return empty
+
+    # ── required / strict getters ──
+
+    pub def require(self, key: str) throws str -> str:
+        if self._find(key) < 0:
+            raise(f"config: required key '{key}' is not set (checked {self._layers_desc()})")
+        mut v: str = self.lookup(key)?
+        return v
+
+    def _layers_desc(self) -> str:
+        mut parts: List[str] = []
+        parts.append("defaults")
+        if len(self.files) > 0: parts.append("files " + _cf_join(self.files, ", "))
+        if self.env_loaded: parts.append(f"environment {self.env_prefix}*")
+        parts.append("command line")
+        parts.append("overrides")
+        return _cf_join(parts, "; ")
+
+    pub def require_int(self, key: str) throws str -> int:
+        mut v: str = self.require(key)?
+        if not _cf_is_int(v):
+            raise(f"config: '{key}' = '{v}' ({self._where(key)}) is not an integer")
+        return v.trim().parse_int()
+
+    pub def require_float(self, key: str) throws str -> float:
+        mut v: str = self.require(key)?
+        if not _cf_is_float(v):
+            raise(f"config: '{key}' = '{v}' ({self._where(key)}) is not a number")
+        return v.trim().parse_float()
+
+    pub def require_bool(self, key: str) throws str -> bool:
+        mut v: str = self.require(key)?
+        mut b = _cf_bool_val(v)
+        if b < 0:
+            raise(f"config: '{key}' = '{v}' ({self._where(key)}) is not a boolean (true/false, yes/no, on/off, 1/0)")
+        return b == 1
+
+    pub def require_duration_ms(self, key: str) throws str -> int:
+        mut v: str = self.require(key)?
+        mut r: Result[int, str] = Config.parse_duration_ms(v)
+        if r.is_err:
+            raise(f"config: '{key}' = '{v}' ({self._where(key)}): {r.err}")
+        return r.ok
+
+    pub def require_bytes(self, key: str) throws str -> int:
+        mut v: str = self.require(key)?
+        mut r: Result[int, str] = Config.parse_bytes(v)
+        if r.is_err:
+            raise(f"config: '{key}' = '{v}' ({self._where(key)}): {r.err}")
+        return r.ok
+
+    pub def require_list(self, key: str) throws str -> List[str]:
+        mut out: List[str] = []
+        mut i = self._find(key)
+        if i >= 0:
+            mut stack: List[str] = []
+            stack.append(key)
+            mut e = self.entries[i]
+            if e.is_list:
+                mut k = 0
+                while k < len(e.items):
+                    mut item: str = self._interp(e.items[k], stack)?
+                    out.append(item)
+                    k = k + 1
+                return out
+            mut v: str = self._interp(e.value, stack)?
+            mut parts: List[str] = v.split_exact(",")
+            mut k2 = 0
+            while k2 < len(parts):
+                mut p = parts[k2].trim()
+                if p.len() > 0: out.append(p)
+                k2 = k2 + 1
+            return out
+        mut n = 0
+        while self._find(f"{key}.{n}") >= 0:
+            mut iv: str = self.lookup(f"{key}.{n}")?
+            out.append(iv)
+            n = n + 1
+        if n == 0:
+            raise(f"config: required key '{key}' is not set (checked {self._layers_desc()})")
+        return out
+
+    # ── value parsers ──
+
+    # "250ms", "5s", "1.5s", "2m", "1h30m", "1d", "1w"; a bare number is ms.
+    pub def parse_duration_ms(text: str) throws str -> int:
+        mut s = text.trim().lower()
+        if s.len() == 0: raise("invalid duration '' (expected e.g. 250ms, 5s, 2m, 1h)")
+        mut neg = false
+        mut i = 0
+        if _cf_byte(s, 0) == 45:
+            neg = true
+            i = 1
+        mut total = 0
+        mut parts = 0
+        while i < s.len():
+            mut c = _cf_byte(s, i)
+            if not (_cf_is_digit(c) or c == 46):
+                raise(f"invalid duration '{text}' (expected e.g. 250ms, 5s, 2m, 1h)")
+            mut milli, nxt = _cf_num_milli(s, i)
+            if nxt == i or (nxt == i + 1 and _cf_byte(s, i) == 46):
+                raise(f"invalid duration '{text}'")
+            i = nxt
+            mut ustart = i
+            while i < s.len() and not (_cf_is_digit(_cf_byte(s, i)) or _cf_byte(s, i) == 46):
+                i = i + 1
+            mut unit = s.slice(ustart, i).trim()
+            mut mult = 0
+            if unit == "" or unit == "ms": mult = 1
+            elif unit == "s" or unit == "sec" or unit == "secs": mult = 1000
+            elif unit == "m" or unit == "min" or unit == "mins": mult = 60000
+            elif unit == "h" or unit == "hr" or unit == "hrs": mult = 3600000
+            elif unit == "d": mult = 86400000
+            elif unit == "w": mult = 604800000
+            else:
+                raise(f"invalid duration '{text}': unknown unit '{unit}' (use ms, s, m, h, d, w)")
+            if unit == "" and parts > 0:
+                raise(f"invalid duration '{text}': missing unit")
+            total = total + milli * mult / 1000
+            parts = parts + 1
+        if neg: return 0 - total
+        return total
+
+    # "512", "10KB" (1000s), "512KiB" (1024s), "1.5GB", "64M" (1024s).
+    pub def parse_bytes(text: str) throws str -> int:
+        mut s = text.trim()
+        if s.len() == 0 or not (_cf_is_digit(_cf_byte(s, 0)) or _cf_byte(s, 0) == 46):
+            raise(f"invalid size '{text}' (expected e.g. 512, 10MB, 512KiB)")
+        mut milli, i = _cf_num_milli(s, 0)
+        mut unit = s.slice(i, s.len()).trim().lower()
+        mut mult = 0
+        if unit == "" or unit == "b": mult = 1
+        elif unit == "kb": mult = 1000
+        elif unit == "mb": mult = 1000000
+        elif unit == "gb": mult = 1000000000
+        elif unit == "tb": mult = 1000000000000
+        elif unit == "k" or unit == "kib": mult = 1024
+        elif unit == "m" or unit == "mib": mult = 1048576
+        elif unit == "g" or unit == "gib": mult = 1073741824
+        elif unit == "t" or unit == "tib": mult = 1099511627776
+        else:
+            raise(f"invalid size '{text}': unknown unit '{unit}' (use B, KB, MB, GB, TB, KiB, MiB, GiB, TiB)")
+        if milli % 1000 == 0: return (milli / 1000) * mult
+        return milli * mult / 1000
+
+    pub def parse_bool(text: str) throws str -> bool:
+        mut b = _cf_bool_val(text)
+        if b < 0: raise(f"invalid boolean '{text}' (use true/false, yes/no, on/off, 1/0)")
+        return b == 1
+
+    # ── file layer ──
+
+    def _flatten_toml(self, v: TomlValue, prefix: str, src: str):
+        if v.is_table():
+            mut i = 0
+            while i < v.keys.len:
+                mut k = v.keys.get(i)
+                mut full = k
+                if prefix.len() > 0: full = prefix + "." + k
+                self._flatten_toml(v.items.get(i), full, src)
+                i = i + 1
+            return
+        if v.is_array():
+            mut scalars = true
+            mut i = 0
+            while i < v.items.len:
+                mut it = v.items.get(i)
+                if it.is_table() or it.is_array(): scalars = false
+                i = i + 1
+            if scalars:
+                mut items: List[str] = []
+                i = 0
+                while i < v.items.len:
+                    items.append(Config._toml_text(v.items.get(i)))
+                    i = i + 1
+                self.set_layer_list(prefix, items, LAYER_FILE, src)
+            else:
+                i = 0
+                while i < v.items.len:
+                    self._flatten_toml(v.items.get(i), f"{prefix}.{i}", src)
+                    i = i + 1
+            return
+        mut kind = CFG_STR
+        if v.is_int(): kind = CFG_INT
+        elif v.is_float(): kind = CFG_FLOAT
+        elif v.is_bool(): kind = CFG_BOOL
+        elif v.is_none(): kind = CFG_NULL
+        self.set_layer_kind(prefix, Config._toml_text(v), kind, LAYER_FILE, src)
+
+    def _toml_text(v: TomlValue) -> str:
+        if v.is_int(): return f"{v.i_val}"
+        if v.is_float(): return f"{v.f_val}"
+        if v.is_bool():
+            if v.b_val: return "true"
+            return "false"
+        return v.s_val
+
+    def _flatten_yaml(self, v: YamlValue, prefix: str, src: str):
+        if v.is_table():
+            mut i = 0
+            while i < v.keys.len:
+                mut k = v.keys.get(i)
+                mut full = k
+                if prefix.len() > 0: full = prefix + "." + k
+                self._flatten_yaml(v.items.get(i), full, src)
+                i = i + 1
+            return
+        if v.is_array():
+            mut scalars = true
+            mut i = 0
+            while i < v.items.len:
+                mut it = v.items.get(i)
+                if it.is_table() or it.is_array(): scalars = false
+                i = i + 1
+            if scalars:
+                mut items: List[str] = []
+                i = 0
+                while i < v.items.len:
+                    items.append(Config._yaml_text(v.items.get(i)))
+                    i = i + 1
+                self.set_layer_list(prefix, items, LAYER_FILE, src)
+            else:
+                i = 0
+                while i < v.items.len:
+                    self._flatten_yaml(v.items.get(i), f"{prefix}.{i}", src)
+                    i = i + 1
+            return
+        if prefix.len() == 0: return
+        mut kind = CFG_STR
+        if v.is_int(): kind = CFG_INT
+        elif v.is_float(): kind = CFG_FLOAT
+        elif v.is_bool(): kind = CFG_BOOL
+        elif v.is_null(): kind = CFG_NULL
+        self.set_layer_kind(prefix, Config._yaml_text(v), kind, LAYER_FILE, src)
+
+    def _yaml_text(v: YamlValue) -> str:
+        if v.is_int(): return f"{v.i_val}"
+        if v.is_float(): return f"{v.f_val}"
+        if v.is_bool():
+            if v.b_val: return "true"
+            return "false"
+        return v.s_val
+
+    def _json_text(doc: JsonDoc, idx: int) -> str:
+        mut tag = doc.tag_at(idx)
+        if tag == 1:
+            if doc.bool_at(idx): return "true"
+            return "false"
+        if tag == 2: return f"{doc.int_at(idx)}"
+        if tag == 3: return f"{doc.float_at(idx)}"
+        if tag == 4: return doc.str_at(idx)
+        return ""
+
+    def _flatten_json(self, doc: JsonDoc, idx: int, prefix: str, src: str):
+        mut tag = doc.tag_at(idx)
+        if tag == 6:
+            mut child = doc.kids.get(idx)
+            while child != -1:
+                mut ko = doc.koffs.get(child)
+                mut kl = doc.klens.get(child)
+                mut k = doc.strs.slice(ko, ko + kl)
+                mut full = k
+                if prefix.len() > 0: full = prefix + "." + k
+                self._flatten_json(doc, child, full, src)
+                child = doc.sibs.get(child)
+            return
+        if tag == 5:
+            mut scalars = true
+            mut child = doc.kids.get(idx)
+            while child != -1:
+                mut ct = doc.tag_at(child)
+                if ct == 5 or ct == 6: scalars = false
+                child = doc.sibs.get(child)
+            mut n = 0
+            mut items: List[str] = []
+            child = doc.kids.get(idx)
+            while child != -1:
+                if scalars:
+                    items.append(Config._json_text(doc, child))
+                else:
+                    self._flatten_json(doc, child, f"{prefix}.{n}", src)
+                n = n + 1
+                child = doc.sibs.get(child)
+            if scalars: self.set_layer_list(prefix, items, LAYER_FILE, src)
+            return
+        if prefix.len() == 0: return
+        mut kind = CFG_STR
+        if tag == 0: kind = CFG_NULL
+        elif tag == 1: kind = CFG_BOOL
+        elif tag == 2: kind = CFG_INT
+        elif tag == 3: kind = CFG_FLOAT
+        self.set_layer_kind(prefix, Config._json_text(doc, idx), kind, LAYER_FILE, src)
+
+    # Load text in a named format ("toml", "yaml", "json", "ini", "env") as
+    # the file layer; `source` is the label recorded for source_of.
+    pub def load_text(self, text: str, format: str, source: str) throws str:
+        mut f = format.lower()
+        if f == "toml":
+            mut t = Toml.parse(text)
+            if not t.is_table():
+                raise(f"config: {source}: not a TOML document")
+            self._flatten_toml(t, "", source)
+        elif f == "yaml" or f == "yml":
+            mut y = Yaml.parse(text)
+            if y.is_none() and text.trim().len() > 0 and not text.trim().starts_with("#"):
+                raise(f"config: {source}: YAML document is not a mapping")
+            if not y.is_none() and not y.is_table():
+                raise(f"config: {source}: YAML document is not a mapping")
+            self._flatten_yaml(y, "", source)
+        elif f == "json":
+            mut doc = Json.parse(text)
+            if doc.tag_at(0) != 6 or not text.trim().starts_with("{"):
+                raise(f"config: {source}: JSON document is not an object")
+            self._flatten_json(doc, 0, "", source)
+        elif f == "ini" or f == "cfg" or f == "conf":
+            mut d = Ini.parse(text)
+            mut s = 0
+            while s < d.sections.len:
+                mut sec = d.sections.get(s)
+                mut k = 0
+                while k < sec.keys.len:
+                    mut key = sec.keys.get(k)
+                    if sec.name.len() > 0: key = sec.name + "." + key
+                    self.set_layer(key, sec.vals.get(k), LAYER_FILE, source)
+                    k = k + 1
+                s = s + 1
+        elif f == "env" or f == "dotenv":
+            mut m = Dotenv.parse(text)
+            mut ks = m.keys()
+            mut i = 0
+            while i < len(ks):
+                mut key = self._env_key(ks[i])
+                if key.len() > 0:
+                    self.set_layer(key, m[ks[i]], LAYER_FILE, f"{source} ({ks[i]})")
+                i = i + 1
+        else:
+            raise(f"config: {source}: unsupported format '{format}' (use toml, yaml, json, ini or env)")
+
+    # Format from a path's extension ("" when unknown).
+    pub def format_of(path: str) -> str:
+        mut l = path.lower()
+        if l.ends_with(".toml"): return "toml"
+        if l.ends_with(".yaml") or l.ends_with(".yml"): return "yaml"
+        if l.ends_with(".json"): return "json"
+        if l.ends_with(".ini") or l.ends_with(".cfg") or l.ends_with(".conf"): return "ini"
+        if l.ends_with(".env") or l == ".env" or l.ends_with("/.env"): return "env"
+        return ""
+
+    def _load_path(self, path: str, optional: bool) throws str -> bool:
+        mut fmt = Config.format_of(path)
+        if fmt.len() == 0:
+            raise(f"config: cannot tell the format of '{path}' (use .toml, .yaml, .yml, .json, .ini, .cfg, .conf or .env)")
+        if not File.file_exists(path):
+            if optional: return false
+            raise(f"config: config file '{path}' not found")
+        mut text = File.read_text(path)
+        self.load_text(text, fmt, f"file {path}")?
+        return true
+
+    def _remember(self, path: str, optional: bool):
+        if not _cf_contains(self.files, path):
+            self.files.append(path)
+            self.file_opt.append(optional)
+
+    # Load a config file (format from the extension). Missing file = error.
+    pub def load_file(self, path: str) throws str:
+        mut ok: bool = self._load_path(path, false)?
+        self._remember(path, false)
+
+    # Like load_file, but a missing file is skipped. Returns whether it loaded.
+    pub def load_file_optional(self, path: str) throws str -> bool:
+        mut ok: bool = self._load_path(path, true)?
+        self._remember(path, true)
+        return ok
+
+    # ── environment layer ──
+
+    # Map an environment variable name to a config key ("" = not ours).
+    pub def _env_key(self, name: str) -> str:
+        if self.env_prefix.len() > 0 and not name.starts_with(self.env_prefix): return ""
+        mut rest = name.slice(self.env_prefix.len(), name.len())
+        if rest.len() == 0: return ""
+        mut segs: List[str] = rest.split_exact(self.env_sep)
+        mut out: List[str] = []
+        mut i = 0
+        while i < len(segs):
+            if segs[i].len() == 0: return ""
+            out.append(segs[i].lower())
+            i = i + 1
+        return _cf_join(out, ".")
+
+    # Set the prefix/separator used by load_env and .env files without
+    # reading the environment yet.
+    pub def env_mapping(self, prefix: str, sep: str):
+        self.env_prefix = prefix
+        if sep.len() > 0: self.env_sep = sep
+        else: self.env_sep = "__"
+
+    # Read every PREFIX* process environment variable into the env layer.
+    pub def load_env(self, prefix: str, sep: str):
+        self.env_mapping(prefix, sep)
+        self.env_loaded = true
+        self.env_from_map = false
+        self._read_env()
+
+    def _read_env(self):
+        mut n = trc_cfg_env_count()
+        mut i = 0
+        while i < n:
+            mut len_i = trc_cfg_env_len(i)
+            if len_i > 0:
+                mut buf = _tr_c_malloc(len_i + 1)
+                mut got = trc_cfg_env_copy(i, buf, len_i)
+                mut entry = _tr_str_wrap_len(buf, got)
+                mut eq = entry.index_of("=")
+                if eq > 0:
+                    mut name = entry.slice(0, eq)
+                    mut key = self._env_key(name)
+                    if key.len() > 0:
+                        self.set_layer(key, entry.slice(eq + 1, entry.len()), LAYER_ENV, f"env {name}")
+            i = i + 1
+
+    # Same as load_env, from an explicit NAME -> value map.
+    pub def load_env_map(self, vars: Dict[str, str], prefix: str, sep: str):
+        self.env_mapping(prefix, sep)
+        self.env_loaded = true
+        self.env_from_map = true
+        self.env_map_k = []
+        self.env_map_v = []
+        mut ks = vars.keys()
+        mut i = 0
+        while i < len(ks):
+            self.env_map_k.append(ks[i])
+            self.env_map_v.append(vars[ks[i]])
+            i = i + 1
+        self._apply_env_map()
+
+    def _apply_env_map(self):
+        mut i = 0
+        while i < len(self.env_map_k):
+            mut name = self.env_map_k[i]
+            mut key = self._env_key(name)
+            if key.len() > 0:
+                self.set_layer(key, self.env_map_v[i], LAYER_ENV, f"env {name}")
+            i = i + 1
+
+    # ── command-line layer ──
+
+    # Take the options an argparse Namespace got FROM THE COMMAND LINE
+    # (argparse's own env/default values are left to the lower layers). An
+    # argument named "db__host" or "db.host" maps to key db.host; repeated
+    # options become lists.
+    pub def load_args(self, ns: Namespace):
+        mut i = 0
+        while i < len(ns.keys):
+            if ns.sources[i] == 1:
+                mut name = ns.keys[i]
+                mut key = name.replace("__", ".")
+                mut vals = ns.list(name)
+                if len(vals) > 1:
+                    self.set_layer_list(key, vals, LAYER_ARGS, f"flag --{name}")
+                else:
+                    self.set_layer(key, ns.get(name), LAYER_ARGS, f"flag --{name}")
+            i = i + 1
+
+    # Minimal flag reader: "--key=value", "--key" (true) and "--no-key"
+    # (false); "-" in names becomes "_" ("--log-level=debug" -> log_level),
+    # "--" ends options. Returns the arguments that were not flags.
+    pub def load_flags(self, args: List[str]) -> List[str]:
+        mut rest: List[str] = []
+        mut i = 0
+        mut done = false
+        while i < len(args):
+            mut a = args[i]
+            i = i + 1
+            if done or not a.starts_with("--") or a == "-":
+                rest.append(a)
+                continue
+            if a == "--":
+                done = true
+                continue
+            mut body = a.slice(2, a.len())
+            mut eq = body.index_of("=")
+            if eq >= 0:
+                mut key = body.slice(0, eq).replace("-", "_")
+                self.set_layer(key, body.slice(eq + 1, body.len()), LAYER_ARGS, f"flag --{body.slice(0, eq)}")
+            elif body.starts_with("no-") and body.len() > 3:
+                mut key2 = body.slice(3, body.len()).replace("-", "_")
+                self.set_layer_kind(key2, "false", CFG_BOOL, LAYER_ARGS, f"flag {a}")
+            else:
+                mut key3 = body.replace("-", "_")
+                self.set_layer_kind(key3, "true", CFG_BOOL, LAYER_ARGS, f"flag {a}")
+        return rest
+
+    # ── reload ──
+
+    # Re-read the file and environment layers (defaults, command line and
+    # overrides are kept).
+    pub def reload(self) throws str:
+        self.clear_layer(LAYER_FILE)
+        self.clear_layer(LAYER_ENV)
+        mut i = 0
+        while i < len(self.files):
+            mut ok: bool = self._load_path(self.files[i], self.file_opt[i])?
+            i = i + 1
+        if self.env_loaded:
+            if self.env_from_map: self._apply_env_map()
+            else: self._read_env()
+
+    # ── validation ──
+
+    pub def expect(self, key: str, kind: str) -> ConfigSpec:
+        mut s = ConfigSpec()
+        s.key = key
+        s.kind = kind
+        s.req = false
+        s.choices = []
+        s.has_range = false
+        s.lo = 0.0
+        s.hi = 0.0
+        s.is_secret = false
+        self.specs.append(s)
+        return s
+
+    pub def mark_secret(self, key: str):
+        self.secrets.append(key)
+
+    pub def is_secret(self, key: str) -> bool:
+        if _cf_contains(self.secrets, key): return true
+        mut i = 0
+        while i < len(self.specs):
+            if self.specs[i].is_secret and self.specs[i].matches_key(key): return true
+            i = i + 1
+        return _cf_secret_name(key)
+
+    def _check_one(self, s: ConfigSpec, key: str, errs: List[str]):
+        mut where = self._where(key)
+        if s.kind == "list":
+            mut lr: Result[List[str], str] = self.require_list(key)
+            if lr.is_err:
+                errs.append(lr.err)
+                return
+            if s.has_range:
+                mut n = len(lr.ok) as float
+                if n < s.lo or n > s.hi:
+                    errs.append(f"config: '{key}' ({where}) must have between {s.lo as int} and {s.hi as int} items, has {len(lr.ok)}")
+            return
+        mut r: Result[str, str] = self.lookup(key)
+        if r.is_err:
+            errs.append(r.err)
+            return
+        mut v = r.ok
+        mut num = 0.0
+        mut numeric = false
+        if s.kind == "int":
+            mut ri: Result[int, str] = self.require_int(key)
+            if ri.is_err:
+                errs.append(ri.err)
+                return
+            num = ri.ok as float
+            numeric = true
+        elif s.kind == "float":
+            mut rf: Result[float, str] = self.require_float(key)
+            if rf.is_err:
+                errs.append(rf.err)
+                return
+            num = rf.ok
+            numeric = true
+        elif s.kind == "bool":
+            mut rb: Result[bool, str] = self.require_bool(key)
+            if rb.is_err:
+                errs.append(rb.err)
+                return
+        elif s.kind == "duration":
+            mut rd: Result[int, str] = self.require_duration_ms(key)
+            if rd.is_err:
+                errs.append(rd.err)
+                return
+            num = rd.ok as float
+            numeric = true
+        elif s.kind == "bytes":
+            mut rz: Result[int, str] = self.require_bytes(key)
+            if rz.is_err:
+                errs.append(rz.err)
+                return
+            num = rz.ok as float
+            numeric = true
+        elif s.kind == "str":
+            num = v.len() as float
+        if len(s.choices) > 0 and not _cf_contains(s.choices, v):
+            mut allowed = _cf_join(s.choices, ", ")
+            errs.append(f"config: '{key}' = '{v}' ({where}) must be one of: {allowed}")
+        if s.has_range and (numeric or s.kind == "str"):
+            if num < s.lo or num > s.hi:
+                if s.kind == "str":
+                    errs.append(f"config: '{key}' ({where}) length must be between {s.lo as int} and {s.hi as int}")
+                else:
+                    errs.append(f"config: '{key}' = '{v}' ({where}) must be between {s.lo} and {s.hi}")
+
+    # Every problem: missing required keys, type / choice / range violations
+    # and broken interpolations (in all keys, declared or not).
+    pub def validate(self) -> List[str]:
+        mut errs: List[str] = []
+        mut all = self.keys()
+        mut i = 0
+        while i < len(self.specs):
+            mut s = self.specs[i]
+            if s.key.ends_with(".*"):
+                mut any_match = false
+                mut k = 0
+                while k < len(all):
+                    if s.matches_key(all[k]):
+                        any_match = true
+                        self._check_one(s, all[k], errs)
+                    k = k + 1
+                if s.req and not any_match:
+                    errs.append(f"config: required key '{s.key}' has no entries")
+            elif not self.has(s.key):
+                if s.req: errs.append(f"config: required key '{s.key}' is not set (checked {self._layers_desc()})")
+            elif self._find(s.key) >= 0 or s.kind == "list":
+                self._check_one(s, s.key, errs)
+            i = i + 1
+        i = 0
+        while i < len(all):
+            mut r: Result[str, str] = self.lookup(all[i])
+            if r.is_err and not _cf_contains(errs, r.err): errs.append(r.err)
+            i = i + 1
+        return errs
+
+    # Raise all validate() problems as one error (one per line).
+    pub def check(self) throws str:
+        mut errs = self.validate()
+        if len(errs) > 0:
+            raise(_cf_join(errs, "\n"))
+
+    # Keys neither declared with expect() nor given a default.
+    pub def unknown_keys(self) -> List[str]:
+        mut out: List[str] = []
+        mut all = self.keys()
+        mut i = 0
+        while i < len(all):
+            mut key = all[i]
+            mut known = false
+            mut j = 0
+            while j < len(self.entries) and not known:
+                if self.entries[j].key == key and self.entries[j].layer == LAYER_DEFAULT: known = true
+                j = j + 1
+            j = 0
+            while j < len(self.specs) and not known:
+                if self.specs[j].matches_key(key): known = true
+                # a declared list may be given as indexed keys (key.0, key.1)
+                if self.specs[j].kind == "list" and key.starts_with(self.specs[j].key + "."): known = true
+                j = j + 1
+            if not known: out.append(key)
+            i = i + 1
+        return out
+
+    # ── export ──
+
+    def _declared_kind(self, key: str) -> str:
+        mut i = 0
+        while i < len(self.specs):
+            if self.specs[i].matches_key(key): return self.specs[i].kind
+            i = i + 1
+        return ""
+
+    def _json_scalar(self, key: str, sb: StringBuilder):
+        mut i = self._find(key)
+        mut e = self.entries[i]
+        mut stack: List[str] = []
+        stack.append(key)
+        if e.is_list:
+            sb.append_char(91)
+            mut k = 0
+            while k < len(e.items):
+                if k > 0: sb.append_char(44)
+                mut ir: Result[str, str] = self._interp(e.items[k], stack)
+                mut item = e.items[k]
+                if ir.is_ok: item = ir.ok
+                self._json_value(item, CFG_TEXT, "", sb)
+                k = k + 1
+            sb.append_char(93)
+            return
+        mut r: Result[str, str] = self._interp(e.value, stack)
+        mut v = e.value
+        if r.is_ok: v = r.ok
+        self._json_value(v, e.kind, self._declared_kind(key), sb)
+
+    def _json_value(self, v: str, kind: int, declared: str, sb: StringBuilder):
+        if kind == CFG_NULL:
+            sb.append("null")
+            return
+        mut k = kind
+        if declared == "str": k = CFG_STR
+        elif declared == "int" and _cf_is_int(v): k = CFG_INT
+        elif declared == "float" and _cf_is_float(v): k = CFG_FLOAT
+        elif declared == "bool" and _cf_bool_val(v) >= 0: k = CFG_BOOL
+        elif kind == CFG_TEXT:
+            if _cf_is_int(v): k = CFG_INT
+            elif _cf_is_float(v): k = CFG_FLOAT
+            elif v == "true" or v == "false": k = CFG_BOOL
+            else: k = CFG_STR
+        if k == CFG_INT:
+            sb.append(f"{v.trim().parse_int()}")
+        elif k == CFG_FLOAT:
+            sb.append(v.trim())
+        elif k == CFG_BOOL:
+            if _cf_bool_val(v) == 1: sb.append("true")
+            else: sb.append("false")
+        else:
+            sb.append_char(34)
+            _cf_json_escape(v, sb)
+            sb.append_char(34)
+
+    def _json_obj(self, prefix: str, keys: List[str], sb: StringBuilder):
+        # direct children names of `prefix`, in sorted order
+        mut names: List[str] = []
+        mut pre = ""
+        if prefix.len() > 0: pre = prefix + "."
+        mut i = 0
+        while i < len(keys):
+            mut k = keys[i]
+            if k.starts_with(pre):
+                mut rest = k.slice(pre.len(), k.len())
+                mut dot = rest.index_of(".")
+                mut name = rest
+                if dot >= 0: name = rest.slice(0, dot)
+                if not _cf_contains(names, name): names.append(name)
+            i = i + 1
+        sb.append_char(123)
+        i = 0
+        while i < len(names):
+            if i > 0: sb.append_char(44)
+            mut full = pre + names[i]
+            sb.append_char(34)
+            _cf_json_escape(names[i], sb)
+            sb.append("\":")
+            mut is_table = false
+            mut j = 0
+            while j < len(keys):
+                if keys[j].starts_with(full + "."): is_table = true
+                j = j + 1
+            if is_table: self._json_obj(full, keys, sb)
+            else: self._json_scalar(full, sb)
+            i = i + 1
+        sb.append_char(125)
+
+    # The resolved configuration as a nested JSON object. Typed sources keep
+    # their types; text from env/INI/flags becomes a number/bool when it
+    # parses as one (or as the kind declared with expect()).
+    pub def to_json(self) -> str:
+        mut sb = StringBuilder.init(256)
+        self._json_obj("", self.keys(), sb)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Validate to_json() against a std.validate.schema Schema.
+    pub def validate_schema(self, s: Schema) -> ValidationResult:
+        mut doc = Json.parse(self.to_json())
+        mut res = s.validate(doc.root())
+        return res
+
+    # "key = value  # source" lines, sorted, secrets masked, values raw.
+    pub def dump(self) -> str:
+        mut sb = StringBuilder.init(256)
+        mut all = self.keys()
+        mut i = 0
+        while i < len(all):
+            mut key = all[i]
+            mut e = self.entries[self._find(key)]
+            mut v = e.value
+            if e.is_list: v = "[" + _cf_join(e.items, ", ") + "]"
+            if self.is_secret(key): v = self.mask
+            sb.append(key)
+            sb.append(" = ")
+            sb.append(v)
+            sb.append("  # ")
+            sb.append(e.source)
+            sb.append("\n")
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+# ─── ConfigWatcher ──────────────────────────────────────────────────────────
+
+# Reload a Config when one of its files changes (std.io.watch). Watches the
+# directories holding the files, so editors that save by rename still count.
+pub class ConfigWatcher:
+    pub cfg:     Config
+    pub w:       Watcher
+    pub names:   List[str]
+    pub active:  bool
+
+def _cf_dir_of(path: str) -> str:
+    mut slash = -1
+    mut i = 0
+    while i < path.len():
+        if _cf_byte(path, i) == 47 or _cf_byte(path, i) == 92: slash = i
+        i = i + 1
+    if slash < 0: return "."
+    if slash == 0: return "/"
+    return path.slice(0, slash)
+
+def _cf_base_of(path: str) -> str:
+    mut slash = -1
+    mut i = 0
+    while i < path.len():
+        if _cf_byte(path, i) == 47 or _cf_byte(path, i) == 92: slash = i
+        i = i + 1
+    return path.slice(slash + 1, path.len())
+
+extend ConfigWatcher:
+    pub def init(cfg: Config, debounce_ms: int) -> ConfigWatcher:
+        mut cw = ConfigWatcher()
+        cw.cfg = cfg
+        cw.w = Watcher.new()
+        cw.names = []
+        cw.active = false
+        mut dirs: List[str] = []
+        mut i = 0
+        while i < len(cfg.files):
+            mut d = _cf_dir_of(cfg.files[i])
+            cw.names.append(_cf_base_of(cfg.files[i]))
+            if not _cf_contains(dirs, d):
+                dirs.append(d)
+                if cw.w.watch(d, false, debounce_ms): cw.active = true
+            i = i + 1
+        return cw
+
+    # Wait up to timeout_ms; when a watched file changed, reload and return
+    # true. Reload errors (e.g. a half-written file) are raised.
+    pub def poll(self, timeout_ms: int) throws str -> bool:
+        mut evs = self.w.poll(timeout_ms)
+        mut hit = false
+        mut i = 0
+        while i < evs.len:
+            mut base = _cf_base_of(evs.get(i).path)
+            if _cf_contains(self.names, base): hit = true
+            i = i + 1
+        if hit:
+            self.cfg.reload()?
+        return hit
+
+    pub def destroy(self):
+        self.w.destroy()
