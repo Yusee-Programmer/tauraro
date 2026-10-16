@@ -1,0 +1,339 @@
+# std.encoding.xlsx_xml -- a small pull (StAX-style) XML reader used by
+# std.encoding.xlsx for the SpreadsheetML parts of a workbook.
+#
+# Events: XX_START (element open; `name`, attributes), XX_END (element close,
+# also emitted right after a self-closing START), XX_TEXT (`text`, entities
+# and CDATA already decoded), XX_EOF. Namespace prefixes are dropped from
+# element and attribute names (`x:c` -> `c`, `r:id` -> `id`), which is what
+# SpreadsheetML consumers want: Excel, LibreOffice and the .NET SDK disagree
+# on prefixes but not on local names. Comments, processing instructions and
+# DOCTYPE declarations are skipped. Character references (`&#10;`,
+# `&#x1F600;`) are decoded to UTF-8 alongside the five predefined entities.
+#
+#   mut r = XlsxXml.init(src)
+#   while r.next() != XX_EOF:
+#       if r.kind == XX_START and r.name == "c": print(r.attr("r"))
+
+from std.core.string import StringBuilder
+
+pub const XX_EOF = 0
+pub const XX_START = 1
+pub const XX_END = 2
+pub const XX_TEXT = 3
+
+def _xx_byte(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+# Append code point `cp` to `sb` as UTF-8.
+pub def xlsx_put_utf8(sb: StringBuilder, cp: int):
+    if cp < 0x80:
+        sb.append_char(cp)
+    elif cp < 0x800:
+        sb.append_char(0xC0 | (cp >> 6))
+        sb.append_char(0x80 | (cp & 63))
+    elif cp < 0x10000:
+        sb.append_char(0xE0 | (cp >> 12))
+        sb.append_char(0x80 | ((cp >> 6) & 63))
+        sb.append_char(0x80 | (cp & 63))
+    else:
+        sb.append_char(0xF0 | (cp >> 18))
+        sb.append_char(0x80 | ((cp >> 12) & 63))
+        sb.append_char(0x80 | ((cp >> 6) & 63))
+        sb.append_char(0x80 | (cp & 63))
+
+def _xx_hexval(c: int) -> int:
+    if c >= 48 and c <= 57: return c - 48
+    if c >= 97 and c <= 102: return c - 87
+    if c >= 65 and c <= 70: return c - 55
+    return -1
+
+# Decode entities in s[a:b].
+pub def xlsx_xml_unescape(s: str, a: int, b: int) -> str:
+    mut i = a
+    mut amp = false
+    while i < b:
+        if _xx_byte(s, i) == 38:
+            amp = true
+            break
+        i = i + 1
+    if not amp: return s.slice(a, b)
+    mut sb = StringBuilder.init(b - a + 8)
+    i = a
+    while i < b:
+        mut c = _xx_byte(s, i)
+        if c != 38:
+            sb.append_char(c)
+            i = i + 1
+            continue
+        mut j = i + 1
+        while j < b and j - i < 12 and _xx_byte(s, j) != 59:
+            j = j + 1
+        if j >= b or _xx_byte(s, j) != 59:
+            sb.append_char(c)
+            i = i + 1
+            continue
+        mut ent = s.slice(i + 1, j)
+        mut done = true
+        if ent == "lt": sb.append_char(60)
+        elif ent == "gt": sb.append_char(62)
+        elif ent == "amp": sb.append_char(38)
+        elif ent == "quot": sb.append_char(34)
+        elif ent == "apos": sb.append_char(39)
+        elif ent.len() > 1 and _xx_byte(ent, 0) == 35:
+            mut cp = 0
+            mut k = 1
+            mut hex = false
+            if _xx_byte(ent, 1) == 120 or _xx_byte(ent, 1) == 88:
+                hex = true
+                k = 2
+            if k >= ent.len(): done = false
+            while k < ent.len() and done:
+                mut d = _xx_byte(ent, k)
+                if hex:
+                    mut v = _xx_hexval(d)
+                    if v < 0: done = false
+                    else: cp = cp * 16 + v
+                else:
+                    if d < 48 or d > 57: done = false
+                    else: cp = cp * 10 + (d - 48)
+                if cp > 0x10FFFF: done = false
+                k = k + 1
+            if done: xlsx_put_utf8(sb, cp)
+        else:
+            done = false
+        if done:
+            i = j + 1
+        else:
+            sb.append_char(c)
+            i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+pub class XlsxXml:
+    pub src:   str
+    pub pos:   int
+    pub n:     int
+    pub kind:  int
+    pub name:  str
+    pub text:  str
+    pub nattr: int
+    pub akeys: List[str]
+    pub avals: List[str]
+    pub pending_end: bool
+    pub depth: int
+
+extend XlsxXml:
+    pub def init(src: str) -> XlsxXml:
+        mut r = XlsxXml()
+        r.src = src
+        r.pos = 0
+        r.n = src.len()
+        r.kind = XX_EOF
+        r.name = ""
+        r.text = ""
+        r.nattr = 0
+        r.akeys = []
+        r.avals = []
+        r.pending_end = false
+        r.depth = 0
+        return r
+
+    def _starts(self, lit: str) -> bool:
+        mut m = lit.len()
+        if self.pos + m > self.n: return false
+        mut i = 0
+        while i < m:
+            if _xx_byte(self.src, self.pos + i) != _xx_byte(lit, i): return false
+            i = i + 1
+        return true
+
+    # Advance past the next occurrence of `lit` (or to the end).
+    def _skip_past(self, lit: str):
+        while self.pos < self.n and not self._starts(lit):
+            self.pos = self.pos + 1
+        if self.pos < self.n: self.pos = self.pos + lit.len()
+
+    def _is_ws(self, c: int) -> bool:
+        return c == 32 or c == 9 or c == 10 or c == 13
+
+    def _name_end(self, c: int) -> bool:
+        return self._is_ws(c) or c == 62 or c == 47 or c == 61 or c == 0
+
+    # Read a name at pos and return its local part (prefix dropped).
+    def _read_name(self) -> str:
+        mut a = self.pos
+        mut colon = -1
+        while self.pos < self.n:
+            mut c = _xx_byte(self.src, self.pos)
+            if self._name_end(c): break
+            if c == 58: colon = self.pos
+            self.pos = self.pos + 1
+        if colon >= 0 and not (colon - a == 5 and self.src.slice(a, colon) == "xmlns"):
+            return self.src.slice(colon + 1, self.pos)
+        return self.src.slice(a, self.pos)
+
+    def _add_attr(self, k: str, v: str):
+        if self.nattr < self.akeys.len():
+            self.akeys[self.nattr] = k
+            self.avals[self.nattr] = v
+        else:
+            self.akeys.append(k)
+            self.avals.append(v)
+        self.nattr = self.nattr + 1
+
+    # Next event; also stored in self.kind.
+    pub def next(self) -> int:
+        if self.pending_end:
+            self.pending_end = false
+            self.kind = XX_END
+            self.nattr = 0
+            self.depth = self.depth - 1
+            return XX_END
+        while self.pos < self.n:
+            mut c = _xx_byte(self.src, self.pos)
+            if c != 60:
+                mut a = self.pos
+                while self.pos < self.n and _xx_byte(self.src, self.pos) != 60:
+                    self.pos = self.pos + 1
+                self.text = xlsx_xml_unescape(self.src, a, self.pos)
+                self.kind = XX_TEXT
+                return XX_TEXT
+            if self._starts("<?"):
+                self._skip_past("?>")
+                continue
+            if self._starts("<!--"):
+                self._skip_past("-->")
+                continue
+            if self._starts("<![CDATA["):
+                self.pos = self.pos + 9
+                mut a2 = self.pos
+                while self.pos < self.n and not self._starts("]]>"):
+                    self.pos = self.pos + 1
+                self.text = self.src.slice(a2, self.pos)
+                if self.pos < self.n: self.pos = self.pos + 3
+                self.kind = XX_TEXT
+                return XX_TEXT
+            if self._starts("<!"):
+                # DOCTYPE: skip, allowing one level of [ ... ] internal subset
+                mut br = 0
+                while self.pos < self.n:
+                    mut d = _xx_byte(self.src, self.pos)
+                    if d == 91: br = br + 1
+                    if d == 93: br = br - 1
+                    self.pos = self.pos + 1
+                    if d == 62 and br <= 0: break
+                continue
+            if self._starts("</"):
+                self.pos = self.pos + 2
+                self.name = self._read_name()
+                while self.pos < self.n and _xx_byte(self.src, self.pos) != 62:
+                    self.pos = self.pos + 1
+                if self.pos < self.n: self.pos = self.pos + 1
+                self.kind = XX_END
+                self.nattr = 0
+                self.depth = self.depth - 1
+                return XX_END
+            # start tag
+            self.pos = self.pos + 1
+            self.name = self._read_name()
+            self.nattr = 0
+            while self.pos < self.n:
+                mut d2 = _xx_byte(self.src, self.pos)
+                if self._is_ws(d2):
+                    self.pos = self.pos + 1
+                    continue
+                if d2 == 62:
+                    self.pos = self.pos + 1
+                    break
+                if d2 == 47:
+                    self.pos = self.pos + 1
+                    if self.pos < self.n and _xx_byte(self.src, self.pos) == 62: self.pos = self.pos + 1
+                    self.pending_end = true
+                    break
+                mut k = self._read_name()
+                if k.len() == 0:
+                    self.pos = self.pos + 1
+                    continue
+                while self.pos < self.n and self._is_ws(_xx_byte(self.src, self.pos)):
+                    self.pos = self.pos + 1
+                mut v = ""
+                if self.pos < self.n and _xx_byte(self.src, self.pos) == 61:
+                    self.pos = self.pos + 1
+                    while self.pos < self.n and self._is_ws(_xx_byte(self.src, self.pos)):
+                        self.pos = self.pos + 1
+                    if self.pos < self.n:
+                        mut q = _xx_byte(self.src, self.pos)
+                        if q == 34 or q == 39:
+                            self.pos = self.pos + 1
+                            mut va = self.pos
+                            while self.pos < self.n and _xx_byte(self.src, self.pos) != q:
+                                self.pos = self.pos + 1
+                            v = xlsx_xml_unescape(self.src, va, self.pos)
+                            if self.pos < self.n: self.pos = self.pos + 1
+                self._add_attr(k, v)
+            self.kind = XX_START
+            self.depth = self.depth + 1
+            return XX_START
+        self.kind = XX_EOF
+        return XX_EOF
+
+    pub def attr(self, k: str) -> str:
+        mut i = 0
+        while i < self.nattr:
+            if self.akeys[i] == k:
+                # a copy: returning the list slot directly hands back a view
+                # that dies when the slot is reused by the next start tag
+                mut v = self.avals[i]
+                return v.slice(0, v.len())
+            i = i + 1
+        return ""
+
+    pub def has_attr(self, k: str) -> bool:
+        mut i = 0
+        while i < self.nattr:
+            if self.akeys[i] == k: return true
+            i = i + 1
+        return false
+
+    # After a START: all text inside this element (nested elements' text
+    # included), consuming through the matching END.
+    pub def read_text(self) -> str:
+        mut d = self.depth
+        mut sb = StringBuilder.init(16)
+        while true:
+            mut e = self.next()
+            if e == XX_EOF: break
+            if e == XX_TEXT: sb.append(self.text)
+            if e == XX_END and self.depth < d: break
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # After a START: skip to the matching END.
+    pub def skip(self):
+        mut d = self.depth
+        while true:
+            mut e = self.next()
+            if e == XX_EOF: break
+            if e == XX_END and self.depth < d: break
+
+# True when `src` is well-formed enough for our purposes: every start tag is
+# closed by an end tag of the same name, in order, with nothing left open.
+pub def xlsx_xml_well_formed(src: str) -> bool:
+    mut r = XlsxXml.init(src)
+    mut stack: List[str] = []
+    mut roots = 0
+    while true:
+        mut e = r.next()
+        if e == XX_EOF: break
+        if e == XX_START:
+            if stack.len() == 0: roots = roots + 1
+            stack.append(r.name)
+        elif e == XX_END:
+            if stack.len() == 0: return false
+            mut top = stack.pop()
+            if top != r.name: return false
+    return stack.len() == 0 and roots == 1

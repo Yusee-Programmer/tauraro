@@ -407,7 +407,7 @@ while loop.is_running():
 ## Archive (ZIP) — `std.io.archive`
 
 **When**: You need to create or read real `.zip` files — bundling multiple files into one archive, or unpacking one — without shelling out to a `zip`/`unzip` CLI tool.
-**Why**: A pure-Tauraro implementation of the PKZIP APPNOTE format (local file header + central directory + end-of-central-directory record), byte-correct enough that real ZIP tools can read `ZipWriter`'s output. Compression uses the same raw-DEFLATE runtime routines `std.compress.zlib.Zlib` wraps; every entry's CRC32 (IEEE 802.3 / PKZIP polynomial `0xEDB88320`) is verified on decompression, so a corrupted archive is detected rather than silently handed back as wrong data.
+**Why**: A pure-Tauraro implementation of the PKZIP APPNOTE format (local file header + central directory + end-of-central-directory record), byte-correct enough that real ZIP tools can read `ZipWriter`'s output. Compression uses the built-in raw-DEFLATE codec of `std.compress.flate` (no `-lz` needed, and deflated entries written by other tools read back the same way); every entry's CRC32 (IEEE 802.3 / PKZIP polynomial `0xEDB88320`) is verified on decompression, so a corrupted archive is detected rather than silently handed back as wrong data.
 
 ```tauraro
 from std.io.archive import ZipWriter, ZipReader
@@ -422,7 +422,7 @@ mut zip_bytes = w.finish()
 | Method | Signature | Returns | Description |
 |---|---|---|---|
 | `init` | `() -> ZipWriter` | `ZipWriter` | Create an empty archive builder. |
-| `add_file` | `(self, name: str, data: str, len_: int)` | `void` | Add an entry, compressed with DEFLATE when that actually shrinks `data`; otherwise falls back to STORED automatically (always correct, e.g. also true when compression is unavailable). |
+| `add_file` | `(self, name: str, data: str, len_: int)` | `void` | Add an entry, compressed with DEFLATE when that actually shrinks `data`; otherwise falls back to STORED automatically. |
 | `add_file_stored` | `(self, name: str, data: str, len_: int)` | `void` | Add an entry with no compression, regardless of size. |
 | `finish` | `(self) -> str` | `str` | Write the central directory + end-of-central-directory record and return the complete ZIP file bytes. |
 | `total_len` | `(self) -> int` | `int` | Exact byte length of the archive built so far — call **after** `finish()` for the final archive size. The returned bytes may contain embedded NULs, so this length (not `strlen`) is authoritative. |
