@@ -1,0 +1,1242 @@
+# std.net.acme -- automatic certificates with ACME (RFC 8555), e.g. from
+# Let's Encrypt.
+#
+#   AcmeClient   account (ES256 / ES384 / RS256 key, contacts, terms of service,
+#                External Account Binding, key rollover, deactivation), orders
+#                for DNS names (wildcards included) and IP addresses (RFC 8738),
+#                challenges http-01, dns-01 and tls-alpn-01 (RFC 8737),
+#                finalization with a PKCS#10 CSR, polling with Retry-After,
+#                certificate download with alternate chains, revocation, and
+#                obtain() which does all of it in one call.
+#   AcmeJws      the JOSE pieces: flattened JWS, JWK, RFC 7638 thumbprints,
+#                key authorizations, EAB.
+#
+# Usage:
+#   from std.net.acme import AcmeClient, LETSENCRYPT_STAGING, CHALLENGE_HTTP01
+#   mut acme = AcmeClient.init(LETSENCRYPT_STAGING)
+#   acme.set_contacts(["admin@example.com"])
+#   acme.agree_to_terms(true)
+#   mut cert = acme.obtain(["example.com", "www.example.com"], CHALLENGE_HTTP01)?
+#   # cert.cert_pem (leaf + chain) and cert.key_pem go straight into
+#   # TlsServerConfig.from_pem(cert.cert_pem, cert.key_pem)
+#   write_file("account.pem", acme.account_key.private_pem())   # keep the account
+#   if AcmeClient.needs_renewal(cert.cert_pem, 30): ...
+#
+# Challenges: obtain() answers http-01 with a built-in responder on port 80
+# (`http_port`) and tls-alpn-01 with a built-in TLS responder on port 443
+# (`tls_port`) unless a hook is set (set_http01_hook / set_tls_alpn01_hook,
+# e.g. to serve the challenge from a running server; for tls-alpn-01 see
+# TlsServerConfig.add_route). dns-01 always needs set_dns01_hook: it receives
+# the record name ("_acme-challenge.example.com") and the TXT value.
+# Wildcard names can only be validated with dns-01.
+#
+# Limitations: no account-key generation for RSA (load an RSA key with
+# KeyPair.from_pem); one request at a time per client; the built-in responders
+# bind 0.0.0.0 and serve only during obtain(); pre-authorization (newAuthz)
+# and the ARI renewal-info extension are not implemented.
+
+from std.core.string import StringBuilder
+from std.encoding.json import Json, JsonDoc, JsonRef
+from std.crypto.native import _cn_b64, _cn_unb64, ALG_SHA256, ALG_SHA384
+from std.crypto.digest import Digest
+from std.crypto.hmac import Hmac
+from std.crypto.pk import PKey, Pem, KEY_RSA, KEY_EC_P256, KEY_EC_P384, CURVE_P256, CURVE_P384, SIG_PKCS1
+from std.crypto.x509 import Certificate
+from std.crypto.der import Der, der_byte
+from std.crypto.csr import KeyPair, Csr, CertBuilder, is_ip_literal, ip_to_bytes, name_der
+from std.net.client import HttpSession, HttpReply
+from std.net.http_server import HttpServer, HttpConn
+from std.net.tcp import TcpStream
+from std.net.tls import TlsServerConfig, TlsListener, TlsStream
+from std.sys.time import Clock
+
+pub const LETSENCRYPT_PRODUCTION = "https://acme-v02.api.letsencrypt.org/directory"
+pub const LETSENCRYPT_STAGING = "https://acme-staging-v02.api.letsencrypt.org/directory"
+
+pub const CHALLENGE_HTTP01 = "http-01"
+pub const CHALLENGE_DNS01 = "dns-01"
+pub const CHALLENGE_TLS_ALPN01 = "tls-alpn-01"
+
+# ALPN protocol and certificate extension of tls-alpn-01 (RFC 8737).
+pub const ACME_TLS_ALPN = "acme-tls/1"
+pub const OID_ACME_IDENTIFIER = "1.3.6.1.5.5.7.1.31"
+
+# Revocation reasons (RFC 5280 CRLReason).
+pub const REVOKE_UNSPECIFIED = 0
+pub const REVOKE_KEY_COMPROMISE = 1
+pub const REVOKE_AFFILIATION_CHANGED = 3
+pub const REVOKE_SUPERSEDED = 4
+pub const REVOKE_CESSATION_OF_OPERATION = 5
+
+pub const ACME_ERR_BAD_NONCE = "urn:ietf:params:acme:error:badNonce"
+
+# ─── JSON helpers ────────────────────────────────────────────────────────────
+
+# A JSON string literal (quotes included).
+pub def acme_json_str(s: str) -> str:
+    mut sb = StringBuilder.init(s.len() + 8)
+    sb.append_char(34)
+    mut i = 0
+    while i < s.len():
+        mut c = der_byte(s, i)
+        if c == 34: sb.append("\\\"")
+        elif c == 92: sb.append("\\\\")
+        elif c == 10: sb.append("\\n")
+        elif c == 13: sb.append("\\r")
+        elif c == 9: sb.append("\\t")
+        elif c < 32:
+            mut hex = "0123456789abcdef"
+            sb.append("\\u00")
+            sb.append_char(der_byte(hex, c >> 4))
+            sb.append_char(der_byte(hex, c & 15))
+        else: sb.append_char(c)
+        i = i + 1
+    sb.append_char(34)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _jarr(items: List[str]) -> str:
+    mut sb = StringBuilder.init(64)
+    sb.append("[")
+    mut i = 0
+    while i < len(items):
+        if i > 0: sb.append(",")
+        sb.append(acme_json_str(items[i]))
+        i = i + 1
+    sb.append("]")
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# String member of an object ("" when absent or not a string).
+def _js(r: JsonRef, key: str) -> str:
+    if not r.exists() or not r.is_object(): return ""
+    mut v = r.obj_get(key)
+    if not v.exists() or not v.is_str(): return ""
+    return v.get_str()
+
+def _jb(r: JsonRef, key: str) -> bool:
+    if not r.exists() or not r.is_object(): return false
+    mut v = r.obj_get(key)
+    if not v.exists() or not v.is_bool(): return false
+    return v.get_bool()
+
+def _jstrs(r: JsonRef, key: str) -> List[str]:
+    mut out: List[str] = []
+    if not r.exists() or not r.is_object(): return out
+    mut v = r.obj_get(key)
+    if not v.exists() or not v.is_array(): return out
+    mut i = 0
+    while i < v.array_len():
+        mut e = v.array_get(i)
+        if e.is_str(): out.append(e.get_str())
+        i = i + 1
+    return out
+
+# "type: detail" of an RFC 7807 problem document, with subproblems.
+def _problem_text(r: JsonRef) -> str:
+    if not r.exists() or not r.is_object(): return ""
+    mut t = _js(r, "type")
+    mut d = _js(r, "detail")
+    mut out = t
+    if d.len() > 0:
+        if out.len() > 0: out = out + ": "
+        out = out + d
+    mut subs = r.obj_get("subproblems")
+    if subs.exists() and subs.is_array():
+        mut i = 0
+        while i < subs.array_len():
+            mut sp = subs.array_get(i)
+            mut idv = _js(sp.obj_get("identifier"), "value")
+            out = out + "; " + idv + ": " + _js(sp, "detail")
+            i = i + 1
+    return out
+
+# ─── JOSE ────────────────────────────────────────────────────────────────────
+
+pub class AcmeJws:
+    _dummy: int
+
+extend AcmeJws:
+    # base64url without padding (binary-safe).
+    pub def b64url(data: str) -> str: return _cn_b64(1, false, data)
+
+    pub def unb64url(s: str) throws str -> str: return _cn_unb64(1, s)?
+
+    # "ES256", "ES384" or "RS256".
+    pub def alg(key: KeyPair) -> str:
+        if key.kind == KEY_RSA: return "RS256"
+        if key.kind == KEY_EC_P384: return "ES384"
+        return "ES256"
+
+    # The public JWK with members in lexicographic order and no whitespace,
+    # which is also the RFC 7638 thumbprint input.
+    pub def jwk(key: KeyPair) -> str:
+        if key.kind == KEY_RSA:
+            return "{\"e\":\"" + AcmeJws.b64url(key.rsa_e) + "\",\"kty\":\"RSA\",\"n\":\"" + AcmeJws.b64url(key.rsa_n) + "\"}"
+        mut crv = "P-256"
+        if key.kind == KEY_EC_P384: crv = "P-384"
+        return "{\"crv\":\"" + crv + "\",\"kty\":\"EC\",\"x\":\"" + AcmeJws.b64url(key.ec_x) + "\",\"y\":\"" + AcmeJws.b64url(key.ec_y) + "\"}"
+
+    # RFC 7638 JWK SHA-256 thumbprint, base64url.
+    pub def thumbprint(key: KeyPair) -> str:
+        return AcmeJws.b64url(Digest.sha256(AcmeJws.jwk(key)))
+
+    # token "." thumbprint (RFC 8555 section 8.1).
+    pub def key_authorization(token: str, key: KeyPair) -> str:
+        return token + "." + AcmeJws.thumbprint(key)
+
+    # dns-01 TXT record value for a key authorization.
+    pub def dns01_value(key_authorization: str) -> str:
+        return AcmeJws.b64url(Digest.sha256(key_authorization))
+
+    # The protected header: `kid` when non-empty, else the account `jwk`.
+    # `nonce` "" leaves the nonce out (inner key-change JWS).
+    pub def protected_header(key: KeyPair, nonce: str, url: str, kid: str) -> str:
+        mut sb = StringBuilder.init(256)
+        sb.append("{\"alg\":\"")
+        sb.append(AcmeJws.alg(key))
+        sb.append("\",")
+        if kid.len() > 0:
+            sb.append("\"kid\":")
+            sb.append(acme_json_str(kid))
+        else:
+            sb.append("\"jwk\":")
+            sb.append(AcmeJws.jwk(key))
+        if nonce.len() > 0:
+            sb.append(",\"nonce\":")
+            sb.append(acme_json_str(nonce))
+        sb.append(",\"url\":")
+        sb.append(acme_json_str(url))
+        sb.append("}")
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Flattened JSON serialization of a JWS over `payload` ("" = POST-as-GET).
+    pub def sign(key: KeyPair, protected_json: str, payload: str) throws str -> str:
+        mut p64 = AcmeJws.b64url(protected_json)
+        mut y64 = AcmeJws.b64url(payload)
+        mut sig = key.sign_jose(p64 + "." + y64)?
+        return "{\"protected\":\"" + p64 + "\",\"payload\":\"" + y64 + "\",\"signature\":\"" + AcmeJws.b64url(sig) + "\"}"
+
+    # External Account Binding (RFC 8555 section 7.3.4): an HS256 JWS over the
+    # account JWK. `hmac_key_b64url` is the key as the CA hands it out.
+    pub def eab(eab_kid: str, hmac_key_b64url: str, account_jwk: str, url: str) throws str -> str:
+        mut mac_key = AcmeJws.unb64url(hmac_key_b64url)?
+        mut prot = "{\"alg\":\"HS256\",\"kid\":" + acme_json_str(eab_kid) + ",\"url\":" + acme_json_str(url) + "}"
+        mut p64 = AcmeJws.b64url(prot)
+        mut y64 = AcmeJws.b64url(account_jwk)
+        mut mac = Hmac.sha256_raw(mac_key, p64 + "." + y64)
+        return "{\"protected\":\"" + p64 + "\",\"payload\":\"" + y64 + "\",\"signature\":\"" + AcmeJws.b64url(mac) + "\"}"
+
+    # A private key from a JWK (EC with "d", or RSA with "d", "p", "q", "dp",
+    # "dq", "qi") -- the format certbot and lego store account keys in.
+    pub def key_from_jwk(json: str) throws str -> KeyPair:
+        mut doc = Json.parse(json)
+        mut r = doc.root()
+        if not r.is_object(): raise("JWK: not a JSON object")
+        mut kty = _js(r, "kty")
+        if kty == "EC":
+            mut crv = _js(r, "crv")
+            mut d = AcmeJws.unb64url(_js(r, "d"))?
+            if d.len() == 0: raise("JWK: no private key (d)")
+            if crv == "P-256": return KeyPair.ec_from_scalar(CURVE_P256, d)?
+            if crv == "P-384": return KeyPair.ec_from_scalar(CURVE_P384, d)?
+            raise("JWK: unsupported curve " + crv)
+        if kty == "RSA":
+            mut names = ["n", "e", "d", "p", "q", "dp", "dq", "qi"]
+            mut vals: List[str] = []
+            mut i = 0
+            while i < len(names):
+                mut v = AcmeJws.unb64url(_js(r, names[i]))?
+                if v.len() == 0: raise("JWK: RSA member '" + names[i] + "' missing")
+                vals.append(v)
+                i = i + 1
+            return KeyPair.rsa_from_components(vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], vals[7])?
+        raise("JWK: unsupported key type " + kty)
+
+    # The canonical (RFC 7638) form of any public or private JWK: only the
+    # required public members, sorted, no whitespace.
+    pub def canonical_jwk(json: str) throws str -> str:
+        mut doc = Json.parse(json)
+        mut r = doc.root()
+        if not r.is_object(): raise("JWK: not a JSON object")
+        mut kty = _js(r, "kty")
+        if kty == "EC":
+            return "{\"crv\":" + acme_json_str(_js(r, "crv")) + ",\"kty\":\"EC\",\"x\":" + acme_json_str(_js(r, "x")) + ",\"y\":" + acme_json_str(_js(r, "y")) + "}"
+        if kty == "RSA":
+            return "{\"e\":" + acme_json_str(_js(r, "e")) + ",\"kty\":\"RSA\",\"n\":" + acme_json_str(_js(r, "n")) + "}"
+        raise("JWK: unsupported key type " + kty)
+
+    # RFC 7638 thumbprint of a JWK given as JSON.
+    pub def thumbprint_of(json: str) throws str -> str:
+        mut c = AcmeJws.canonical_jwk(json)?
+        return AcmeJws.b64url(Digest.sha256(c))
+
+    # The public key of a JWK (EC P-256 / P-384 or RSA), e.g. to verify JWS.
+    pub def public_key_from_jwk(json: str) throws str -> PKey:
+        mut doc = Json.parse(json)
+        mut r = doc.root()
+        mut kty = _js(r, "kty")
+        if kty == "EC":
+            mut x = AcmeJws.unb64url(_js(r, "x"))?
+            mut y = AcmeJws.unb64url(_js(r, "y"))?
+            mut crv = _js(r, "crv")
+            if crv == "P-256" and x.len() == 32 and y.len() == 32: return PKey.ec_from_public(CURVE_P256, "\x04" + x + y)?
+            if crv == "P-384" and x.len() == 48 and y.len() == 48: return PKey.ec_from_public(CURVE_P384, "\x04" + x + y)?
+            raise("JWK: bad EC key")
+        if kty == "RSA":
+            mut n = AcmeJws.unb64url(_js(r, "n"))?
+            mut e = AcmeJws.unb64url(_js(r, "e"))?
+            return PKey.rsa_from_public(n, e)?
+        raise("JWK: unsupported key type " + kty)
+
+    # Verify a JWS signature made with `key` and JWS algorithm `alg`
+    # ("ES256", "ES384", "RS256") over "protected64.payload64".
+    pub def verify(key: PKey, alg: str, signing_input: str, sig: str) -> bool:
+        if alg == "ES256": return key.kind() == KEY_EC_P256 and key.verify_raw(signing_input, sig, ALG_SHA256)
+        if alg == "ES384": return key.kind() == KEY_EC_P384 and key.verify_raw(signing_input, sig, ALG_SHA384)
+        if alg == "RS256": return key.kind() == KEY_RSA and key.verify(signing_input, sig, ALG_SHA256, SIG_PKCS1)
+        return false
+
+    # RFC 8738 reverse name used as SNI for tls-alpn-01 on an IP address.
+    pub def reverse_name(ip: str) -> str:
+        mut b = ip_to_bytes(ip)
+        mut hex = "0123456789abcdef"
+        mut sb = StringBuilder.init(80)
+        if b.len() == 4:
+            mut i = 3
+            while i >= 0:
+                sb.append_int(der_byte(b, i))
+                sb.append(".")
+                i = i - 1
+            sb.append("in-addr.arpa")
+        elif b.len() == 16:
+            mut j = 15
+            while j >= 0:
+                mut v = der_byte(b, j)
+                sb.append_char(der_byte(hex, v & 15))
+                sb.append(".")
+                sb.append_char(der_byte(hex, v >> 4))
+                sb.append(".")
+                j = j - 1
+            sb.append("ip6.arpa")
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # The tls-alpn-01 challenge certificate (self-signed, SAN = identifier,
+    # critical acmeIdentifier = SHA-256 of the key authorization) and its
+    # fresh P-256 key, as [cert_pem, key_pem].
+    pub def tls_alpn01_cert(identifier: str, key_authorization: str) throws str -> List[str]:
+        mut k = KeyPair.generate_ec(CURVE_P256)?
+        mut b = CertBuilder.init()
+        b.add_name(identifier)
+        b.server_auth = false
+        b.add_extension(OID_ACME_IDENTIFIER, true, Der.octets(Digest.sha256(key_authorization)))
+        mut der = b.self_signed(k)?
+        mut out = [Pem.encode(der, "CERTIFICATE"), k.private_pem()]
+        k.dispose()
+        return out
+
+# ─── resources ───────────────────────────────────────────────────────────────
+
+pub class AcmeDirectory:
+    pub url: str
+    pub new_nonce: str
+    pub new_account: str
+    pub new_order: str
+    pub new_authz: str
+    pub revoke_cert: str
+    pub key_change: str
+    pub terms_of_service: str
+    pub website: str
+    pub caa_identities: List[str]
+    pub eab_required: bool
+
+pub class AcmeChallenge:
+    pub kind: str           # "http-01", "dns-01", "tls-alpn-01", ...
+    pub url: str
+    pub token: str
+    pub status: str         # pending, processing, valid, invalid
+    pub error: str          # problem text when invalid
+    pub validated: str
+
+pub class AcmeAuthorization:
+    pub url: str
+    pub status: str         # pending, valid, invalid, deactivated, expired, revoked
+    pub id_type: str        # "dns" or "ip"
+    pub id_value: str       # without "*." for wildcard authorizations
+    pub wildcard: bool
+    pub expires: str
+    pub challenges: List[AcmeChallenge]
+
+extend AcmeAuthorization:
+    # The challenge of type `kind`, or raises.
+    pub def challenge(self, kind: str) throws str -> AcmeChallenge:
+        mut i = 0
+        while i < len(self.challenges):
+            if self.challenges[i].kind == kind: return self.challenges[i]
+            i = i + 1
+        raise("acme: the CA offers no " + kind + " challenge for " + self.id_value)
+
+    pub def error(self) -> str:
+        mut i = 0
+        while i < len(self.challenges):
+            if self.challenges[i].error.len() > 0: return self.challenges[i].kind + ": " + self.challenges[i].error
+            i = i + 1
+        return ""
+
+pub class AcmeOrder:
+    pub url: str
+    pub status: str         # pending, ready, processing, valid, invalid
+    pub id_types: List[str]
+    pub id_values: List[str]
+    pub authorizations: List[str]
+    pub finalize_url: str
+    pub certificate_url: str
+    pub expires: str
+    pub error: str
+    pub retry_after_ms: int
+
+pub class AcmeChain:
+    pub url: str
+    pub pem: str            # leaf first, then the issuers
+    pub alternates: List[str]
+
+# What obtain() returns.
+pub class AcmeCertificate:
+    pub cert_pem: str       # leaf certificate + chain (TlsServerConfig.from_pem input)
+    pub key_pem: str        # the certificate's private key (PKCS#8)
+    pub url: str            # certificate URL (for later download / revocation)
+    pub order_url: str
+    pub alternates: List[str]
+    pub not_after: int      # Unix time
+
+def _parse_challenge(r: JsonRef) -> AcmeChallenge:
+    mut c = AcmeChallenge()
+    c.kind = _js(r, "type")
+    c.url = _js(r, "url")
+    c.token = _js(r, "token")
+    c.status = _js(r, "status")
+    c.validated = _js(r, "validated")
+    c.error = ""
+    if r.obj_has("error"): c.error = _problem_text(r.obj_get("error"))
+    return c
+
+def _parse_authorization(url: str, body: str) -> AcmeAuthorization:
+    mut doc = Json.parse(body)
+    mut r = doc.root()
+    mut a = AcmeAuthorization()
+    a.url = url
+    a.status = _js(r, "status")
+    a.expires = _js(r, "expires")
+    a.id_type = _js(r.obj_get("identifier"), "type")
+    a.id_value = _js(r.obj_get("identifier"), "value")
+    a.wildcard = _jb(r, "wildcard")
+    a.challenges = []
+    mut cs = r.obj_get("challenges")
+    if cs.exists() and cs.is_array():
+        mut i = 0
+        while i < cs.array_len():
+            a.challenges.append(_parse_challenge(cs.array_get(i)))
+            i = i + 1
+    return a
+
+def _parse_order(url: str, body: str) -> AcmeOrder:
+    mut doc = Json.parse(body)
+    mut r = doc.root()
+    mut o = AcmeOrder()
+    o.url = url
+    o.status = _js(r, "status")
+    o.expires = _js(r, "expires")
+    o.finalize_url = _js(r, "finalize")
+    o.certificate_url = _js(r, "certificate")
+    o.authorizations = _jstrs(r, "authorizations")
+    o.id_types = []
+    o.id_values = []
+    o.error = ""
+    o.retry_after_ms = 0
+    if r.obj_has("error"): o.error = _problem_text(r.obj_get("error"))
+    mut ids = r.obj_get("identifiers")
+    if ids.exists() and ids.is_array():
+        mut i = 0
+        while i < ids.array_len():
+            mut e = ids.array_get(i)
+            o.id_types.append(_js(e, "type"))
+            o.id_values.append(_js(e, "value"))
+            i = i + 1
+    return o
+
+# Retry-After in milliseconds (delta-seconds only), or `dflt`.
+def _retry_after_ms(r: HttpReply, dflt: int) -> int:
+    mut v = r.header("Retry-After").strip()
+    if v.len() == 0 or v.len() > 9: return dflt
+    mut n = 0
+    mut i = 0
+    while i < v.len():
+        mut c = der_byte(v, i)
+        if c < 48 or c > 57: return dflt
+        n = n * 10 + (c - 48)
+        i = i + 1
+    return n * 1000
+
+# URLs of every Link header entry with rel="<rel>".
+pub def acme_links(r: HttpReply, rel: str) -> List[str]:
+    mut out: List[str] = []
+    mut all = r.header_all("Link")
+    mut h = 0
+    while h < all.len:
+        mut v = all.get(h)
+        mut pos = 0
+        while pos < v.len():
+            mut lt = v.slice(pos, v.len()).find("<")
+            if lt < 0: break
+            mut gt = v.slice(pos + lt, v.len()).find(">")
+            if gt < 0: break
+            mut target = v.slice(pos + lt + 1, pos + lt + gt)
+            mut rest_start = pos + lt + gt + 1
+            mut rest = v.slice(rest_start, v.len())
+            mut nxt = rest.find("<")
+            mut params = rest
+            if nxt >= 0: params = rest.slice(0, nxt)
+            mut want1 = "rel=\"" + rel + "\""
+            mut want2 = "rel=" + rel
+            mut lp = params.lower()
+            if lp.find(want1) >= 0 or (lp.find(want2) >= 0 and lp.find(want2 + "-") < 0 and lp.find(want2 + "/") < 0):
+                out.append(target)
+            if nxt < 0: break
+            pos = rest_start + nxt
+        h = h + 1
+    return out
+
+def _no_hook3(a: str, b: str, present: bool) -> bool: return false
+def _no_hook4(a: str, b: str, c: str, present: bool) -> bool: return false
+
+# ─── built-in challenge responders (background threads) ─────────────────────
+
+# State shared with a responder thread. Fields other than the Atomics are
+# written before the thread starts and only read afterwards. (One class for
+# both responders: with two Shared[...] Sendable classes the compiler cast
+# field accesses to the wrong struct.)
+class _Responder implements Sendable:
+    pub host: str
+    pub port: Atomic[int]
+    pub table: str            # http: "token\x01keyauth\x02..."; tls: "sni\x01cert\x01key\x02..."
+    pub stop: Atomic[int]
+    pub state: Atomic[int]    # 0 starting, 1 serving, -1 failed, 2 stopped
+    pub served: Atomic[int]
+
+def _http_responder_main(st: Shared[_Responder]):
+    mut srv = HttpServer.init(st.host, st.port.load())
+    if not srv.start():
+        st.state.store(-1)
+        return
+    st.state.store(1)
+    mut entries = st.table.split_exact("\x02")
+    while st.stop.load() == 0:
+        mut conn = srv.accept()
+        if st.stop.load() != 0:
+            conn.close()
+            break
+        mut path = conn.request.path
+        mut prefix = "/.well-known/acme-challenge/"
+        mut answered = false
+        if path.starts_with(prefix):
+            mut tok = path.slice(prefix.len(), path.len())
+            mut i = 0
+            while i < len(entries):
+                mut kv = entries[i].split_exact("\x01")
+                if len(kv) == 2 and kv[0] == tok:
+                    conn.send_text(200, kv[1])
+                    st.served.add(1)
+                    answered = true
+                    break
+                i = i + 1
+        if not answered: conn.send_status(404)
+        conn.close()
+    srv.stop()
+    st.state.store(2)
+
+def _tls_responder_main(st: Shared[_Responder]):
+    mut r: Result[bool, str] = _tls_responder_run(st)
+    if r.is_err and st.state.load() == 0: st.state.store(-1)
+    st.state.store(2)
+
+def _tls_responder_run(st: Shared[_Responder]) throws str -> bool:
+    mut entries = st.table.split_exact("\x02")
+    mut cfgs: List[TlsServerConfig] = []
+    mut i = 0
+    while i < len(entries):
+        mut parts = entries[i].split_exact("\x01")
+        if len(parts) == 3:
+            mut c = TlsServerConfig.from_pem(parts[1], parts[2])?
+            c.set_alpn(ACME_TLS_ALPN)?
+            cfgs.append(c)
+        i = i + 1
+    if len(cfgs) == 0: raise("no challenge certificates")
+    mut base = cfgs[0]
+    mut j = 0
+    mut k = 0
+    while j < len(entries):
+        mut parts2 = entries[j].split_exact("\x01")
+        if len(parts2) == 3:
+            base.add_route(parts2[0], "", cfgs[k])?
+            k = k + 1
+        j = j + 1
+    mut l = TlsListener.listen(st.host, st.port.load(), base)?
+    l.timeout_ms = 10000
+    st.state.store(1)
+    while st.stop.load() == 0:
+        mut ar: Result[TlsStream, str] = l.accept()
+        if ar.is_ok:
+            mut s = ar.ok
+            st.served.add(1)
+            s.close()
+    l.close()
+    return true
+
+# ─── AcmeClient ──────────────────────────────────────────────────────────────
+
+pub class AcmeClient:
+    pub directory_url: str
+    pub session: HttpSession
+    pub account_key: KeyPair
+    pub has_key: bool
+    pub kid: str                  # account URL once registered
+    pub contacts: List[str]       # "mailto:..." URIs
+    pub tos_agreed: bool
+    pub eab_kid: str
+    pub eab_hmac: str             # base64url HMAC key
+    pub dir: AcmeDirectory
+    pub dir_loaded: bool
+    pub nonce: str
+    pub nonce_retries: int        # badNonce retries per request (default 3)
+    pub poll_interval_ms: int     # when the server sends no Retry-After (default 1000)
+    pub poll_timeout_ms: int      # give up waiting for an authorization / order (default 180000)
+    pub max_retry_after_ms: int   # cap for Retry-After (default 30000)
+    pub http_port: int            # built-in http-01 responder port (default 80)
+    pub tls_port: int             # built-in tls-alpn-01 responder port (default 443)
+    pub dns_wait_ms: int          # pause after the dns-01 hook before answering (default 0)
+    pub cert_curve: int           # curve of the certificate key obtain() generates
+    pub preferred_chain: str      # issuer common-name substring to prefer ("" = default chain)
+    pub http01_hook: def(str, str, bool) -> bool
+    pub dns01_hook: def(str, str, bool) -> bool
+    pub tls_alpn01_hook: def(str, str, str, bool) -> bool
+    pub _has_http_hook: bool
+    pub _has_dns_hook: bool
+    pub _has_tls_hook: bool
+    pub last_status: int          # HTTP status of the last ACME request
+
+extend AcmeClient:
+    pub def init(directory_url: str) -> AcmeClient:
+        mut c = AcmeClient()
+        c.directory_url = directory_url
+        c.session = HttpSession.init()
+        c.session.set_follow_redirects(false)
+        c.session.set_user_agent("tauraro-acme/1.0")
+        c.session.set_timeout(30000)
+        c.has_key = false
+        c.kid = ""
+        c.contacts = []
+        c.tos_agreed = false
+        c.eab_kid = ""
+        c.eab_hmac = ""
+        c.dir = AcmeDirectory()
+        c.dir_loaded = false
+        c.nonce = ""
+        c.nonce_retries = 3
+        c.poll_interval_ms = 1000
+        c.poll_timeout_ms = 180000
+        c.max_retry_after_ms = 30000
+        c.http_port = 80
+        c.tls_port = 443
+        c.dns_wait_ms = 0
+        c.cert_curve = CURVE_P256
+        c.preferred_chain = ""
+        c.http01_hook = _no_hook3
+        c.dns01_hook = _no_hook3
+        c.tls_alpn01_hook = _no_hook4
+        c._has_http_hook = false
+        c._has_dns_hook = false
+        c._has_tls_hook = false
+        c.last_status = 0
+        return c
+
+    # ── configuration ──
+
+    # Extra trusted roots for the ACME server's HTTPS (e.g. Pebble's).
+    pub def set_ca_pem(self, pem: str): self.session.set_ca_pem(pem)
+    # Testing only: skip TLS verification of the ACME server.
+    pub def set_insecure(self, v: bool): self.session.set_allow_unverified_tls(v)
+
+    pub def set_account_key(self, key: KeyPair):
+        self.account_key = key
+        self.has_key = true
+
+    # Reuse a known account (its key and URL) without calling register().
+    pub def set_account(self, key: KeyPair, account_url: str):
+        self.set_account_key(key)
+        self.kid = account_url
+
+    # E-mail addresses ("a@b" or "mailto:a@b").
+    pub def set_contacts(self, emails: List[str]):
+        self.contacts = []
+        mut i = 0
+        while i < len(emails):
+            mut e = emails[i]
+            if not e.starts_with("mailto:"): e = "mailto:" + e
+            self.contacts.append(e)
+            i = i + 1
+
+    pub def agree_to_terms(self, v: bool): self.tos_agreed = v
+
+    # External Account Binding credentials from the CA (key id, base64url key).
+    pub def set_external_account_binding(self, key_id: str, hmac_b64url: str):
+        self.eab_kid = key_id
+        self.eab_hmac = hmac_b64url
+
+    # hook(token, key_authorization, present): serve key_authorization at
+    # http://<domain>/.well-known/acme-challenge/<token> while present; return
+    # true when done.
+    pub def set_http01_hook(self, hook: def(str, str, bool) -> bool):
+        self.http01_hook = hook
+        self._has_http_hook = true
+
+    # hook(record_name, txt_value, present): create / delete the TXT record.
+    pub def set_dns01_hook(self, hook: def(str, str, bool) -> bool):
+        self.dns01_hook = hook
+        self._has_dns_hook = true
+
+    # hook(identifier, cert_pem, key_pem, present): serve the certificate on
+    # port 443 for SNI = identifier (reverse name for IPs) with ALPN
+    # "acme-tls/1" (see TlsServerConfig.add_route).
+    pub def set_tls_alpn01_hook(self, hook: def(str, str, str, bool) -> bool):
+        self.tls_alpn01_hook = hook
+        self._has_tls_hook = true
+
+    # ── plumbing ──
+
+    def _need_key(self) throws str:
+        if not self.has_key:
+            self.account_key = KeyPair.generate_ec(CURVE_P256)?
+            self.has_key = true
+
+    pub def directory(self) throws str -> AcmeDirectory:
+        if self.dir_loaded: return self.dir
+        mut r = self.session.get(self.directory_url)
+        if r.error.len() > 0: raise("acme: directory " + self.directory_url + ": " + r.error)
+        if r.status != 200: raise(f"acme: directory {self.directory_url}: HTTP {r.status}")
+        mut doc = Json.parse(r.body)
+        mut j = doc.root()
+        if not j.is_object(): raise("acme: the directory is not a JSON object")
+        mut d = AcmeDirectory()
+        d.url = self.directory_url
+        d.new_nonce = _js(j, "newNonce")
+        d.new_account = _js(j, "newAccount")
+        d.new_order = _js(j, "newOrder")
+        d.new_authz = _js(j, "newAuthz")
+        d.revoke_cert = _js(j, "revokeCert")
+        d.key_change = _js(j, "keyChange")
+        mut meta = j.obj_get("meta")
+        d.terms_of_service = _js(meta, "termsOfService")
+        d.website = _js(meta, "website")
+        d.caa_identities = _jstrs(meta, "caaIdentities")
+        d.eab_required = _jb(meta, "externalAccountRequired")
+        if d.new_nonce.len() == 0 or d.new_account.len() == 0 or d.new_order.len() == 0:
+            raise("acme: the directory lacks newNonce / newAccount / newOrder")
+        self.dir = d
+        self.dir_loaded = true
+        return d
+
+    def _keep_nonce(self, r: HttpReply):
+        mut n = r.header("Replay-Nonce")
+        if n.len() > 0: self.nonce = n
+
+    # A fresh nonce (the one from the last response, or newNonce).
+    pub def new_nonce(self) throws str -> str:
+        if self.nonce.len() > 0:
+            mut n = self.nonce
+            self.nonce = ""
+            return n
+        mut d = self.directory()?
+        mut r = self.session.head(d.new_nonce)
+        if r.error.len() > 0: raise("acme: newNonce: " + r.error)
+        mut n2 = r.header("Replay-Nonce")
+        if n2.len() == 0: raise(f"acme: newNonce returned no Replay-Nonce (HTTP {r.status})")
+        return n2
+
+    def _fail(self, what: str, r: HttpReply) -> str:
+        mut doc = Json.parse(r.body)
+        mut p = _problem_text(doc.root())
+        if p.len() == 0: p = r.body.slice(0, 200)
+        return f"acme: {what}: HTTP {r.status}: " + p
+
+    # A signed POST (JWS with kid, or jwk when use_jwk / no account yet),
+    # retried on badNonce. Raises on transport errors and HTTP >= 400.
+    pub def post(self, url: str, payload: str, use_jwk: bool) throws str -> HttpReply:
+        self._need_key()?
+        mut attempt = 0
+        while true:
+            mut nonce = self.new_nonce()?
+            mut kid = self.kid
+            if use_jwk: kid = ""
+            mut prot = AcmeJws.protected_header(self.account_key, nonce, url, kid)
+            mut body = AcmeJws.sign(self.account_key, prot, payload)?
+            mut r = self.session.post(url, body, "application/jose+json")
+            if r.error.len() > 0: raise("acme: " + url + ": " + r.error)
+            self._keep_nonce(r)
+            self.last_status = r.status
+            if r.status == 400 and attempt < self.nonce_retries:
+                mut doc = Json.parse(r.body)
+                if _js(doc.root(), "type") == ACME_ERR_BAD_NONCE:
+                    attempt = attempt + 1
+                    continue
+            if r.status >= 400: raise(self._fail(url, r))
+            return r
+        raise("acme: unreachable")
+
+    # POST-as-GET (RFC 8555 section 6.3).
+    pub def fetch(self, url: str) throws str -> HttpReply:
+        if self.kid.len() == 0: raise("acme: no account (call register() first)")
+        return self.post(url, "", false)?
+
+    # ── account ──
+
+    def _account_request(self, only_existing: bool) throws str -> str:
+        self._need_key()?
+        mut d = self.directory()?
+        mut sb = StringBuilder.init(512)
+        sb.append("{")
+        if only_existing:
+            sb.append("\"onlyReturnExisting\":true")
+        else:
+            mut tos = "false"
+            if self.tos_agreed: tos = "true"
+            sb.append("\"termsOfServiceAgreed\":" + tos)
+            if len(self.contacts) > 0:
+                sb.append(",\"contact\":")
+                sb.append(_jarr(self.contacts))
+            if self.eab_kid.len() > 0:
+                mut eab = AcmeJws.eab(self.eab_kid, self.eab_hmac, AcmeJws.jwk(self.account_key), d.new_account)?
+                sb.append(",\"externalAccountBinding\":")
+                sb.append(eab)
+            elif d.eab_required:
+                sb.free()
+                raise("acme: this CA requires External Account Binding (set_external_account_binding)")
+        sb.append("}")
+        mut payload = sb.to_owned()
+        sb.free()
+        mut r = self.post(d.new_account, payload, true)?
+        mut loc = r.header("Location")
+        if loc.len() == 0: raise("acme: newAccount returned no Location")
+        self.kid = loc
+        return loc
+
+    # Create the account (or find the existing one for this key); returns
+    # the account URL, also stored in `kid`.
+    pub def register(self) throws str -> str:
+        return self._account_request(false)?
+
+    # The account URL for the current key; raises if there is none.
+    pub def find_account(self) throws str -> str:
+        return self._account_request(true)?
+
+    # The account object (JSON text).
+    pub def account(self) throws str -> str:
+        mut r = self.post(self.kid, "", false)?
+        return r.body
+
+    # Replace the contact addresses.
+    pub def update_contacts(self, emails: List[str]) throws str:
+        self.set_contacts(emails)
+        if self.kid.len() == 0: raise("acme: no account")
+        self.post(self.kid, "{\"contact\":" + _jarr(self.contacts) + "}", false)?
+
+    # Deactivate the account (permanent).
+    pub def deactivate_account(self) throws str:
+        if self.kid.len() == 0: raise("acme: no account")
+        mut r = self.post(self.kid, "{\"status\":\"deactivated\"}", false)?
+        mut doc = Json.parse(r.body)
+        mut st = _js(doc.root(), "status")
+        if st.len() > 0 and st != "deactivated": raise("acme: account status is " + st + " after deactivation")
+
+    # Account key rollover (RFC 8555 section 7.3.5); afterwards the client
+    # signs with `new_key`.
+    pub def change_key(self, new_key: KeyPair) throws str:
+        if self.kid.len() == 0: raise("acme: no account")
+        mut d = self.directory()?
+        if d.key_change.len() == 0: raise("acme: the CA does not support key change")
+        mut inner_prot = AcmeJws.protected_header(new_key, "", d.key_change, "")
+        mut inner_payload = "{\"account\":" + acme_json_str(self.kid) + ",\"oldKey\":" + AcmeJws.jwk(self.account_key) + "}"
+        mut inner = AcmeJws.sign(new_key, inner_prot, inner_payload)?
+        self.post(d.key_change, inner, false)?
+        self.account_key = new_key
+
+    # ── orders ──
+
+    # A new order for DNS names (e.g. "*.example.com") and IP literals.
+    pub def new_order(self, names: List[str]) throws str -> AcmeOrder:
+        if len(names) == 0: raise("acme: no identifiers")
+        if self.kid.len() == 0: self.register()?
+        mut d = self.directory()?
+        mut sb = StringBuilder.init(256)
+        sb.append("{\"identifiers\":[")
+        mut i = 0
+        while i < len(names):
+            if i > 0: sb.append(",")
+            mut t = "dns"
+            if is_ip_literal(names[i]): t = "ip"
+            sb.append("{\"type\":\"" + t + "\",\"value\":")
+            sb.append(acme_json_str(names[i]))
+            sb.append("}")
+            i = i + 1
+        sb.append("]}")
+        mut payload = sb.to_owned()
+        sb.free()
+        mut r = self.post(d.new_order, payload, false)?
+        mut o = _parse_order(r.header("Location"), r.body)
+        return o
+
+    pub def get_order(self, url: str) throws str -> AcmeOrder:
+        mut r = self.fetch(url)?
+        mut o = _parse_order(url, r.body)
+        o.retry_after_ms = _retry_after_ms(r, 0)
+        return o
+
+    pub def get_authorization(self, url: str) throws str -> AcmeAuthorization:
+        mut r = self.fetch(url)?
+        return _parse_authorization(url, r.body)
+
+    # Deactivate an authorization (e.g. after a failed attempt).
+    pub def deactivate_authorization(self, url: str) throws str:
+        self.post(url, "{\"status\":\"deactivated\"}", false)?
+
+    pub def key_authorization(self, token: str) throws str -> str:
+        self._need_key()?
+        return AcmeJws.key_authorization(token, self.account_key)
+
+    # Tell the CA the challenge is ready to be validated.
+    pub def respond(self, challenge: AcmeChallenge) throws str -> AcmeChallenge:
+        mut r = self.post(challenge.url, "{}", false)?
+        mut doc = Json.parse(r.body)
+        return _parse_challenge(doc.root())
+
+    def _sleep_for(self, retry_ms: int):
+        mut ms = retry_ms
+        if ms <= 0: ms = self.poll_interval_ms
+        if ms > self.max_retry_after_ms: ms = self.max_retry_after_ms
+        Clock.sleep_ms(ms)
+
+    # Poll an authorization until it is no longer pending; raises if invalid.
+    pub def wait_authorization(self, url: str) throws str -> AcmeAuthorization:
+        mut start = Clock.now_ms()
+        while true:
+            mut r = self.fetch(url)?
+            mut a = _parse_authorization(url, r.body)
+            if a.status == "valid": return a
+            if a.status != "pending":
+                mut e = a.error()
+                raise("acme: authorization for " + a.id_value + " is " + a.status + ": " + e)
+            if Clock.now_ms() - start > self.poll_timeout_ms: raise("acme: timed out waiting for the authorization of " + a.id_value)
+            self._sleep_for(_retry_after_ms(r, 0))
+        raise("acme: unreachable")
+
+    # Poll an order until its status is not pending / processing (or equals
+    # `until`); raises if it becomes invalid.
+    pub def wait_order(self, url: str, until: str) throws str -> AcmeOrder:
+        mut start = Clock.now_ms()
+        while true:
+            mut o = self.get_order(url)?
+            if o.status == until or o.status == "valid": return o
+            if o.status == "invalid": raise("acme: order is invalid: " + o.error)
+            if o.status == "ready" and until != "ready": return o
+            if Clock.now_ms() - start > self.poll_timeout_ms: raise("acme: timed out waiting for the order (status " + o.status + ")")
+            self._sleep_for(o.retry_after_ms)
+        raise("acme: unreachable")
+
+    # Submit the CSR (DER) and wait until the certificate is issued.
+    pub def finalize(self, order: AcmeOrder, csr_der: str) throws str -> AcmeOrder:
+        mut r = self.post(order.finalize_url, "{\"csr\":\"" + AcmeJws.b64url(csr_der) + "\"}", false)?
+        mut o = _parse_order(order.url, r.body)
+        if o.status == "valid" and o.certificate_url.len() > 0: return o
+        if o.status == "invalid": raise("acme: order is invalid after finalize: " + o.error)
+        return self.wait_order(order.url, "valid")?
+
+    # Download a certificate chain (PEM) and the alternate chain URLs.
+    pub def download(self, cert_url: str) throws str -> AcmeChain:
+        mut r = self.fetch(cert_url)?
+        mut c = AcmeChain()
+        c.url = cert_url
+        c.pem = r.body
+        c.alternates = acme_links(r, "alternate")
+        if c.pem.find("-----BEGIN CERTIFICATE-----") < 0: raise("acme: the certificate download is not PEM")
+        return c
+
+    # Revoke with the account key (the account must own the certificate).
+    pub def revoke(self, cert_pem: str, reason: int) throws str:
+        mut d = self.directory()?
+        mut der = Pem.decode(cert_pem, "CERTIFICATE")?
+        self.post(d.revoke_cert, f"{{\"certificate\":\"{AcmeJws.b64url(der)}\",\"reason\":{reason}}}", false)?
+
+    # Revoke by proving possession of the certificate's private key (no
+    # account needed; RFC 8555 section 7.6).
+    pub def revoke_with_key(self, cert_pem: str, cert_key: KeyPair, reason: int) throws str:
+        mut d = self.directory()?
+        mut der = Pem.decode(cert_pem, "CERTIFICATE")?
+        mut payload = f"{{\"certificate\":\"{AcmeJws.b64url(der)}\",\"reason\":{reason}}}"
+        mut attempt = 0
+        while true:
+            mut nonce = self.new_nonce()?
+            mut prot = AcmeJws.protected_header(cert_key, nonce, d.revoke_cert, "")
+            mut body = AcmeJws.sign(cert_key, prot, payload)?
+            mut r = self.session.post(d.revoke_cert, body, "application/jose+json")
+            if r.error.len() > 0: raise("acme: revokeCert: " + r.error)
+            self._keep_nonce(r)
+            self.last_status = r.status
+            if r.status == 400 and attempt < self.nonce_retries:
+                mut doc = Json.parse(r.body)
+                if _js(doc.root(), "type") == ACME_ERR_BAD_NONCE:
+                    attempt = attempt + 1
+                    continue
+            if r.status >= 400: raise(self._fail("revokeCert", r))
+            return
+
+    # True when the (first) certificate in `cert_pem` expires within `days`
+    # days, is already expired, or cannot be parsed.
+    pub def needs_renewal(cert_pem: str, days: int) -> bool:
+        return acme_needs_renewal(cert_pem, days)
+
+    # ── the whole flow ──
+
+    # Obtain a certificate for `names` (DNS names, "*.wildcards", IPs) with
+    # `challenge_type`; a fresh key on `cert_curve` is generated.
+    pub def obtain(self, names: List[str], challenge_type: str) throws str -> AcmeCertificate:
+        mut key = KeyPair.generate_ec(self.cert_curve)?
+        mut out = self.obtain_with_key(names, challenge_type, key)?
+        key.dispose()
+        return out
+
+    # obtain() with your own certificate key.
+    pub def obtain_with_key(self, names: List[str], challenge_type: str, cert_key: KeyPair) throws str -> AcmeCertificate:
+        if challenge_type != CHALLENGE_HTTP01 and challenge_type != CHALLENGE_DNS01 and challenge_type != CHALLENGE_TLS_ALPN01:
+            raise("acme: unknown challenge type " + challenge_type)
+        if challenge_type == CHALLENGE_DNS01 and not self._has_dns_hook: raise("acme: dns-01 needs set_dns01_hook")
+        if self.kid.len() == 0: self.register()?
+        mut order = self.new_order(names)?
+        if order.status == "pending":
+            self._authorize(order, challenge_type)?
+            order = self.wait_order(order.url, "ready")?
+        if order.status != "ready" and order.status != "valid":
+            raise("acme: order status " + order.status + ": " + order.error)
+        if order.status == "ready":
+            mut csr = Csr.build(cert_key, names)?
+            order = self.finalize(order, csr)?
+        if order.certificate_url.len() == 0: raise("acme: the order has no certificate URL")
+        mut chain = self.download(order.certificate_url)?
+        if self.preferred_chain.len() > 0 and not _chain_matches(chain.pem, self.preferred_chain):
+            mut i = 0
+            while i < len(chain.alternates):
+                mut alt = self.download(chain.alternates[i])?
+                if _chain_matches(alt.pem, self.preferred_chain):
+                    alt.alternates = chain.alternates
+                    chain = alt
+                    break
+                i = i + 1
+        mut res = AcmeCertificate()
+        res.cert_pem = chain.pem
+        res.key_pem = cert_key.private_pem()
+        res.url = chain.url
+        res.order_url = order.url
+        res.alternates = chain.alternates
+        res.not_after = 0
+        mut cr: Result[Certificate, str] = Certificate.from_pem(chain.pem)
+        if cr.is_ok:
+            mut cert = cr.ok
+            res.not_after = cert.not_after()
+            cert.dispose()
+        return res
+
+    # Solve every pending authorization of `order`.
+    def _authorize(self, order: AcmeOrder, challenge_type: str) throws str:
+        mut auths: List[AcmeAuthorization] = []
+        mut chals: List[AcmeChallenge] = []
+        mut kas: List[str] = []
+        mut i = 0
+        while i < len(order.authorizations):
+            mut a = self.get_authorization(order.authorizations[i])?
+            if a.status == "pending":
+                if a.wildcard and challenge_type != CHALLENGE_DNS01:
+                    raise("acme: *." + a.id_value + " can only be validated with dns-01")
+                mut ch = a.challenge(challenge_type)?
+                auths.append(a)
+                chals.append(ch)
+                kas.append(self.key_authorization(ch.token)?)
+            elif a.status != "valid":
+                raise("acme: authorization for " + a.id_value + " is " + a.status)
+            i = i + 1
+        if len(auths) == 0: return
+        # State of a built-in responder thread. It lives in this scope, which
+        # outlasts the thread: _stop_responder waits for the thread to finish.
+        shared rs = _Responder()
+        rs.host = "0.0.0.0"
+        rs.port = Atomic.new(0)
+        rs.table = ""
+        rs.stop = Atomic.new(0)
+        rs.state = Atomic.new(2)
+        rs.served = Atomic.new(0)
+        mut r: Result[bool, str] = self._present(auths, chals, kas, challenge_type, true, rs)
+        if r.is_err:
+            self._present(auths, chals, kas, challenge_type, false, rs)
+            raise(r.err)
+        mut r2: Result[bool, str] = self._validate(auths, chals)
+        self._present(auths, chals, kas, challenge_type, false, rs)
+        if r2.is_err: raise(r2.err)
+
+    def _validate(self, auths: List[AcmeAuthorization], chals: List[AcmeChallenge]) throws str -> bool:
+        mut i = 0
+        while i < len(chals):
+            if chals[i].status == "pending": self.respond(chals[i])?
+            i = i + 1
+        mut j = 0
+        while j < len(auths):
+            self.wait_authorization(auths[j].url)?
+            j = j + 1
+        return true
+
+    # Start (present) or stop the challenge responses.
+    def _present(self, auths: List[AcmeAuthorization], chals: List[AcmeChallenge], kas: List[str], kind: str, present: bool, rs: Shared[_Responder]) throws str -> bool:
+        if kind == CHALLENGE_DNS01:
+            mut i = 0
+            while i < len(auths):
+                mut rec = "_acme-challenge." + auths[i].id_value
+                if not self.dns01_hook(rec, AcmeJws.dns01_value(kas[i]), present):
+                    if present: raise("acme: the dns-01 hook failed for " + rec)
+                i = i + 1
+            if present and self.dns_wait_ms > 0: Clock.sleep_ms(self.dns_wait_ms)
+            return true
+        if kind == CHALLENGE_HTTP01:
+            if self._has_http_hook:
+                mut j = 0
+                while j < len(chals):
+                    if not self.http01_hook(chals[j].token, kas[j], present):
+                        if present: raise("acme: the http-01 hook failed for " + auths[j].id_value)
+                    j = j + 1
+                return true
+            if present: self._start_http(chals, kas, rs)?
+            else: _stop_responder(rs)
+            return true
+        # tls-alpn-01
+        mut certs: List[str] = []
+        mut keys: List[str] = []
+        mut snis: List[str] = []
+        if present:
+            mut k = 0
+            while k < len(auths):
+                mut ck = AcmeJws.tls_alpn01_cert(auths[k].id_value, kas[k])?
+                certs.append(ck[0])
+                keys.append(ck[1])
+                mut sni = auths[k].id_value
+                if auths[k].id_type == "ip": sni = AcmeJws.reverse_name(auths[k].id_value)
+                snis.append(sni)
+                k = k + 1
+        if self._has_tls_hook:
+            mut m = 0
+            while m < len(auths):
+                mut cp = ""
+                mut kp = ""
+                if present:
+                    cp = certs[m]
+                    kp = keys[m]
+                if not self.tls_alpn01_hook(auths[m].id_value, cp, kp, present):
+                    if present: raise("acme: the tls-alpn-01 hook failed for " + auths[m].id_value)
+                m = m + 1
+            return true
+        if present: self._start_tls(snis, certs, keys, rs)?
+        else: _stop_responder(rs)
+        return true
+
+    # ── built-in responders ──
+
+    def _start_http(self, chals: List[AcmeChallenge], kas: List[str], st: Shared[_Responder]) throws str:
+        mut sb = StringBuilder.init(256)
+        mut i = 0
+        while i < len(chals):
+            if i > 0: sb.append("\x02")
+            sb.append(chals[i].token)
+            sb.append("\x01")
+            sb.append(kas[i])
+            i = i + 1
+        st.port.store(self.http_port)
+        st.table = sb.to_owned()
+        sb.free()
+        st.stop.store(0)
+        st.state.store(0)
+        mut th = Thread.spawn(_http_responder_main, st)
+        th.detach()
+        _await_start(st)
+        if st.state.load() != 1:
+            raise(f"acme: cannot listen on port {self.http_port} for http-01 (use set_http01_hook or http_port)")
+
+    def _start_tls(self, snis: List[str], certs: List[str], keys: List[str], st: Shared[_Responder]) throws str:
+        mut sb = StringBuilder.init(4096)
+        mut i = 0
+        while i < len(snis):
+            if i > 0: sb.append("\x02")
+            sb.append(snis[i])
+            sb.append("\x01")
+            sb.append(certs[i])
+            sb.append("\x01")
+            sb.append(keys[i])
+            i = i + 1
+        st.port.store(self.tls_port)
+        st.table = sb.to_owned()
+        sb.free()
+        st.stop.store(0)
+        st.state.store(0)
+        mut th = Thread.spawn(_tls_responder_main, st)
+        th.detach()
+        _await_start(st)
+        if st.state.load() != 1:
+            raise(f"acme: cannot listen on port {self.tls_port} for tls-alpn-01 (use set_tls_alpn01_hook or tls_port)")
+
+def _await_start(st: Shared[_Responder]):
+    mut waited = 0
+    while st.state.load() == 0 and waited < 10000:
+        Clock.sleep_ms(10)
+        waited = waited + 10
+
+# Stop a responder thread and wait until it no longer uses `st`.
+def _stop_responder(st: Shared[_Responder]):
+    st.stop.store(1)
+    mut waited = 0
+    while st.state.load() != 2 and waited < 15000:
+        if st.state.load() == 1:
+            mut t = TcpStream.connect("127.0.0.1", st.port.load())
+            t.close()
+        Clock.sleep_ms(20)
+        waited = waited + 20
+
+def _chain_matches(pem: str, issuer: str) -> bool:
+    mut r: Result[List[Certificate], str] = Certificate.all_from_pem(pem)
+    if r.is_err: return false
+    mut certs = r.ok
+    mut top = certs[len(certs) - 1]
+    mut ok = top.issuer().find(issuer) >= 0
+    mut i = 0
+    while i < len(certs):
+        certs[i].dispose()
+        i = i + 1
+    return ok
+
+# True when the first certificate in `cert_pem` expires within `days` days,
+# is already expired, or cannot be parsed.
+pub def acme_needs_renewal(cert_pem: str, days: int) -> bool:
+    mut r: Result[Certificate, str] = Certificate.from_pem(cert_pem)
+    if r.is_err: return true
+    mut c = r.ok
+    mut left = c.not_after() - Clock.timestamp()
+    c.dispose()
+    return left < days * 86400

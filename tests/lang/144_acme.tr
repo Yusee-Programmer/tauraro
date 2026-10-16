@@ -1,0 +1,1165 @@
+# tests/lang/144_acme.tr
+# std.net.acme / std.crypto.csr / std.crypto.der.
+#
+# 1. Known vectors: RFC 7515 A.2 (RS256, exact signature) and A.3 (ES256),
+#    RFC 7638 thumbprint, DER encodings; CSRs and certificates were also
+#    checked with `openssl req -verify` / `openssl verify` during development.
+# 2. TlsServerConfig.add_route (ALPN / SNI certificate selection).
+# 3. End to end against a fake ACME server (std.net.http_server, plain HTTP, in
+#    a thread) that checks every JWS signature, nonce and URL, External Account
+#    Binding, key rollover and CSRs, validates http-01 / dns-01 / tls-alpn-01
+#    for real against the client's responders, and issues certificates from a
+#    test CA (with an alternate chain). The client was also run against
+#    Pebble (Let's Encrypt's test CA) during development.
+
+from std.test import TestRunner
+from std.net.acme import AcmeClient, AcmeJws, AcmeCertificate, AcmeOrder, acme_links, acme_json_str, acme_needs_renewal, CHALLENGE_HTTP01, CHALLENGE_DNS01, CHALLENGE_TLS_ALPN01, ACME_TLS_ALPN, OID_ACME_IDENTIFIER, REVOKE_SUPERSEDED, LETSENCRYPT_PRODUCTION, LETSENCRYPT_STAGING
+from std.crypto.csr import KeyPair, Csr, CertBuilder, ip_to_bytes, ip_to_text, cert_extension, cert_names, name_der, CertExtension
+from std.crypto.der import Der, DerNode, der_byte
+from std.crypto.pk import PKey, Pem, CURVE_P256, CURVE_P384, KEY_RSA, KEY_EC_P256
+from std.crypto.x509 import Certificate, TrustStore, X509, PURPOSE_SERVER
+from std.crypto.native import _cn_hex, ALG_SHA256
+from std.crypto.digest import Digest
+from std.crypto.hmac import Hmac
+from std.encoding.json import Json, JsonDoc, JsonRef
+from std.net.client import HttpSession, HttpReply
+from std.net.http_server import HttpServer, HttpConn, HttpResponse
+from std.net.tcp import TcpStream
+from std.net.tls import TlsStream, TlsOptions, TlsListener, TlsServerConfig
+from std.io.file import read_file, write_file
+from std.sys.fs import Fs
+from std.sys.time import Clock
+
+const ACME_PORT = 18990
+const HTTP01_PORT = 18991
+const TLS01_PORT = 18992
+const ROUTE_PORT = 18993
+const DNS_FILE = "build/acme144_dns.txt"
+const EAB_KID = "kid-1"
+const EAB_SECRET = "an eab secret key, 32 bytes long"
+
+def rsa_key_pem() -> str:
+    return """-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDToWgqUJB5hPuh
+L0PELeEoyuSctEtQNQEOb5Gk66hK+pTe/Hi8P8T/9cIKiMMt6RV9KLMqf0Sor+nu
+DcLuGdpdn6sKNW36p9DatFBbgYE++vFc69uL2dh8KosCbABod5jh24MvN7Lbv4ri
+Y1TLWmB+7LTQV0Ra0stWjEr3XntYWyi1mzKSRpdMsvMAz+GPtiEwIHSSj99oe/0/
+sKhMNL4lnasxyjFvT63V+U+ijwYVgi6K5TiwYHNav9IlQTIY8VXQRYCg0/oKYD5W
+SMXHQCHnCTyFXP5W10RoEd1dimFa6KRVGomQZoS1x5zqi6oRcboxM0Hu2yCgKM2d
+1Rbj8BphAgMBAAECggEABGBpfRE0IQSPskz97nKxyLGEJNF9tTzuC/8MA13Jmd4G
+HM5v2MTLgtecRFzWXH6zg7vHE3E/ruq5wG3nGBwkw0boDJ//lELK3kWtsRbD4NTj
+ukjjvh1VOCF7xSMNUcZsvPmt2YN3Xsqz8+vwoaakKZEk9CIPNymg1uYJLtsfWzu4
+Y+uGkawsiy9m79HhwxsmXnDfbzSps62nO9o9P5Zo8nDdv00ihp3s+tpEpHnJ4Lgz
+Xh9Ho+bU6W3oAbHDWXZwFxpDPPNkNqn+ZwfHWh0ZL8Kh3s3v0u8lsNqxVr2mwnfB
+gY8nPcJpiQf4Z12V4tS2LFR52ptA/wSrexiR8nxCIQKBgQD93ryj7oO8eJWG7EFK
+NTZF7YL/rGaO84IQXxKuwMvhUgevDWIsr5m/QVL2wvz0Mb7KAtbTYCLKpfzu6Ets
+zrD0J4MH2j7dDF1x5qj5MarHE9ATwMDdb9WBbN48qLxkw9FkLVs4O5dS/f+CwxgF
+imZwmzgHSlOf960BEpRwnA+OlQKBgQDVZ/KcxL0FgufBmkH7x2A5JkzDle42EyFr
+JReo3HEyy/CdCgxA/JJfQpCINJzVGWQt0fnqUOhBhsVi/63seOIGM1Vb1hPy7Hf0
+6l09blYl5saDidcxfEsOaI5BXTo/ju82VjbK7P0pw5X3Re1MjhvYb9SJQ/1QoV59
+oondfLnFnQKBgHb+848nmqo6H2SJ0yS0gocOiGvNZJk2/M0tszUke6xW5fEgpdbq
+THfAZ+Hwjd7sflB0OjwEAOraGQ/m5IvQ6lLXPmzs2LCGPjrIcoWzySfdWpgXro9c
+/0fWPulR8lSNENYTCIH4NLsbAaxKRDU8pT29E+se5MnDr10kV13dWNFtAoGAGDGu
+ucM8QtGygKqCbI8QA6qp7UqkNRE6KrGL2yMS2lVws/0dooh/97jONgLw/N/iEafK
+k5wUmMk0u6KND1AtH9LWDJFataHFf8jKRVqq/aUKQINyGDQlNj74UcTGA8qqqBhi
+IeN4WDHKYLxWyOUblxAmomFI6MlCsy+oPaoUTakCgYAnsV9dYg118kZkE26/Tb0F
+Qow9grFd5fpc3n5nDLmXgVbM16ZEF1+EwtmhtGTM2I6PCNYlNlGFdgKitxTksBzS
+IqFXX136obJf/kH2dz4Zt++AJJx9gr5GgwKqZ3LNGyy1/k6OAED90NvJ0ulyW7ko
+O44fiVPNAQCsdXpcArObGQ==
+-----END PRIVATE KEY-----
+"""
+
+# RFC 7515 appendix A.2 key (JWK) and A.3 key.
+def rfc_rsa_jwk() -> str:
+    return "{\"kty\":\"RSA\",\"n\":\"ofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd_wWJcyQoTbji9k0l8W26mPddxHmfHQp-Vaw-4qPCJrcS2mJPMEzP1Pt0Bm4d4QlL-yRT-SFd2lZS-pCgNMsD1W_YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb_7OMg0LOL-bSf63kpaSHSXndS5z5rexMdbBYUsLA9e-KXBdQOS-UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uDZlxvb3qCo5ZwKh9kG4LT6_I5IhlJH7aGhyxXFvUK-DWNmoudF8NAco9_h9iaGNj8q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQ\",\"e\":\"AQAB\",\"d\":\"Eq5xpGnNCivDflJsRQBXHx1hdR1k6Ulwe2JZD50LpXyWPEAeP88vLNO97IjlA7_GQ5sLKMgvfTeXZx9SE-7YwVol2NXOoAJe46sui395IW_GO-pWJ1O0BkTGoVEn2bKVRUCgu-GjBVaYLU6f3l9kJfFNS3E0QbVdxzubSu3Mkqzjkn439X0M_V51gfpRLI9JYanrC4D4qAdGcopV_0ZHHzQlBjudU2QvXt4ehNYTCBr6XCLQUShb1juUO1ZdiYoFaFQT5Tw8bGUl_x_jTj3ccPDVZFD9pIuhLhBOneufuBiB4cS98l2SR_RQyGWSeWjnczT0QU91p1DhOVRuOopznQ\",\"p\":\"4BzEEOtIpmVdVEZNCqS7baC4crd0pqnRH_5IB3jw3bcxGn6QLvnEtfdUdiYrqBdss1l58BQ3KhooKeQTa9AB0Hw_Py5PJdTJNPY8cQn7ouZ2KKDcmnPGBY5t7yLc1QlQ5xHdwW1VhvKn-nXqhJTBgIPgtldC-KDV5z-y2XDwGUc\",\"q\":\"uQPEfgmVtjL0Uyyx88GZFF1fOunH3-7cepKmtH4pxhtCoHqpWmT8YAmZxaewHgHAjLYsp1ZSe7zFYHj7C6ul7TjeLQeZD_YwD66t62wDmpe_HlB-TnBA-njbglfIsRLtXlnDzQkv5dTltRJ11BKBBypeeF6689rjcJIDEz9RWdc\",\"dp\":\"BwKfV3Akq5_MFZDFZCnW-wzl-CCo83WoZvnLQwCTeDv8uzluRSnm71I3QCLdhrqE2e9YkxvuxdBfpT_PI7Yz-FOKnu1R6HsJeDCjn12Sk3vmAktV2zb34MCdy7cpdTh_YVr7tss2u6vneTwrA86rZtu5Mbr1C1XsmvkxHQAdYo0\",\"dq\":\"h_96-mK1R_7glhsum81dZxjTnYynPbZpHziZjeeHcXYsXaaMwkOlODsWa7I9xXDoRwbKgB719rrmI2oKr6N3Do9U0ajaHF-NKJnwgjMd2w9cjz3_-kyNlxAr2v4IKhGNpmM5iIgOS1VZnOZ68m6_pbLBSp3nssTdlqvd0tIiTHU\",\"qi\":\"IYd7DHOhrWvxkwPQsRM2tOgrjbcrfvtQJipd-DlcxyVuuM9sQLdgjVk2oy26F0EmpScGLq2MowX7fhd_QJQ3ydy5cY7YIBi87w93IKLEdfnbJtoOPLUW0ITrJReOgo1cq9SbsxYawBgfp_gh6A5603k2-ZQwVK0JKSHuLFkuQ3U\"}"
+
+def rfc_rs256_sig() -> str:
+    return "cC4hiUPoj9Eetdgtv3hF80EGrhuB__dzERat0XF9g2VtQgr9PJbu3XOiZj5RZmh7AAuHIm4Bh-0Qc_lF5YKt_O8W2Fp5jujGbds9uJdbF9CUAr7t1dnZcAcQjbKBYNX4BAynRFdiuB--f_nZLgrnbyTyWzO75vRK5h6xBArLIARNPvkSjtQBMHlb1L07Qe7K0GarZRmB_eSN9383LcOLn6_dO--xi12jzDwusC-eOkHWEsqtFZESc6BfI7noOPqvhJ1phCnvWh6IeYI2w9QOYEUipUTI8np6LbgGY9Fs98rqVt5AXLIhWkWywlVmtVrBp0igcN_IoypGlUPQGe77Rw"
+
+def rfc_ec_jwk() -> str:
+    return "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU\",\"y\":\"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0\",\"d\":\"jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI\"}"
+
+# RFC 7638 section 3.1
+def rfc7638_jwk() -> str:
+    return "{\"kty\":\"RSA\",\"n\":\"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw\",\"e\":\"AQAB\",\"alg\":\"RS256\",\"kid\":\"2011-04-29\"}"
+
+def jws_input() -> str:
+    return "eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ"
+
+# ─── 1. vectors ──────────────────────────────────────────────────────────────
+
+def test_vectors(t: TestRunner) throws str:
+    t.section("JOSE vectors (RFC 7515 / 7638)")
+    mut rk = AcmeJws.key_from_jwk(rfc_rsa_jwk())?
+    t.assert_true(rk.kind == KEY_RSA, "RSA JWK imports as an RSA key")
+    t.assert_eq_str(AcmeJws.alg(rk), "RS256", "RSA alg")
+    mut sig = rk.sign_jose("eyJhbGciOiJSUzI1NiJ9." + jws_input())?
+    t.assert_eq_str(AcmeJws.b64url(sig), rfc_rs256_sig(), "RFC 7515 A.2 RS256 signature (exact)")
+    mut ek = AcmeJws.key_from_jwk(rfc_ec_jwk())?
+    t.assert_eq_str(AcmeJws.jwk(ek), "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU\",\"y\":\"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0\"}", "EC JWK in canonical form")
+    mut esig = AcmeJws.unb64url("DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q")?
+    mut epub = AcmeJws.public_key_from_jwk(rfc_ec_jwk())?
+    t.assert_true(AcmeJws.verify(epub, "ES256", "eyJhbGciOiJFUzI1NiJ9." + jws_input(), esig), "RFC 7515 A.3 ES256 signature verifies")
+    t.assert_true(not AcmeJws.verify(epub, "ES256", "eyJhbGciOiJFUzI1NiJ9." + jws_input() + "x", esig), "ES256 rejects a changed input")
+    t.assert_true(not AcmeJws.verify(epub, "RS256", "eyJhbGciOiJFUzI1NiJ9." + jws_input(), esig), "algorithm must match the key")
+    mut own = ek.sign_jose("abc")?
+    t.assert_eq_int(own.len(), 64, "ES256 signatures are raw r||s")
+    t.assert_true(AcmeJws.verify(epub, "ES256", "abc", own), "own ES256 signature verifies")
+    t.assert_eq_str(AcmeJws.thumbprint_of(rfc7638_jwk())?, "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs", "RFC 7638 thumbprint")
+    t.assert_eq_str(AcmeJws.thumbprint(ek), AcmeJws.thumbprint_of(rfc_ec_jwk())?, "thumbprint of key == thumbprint of its JWK")
+    mut ka = AcmeJws.key_authorization("tok-123", ek)
+    t.assert_eq_str(ka, "tok-123." + AcmeJws.thumbprint(ek), "key authorization = token.thumbprint")
+    t.assert_eq_str(AcmeJws.dns01_value(ka), AcmeJws.b64url(Digest.sha256(ka)), "dns-01 TXT value")
+    t.assert_eq_int(AcmeJws.dns01_value(ka).len(), 43, "dns-01 value is 43 characters")
+    # protected header + flattened JWS
+    mut prot = AcmeJws.protected_header(ek, "nonce-1", "https://ca/x", "")
+    mut pd = Json.parse(prot)
+    mut pr = pd.root()
+    t.assert_eq_str(pr.obj_get("alg").get_str(), "ES256", "header alg")
+    t.assert_eq_str(pr.obj_get("nonce").get_str(), "nonce-1", "header nonce")
+    t.assert_eq_str(pr.obj_get("url").get_str(), "https://ca/x", "header url")
+    t.assert_true(pr.obj_has("jwk") and not pr.obj_has("kid"), "jwk header without kid")
+    mut prot2 = AcmeJws.protected_header(ek, "n", "https://ca/y", "https://ca/acct/1")
+    t.assert_true(prot2.find("\"kid\":\"https://ca/acct/1\"") >= 0 and prot2.find("jwk") < 0, "kid header without jwk")
+    mut jws = AcmeJws.sign(ek, prot, "{\"a\":1}")?
+    mut jd = Json.parse(jws)
+    mut jr = jd.root()
+    mut p64 = jr.obj_get("protected").get_str()
+    mut y64 = jr.obj_get("payload").get_str()
+    t.assert_eq_str(AcmeJws.unb64url(p64)?, prot, "protected round-trips")
+    t.assert_eq_str(AcmeJws.unb64url(y64)?, "{\"a\":1}", "payload round-trips")
+    mut s64 = AcmeJws.unb64url(jr.obj_get("signature").get_str())?
+    t.assert_true(AcmeJws.verify(epub, "ES256", p64 + "." + y64, s64), "flattened JWS verifies")
+    mut empty = AcmeJws.sign(ek, prot, "")?
+    t.assert_true(empty.find("\"payload\":\"\"") >= 0, "POST-as-GET payload is empty")
+    mut eab = AcmeJws.eab("kid-9", AcmeJws.b64url("secret"), AcmeJws.jwk(ek), "https://ca/new-acct")?
+    mut ed = Json.parse(eab)
+    mut er = ed.root()
+    mut ep64 = er.obj_get("protected").get_str()
+    mut ey64 = er.obj_get("payload").get_str()
+    t.assert_eq_str(AcmeJws.unb64url(ep64)?, "{\"alg\":\"HS256\",\"kid\":\"kid-9\",\"url\":\"https://ca/new-acct\"}", "EAB protected header")
+    t.assert_eq_str(AcmeJws.unb64url(ey64)?, AcmeJws.jwk(ek), "EAB payload is the account JWK")
+    t.assert_eq_str(AcmeJws.unb64url(er.obj_get("signature").get_str())?, Hmac.sha256_raw("secret", ep64 + "." + ey64), "EAB HS256 MAC")
+    t.assert_eq_str(acme_json_str("a\"b\\c\n\x01"), "\"a\\\"b\\\\c\\n\\u0001\"", "JSON string escaping")
+    t.assert_eq_str(AcmeJws.reverse_name("127.0.0.1"), "1.0.0.127.in-addr.arpa", "RFC 8738 IPv4 reverse name")
+    t.assert_eq_str(AcmeJws.reverse_name("2001:db8::1"), "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa", "RFC 8738 IPv6 reverse name")
+    t.assert_true(LETSENCRYPT_PRODUCTION.starts_with("https://acme-v02.") and LETSENCRYPT_STAGING.find("staging") > 0, "Let's Encrypt directory URLs")
+    # JWK private import round trip
+    mut ek2 = KeyPair.from_pem(ek.private_pem())?
+    t.assert_eq_str(AcmeJws.jwk(ek2), AcmeJws.jwk(ek), "EC key survives PKCS#8 PEM")
+    mut rk2 = KeyPair.from_pem(rk.private_pem())?
+    t.assert_eq_str(AcmeJws.jwk(rk2), AcmeJws.jwk(rk), "RSA key survives PEM")
+    mut lp = KeyPair.from_pem(rsa_key_pem())?
+    t.assert_eq_int(lp.rsa_e.len(), 3, "RSA exponent parsed from PKCS#8")
+    t.assert_eq_int(lp.rsa_n.len(), 256, "RSA-2048 modulus parsed")
+    mut bad: Result[KeyPair, str] = AcmeJws.key_from_jwk("{\"kty\":\"OKP\"}")
+    t.assert_true(bad.is_err, "unsupported JWK rejected")
+    # Link header parsing
+    mut rep = HttpReply.init()
+    rep.headers.add("Link", "<https://ca/dir>;rel=\"index\", <https://ca/cert/1/alt>; rel=\"alternate\"")
+    rep.headers.add("Link", "<https://ca/cert/1/alt2>;rel=alternate")
+    mut alts = acme_links(rep, "alternate")
+    t.assert_eq_int(len(alts), 2, "two alternate links")
+    if len(alts) == 2:
+        t.assert_eq_str(alts[0], "https://ca/cert/1/alt", "first alternate")
+        t.assert_eq_str(alts[1], "https://ca/cert/1/alt2", "unquoted rel")
+    t.assert_eq_int(len(acme_links(rep, "index")), 1, "index link")
+
+def test_der(t: TestRunner) throws str:
+    t.section("DER / CSR / certificates")
+    t.assert_eq_str(_cn_hex(Der.oid("1.2.840.10045.2.1")), "06072a8648ce3d0201", "OID encoding")
+    t.assert_eq_str(_cn_hex(Der.integer(0)) + _cn_hex(Der.integer(128)) + _cn_hex(Der.integer(65537)), "020100" + "02020080" + "0203010001", "INTEGER encoding")
+    t.assert_eq_str(_cn_hex(Der.time(0)), "170d3730303130313030303030305a", "UTCTime 1970")
+    t.assert_eq_str(Der.time(2524608000).slice(2, 17), "20500101000000Z", "GeneralizedTime from 2050")
+    mut long = Der.octets("x".repeat(300))
+    t.assert_eq_str(_cn_hex(long.slice(0, 4)), "0482012c", "long-form length")
+    mut node = Der.parse(Der.time(1700000000))?
+    t.assert_eq_int(Der.time_value(node)?, 1700000000, "time round trip")
+    mut seq = Der.parse(Der.seq(Der.oid("2.5.4.3") + Der.utf8("hi")))?
+    mut kids = Der.children(seq)?
+    t.assert_eq_str(Der.oid_text(kids[0].content), "2.5.4.3", "OID text")
+    mut trunc: Result[DerNode, str] = Der.parse("\x30\x05\x02\x01")
+    t.assert_true(trunc.is_err, "truncated DER rejected")
+    t.assert_eq_str(ip_to_text(ip_to_bytes("2001:0db8:0:0:0:0:0:1")), "2001:db8::1", "IPv6 compression")
+    t.assert_eq_str(ip_to_text(ip_to_bytes("192.168.0.1")), "192.168.0.1", "IPv4")
+    t.assert_eq_int(ip_to_bytes("example.com").len() + ip_to_bytes("1.2.3.256").len(), 0, "non-IPs")
+
+    mut k = KeyPair.generate_ec(CURVE_P256)?
+    mut der = Csr.build(k, ["example.com", "www.example.com", "10.0.0.1", "::1"])?
+    mut c = Csr.parse(der)?
+    t.assert_true(c.verify(), "P-256 CSR self-signature")
+    t.assert_eq_str(c.common_name, "example.com", "CSR CN")
+    t.assert_eq_int(len(c.dns_names), 2, "CSR DNS names")
+    t.assert_eq_int(len(c.ip_addresses), 2, "CSR IP addresses")
+    if len(c.ip_addresses) == 2: t.assert_eq_str(c.ip_addresses[1], "::1", "CSR IPv6")
+    t.assert_eq_str(c.public_key_der, k.spki(), "CSR public key")
+    mut pk = PKey.from_der(k.spki())?
+    t.assert_eq_str(pk.public_bytes(), k.pkey.public_bytes(), "SPKI parses back to the same key")
+    mut flip = der.slice(0, 40) + "Z" + der.slice(41, der.len())
+    mut fc: Result[Csr, str] = Csr.parse(flip)
+    t.assert_true(fc.is_err or not fc.ok.verify(), "tampered CSR fails verification")
+    mut k384 = KeyPair.generate_ec(CURVE_P384)?
+    mut c384 = Csr.parse(Csr.build(k384, ["a.example"])?)?
+    t.assert_true(c384.verify(), "P-384 CSR")
+    mut rk = KeyPair.from_pem(rsa_key_pem())?
+    mut crsa = Csr.from_pem(Csr.build_pem(rk, ["rsa.example"])?)?
+    t.assert_true(crsa.verify(), "RSA CSR (from PEM)")
+
+    # CA + leaf, verified by std.crypto.x509
+    mut ca = KeyPair.generate_ec(CURVE_P256)?
+    mut b = CertBuilder.init()
+    b.subject_cn("Unit CA")
+    b.is_ca = true
+    b.server_auth = false
+    mut ca_der = b.self_signed(ca)?
+    mut l = CertBuilder.init()
+    l.subject_cn("example.com")
+    l.issuer = name_der("Unit CA")
+    l.add_name("example.com")
+    l.add_name("127.0.0.1")
+    mut leaf_der = l.sign(rk.spki(), ca)?
+    mut store = TrustStore.empty()
+    store.add_der(ca_der)?
+    mut leaf = Certificate.from_der(leaf_der)?
+    t.assert_eq_int(X509.verify_der(store, [leaf_der], "example.com", 0, PURPOSE_SERVER), 0, "issued certificate verifies against the CA")
+    t.assert_eq_int(X509.verify_der(store, [leaf_der], "127.0.0.1", 0, PURPOSE_SERVER), 0, "IP SAN matches")
+    t.assert_true(X509.verify_der(store, [leaf_der], "other.com", 0, PURPOSE_SERVER) != 0, "wrong host rejected")
+    t.assert_eq_str(leaf.key_algorithm(), "RSA", "leaf key is the RSA key")
+    mut names = cert_names(leaf_der)?
+    t.assert_eq_int(len(names), 2, "cert_names")
+    leaf.dispose()
+    store.dispose()
+
+    # tls-alpn-01 certificate
+    mut tc = AcmeJws.tls_alpn01_cert("example.com", "tok.thumb")?
+    mut tder = Pem.decode(tc[0], "CERTIFICATE")?
+    mut ext = cert_extension(tder, OID_ACME_IDENTIFIER)?
+    t.assert_true(ext.found and ext.critical, "acmeIdentifier present and critical")
+    t.assert_eq_str(ext.value, Der.octets(Digest.sha256("tok.thumb")), "acmeIdentifier = OCTET STRING(SHA-256(keyAuthorization))")
+    mut tn = cert_names(tder)?
+    t.assert_true(len(tn) == 1 and tn[0] == "example.com", "single dNSName")
+    mut cfg: Result[TlsServerConfig, str] = TlsServerConfig.from_pem(tc[0], tc[1])
+    t.assert_true(cfg.is_ok, "challenge cert + key load into TlsServerConfig")
+
+# ─── 2. TLS routing ──────────────────────────────────────────────────────────
+
+class RouteSrv implements Sendable:
+    pub base_cert: str
+    pub base_key: str
+    pub alt_cert: str
+    pub alt_key: str
+    pub host_cert: str
+    pub host_key: str
+    pub ok: Atomic[int]
+    pub done: Atomic[int]
+
+def route_server(f: Shared[RouteSrv]):
+    mut r: Result[bool, str] = route_serve(f)
+    if r.is_err: print("route server: " + r.err)
+    f.done.store(1)
+
+def route_serve(f: Shared[RouteSrv]) throws str -> bool:
+    mut base = TlsServerConfig.from_pem(f.base_cert, f.base_key)?
+    base.set_alpn("http/1.1")?
+    mut alt = TlsServerConfig.from_pem(f.alt_cert, f.alt_key)?
+    alt.set_alpn(ACME_TLS_ALPN)?
+    mut host = TlsServerConfig.from_pem(f.host_cert, f.host_key)?
+    base.add_route("", ACME_TLS_ALPN, alt)?
+    base.add_route("Other.Test", "", host)?
+    mut l = TlsListener.listen("127.0.0.1", ROUTE_PORT, base)?
+    l.timeout_ms = 10000
+    mut n = 0
+    while n < 3:
+        mut ar: Result[TlsStream, str] = l.accept()
+        if ar.is_ok:
+            mut s = ar.ok
+            f.ok.add(1)
+            s.close()
+        n = n + 1
+    l.close()
+    return true
+
+def self_signed(name: str) throws str -> List[str]:
+    mut k = KeyPair.generate_ec(CURVE_P256)?
+    mut b = CertBuilder.init()
+    b.subject_cn(name)
+    b.add_name(name)
+    mut d = b.self_signed(k)?
+    return [Pem.encode(d, "CERTIFICATE"), k.private_pem()]
+
+def peer_cn(sni: str, alpn: str) throws str -> List[str]:
+    mut tcp = TcpStream.connect("127.0.0.1", ROUTE_PORT)
+    if not tcp.connected: raise("connect failed")
+    mut o = TlsOptions.insecure()
+    o.alpn = alpn
+    o.timeout_ms = 10000
+    mut s = TlsStream.wrap_fd(tcp.fd, sni, o)?
+    mut certs = s.peer_certificates()
+    mut cn = ""
+    if len(certs) > 0: cn = certs[0].subject()
+    mut proto = s.alpn()
+    s.close()
+    tcp.close()
+    return [cn, proto]
+
+def test_routes(t: TestRunner) throws str:
+    t.section("TlsServerConfig.add_route")
+    mut a = self_signed("base.test")?
+    mut b = self_signed("acme.test")?
+    mut c = self_signed("other.test")?
+    shared f = RouteSrv()
+    f.base_cert = a[0]
+    f.base_key = a[1]
+    f.alt_cert = b[0]
+    f.alt_key = b[1]
+    f.host_cert = c[0]
+    f.host_key = c[1]
+    f.ok = Atomic.new(0)
+    f.done = Atomic.new(0)
+    mut th = Thread.spawn(route_server, f)
+    Thread.sleep(300)
+    mut r1 = peer_cn("base.test", "http/1.1")?
+    t.assert_eq_str(r1[0], "CN=base.test", "default certificate")
+    t.assert_eq_str(r1[1], "http/1.1", "default ALPN")
+    mut r2 = peer_cn("base.test", "acme-tls/1")?
+    t.assert_eq_str(r2[0], "CN=acme.test", "ALPN acme-tls/1 selects the challenge certificate")
+    t.assert_eq_str(r2[1], "acme-tls/1", "acme-tls/1 negotiated")
+    mut r3 = peer_cn("other.test", "http/1.1")?
+    t.assert_eq_str(r3[0], "CN=other.test", "SNI route (case-insensitive)")
+    th.join()
+    t.assert_eq_int(f.ok.load(), 3, "server handshakes")
+
+# ─── 3. fake ACME server ─────────────────────────────────────────────────────
+
+class Fake implements Sendable:
+    pub ca_key: str
+    pub ca_cert: str
+    pub alt_key: str
+    pub alt_cert: str
+    pub ready: Atomic[int]
+    pub done: Atomic[int]
+    pub inject_bad_nonce: Atomic[int]
+    pub bad_nonce_sent: Atomic[int]
+    pub jws_ok: Atomic[int]
+    pub jws_rejected: Atomic[int]
+    pub eab_ok: Atomic[int]
+    pub csr_ok: Atomic[int]
+    pub http_checks: Atomic[int]
+    pub dns_checks: Atomic[int]
+    pub tls_checks: Atomic[int]
+    pub delayed: Atomic[int]
+
+# Server-thread state (never shared).
+class St:
+    pub base: str
+    pub counter: int
+    pub nonces: List[str]
+    pub acct_jwk: List[str]
+    pub acct_status: List[str]
+    pub acct_contact: List[str]
+    pub ord_acct: List[int]
+    pub ord_types: List[str]     # "dns,ip"
+    pub ord_values: List[str]    # "a.test,1.2.3.4"
+    pub ord_authz: List[str]     # "0,1"
+    pub ord_status: List[str]
+    pub ord_cert: List[int]
+    pub ord_polls: List[int]
+    pub az_type: List[str]
+    pub az_value: List[str]
+    pub az_wild: List[bool]
+    pub az_status: List[str]
+    pub az_token: List[str]
+    pub az_err: List[str]
+    pub az_acct: List[int]
+    pub az_chal: List[str]       # challenge type that was answered
+    pub cert_chain: List[str]
+    pub cert_alt: List[str]
+    pub cert_der: List[str]
+    pub cert_acct: List[int]
+    pub cert_revoked: List[bool]
+    pub cert_spki: List[str]
+
+def st_init() -> St:
+    mut s = St()
+    s.base = f"http://127.0.0.1:{ACME_PORT}"
+    s.counter = 0
+    s.nonces = []
+    s.acct_jwk = []
+    s.acct_status = []
+    s.acct_contact = []
+    s.ord_acct = []
+    s.ord_types = []
+    s.ord_values = []
+    s.ord_authz = []
+    s.ord_status = []
+    s.ord_cert = []
+    s.ord_polls = []
+    s.az_type = []
+    s.az_value = []
+    s.az_wild = []
+    s.az_status = []
+    s.az_token = []
+    s.az_err = []
+    s.az_acct = []
+    s.az_chal = []
+    s.cert_chain = []
+    s.cert_alt = []
+    s.cert_der = []
+    s.cert_acct = []
+    s.cert_revoked = []
+    s.cert_spki = []
+    return s
+
+class Jws:
+    pub ok: bool
+    pub status: int
+    pub err_type: str
+    pub detail: str
+    pub payload: str
+    pub jwk: str          # canonical JWK when the request carried one
+    pub acct: int         # account index when it carried a kid
+    pub has_payload: bool
+
+def jws_fail(status: int, kind: str, detail: str) -> Jws:
+    mut j = Jws()
+    j.ok = false
+    j.status = status
+    j.err_type = "urn:ietf:params:acme:error:" + kind
+    j.detail = detail
+    j.payload = ""
+    j.jwk = ""
+    j.acct = -1
+    return j
+
+def new_nonce(s: St) -> str:
+    s.counter = s.counter + 1
+    mut n = AcmeJws.b64url(Digest.sha256(f"nonce-{s.counter}-{Clock.now_ms()}")).slice(0, 22)
+    s.nonces.append(n)
+    return n
+
+def take_nonce(s: St, n: str) -> bool:
+    mut i = 0
+    while i < len(s.nonces):
+        if s.nonces[i] == n and n.len() > 0:
+            s.nonces[i] = ""
+            return true
+        i = i + 1
+    return false
+
+def find_acct(s: St, jwk: str) -> int:
+    mut i = 0
+    while i < len(s.acct_jwk):
+        if s.acct_jwk[i] == jwk: return i
+        i = i + 1
+    return -1
+
+def check_jws(f: Shared[Fake], s: St, body: str, path: str) -> Jws:
+    mut r: Result[Jws, str] = check_jws_inner(f, s, body, path)
+    if r.is_err: return jws_fail(400, "malformed", r.err)
+    return r.ok
+
+def check_jws_inner(f: Shared[Fake], s: St, body: str, path: str) throws str -> Jws:
+    mut doc = Json.parse(body)
+    mut root = doc.root()
+    if not root.is_object() or not root.obj_has("protected") or not root.obj_has("signature") or not root.obj_has("payload"):
+        return jws_fail(400, "malformed", "not a flattened JWS")
+    mut p64 = root.obj_get("protected").get_str()
+    mut y64 = root.obj_get("payload").get_str()
+    mut sig = AcmeJws.unb64url(root.obj_get("signature").get_str())?
+    mut prot = AcmeJws.unb64url(p64)?
+    mut pd = Json.parse(prot)
+    mut pr = pd.root()
+    mut alg = pr.obj_get("alg").get_str()
+    if alg != "ES256" and alg != "ES384" and alg != "RS256": return jws_fail(400, "badSignatureAlgorithm", alg)
+    if not pr.obj_has("nonce") or not take_nonce(s, pr.obj_get("nonce").get_str()): return jws_fail(400, "badNonce", "unknown nonce")
+    if f.inject_bad_nonce.load() == 1:
+        f.inject_bad_nonce.store(0)
+        f.bad_nonce_sent.add(1)
+        return jws_fail(400, "badNonce", "injected")
+    if not pr.obj_has("url") or pr.obj_get("url").get_str() != s.base + path: return jws_fail(401, "unauthorized", "url mismatch")
+    mut j = Jws()
+    j.ok = true
+    j.status = 200
+    j.err_type = ""
+    j.detail = ""
+    j.jwk = ""
+    j.acct = -1
+    mut keytext = ""
+    if pr.obj_has("jwk") and pr.obj_has("kid"): return jws_fail(400, "malformed", "both jwk and kid")
+    if pr.obj_has("jwk"):
+        keytext = pr.obj_get("jwk").to_str()
+        j.jwk = AcmeJws.canonical_jwk(keytext)?
+    elif pr.obj_has("kid"):
+        mut kid = pr.obj_get("kid").get_str()
+        mut pre = s.base + "/acct/"
+        if not kid.starts_with(pre): return jws_fail(401, "accountDoesNotExist", "bad kid")
+        mut idx = int(kid.slice(pre.len(), kid.len()))
+        if idx < 0 or idx >= len(s.acct_jwk): return jws_fail(401, "accountDoesNotExist", "no such account")
+        if s.acct_status[idx] != "valid": return jws_fail(401, "unauthorized", "account is " + s.acct_status[idx])
+        j.acct = idx
+        keytext = s.acct_jwk[idx]
+    else:
+        return jws_fail(400, "malformed", "no jwk or kid")
+    mut key = AcmeJws.public_key_from_jwk(keytext)?
+    mut good = AcmeJws.verify(key, alg, p64 + "." + y64, sig)
+    key.dispose()
+    if not good:
+        f.jws_rejected.add(1)
+        return jws_fail(400, "malformed", "bad signature")
+    f.jws_ok.add(1)
+    j.payload = AcmeJws.unb64url(y64)?
+    return j
+
+def send(conn: HttpConn, s: St, status: int, body: str, ctype: str, hname: str, hval: str):
+    mut resp = HttpResponse.init(status, body)
+    resp.set_header("Content-Type", ctype)
+    resp.set_header("Replay-Nonce", new_nonce(s))
+    resp.set_header("Cache-Control", "no-store")
+    if hname.len() > 0: resp.set_header(hname, hval)
+    conn.send_response(resp)
+
+def send_json(conn: HttpConn, s: St, status: int, body: str):
+    send(conn, s, status, body, "application/json", "", "")
+
+def send_problem(conn: HttpConn, s: St, status: int, kind: str, detail: str):
+    mut t = kind
+    if not t.starts_with("urn:"): t = "urn:ietf:params:acme:error:" + kind
+    send(conn, s, status, "{\"type\":" + acme_json_str(t) + ",\"detail\":" + acme_json_str(detail) + "}", "application/problem+json", "", "")
+
+def directory_json(s: St, eab: bool) -> str:
+    mut acct = "/new-acct"
+    mut req = "false"
+    if eab:
+        acct = "/new-acct-eab"
+        req = "true"
+    return "{\"newNonce\":\"" + s.base + "/nonce\",\"newAccount\":\"" + s.base + acct + "\",\"newOrder\":\"" + s.base + "/new-order\",\"revokeCert\":\"" + s.base + "/revoke\",\"keyChange\":\"" + s.base + "/key-change\",\"meta\":{\"termsOfService\":\"" + s.base + "/tos\",\"externalAccountRequired\":" + req + "}}"
+
+def acct_json(s: St, i: int) -> str:
+    return "{\"status\":\"" + s.acct_status[i] + "\",\"contact\":" + s.acct_contact[i] + ",\"orders\":\"" + s.base + f"/acct/{i}/orders\"}}"
+
+def ids_json(types: List[str], values: List[str]) -> str:
+    mut out = "["
+    mut i = 0
+    while i < len(types):
+        if i > 0: out = out + ","
+        out = out + "{\"type\":\"" + types[i] + "\",\"value\":" + acme_json_str(values[i]) + "}"
+        i = i + 1
+    return out + "]"
+
+def update_order(s: St, o: int):
+    if s.ord_status[o] != "pending": return
+    mut az = s.ord_authz[o].split_exact(",")
+    mut all_valid = true
+    mut i = 0
+    while i < len(az):
+        mut a = int(az[i])
+        if s.az_status[a] == "invalid":
+            s.ord_status[o] = "invalid"
+            return
+        if s.az_status[a] != "valid": all_valid = false
+        i = i + 1
+    if all_valid: s.ord_status[o] = "ready"
+
+def order_json(s: St, o: int) -> str:
+    update_order(s, o)
+    mut az = s.ord_authz[o].split_exact(",")
+    mut urls = "["
+    mut i = 0
+    while i < len(az):
+        if i > 0: urls = urls + ","
+        urls = urls + "\"" + s.base + "/authz/" + az[i] + "\""
+        i = i + 1
+    urls = urls + "]"
+    mut out = "{\"status\":\"" + s.ord_status[o] + "\",\"expires\":\"2030-01-01T00:00:00Z\",\"identifiers\":" + ids_json(s.ord_types[o].split_exact(","), s.ord_values[o].split_exact(",")) + ",\"authorizations\":" + urls + ",\"finalize\":\"" + s.base + f"/finalize/{o}\""
+    if s.ord_status[o] == "valid": out = out + ",\"certificate\":\"" + s.base + f"/cert/{s.ord_cert[o]}\""
+    if s.ord_status[o] == "invalid": out = out + ",\"error\":{\"type\":\"urn:ietf:params:acme:error:unauthorized\",\"detail\":\"an authorization failed\"}"
+    return out + "}"
+
+def authz_json(s: St, a: int) -> str:
+    mut v = s.az_value[a]
+    mut out = "{\"identifier\":{\"type\":\"" + s.az_type[a] + "\",\"value\":" + acme_json_str(v) + "},\"status\":\"" + s.az_status[a] + "\",\"expires\":\"2030-01-01T00:00:00Z\""
+    if s.az_wild[a]: out = out + ",\"wildcard\":true"
+    mut kinds: List[str] = []
+    if s.az_wild[a]: kinds = ["dns-01"]
+    elif s.az_type[a] == "ip": kinds = ["http-01", "tls-alpn-01"]
+    else: kinds = ["http-01", "dns-01", "tls-alpn-01"]
+    out = out + ",\"challenges\":["
+    mut i = 0
+    while i < len(kinds):
+        if i > 0: out = out + ","
+        mut cst = "pending"
+        if s.az_chal[a] == kinds[i]:
+            cst = s.az_status[a]
+            if cst == "pending": cst = "processing"
+        out = out + "{\"type\":\"" + kinds[i] + "\",\"url\":\"" + s.base + f"/chall/{a}/" + kinds[i] + "\",\"token\":\"" + s.az_token[a] + "\",\"status\":\"" + cst + "\""
+        if s.az_chal[a] == kinds[i] and s.az_err[a].len() > 0:
+            out = out + ",\"error\":{\"type\":\"urn:ietf:params:acme:error:incorrectResponse\",\"detail\":" + acme_json_str(s.az_err[a]) + "}"
+        out = out + "}"
+        i = i + 1
+    return out + "]}"
+
+# Validate challenge `kind` of authorization a; "" on success, else why not.
+def validate(f: Shared[Fake], s: St, a: int, kind: str) -> str:
+    mut ka = s.az_token[a] + "." + thumb(s.acct_jwk[s.az_acct[a]])
+    if kind == "http-01":
+        f.http_checks.add(1)
+        mut sess = HttpSession.init()
+        sess.set_timeout(5000)
+        mut r = sess.get(f"http://127.0.0.1:{HTTP01_PORT}/.well-known/acme-challenge/" + s.az_token[a])
+        if r.status != 200: return f"http-01: HTTP {r.status} {r.error}"
+        if r.body.strip() != ka: return "http-01: wrong key authorization"
+        return ""
+    if kind == "dns-01":
+        f.dns_checks.add(1)
+        mut txt = ""
+        if Fs.is_file(DNS_FILE): txt = read_file(DNS_FILE)
+        mut want = "_acme-challenge." + s.az_value[a] + "=" + AcmeJws.dns01_value(ka) + "\n"
+        if txt.find(want) < 0: return "dns-01: TXT record not found"
+        return ""
+    if kind == "tls-alpn-01":
+        f.tls_checks.add(1)
+        mut r2: Result[str, str] = check_tls(s, a, ka)
+        if r2.is_err: return "tls-alpn-01: " + r2.err
+        return r2.ok
+    return "unknown challenge"
+
+def thumb(jwk: str) -> str:
+    mut r: Result[str, str] = AcmeJws.thumbprint_of(jwk)
+    return r.ok
+
+def check_tls(s: St, a: int, ka: str) throws str -> str:
+    mut sni = s.az_value[a]
+    if s.az_type[a] == "ip": sni = AcmeJws.reverse_name(sni)
+    mut tcp = TcpStream.connect("127.0.0.1", TLS01_PORT)
+    if not tcp.connected: return "connect failed"
+    mut o = TlsOptions.insecure()
+    o.alpn = ACME_TLS_ALPN
+    o.timeout_ms = 5000
+    mut st = TlsStream.wrap_fd(tcp.fd, sni, o)?
+    mut proto = st.alpn()
+    mut certs = st.peer_certificates()
+    st.close()
+    tcp.close()
+    if proto != ACME_TLS_ALPN: return "ALPN not negotiated"
+    if len(certs) != 1: return "expected one certificate"
+    mut der = certs[0].der()
+    mut ext = cert_extension(der, OID_ACME_IDENTIFIER)?
+    if not ext.found or not ext.critical: return "no critical acmeIdentifier"
+    if ext.value != Der.octets(Digest.sha256(ka)): return "wrong acmeIdentifier"
+    mut names = cert_names(der)?
+    if len(names) != 1 or names[0] != s.az_value[a]: return "wrong subjectAltName"
+    return ""
+
+def fake_main(f: Shared[Fake]):
+    mut r: Result[bool, str] = fake_run(f)
+    if r.is_err: print("fake ACME server: " + r.err)
+    f.done.store(1)
+
+def fake_run(f: Shared[Fake]) throws str -> bool:
+    mut s = st_init()
+    mut ca = KeyPair.from_pem(f.ca_key)?
+    mut alt = KeyPair.from_pem(f.alt_key)?
+    mut srv = HttpServer.init("127.0.0.1", ACME_PORT)
+    if not srv.start(): raise("cannot listen")
+    f.ready.store(1)
+    mut running = true
+    while running:
+        mut conn = srv.accept()
+        mut req = conn.request
+        mut path = req.path
+        if path == "/quit":
+            conn.send_text(200, "bye")
+            running = false
+        elif path == "/dir":
+            send_json(conn, s, 200, directory_json(s, false))
+        elif path == "/dir-eab":
+            send_json(conn, s, 200, directory_json(s, true))
+        elif path == "/nonce":
+            mut st = 204
+            if req.method == "HEAD": st = 200
+            send(conn, s, st, "", "text/plain", "", "")
+        elif req.method != "POST":
+            send_problem(conn, s, 405, "malformed", "use POST")
+        else:
+            handle_post(f, s, conn, path, req.body, ca, alt)?
+        conn.close()
+    srv.stop()
+    return true
+
+def handle_post(f: Shared[Fake], s: St, conn: HttpConn, path: str, body: str, ca: KeyPair, alt: KeyPair) throws str:
+    mut j = check_jws(f, s, body, path)
+    if not j.ok:
+        send_problem(conn, s, j.status, j.err_type, j.detail)
+        return
+    if path == "/new-acct" or path == "/new-acct-eab":
+        if j.jwk.len() == 0:
+            send_problem(conn, s, 400, "malformed", "newAccount needs jwk")
+            return
+        mut pd = Json.parse(j.payload)
+        mut p = pd.root()
+        mut existing = find_acct(s, j.jwk)
+        if existing >= 0:
+            send(conn, s, 200, acct_json(s, existing), "application/json", "Location", s.base + f"/acct/{existing}")
+            return
+        if p.obj_has("onlyReturnExisting") and p.obj_get("onlyReturnExisting").get_bool():
+            send_problem(conn, s, 400, "accountDoesNotExist", "no account for this key")
+            return
+        if not p.obj_has("termsOfServiceAgreed") or not p.obj_get("termsOfServiceAgreed").get_bool():
+            send_problem(conn, s, 403, "userActionRequired", "agree to the terms")
+            return
+        if path == "/new-acct-eab":
+            if not p.obj_has("externalAccountBinding"):
+                send_problem(conn, s, 400, "externalAccountRequired", "EAB required")
+                return
+            mut why = check_eab(s, p.obj_get("externalAccountBinding").to_str(), j.jwk)
+            if why.len() > 0:
+                send_problem(conn, s, 400, "unauthorized", why)
+                return
+            f.eab_ok.add(1)
+        mut contact = "[]"
+        if p.obj_has("contact"): contact = p.obj_get("contact").to_str()
+        s.acct_jwk.append(j.jwk)
+        s.acct_status.append("valid")
+        s.acct_contact.append(contact)
+        mut idx = len(s.acct_jwk) - 1
+        send(conn, s, 201, acct_json(s, idx), "application/json", "Location", s.base + f"/acct/{idx}")
+        return
+    if path == "/revoke":
+        handle_revoke(s, conn, j)?
+        return
+    if j.acct < 0:
+        send_problem(conn, s, 400, "malformed", "kid required")
+        return
+    if path.starts_with("/acct/"):
+        mut idx = int(path.slice(6, path.len()))
+        if idx != j.acct:
+            send_problem(conn, s, 403, "unauthorized", "not your account")
+            return
+        if j.payload.len() > 0:
+            mut pd = Json.parse(j.payload)
+            mut p = pd.root()
+            if p.obj_has("status") and p.obj_get("status").get_str() == "deactivated": s.acct_status[idx] = "deactivated"
+            if p.obj_has("contact"): s.acct_contact[idx] = p.obj_get("contact").to_str()
+        send_json(conn, s, 200, acct_json(s, idx))
+        return
+    if path == "/key-change":
+        mut why = key_change(s, j)?
+        if why.len() > 0: send_problem(conn, s, 400, "malformed", why)
+        else: send_json(conn, s, 200, acct_json(s, j.acct))
+        return
+    if path == "/new-order":
+        mut pd = Json.parse(j.payload)
+        mut ids = pd.root().obj_get("identifiers")
+        mut types: List[str] = []
+        mut values: List[str] = []
+        mut azs = ""
+        mut i = 0
+        while i < ids.array_len():
+            mut e = ids.array_get(i)
+            mut ty = e.obj_get("type").get_str()
+            mut v = e.obj_get("value").get_str()
+            if ty != "dns" and ty != "ip":
+                send_problem(conn, s, 400, "unsupportedIdentifier", ty)
+                return
+            types.append(ty)
+            values.append(v)
+            mut wild = v.starts_with("*.")
+            if wild: v = v.slice(2, v.len())
+            s.az_type.append(ty)
+            s.az_value.append(v)
+            s.az_wild.append(wild)
+            s.az_status.append("pending")
+            s.az_token.append(AcmeJws.b64url(Digest.sha256(f"token-{len(s.az_type)}-{Clock.now_ms()}")))
+            s.az_err.append("")
+            s.az_acct.append(j.acct)
+            s.az_chal.append("")
+            if i > 0: azs = azs + ","
+            azs = azs + f"{len(s.az_type) - 1}"
+            i = i + 1
+        mut tj = ""
+        mut vj = ""
+        mut k = 0
+        while k < len(types):
+            if k > 0:
+                tj = tj + ","
+                vj = vj + ","
+            tj = tj + types[k]
+            vj = vj + values[k]
+            k = k + 1
+        s.ord_acct.append(j.acct)
+        s.ord_types.append(tj)
+        s.ord_values.append(vj)
+        s.ord_authz.append(azs)
+        s.ord_status.append("pending")
+        s.ord_cert.append(-1)
+        s.ord_polls.append(0)
+        mut o = len(s.ord_acct) - 1
+        send(conn, s, 201, order_json(s, o), "application/json", "Location", s.base + f"/order/{o}")
+        return
+    if path.starts_with("/authz/"):
+        mut a = int(path.slice(7, path.len()))
+        if s.az_chal[a].len() > 0 and f.delayed.load() == 0:
+            # once: still processing, come back later
+            f.delayed.store(1)
+            mut keep = s.az_status[a]
+            s.az_status[a] = "pending"
+            mut pending = authz_json(s, a)
+            s.az_status[a] = keep
+            send(conn, s, 200, pending, "application/json", "Retry-After", "1")
+            return
+        send_json(conn, s, 200, authz_json(s, a))
+        return
+    if path.starts_with("/chall/"):
+        mut rest = path.slice(7, path.len()).split_exact("/")
+        mut a = int(rest[0])
+        mut kind = rest[1]
+        if s.az_status[a] == "pending" and s.az_chal[a].len() == 0:
+            s.az_chal[a] = kind
+            mut why = validate(f, s, a, kind)
+            if why.len() == 0: s.az_status[a] = "valid"
+            else:
+                s.az_status[a] = "invalid"
+                s.az_err[a] = why
+        send(conn, s, 200, "{\"type\":\"" + kind + "\",\"url\":\"" + s.base + path + "\",\"token\":\"" + s.az_token[a] + "\",\"status\":\"processing\"}", "application/json", "Link", "<" + s.base + f"/authz/{a}>;rel=\"up\"")
+        return
+    if path.starts_with("/order/"):
+        mut o = int(path.slice(7, path.len()))
+        if s.ord_status[o] == "processing":
+            s.ord_polls[o] = s.ord_polls[o] + 1
+            if s.ord_polls[o] >= 2: s.ord_status[o] = "valid"
+            else:
+                send(conn, s, 200, order_json(s, o), "application/json", "Retry-After", "1")
+                return
+        send_json(conn, s, 200, order_json(s, o))
+        return
+    if path.starts_with("/finalize/"):
+        mut o = int(path.slice(10, path.len()))
+        update_order(s, o)
+        if s.ord_status[o] != "ready":
+            send_problem(conn, s, 403, "orderNotReady", "order is " + s.ord_status[o])
+            return
+        mut pd = Json.parse(j.payload)
+        mut csr_der = AcmeJws.unb64url(pd.root().obj_get("csr").get_str())?
+        mut csr = Csr.parse(csr_der)?
+        if not csr.verify():
+            send_problem(conn, s, 400, "badCSR", "signature")
+            return
+        mut want = s.ord_values[o].split_exact(",")
+        mut got = csr.names()
+        if len(want) != len(got) or not same_set(want, got):
+            send_problem(conn, s, 400, "badCSR", "names differ from the order")
+            return
+        f.csr_ok.add(1)
+        mut b = CertBuilder.init()
+        b.subject_cn(csr.common_name)
+        b.issuer = name_der("Fake Root CA")
+        mut i = 0
+        while i < len(got):
+            b.add_name(got[i])
+            i = i + 1
+        mut leaf = b.sign(csr.public_key_der, ca)?
+        b.issuer = name_der("Fake Alt Root")
+        mut leaf2 = b.sign(csr.public_key_der, alt)?
+        s.cert_chain.append(Pem.encode(leaf, "CERTIFICATE") + f.ca_cert)
+        s.cert_alt.append(Pem.encode(leaf2, "CERTIFICATE") + f.alt_cert)
+        s.cert_der.append(leaf)
+        s.cert_acct.append(j.acct)
+        s.cert_revoked.append(false)
+        s.cert_spki.append(csr.public_key_der)
+        s.ord_cert[o] = len(s.cert_der) - 1
+        s.ord_status[o] = "processing"
+        send(conn, s, 200, order_json(s, o), "application/json", "Retry-After", "1")
+        return
+    if path.starts_with("/cert/"):
+        mut rest2 = path.slice(6, path.len()).split_exact("/")
+        mut c = int(rest2[0])
+        if len(rest2) > 1:
+            send(conn, s, 200, s.cert_alt[c], "application/pem-certificate-chain", "Link", "<" + s.base + "/dir>;rel=\"index\"")
+        else:
+            send(conn, s, 200, s.cert_chain[c], "application/pem-certificate-chain", "Link", "<" + s.base + "/dir>;rel=\"index\", <" + s.base + f"/cert/{c}/alt>;rel=\"alternate\"")
+        return
+    send_problem(conn, s, 404, "malformed", "no such resource " + path)
+
+def same_set(a: List[str], b: List[str]) -> bool:
+    mut i = 0
+    while i < len(a):
+        mut found = false
+        mut k = 0
+        while k < len(b):
+            if a[i] == b[k]: found = true
+            k = k + 1
+        if not found: return false
+        i = i + 1
+    return true
+
+def check_eab(s: St, eab_json: str, jwk: str) -> str:
+    mut r: Result[str, str] = check_eab_inner(s, eab_json, jwk)
+    if r.is_err: return r.err
+    return r.ok
+
+def check_eab_inner(s: St, eab_json: str, jwk: str) throws str -> str:
+    mut d = Json.parse(eab_json)
+    mut r = d.root()
+    mut p64 = r.obj_get("protected").get_str()
+    mut y64 = r.obj_get("payload").get_str()
+    mut sig = AcmeJws.unb64url(r.obj_get("signature").get_str())?
+    mut pd = Json.parse(AcmeJws.unb64url(p64)?)
+    mut pr = pd.root()
+    if pr.obj_get("alg").get_str() != "HS256": return "EAB alg"
+    if pr.obj_get("kid").get_str() != EAB_KID: return "EAB kid"
+    if pr.obj_get("url").get_str() != s.base + "/new-acct-eab": return "EAB url"
+    if pr.obj_has("nonce"): return "EAB must not have a nonce"
+    if AcmeJws.canonical_jwk(AcmeJws.unb64url(y64)?)? != jwk: return "EAB payload is not the account key"
+    if Hmac.sha256_raw(EAB_SECRET, p64 + "." + y64) != sig: return "EAB MAC"
+    return ""
+
+def key_change(s: St, j: Jws) throws str -> str:
+    mut d = Json.parse(j.payload)
+    mut r = d.root()
+    mut p64 = r.obj_get("protected").get_str()
+    mut y64 = r.obj_get("payload").get_str()
+    mut sig = AcmeJws.unb64url(r.obj_get("signature").get_str())?
+    mut pd = Json.parse(AcmeJws.unb64url(p64)?)
+    mut pr = pd.root()
+    if not pr.obj_has("jwk"): return "inner JWS needs jwk"
+    if pr.obj_get("url").get_str() != s.base + "/key-change": return "inner url"
+    mut newjwk = AcmeJws.canonical_jwk(pr.obj_get("jwk").to_str())?
+    mut key = AcmeJws.public_key_from_jwk(newjwk)?
+    mut ok = AcmeJws.verify(key, pr.obj_get("alg").get_str(), p64 + "." + y64, sig)
+    key.dispose()
+    if not ok: return "inner signature"
+    mut ipd = Json.parse(AcmeJws.unb64url(y64)?)
+    mut ip = ipd.root()
+    if ip.obj_get("account").get_str() != s.base + f"/acct/{j.acct}": return "inner account"
+    if AcmeJws.canonical_jwk(ip.obj_get("oldKey").to_str())? != s.acct_jwk[j.acct]: return "oldKey"
+    if find_acct(s, newjwk) >= 0: return "key in use"
+    s.acct_jwk[j.acct] = newjwk
+    return ""
+
+def handle_revoke(s: St, conn: HttpConn, j: Jws) throws str:
+    mut pd = Json.parse(j.payload)
+    mut der = AcmeJws.unb64url(pd.root().obj_get("certificate").get_str())?
+    mut c = -1
+    mut i = 0
+    while i < len(s.cert_der):
+        if s.cert_der[i] == der: c = i
+        mut alt_der = Pem.decode(s.cert_alt[i], "CERTIFICATE")?
+        if alt_der == der: c = i
+        i = i + 1
+    if c < 0:
+        send_problem(conn, s, 404, "malformed", "unknown certificate")
+        return
+    if s.cert_revoked[c]:
+        send_problem(conn, s, 400, "alreadyRevoked", "already revoked")
+        return
+    if j.acct >= 0:
+        if s.cert_acct[c] != j.acct:
+            send_problem(conn, s, 403, "unauthorized", "not your certificate")
+            return
+    else:
+        mut a = AcmeJws.public_key_from_jwk(j.jwk)?
+        mut b = PKey.from_der(s.cert_spki[c])?
+        mut same = a.public_bytes() == b.public_bytes()
+        a.dispose()
+        b.dispose()
+        if not same:
+            send_problem(conn, s, 403, "unauthorized", "key does not match the certificate")
+            return
+    s.cert_revoked[c] = true
+    send_json(conn, s, 200, "")
+
+# ─── client side ─────────────────────────────────────────────────────────────
+
+def dns_hook(name: str, value: str, present: bool) -> bool:
+    mut cur = ""
+    if Fs.is_file(DNS_FILE): cur = read_file(DNS_FILE)
+    mut line = name + "=" + value + "\n"
+    if present: cur = cur + line
+    else: cur = cur.replace(line, "")
+    return write_file(DNS_FILE, cur)
+
+def make_client(dir: str) -> AcmeClient:
+    mut c = AcmeClient.init(f"http://127.0.0.1:{ACME_PORT}" + dir)
+    c.http_port = HTTP01_PORT
+    c.tls_port = TLS01_PORT
+    c.poll_interval_ms = 50
+    c.set_contacts(["admin@example.test"])
+    c.agree_to_terms(true)
+    return c
+
+def chain_ok(t: TestRunner, ca_pem: str, cert: AcmeCertificate, host: str, label: str) throws str:
+    mut store = TrustStore.empty()
+    store.add_pem(ca_pem)
+    mut certs = Certificate.all_from_pem(cert.cert_pem)?
+    t.assert_eq_int(len(certs), 2, label + ": leaf + issuer")
+    t.assert_eq_int(X509.verify(store, certs, host, 0, PURPOSE_SERVER), 0, label + ": chain verifies for " + host)
+    mut cfg: Result[TlsServerConfig, str] = TlsServerConfig.from_pem(cert.cert_pem, cert.key_pem)
+    t.assert_true(cfg.is_ok, label + ": cert + key load into TlsServerConfig")
+    store.dispose()
+
+def test_acme(t: TestRunner) throws str:
+    t.section("ACME against a fake CA")
+    Fs.delete(DNS_FILE)
+    mut cak = KeyPair.generate_ec(CURVE_P256)?
+    mut cab = CertBuilder.init()
+    cab.subject_cn("Fake Root CA")
+    cab.is_ca = true
+    cab.server_auth = false
+    mut ca_pem = Pem.encode(cab.self_signed(cak)?, "CERTIFICATE")
+    mut altk = KeyPair.generate_ec(CURVE_P256)?
+    mut alb = CertBuilder.init()
+    alb.subject_cn("Fake Alt Root")
+    alb.is_ca = true
+    alb.server_auth = false
+    mut alt_pem = Pem.encode(alb.self_signed(altk)?, "CERTIFICATE")
+    shared f = Fake()
+    f.ca_key = cak.private_pem()
+    f.ca_cert = ca_pem
+    f.alt_key = altk.private_pem()
+    f.alt_cert = alt_pem
+    f.ready = Atomic.new(0)
+    f.done = Atomic.new(0)
+    f.inject_bad_nonce = Atomic.new(0)
+    f.bad_nonce_sent = Atomic.new(0)
+    f.jws_ok = Atomic.new(0)
+    f.jws_rejected = Atomic.new(0)
+    f.eab_ok = Atomic.new(0)
+    f.csr_ok = Atomic.new(0)
+    f.http_checks = Atomic.new(0)
+    f.dns_checks = Atomic.new(0)
+    f.tls_checks = Atomic.new(0)
+    f.delayed = Atomic.new(0)
+    mut th = Thread.spawn(fake_main, f)
+    mut w = 0
+    while f.ready.load() == 0 and w < 5000:
+        Thread.sleep(10)
+        w = w + 10
+    t.assert_eq_int(f.ready.load(), 1, "fake CA listening")
+    mut r: Result[bool, str] = acme_flows(t, f, ca_pem, alt_pem)
+    t.assert_true(r.is_ok, "ACME flows completed")
+    if r.is_err: print("  error: " + r.err)
+    mut s = HttpSession.init()
+    s.get(f"http://127.0.0.1:{ACME_PORT}/quit")
+    th.join()
+    t.assert_eq_int(f.jws_rejected.load(), 0, "no JWS failed signature verification")
+    t.assert_true(f.jws_ok.load() > 30, "fake CA verified the client's JWS signatures")
+    Fs.delete(DNS_FILE)
+
+def acme_flows(t: TestRunner, f: Shared[Fake], ca_pem: str, alt_pem: str) throws str -> bool:
+    # http-01, ES256 account, one injected badNonce
+    mut c = make_client("/dir")
+    f.inject_bad_nonce.store(1)
+    mut kid = c.register()?
+    t.assert_eq_int(f.bad_nonce_sent.load(), 1, "badNonce was injected")
+    t.assert_true(kid.ends_with("/acct/0"), "account created after a badNonce retry")
+    t.assert_eq_str(c.directory()?.terms_of_service, f"http://127.0.0.1:{ACME_PORT}/tos", "directory meta")
+    mut again = c.register()?
+    t.assert_eq_str(again, kid, "registering the same key finds the account")
+    mut cert = c.obtain(["a.test", "www.a.test"], CHALLENGE_HTTP01)?
+    chain_ok(t, ca_pem, cert, "www.a.test", "http-01")?
+    t.assert_true(f.http_checks.load() == 2, "two http-01 validations hit the built-in responder")
+    t.assert_eq_int(f.delayed.load(), 1, "authorization polled again after Retry-After")
+    t.assert_eq_int(len(cert.alternates), 1, "alternate chain advertised")
+    t.assert_true(cert.not_after > Clock.timestamp() + 80 * 86400, "not_after parsed")
+    t.assert_true(not AcmeClient.needs_renewal(cert.cert_pem, 30), "fresh 90-day certificate needs no renewal at 30 days")
+    t.assert_true(acme_needs_renewal(cert.cert_pem, 100), "renewal due within 100 days")
+    t.assert_true(acme_needs_renewal("garbage", 1), "unparseable certificate needs renewal")
+    mut chain = c.download(cert.url)?
+    t.assert_eq_str(chain.pem, cert.cert_pem, "download() returns the same chain")
+
+    # dns-01 with a wildcard
+    c.set_dns01_hook(dns_hook)
+    mut wc = c.obtain(["*.b.test", "b.test"], CHALLENGE_DNS01)?
+    chain_ok(t, ca_pem, wc, "x.b.test", "dns-01 wildcard")?
+    t.assert_eq_int(f.dns_checks.load(), 2, "two dns-01 validations")
+    mut left = ""
+    if Fs.is_file(DNS_FILE): left = read_file(DNS_FILE)
+    t.assert_eq_str(left, "", "dns-01 records removed afterwards")
+
+    # wildcard needs dns-01
+    mut bad: Result[AcmeCertificate, str] = c.obtain(["*.c.test"], CHALLENGE_HTTP01)
+    t.assert_true(bad.is_err and bad.err.find("dns-01") >= 0, "wildcard with http-01 is refused")
+
+    # tls-alpn-01: DNS name and IP address, preferred alternate chain
+    c.preferred_chain = "Fake Alt Root"
+    mut tk = KeyPair.generate_ec(CURVE_P256)?
+    mut tc = c.obtain_with_key(["c.test", "127.0.0.1"], CHALLENGE_TLS_ALPN01, tk)?
+    t.assert_eq_int(f.tls_checks.load(), 2, "two tls-alpn-01 validations (SNI name + reverse IP name)")
+    chain_ok(t, alt_pem, tc, "127.0.0.1", "tls-alpn-01 + alternate chain")?
+    t.assert_eq_str(tc.key_pem, tk.private_pem(), "own certificate key used")
+    c.preferred_chain = ""
+
+    # IP identifier over http-01
+    mut ipc = c.obtain(["127.0.0.1"], CHALLENGE_HTTP01)?
+    chain_ok(t, ca_pem, ipc, "127.0.0.1", "http-01 IP identifier")?
+
+    # revocation: by account, again (refused), by certificate key
+    c.revoke(cert.cert_pem, REVOKE_SUPERSEDED)?
+    mut rv: Result[bool, str] = revoke_again(c, cert.cert_pem)
+    t.assert_true(rv.is_err and rv.err.find("alreadyRevoked") >= 0, "second revocation reports alreadyRevoked")
+    mut other = make_client("/dir")
+    other.revoke_with_key(tc.cert_pem, tk, 0)?
+    t.assert_true(true, "revoked with the certificate key")
+
+    # key rollover
+    mut nk = KeyPair.generate_ec(CURVE_P384)?
+    c.change_key(nk)?
+    mut c2 = make_client("/dir")
+    c2.set_account_key(nk)
+    t.assert_eq_str(c2.find_account()?, kid, "new key (ES384) finds the account after rollover")
+    mut c3 = make_client("/dir")
+    c3.set_account_key(KeyPair.generate_ec(CURVE_P256)?)
+    mut nf: Result[str, str] = c3.find_account()
+    t.assert_true(nf.is_err and nf.err.find("accountDoesNotExist") >= 0, "unknown key: accountDoesNotExist")
+    mut o2 = c.new_order(["d.test"])?
+    t.assert_eq_str(o2.status, "pending", "orders work with the rolled-over key")
+    c.update_contacts(["ops@example.test"])?
+    t.assert_true(c.account()?.find("mailto:ops@example.test") >= 0, "contacts updated")
+
+    # RS256 account with External Account Binding
+    mut e = make_client("/dir-eab")
+    mut noeab: Result[str, str] = e.register()
+    t.assert_true(noeab.is_err and noeab.err.find("External Account Binding") >= 0, "EAB required by the directory")
+    e.set_account_key(KeyPair.from_pem(rsa_key_pem())?)
+    e.set_external_account_binding(EAB_KID, AcmeJws.b64url(EAB_SECRET))
+    mut ekid = e.register()?
+    t.assert_eq_int(f.eab_ok.load(), 1, "EAB verified by the CA")
+    t.assert_true(ekid.find("/acct/") > 0, "RS256 account created")
+    mut ec = e.obtain(["e.test"], CHALLENGE_HTTP01)?
+    chain_ok(t, ca_pem, ec, "e.test", "RS256 account")?
+
+    # deactivation
+    c.deactivate_account()?
+    mut dead: Result[AcmeOrder, str] = c.new_order(["f.test"])
+    t.assert_true(dead.is_err and dead.err.find("unauthorized") >= 0, "deactivated account is refused")
+    t.assert_true(f.csr_ok.load() == 5, "five CSRs verified by the CA")
+    return true
+
+def revoke_again(c: AcmeClient, pem: str) throws str -> bool:
+    c.revoke(pem, 0)?
+    return true
+
+def main():
+    mut t = TestRunner.init("144_acme")
+    mut r1: Result[bool, str] = run1(t)
+    if r1.is_err: t.assert_true(false, "vectors: " + r1.err)
+    mut r2: Result[bool, str] = run2(t)
+    if r2.is_err: t.assert_true(false, "DER: " + r2.err)
+    mut r3: Result[bool, str] = run3(t)
+    if r3.is_err: t.assert_true(false, "routes: " + r3.err)
+    mut r4: Result[bool, str] = run4(t)
+    if r4.is_err: t.assert_true(false, "acme: " + r4.err)
+    t.summary()
+
+def run1(t: TestRunner) throws str -> bool:
+    test_vectors(t)?
+    return true
+def run2(t: TestRunner) throws str -> bool:
+    test_der(t)?
+    return true
+def run3(t: TestRunner) throws str -> bool:
+    test_routes(t)?
+    return true
+def run4(t: TestRunner) throws str -> bool:
+    test_acme(t)?
+    return true

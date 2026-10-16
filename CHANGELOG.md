@@ -110,6 +110,18 @@ added here as each phase lands.
     docProps. Output checked with openpyxl 3.1.5; workbooks written by openpyxl are read back.
   - Cell reference helpers (`xlsx_col_name`, `xlsx_ref`, `CellRange.parse`, ...) and
     `std.encoding.xlsx_xml`, the small pull XML reader it uses.
+- **`std.net.acme`** — ACME client (RFC 8555) for Let's Encrypt and other CAs: accounts with
+  ES256 / ES384 / RS256 keys, contacts, External Account Binding, key rollover and deactivation;
+  orders for DNS names (wildcards) and IP addresses (RFC 8738); http-01, dns-01 (hook) and
+  tls-alpn-01 (RFC 8737) with built-in responders or hooks; nonce handling with badNonce retry,
+  Retry-After polling, alternate chains, revocation, `needs_renewal`, and
+  `AcmeClient.obtain(names, type)?` returning cert + key PEM for `TlsServerConfig`. Tested
+  against a fake CA and checked against Pebble.
+- **`std.crypto.der`** (ASN.1 DER encoder / decoder) and **`std.crypto.csr`** (`KeyPair` with
+  SPKI / PKCS#8 encodings, PKCS#10 CSR build / parse / verify, `CertBuilder` for self-signed and
+  CA-signed X.509 certificates).
+- `TlsServerConfig.add_route(server_name, alpn, other)` selects another certificate by SNI and / or
+  ALPN (e.g. `acme-tls/1`).
 - **TLS 1.3 server** in `std.net.tls`:
   - `TlsServerConfig` (PEM chain + RSA / EC key, ALPN), `TlsListener` and `TlsStream.accept_fd`;
     certificates RSA-PSS and ECDSA P-256 / P-384, key exchange X25519 / P-256 / P-384 with
@@ -324,6 +336,8 @@ added here as each phase lands.
 
 ### Fixed
 - Compiler: a user method named `as_str` is no longer treated as the builtin cast; `Dict[int, V].has` is true for a stored 0; `return list[i]` / `self.f = list[i]` of a str retain the element; an owned class local or list slot reassigned from a list element retains it; `List[List[T]]` element reads and slot assignment compile; nested f-string format specs (`f"{x:.{p}g}"`, `{s:>{w}}`) are applied.
+- TLS server: ClientHellos listing more than 16 cipher suites (Go's crypto/tls lists 19, the TLS 1.3
+  ones last) failed with handshake_failure, so Go clients such as ACME validators could not connect.
 - `std.net.http` / `std.net.https` declared `Map[str]` (one type argument) for
   the response/header maps, which fails to compile
   (`'V' undeclared` in `HttpClientResponse_header`) as soon as the module is

@@ -586,3 +586,41 @@ leftmost wildcards, IP SANs). Returns 0 or a negative code (`X509.error_text`). 
 
 Tested by `tests/lang/106_x509_tls.tr`; the TLS client was also checked against OpenSSL `s_server` (every cipher
 suite, HelloRetryRequest, KeyUpdate) and public HTTPS sites.
+
+## DER, keys, CSRs and certificates — `std.crypto.der`, `std.crypto.csr`
+
+`std.crypto.der` encodes and decodes ASN.1 DER: `Der.seq`, `set_of`, `integer`, `uint` (big-endian
+magnitude), `oid("1.2.840.10045.2.1")`, `octets`, `bits`, `utf8`, `ia5`, `boolean`, `null_value`,
+`time(unix)` (UTCTime, GeneralizedTime from 2050), `ctx(n, ...)` / `ctx_prim(n, ...)` for `[n]` tags;
+`Der.parse(der)?` (one element), `Der.children(node)?`, `DerReader` (`next()?`, `expect(tag)?`),
+`Der.oid_text`, `uint_bytes`, `bit_bytes`, `time_value(node)?`.
+
+`std.crypto.csr`:
+
+```tauraro
+from std.crypto.csr import KeyPair, Csr, CertBuilder, name_der
+from std.crypto.pk import CURVE_P256, Pem
+
+mut key = KeyPair.generate_ec(CURVE_P256)?               # or KeyPair.from_pem(text)? (RSA / EC)
+mut csr_pem = Csr.build_pem(key, ["example.com", "www.example.com", "192.0.2.1"])?
+mut csr = Csr.from_pem(csr_pem)?                         # csr.dns_names, csr.ip_addresses, csr.verify()
+
+mut ca = KeyPair.generate_ec(CURVE_P256)?
+mut b = CertBuilder.init()                               # random serial, valid 90 days
+b.subject_cn("Test CA")
+b.is_ca = true
+mut ca_pem = Pem.encode(b.self_signed(ca)?, "CERTIFICATE")
+mut leaf = CertBuilder.init()
+leaf.subject_cn("example.com")
+leaf.issuer = name_der("Test CA")
+leaf.add_name("example.com")
+mut leaf_der = leaf.sign(key.spki(), ca)?                # signed by the CA key
+```
+
+`KeyPair`: `pkey` (a `PKey`), `kind`, `spki()` (SubjectPublicKeyInfo), `private_pem()` (PKCS#8 for EC),
+`public_pem()`, `rsa_n` / `rsa_e` / `ec_x` / `ec_y`, `sign_der(data)?` (X.509 form), `sign_jose(data)?`
+(JWS form), `rsa_from_components(...)?`, `ec_from_scalar(curve, d)?`. `CertBuilder` adds
+subjectAltName, basicConstraints / keyUsage for CAs, keyUsage + serverAuth for leaves, and any
+`add_extension(oid, critical, value_der)`. `cert_extension(der, oid)?` and `cert_names(der)?` read
+extensions back. Signatures: SHA-256 with RSA (PKCS#1 v1.5) and P-256, SHA-384 with P-384. Generated
+CSRs and certificates pass `openssl req -verify` / `openssl verify`. RSA keys cannot be generated.

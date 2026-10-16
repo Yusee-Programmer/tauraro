@@ -846,6 +846,10 @@ typedef struct {
     void* key; int key_kind;           /* 1 RSA, 2 P-256, 3 P-384 */
     char alpn[256];                    /* comma-separated, server preference */
     char err[160];
+    /* routes: a ClientHello whose SNI equals route_sni[i] ("" = any) and that
+     * offers ALPN route_alpn[i] ("" = any) is served with routes[i] instead
+     * (e.g. an RFC 8737 "acme-tls/1" challenge certificate). Not owned. */
+    void* routes[16]; char route_sni[16][256]; char route_alpn[16][64]; int nroutes;
 } tls_srv_cfg;
 
 void trc_tls_server_config_free(void* h) {
@@ -877,6 +881,21 @@ void* trc_tls_server_config(const char* ders, const int64_t* lens, int64_t count
     if (alpn) { size_t al = strlen(alpn); if (al >= sizeof g->alpn) al = sizeof g->alpn - 1; memcpy(g->alpn, alpn, al); g->alpn[al] = 0; }
     return g;
 }
+/* Add a route (see tls_srv_cfg); returns 0, or -1 when the table is full. */
+int64_t trc_tls_server_config_route(void* h, const char* sni, int64_t slen, const char* alpn, int64_t alen, void* alt) {
+    tls_srv_cfg* g = (tls_srv_cfg*)h; int i;
+    if (!g || !alt || slen < 0 || slen > 255 || alen < 0 || alen > 63) return -1;
+    for (i = 0; i < g->nroutes; i++)   /* same key: replace */
+        if (strlen(g->route_sni[i]) == (size_t)slen && memcmp(g->route_sni[i], sni, (size_t)slen) == 0 &&
+            strlen(g->route_alpn[i]) == (size_t)alen && memcmp(g->route_alpn[i], alpn, (size_t)alen) == 0) { g->routes[i] = alt; return 0; }
+    if (g->nroutes >= 16) return -1;
+    i = g->nroutes++;
+    memcpy(g->route_sni[i], sni, (size_t)slen); g->route_sni[i][slen] = 0;
+    memcpy(g->route_alpn[i], alpn, (size_t)alen); g->route_alpn[i][alen] = 0;
+    g->routes[i] = alt;
+    return 0;
+}
+void trc_tls_server_config_clear_routes(void* h) { tls_srv_cfg* g = (tls_srv_cfg*)h; if (g) g->nroutes = 0; }
 int64_t trc_tls_server_config_error(void* h, char* out, int64_t cap) {
     tls_srv_cfg* g = (tls_srv_cfg*)h; size_t n;
     if (!g) { memcpy(out, "TLS server: out of memory", 25); return 25; }
@@ -886,9 +905,9 @@ int64_t trc_tls_server_config_error(void* h, char* out, int64_t cap) {
 
 typedef struct {
     const u8* sid; size_t sid_len;
-    int suites[16]; int nsuites;
-    int groups[16]; int ngroups;
-    int sigalgs[32]; int nsigalgs;
+    int suites[128]; int nsuites;              /* Go clients list TLS 1.3 suites after ~16 others */
+    int groups[64]; int ngroups;
+    int sigalgs[64]; int nsigalgs;
     int share_group[8]; const u8* share[8]; size_t share_len[8]; int nshares;
     int tls13;
     const u8* alpn; size_t alpn_len;            /* ProtocolNameList body */
@@ -905,7 +924,7 @@ static int parse_client_hello(tls_conn* c, const u8* m, size_t n, ch_info* h) {
     if (k + 2 > n) goto bad;
     l = ((size_t)m[k] << 8) | m[k + 1]; k += 2;
     if (k + l > n || (l & 1)) goto bad;
-    { size_t i; for (i = 0; i < l; i += 2) if (h->nsuites < 16) h->suites[h->nsuites++] = (m[k + i] << 8) | m[k + i + 1]; }
+    { size_t i; for (i = 0; i < l; i += 2) if (h->nsuites < 128) h->suites[h->nsuites++] = (m[k + i] << 8) | m[k + i + 1]; }
     k += l;
     if (k + 1 > n) goto bad;
     l = m[k++]; if (k + l > n) goto bad; k += l;           /* compression methods */
@@ -926,11 +945,11 @@ static int parse_client_hello(tls_conn* c, const u8* m, size_t n, ch_info* h) {
         } else if (et == 10) {                              /* supported_groups */
             size_t gl, i; if (el < 2) goto bad; gl = ((size_t)d[0] << 8) | d[1];
             if (2 + gl > el) goto bad;
-            for (i = 0; i + 1 < gl; i += 2) if (h->ngroups < 16) h->groups[h->ngroups++] = (d[2 + i] << 8) | d[3 + i];
+            for (i = 0; i + 1 < gl; i += 2) if (h->ngroups < 64) h->groups[h->ngroups++] = (d[2 + i] << 8) | d[3 + i];
         } else if (et == 13) {                              /* signature_algorithms */
             size_t sl, i; if (el < 2) goto bad; sl = ((size_t)d[0] << 8) | d[1];
             if (2 + sl > el) goto bad;
-            for (i = 0; i + 1 < sl; i += 2) if (h->nsigalgs < 32) h->sigalgs[h->nsigalgs++] = (d[2 + i] << 8) | d[3 + i];
+            for (i = 0; i + 1 < sl; i += 2) if (h->nsigalgs < 64) h->sigalgs[h->nsigalgs++] = (d[2 + i] << 8) | d[3 + i];
         } else if (et == 51) {                              /* key_share */
             size_t kl, p = 2; if (el < 2) goto bad; kl = ((size_t)d[0] << 8) | d[1];
             if (2 + kl > el) goto bad;
@@ -979,6 +998,34 @@ static void pick_alpn(const tls_srv_cfg* g, const ch_info* h, char* out) {
     }
 }
 
+static int ieq_ascii(const char* a, const char* b, size_t n) {
+    size_t i;
+    for (i = 0; i < n; i++) { int x = (unsigned char)a[i], y = (unsigned char)b[i]; if (x >= 'A' && x <= 'Z') x += 32; if (y >= 'A' && y <= 'Z') y += 32; if (x != y) return 0; }
+    return 1;
+}
+static int ch_offers_alpn(const ch_info* h, const char* p) {
+    size_t q = 0, n = strlen(p);
+    if (!h->alpn) return 0;
+    while (q < h->alpn_len) {
+        size_t pl = h->alpn[q];
+        if (q + 1 + pl > h->alpn_len) break;
+        if (pl == n && memcmp(h->alpn + q + 1, p, n) == 0) return 1;
+        q += 1 + pl;
+    }
+    return 0;
+}
+/* The configuration a ClientHello is routed to (first matching route, else g). */
+static tls_srv_cfg* route_cfg(tls_srv_cfg* g, const ch_info* h) {
+    int i;
+    for (i = 0; i < g->nroutes; i++) {
+        const char* rs = g->route_sni[i]; const char* ra = g->route_alpn[i];
+        if (rs[0]) { size_t a = strlen(rs), b = strlen(h->sni); if (a != b || ieq_ascii(rs, h->sni, a) == 0) continue; }
+        if (ra[0] && !ch_offers_alpn(h, ra)) continue;
+        return (tls_srv_cfg*)g->routes[i];
+    }
+    return g;
+}
+
 static int server_handshake(tls_conn* c, tls_srv_cfg* g) {
     u8 *msg = NULL; size_t mlen; int type, rc = -1, suite = 0, hash = 256, hl = 32, group = 0, scheme = 0, hrr = 0;
     ch_info ch; u8 random[32], shared[48], x_priv[32], x_pub[32], base[32] = {9}, pub[97]; size_t publen = 0, slen = 0;
@@ -994,6 +1041,10 @@ static int server_handshake(tls_conn* c, tls_srv_cfg* g) {
         if (type != 1) { send_alert(c, 2, 10); tls_fail(c, "TLS: expected ClientHello"); goto out; }
         if (parse_client_hello(c, msg, mlen, &ch) < 0) goto out;
         if (!ch.tls13) { send_alert(c, 2, 70); tls_fail(c, "TLS: client does not offer TLS 1.3"); goto out; }
+        if (!hrr && g->nroutes) {
+            g = route_cfg(g, &ch);
+            if (g->err[0]) { send_alert(c, 2, 80); tls_fail(c, g->err); goto out; }
+        }
         if (hrr && (ch.sid_len != sid_len || memcmp(ch.sid, sid_copy, sid_len) != 0)) { send_alert(c, 2, 47); tls_fail(c, "TLS: ClientHello changed after HelloRetryRequest"); goto out; }
         sid_len = ch.sid_len; memcpy(sid_copy, ch.sid, sid_len);
         if (!suite) {
