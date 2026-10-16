@@ -105,6 +105,18 @@ added here as each phase lands.
 - **HTTP compression** — `HttpSession` sends `Accept-Encoding: gzip, deflate, br` for in-memory
   requests and decodes the body (`reply.content_encoding`, `set_decompress(false)`); downloads and
   streaming keep the raw bytes.
+- **`std.net.mqtt`** — MQTT 3.1.1 and 5.0 client over TCP, TLS 1.3 (`std.net.tls`) or
+  WebSocket: CONNECT with clean start / sessions, keep-alive, will, credentials and v5
+  properties (session expiry, receive maximum, topic alias maximum, user properties); PUBLISH at
+  QoS 0 / 1 / 2 with the full PUBACK / PUBREC / PUBREL / PUBCOMP flows both ways, packet-id
+  management, retained messages, outgoing and incoming topic aliases; SUBSCRIBE with v5 options
+  (no-local, retain-as-published, retain handling, subscription ids) and UNSUBSCRIBE; reason codes;
+  DISCONNECT with reason; automatic reconnect with backoff that resends in-flight messages and
+  re-subscribes; `next_message(timeout)` or `on_message` callbacks. Public packet codec, topic
+  filter matching (`+`, `#`, `$` topics) and `MqttBroker`, a small single-threaded broker for
+  tests and local use (wildcards, QoS 0-2, retained and will messages, takeover, persistent
+  subscriptions, WebSocket listener). Checked against test.mosquitto.org, broker.emqx.io and the
+  paho-mqtt client.
 - String escapes `\xHH` (a byte), `\uXXXX` and `\UXXXXXXXX` (a code point as UTF-8); `str.rfind`
   (alias of `last_index_of`); `str.split_exact(sep)`, Python-style splitting on a whole substring
   that keeps empty parts (`split` splits on any byte of `sep` and drops empty parts).

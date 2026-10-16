@@ -1,0 +1,697 @@
+# tests/lang/143_mqtt.tr
+# std.net.mqtt: packet codec checked against byte vectors written from the
+# OASIS MQTT 3.1.1 / 5.0 specifications, topic filter matching (the spec's
+# own examples), URL options, and end-to-end client <-> MqttBroker traffic
+# (3.1.1 and 5.0, TCP and WebSocket) with the broker running on a thread.
+# In-flight resend after a reconnect is checked against a scripted server
+# that inspects every packet the client puts on the wire.
+
+from std.test import TestRunner
+from std.net.tcp import TcpStream, TcpListener
+from std.net.mqtt import MqttClient, MqttOptions, MqttMessage, MqttProps, MqttPacket, MqttBroker
+from std.net.mqtt import mqtt_topic_matches, mqtt_valid_filter, mqtt_valid_topic, mqtt_frame_len, mqtt_encode_varint, mqtt_sub_options, mqtt_reason_name
+from std.net.mqtt import MQTT_V311, MQTT_V5, MQTT_TCP, MQTT_TLS, MQTT_WS
+from std.net.mqtt import MQTT_CONNECT, MQTT_CONNACK, MQTT_PUBLISH, MQTT_PUBACK, MQTT_PUBREC, MQTT_PUBREL, MQTT_PUBCOMP, MQTT_SUBSCRIBE, MQTT_SUBACK, MQTT_UNSUBACK, MQTT_PINGREQ, MQTT_DISCONNECT
+from std.encoding.hex import Hex
+
+const PORT_TCP = 18431
+const PORT_WS = 18432
+const PORT_SCRIPT = 18433
+
+def hx(s: str) -> str: return Hex.encode(s)
+
+def unhex(h: str) -> str: return Hex.decode(h)
+
+def dec(h: str, v: int) throws str -> MqttPacket:
+    return MqttPacket.decode(unhex(h), v)?
+
+# ── Codec ───────────────────────────────────────────────────────────────────
+
+def test_varint(t: TestRunner):
+    t.section("variable byte integer (spec table 1.1 / 2.4 boundaries)")
+    t.assert_eq_str(hx(mqtt_encode_varint(0)), "00", "0")
+    t.assert_eq_str(hx(mqtt_encode_varint(127)), "7f", "127")
+    t.assert_eq_str(hx(mqtt_encode_varint(128)), "8001", "128")
+    t.assert_eq_str(hx(mqtt_encode_varint(16383)), "ff7f", "16383")
+    t.assert_eq_str(hx(mqtt_encode_varint(16384)), "808001", "16384")
+    t.assert_eq_str(hx(mqtt_encode_varint(2097151)), "ffff7f", "2097151")
+    t.assert_eq_str(hx(mqtt_encode_varint(2097152)), "80808001", "2097152")
+    t.assert_eq_str(hx(mqtt_encode_varint(268435455)), "ffffff7f", "268435455")
+    t.assert_eq_int(mqtt_frame_len(unhex("30")), 0, "frame: header only -> need more")
+    t.assert_eq_int(mqtt_frame_len(unhex("3005000161")), 0, "frame: partial body -> need more")
+    t.assert_eq_int(mqtt_frame_len(unhex("c000d000")), 2, "frame: first of two packets")
+    t.assert_eq_int(mqtt_frame_len(unhex("30ffffffff01")), -1, "frame: 5-byte remaining length is malformed")
+
+def test_encode(t: TestRunner):
+    t.section("encode")
+    # CONNECT 3.1.1, spec 3.1.2.10 example: flags 0xCE, keep alive 10.
+    mut c = MqttPacket.new(MQTT_CONNECT)
+    c.version = MQTT_V311
+    c.clean_start = true
+    c.keep_alive = 10
+    c.client_id = "c"
+    c.has_will = true
+    c.will_topic = "w"
+    c.will_payload = "p"
+    c.will_qos = 1
+    c.has_username = true
+    c.username = "u"
+    c.has_password = true
+    c.password = "pw"
+    t.assert_eq_str(hx(c.encode(MQTT_V311)), "101a00044d51545404ce000a00016300017700017000017500027077", "CONNECT 3.1.1")
+    # CONNECT 5.0 with session expiry 0x78 and receive maximum 20.
+    mut c5 = MqttPacket.new(MQTT_CONNECT)
+    c5.version = MQTT_V5
+    c5.keep_alive = 60
+    c5.client_id = "id"
+    c5.props.session_expiry = 120
+    c5.props.receive_maximum = 20
+    t.assert_eq_str(hx(c5.encode(MQTT_V5)), "101700044d5154540502003c08110000007821001400026964", "CONNECT 5.0 with properties")
+    # PUBLISH QoS 1, 3.1.1 and 5.0 (content type property).
+    mut p = MqttPacket.publish("t", "x", 1, false)
+    p.packet_id = 1
+    t.assert_eq_str(hx(p.encode(MQTT_V311)), "32060001740001" + "78", "PUBLISH 3.1.1 QoS 1")
+    p.props.content_type = "a"
+    t.assert_eq_str(hx(p.encode(MQTT_V5)), "320b00017400010403000161" + "78", "PUBLISH 5.0 with content type")
+    mut r = MqttPacket.publish("a/b", "", 0, true)
+    r.dup = false
+    t.assert_eq_str(hx(r.encode(MQTT_V311)), "3105" + "0003612f62", "PUBLISH QoS 0 retained, empty payload")
+    # SUBSCRIBE, spec 3.8.3 example (a/b QoS 1, c/d QoS 2, id 10).
+    mut s = MqttPacket.new(MQTT_SUBSCRIBE)
+    s.packet_id = 10
+    s.filters.append("a/b")
+    s.sub_options.append(1)
+    s.filters.append("c/d")
+    s.sub_options.append(2)
+    t.assert_eq_str(hx(s.encode(MQTT_V311)), "820e000a0003612f62010003632f6402", "SUBSCRIBE 3.1.1")
+    # 5.0 subscription options: QoS 1 + no-local + retain-as-published + retain handling 2.
+    mut s5 = MqttPacket.new(MQTT_SUBSCRIBE)
+    s5.packet_id = 2
+    s5.props.subscription_ids.append(300)
+    s5.filters.append("x/#")
+    s5.sub_options.append(mqtt_sub_options(1, true, true, 2))
+    t.assert_eq_str(hx(s5.encode(MQTT_V5)), "820c0002030bac020003782f232d", "SUBSCRIBE 5.0 with subscription id and options")
+    # Acks.
+    t.assert_eq_str(hx(MqttPacket.ack(MQTT_PUBACK, 1, 0).encode(MQTT_V5)), "40020001", "PUBACK 5.0 success (short form)")
+    t.assert_eq_str(hx(MqttPacket.ack(MQTT_PUBACK, 1, 0x10).encode(MQTT_V5)), "4003000110", "PUBACK 5.0 reason 0x10")
+    t.assert_eq_str(hx(MqttPacket.ack(MQTT_PUBREL, 0x1234, 0).encode(MQTT_V311)), "62021234", "PUBREL flags 0010")
+    t.assert_eq_str(hx(MqttPacket.new(MQTT_PINGREQ).encode(MQTT_V311)), "c000", "PINGREQ")
+    t.assert_eq_str(hx(MqttPacket.ack(MQTT_DISCONNECT, 0, 0).encode(MQTT_V311)), "e000", "DISCONNECT 3.1.1")
+    t.assert_eq_str(hx(MqttPacket.ack(MQTT_DISCONNECT, 0, 4).encode(MQTT_V5)), "e00104", "DISCONNECT 5.0 with will")
+    mut ua = MqttPacket.ack(MQTT_UNSUBACK, 7, 0)
+    ua.reason_codes.append(0)
+    ua.reason_codes.append(0x11)
+    t.assert_eq_str(hx(ua.encode(MQTT_V311)), "b0020007", "UNSUBACK 3.1.1 has no reason codes")
+    t.assert_eq_str(hx(ua.encode(MQTT_V5)), "b005000700" + "0011", "UNSUBACK 5.0 reason codes")
+
+def test_decode(t: TestRunner):
+    t.section("decode")
+    mut r1: Result[MqttPacket, str] = dec("101a00044d51545404ce000a00016300017700017000017500027077", MQTT_V311)
+    t.assert_true(r1.is_ok, "CONNECT decodes")
+    if r1.is_ok:
+        mut c = r1.ok
+        t.assert_eq_int(c.version, 4, "protocol level")
+        t.assert_true(c.clean_start and c.has_will and c.has_username and c.has_password, "connect flags")
+        t.assert_eq_int(c.will_qos, 1, "will QoS")
+        t.assert_eq_int(c.keep_alive, 10, "keep alive")
+        t.assert_eq_str(c.client_id + c.will_topic + c.will_payload + c.username + c.password, "cwpupw", "payload fields")
+    mut r2: Result[MqttPacket, str] = dec("101700044d5154540502003c08110000007821001400026964", MQTT_V311)
+    t.assert_true(r2.is_ok, "CONNECT 5.0 decodes (version from the packet)")
+    if r2.is_ok:
+        t.assert_eq_int(r2.ok.version, 5, "level 5")
+        t.assert_eq_int(r2.ok.props.session_expiry, 120, "session expiry")
+        t.assert_eq_int(r2.ok.props.receive_maximum, 20, "receive maximum")
+        t.assert_eq_str(r2.ok.client_id, "id", "client id")
+    # CONNACK 5.0: session present, success, assigned client id + topic alias max.
+    mut r3: Result[MqttPacket, str] = dec("200c01000912000361626322000a", MQTT_V5)
+    t.assert_true(r3.is_ok, "CONNACK 5.0 decodes")
+    if r3.is_ok:
+        t.assert_true(r3.ok.session_present, "session present")
+        t.assert_eq_str(r3.ok.props.assigned_client_id, "abc", "assigned client id")
+        t.assert_eq_int(r3.ok.props.topic_alias_max, 10, "topic alias maximum")
+    mut r4: Result[MqttPacket, str] = dec("3b0e0003612f62000503230001" + "68690a", MQTT_V5)
+    t.assert_true(r4.is_ok, "PUBLISH 5.0 decodes")
+    if r4.is_ok:
+        mut p = r4.ok
+        t.assert_true(p.dup and p.retain, "dup + retain flags")
+        t.assert_eq_int(p.qos, 1, "QoS from flags")
+        t.assert_eq_int(p.packet_id, 5, "packet id")
+        t.assert_eq_int(p.props.topic_alias, 1, "topic alias property")
+        t.assert_eq_str(p.payload, "hi\n", "payload")
+    mut r5: Result[MqttPacket, str] = dec("9005000a000280", MQTT_V311)
+    t.assert_true(r5.is_ok and len(r5.ok.reason_codes) == 3, "SUBACK 3.1.1 return codes (spec 3.9.3 example)")
+    if r5.is_ok: t.assert_eq_int(r5.ok.reason_codes[2], 0x80, "failure code")
+    mut r6: Result[MqttPacket, str] = dec("4003000192", MQTT_V5)
+    t.assert_true(r6.is_ok and r6.ok.reason_code == 0x92, "PUBACK 5.0 reason without properties")
+    mut r7: Result[MqttPacket, str] = dec("e0081f000562796521", MQTT_V5)
+    t.assert_true(r7.is_err, "DISCONNECT with property but no length")
+    mut r8: Result[MqttPacket, str] = dec("e0098e071f000462796521", MQTT_V5)
+    t.assert_true(r8.is_ok, "DISCONNECT 5.0 with reason string")
+    if r8.is_ok:
+        t.assert_eq_int(r8.ok.reason_code, 0x8E, "session taken over")
+        t.assert_eq_str(r8.ok.props.reason_string, "bye!", "reason string")
+    # User properties keep order and repeats.
+    mut pp = MqttPacket.publish("t", "", 0, false)
+    pp.props.add_user("a", "1")
+    pp.props.add_user("a", "2")
+    pp.props.message_expiry = 3600
+    pp.props.correlation_data = "\x00\x01"
+    pp.props.response_topic = "r/t"
+    pp.props.payload_format = 1
+    mut rt: Result[MqttPacket, str] = MqttPacket.decode(pp.encode(MQTT_V5), MQTT_V5)
+    t.assert_true(rt.is_ok, "properties round trip")
+    if rt.is_ok:
+        t.assert_eq_int(len(rt.ok.props.user_keys), 2, "two user properties")
+        t.assert_eq_str(rt.ok.props.user_values[1], "2", "second value")
+        t.assert_eq_int(rt.ok.props.message_expiry, 3600, "message expiry")
+        t.assert_eq_str(hx(rt.ok.props.correlation_data), "0001", "binary correlation data")
+        t.assert_eq_str(rt.ok.props.response_topic, "r/t", "response topic")
+        t.assert_eq_int(rt.ok.props.payload_format, 1, "payload format")
+    mut bad1: Result[MqttPacket, str] = dec("8008000a0003612f6201", MQTT_V311)
+    t.assert_true(bad1.is_err, "SUBSCRIBE with flags 0000 is malformed")
+    mut bad2: Result[MqttPacket, str] = dec("360500017400" + "01", MQTT_V311)
+    t.assert_true(bad2.is_err, "PUBLISH QoS 3 is malformed")
+    mut bad3: Result[MqttPacket, str] = dec("400300010000", MQTT_V311)
+    t.assert_true(bad3.is_err, "length mismatch is malformed")
+    mut bad4: Result[MqttPacket, str] = dec("3005000a612f62", MQTT_V311)
+    t.assert_true(bad4.is_err, "truncated topic is malformed")
+    mut bad5: Result[MqttPacket, str] = dec("4004000100ff", MQTT_V5)
+    t.assert_true(bad5.is_err, "properties length beyond packet")
+    t.assert_eq_str(mqtt_reason_name(0x87), "Not authorized", "reason name")
+
+def test_topics(t: TestRunner):
+    t.section("topic filters (spec 4.7 examples)")
+    t.assert_true(mqtt_topic_matches("sport/tennis/player1/#", "sport/tennis/player1"), "# matches the parent level")
+    t.assert_true(mqtt_topic_matches("sport/tennis/player1/#", "sport/tennis/player1/ranking"), "# one level")
+    t.assert_true(mqtt_topic_matches("sport/tennis/player1/#", "sport/tennis/player1/score/wimbledon"), "# two levels")
+    t.assert_true(mqtt_topic_matches("sport/#", "sport"), "sport/# matches sport")
+    t.assert_true(mqtt_topic_matches("#", "any/thing"), "# matches everything")
+    t.assert_true(mqtt_topic_matches("sport/tennis/+", "sport/tennis/player1"), "+ one level")
+    t.assert_false(mqtt_topic_matches("sport/tennis/+", "sport/tennis/player1/ranking"), "+ is one level only")
+    t.assert_false(mqtt_topic_matches("sport/+", "sport"), "sport/+ does not match sport")
+    t.assert_true(mqtt_topic_matches("sport/+", "sport/"), "sport/+ matches sport/")
+    t.assert_true(mqtt_topic_matches("+/+", "/finance"), "+/+ matches /finance")
+    t.assert_true(mqtt_topic_matches("/+", "/finance"), "/+ matches /finance")
+    t.assert_false(mqtt_topic_matches("+", "/finance"), "+ does not match /finance")
+    t.assert_false(mqtt_topic_matches("#", "$SYS/broker/uptime"), "# does not match $ topics")
+    t.assert_false(mqtt_topic_matches("+/monitor/Clients", "$SYS/monitor/Clients"), "+ does not match $ first level")
+    t.assert_true(mqtt_topic_matches("$SYS/#", "$SYS/monitor/Clients"), "$SYS/# matches")
+    t.assert_true(mqtt_topic_matches("$SYS/monitor/+", "$SYS/monitor/Clients"), "$SYS/monitor/+ matches")
+    t.assert_false(mqtt_topic_matches("a/b", "a/B"), "case sensitive")
+    t.assert_true(mqtt_valid_filter("sport/tennis/#"), "valid #")
+    t.assert_false(mqtt_valid_filter("sport/tennis#"), "# must be a whole level")
+    t.assert_false(mqtt_valid_filter("sport/tennis/#/ranking"), "# must be last")
+    t.assert_false(mqtt_valid_filter("sport+"), "+ must be a whole level")
+    t.assert_true(mqtt_valid_filter("+/tennis/#"), "+ and # together")
+    t.assert_false(mqtt_valid_filter(""), "empty filter")
+    t.assert_true(mqtt_valid_topic("a/b"), "valid topic")
+    t.assert_false(mqtt_valid_topic("a/+"), "wildcards are not allowed in topic names")
+
+def test_options(t: TestRunner):
+    t.section("MqttOptions.from_url")
+    mut o1: Result[MqttOptions, str] = MqttOptions.from_url("mqtt://broker.local")
+    t.assert_true(o1.is_ok and o1.ok.port == 1883 and o1.ok.transport == MQTT_TCP, "mqtt:// default port")
+    mut o2: Result[MqttOptions, str] = MqttOptions.from_url("mqtts://bob:s3cret@h.example:9883")
+    t.assert_true(o2.is_ok, "mqtts with credentials")
+    if o2.is_ok:
+        t.assert_eq_int(o2.ok.transport, MQTT_TLS, "TLS transport")
+        t.assert_eq_int(o2.ok.port, 9883, "port")
+        t.assert_eq_str(o2.ok.host, "h.example", "host")
+        t.assert_eq_str(o2.ok.username + "/" + o2.ok.password, "bob/s3cret", "credentials")
+    mut o3: Result[MqttOptions, str] = MqttOptions.from_url("ws://[::1]:8080/ws")
+    t.assert_true(o3.is_ok and o3.ok.host == "::1" and o3.ok.port == 8080 and o3.ok.ws_path == "/ws" and o3.ok.transport == MQTT_WS, "ws:// with IPv6 host and path")
+    mut o4: Result[MqttOptions, str] = MqttOptions.from_url("http://x")
+    t.assert_true(o4.is_err, "unsupported scheme")
+    mut o5: Result[MqttOptions, str] = MqttOptions.from_url("mqtt://x:99999")
+    t.assert_true(o5.is_err, "bad port")
+
+# ── Broker on a thread ──────────────────────────────────────────────────────
+
+class Flags implements Sendable:
+    pub ready: Atomic[int]
+    pub stop:  Atomic[int]
+    pub kick:  Atomic[int]
+    pub bad:   Atomic[int]
+    pub done:  Atomic[int]
+
+extend Flags:
+    pub def init() -> Flags:
+        mut f = Flags()
+        f.ready = Atomic.new(0)
+        f.stop = Atomic.new(0)
+        f.kick = Atomic.new(0)
+        f.bad = Atomic.new(0)
+        f.done = Atomic.new(0)
+        return f
+
+def broker_thread(f: Shared[Flags]):
+    mut r1: Result[MqttBroker, str] = MqttBroker.listen("127.0.0.1", PORT_TCP)
+    mut r2: Result[MqttBroker, str] = MqttBroker.listen_ws("127.0.0.1", PORT_WS)
+    if r1.is_err or r2.is_err:
+        print("broker listen failed")
+        f.bad.add(1)
+        f.ready.store(1)
+        return
+    mut b = r1.ok
+    mut w = r2.ok
+    f.ready.store(1)
+    while f.stop.load() == 0:
+        b.poll(10)
+        w.poll(5)
+        mut k = f.kick.load()
+        if k == 1:
+            b.kick("victim")
+            f.kick.store(0)
+        elif k == 2:
+            b.kick("rc")
+            f.kick.store(0)
+    b.close()
+    w.close()
+    f.done.store(1)
+
+def opts(id: str, ver: int) -> MqttOptions:
+    mut o = MqttOptions.new("127.0.0.1", PORT_TCP)
+    o.client_id = id
+    o.version = ver
+    o.timeout_ms = 3000
+    return o
+
+# Drain until a message on `topic` arrives (or timeout).
+def wait_for(c: MqttClient, topic: str, ms: int) throws str -> MqttMessage:
+    while true:
+        mut m = c.next_message(ms)?
+        if not m.valid: return m
+        if m.topic == topic: return m
+    return MqttMessage.empty()
+
+def pubsub(t: TestRunner, ver: int) throws str:
+    mut sub = MqttClient.connect(opts(f"sub{ver}", ver))?
+    mut pb = MqttClient.connect(opts(f"pub{ver}", ver))?
+    t.assert_true(sub.connected and pb.connected, f"v{ver} connected")
+    mut g = sub.subscribe("dev/+/temp", 2)?
+    t.assert_eq_int(g, 2, "granted QoS 2")
+    mut g2 = sub.subscribe("all/#", 0)?
+    t.assert_eq_int(g2, 0, "granted QoS 0")
+    mut q = 0
+    while q < 3:
+        mut pid = pb.publish(f"dev/d{q}/temp", f"t{q}", q, false)?
+        mut acked = pb.wait_published(pid, 3000)?
+        t.assert_true(acked, f"QoS {q} publish acknowledged")
+        mut m = sub.next_message(3000)?
+        t.assert_true(m.valid, f"QoS {q} delivered")
+        t.assert_eq_str(m.topic, f"dev/d{q}/temp", "topic")
+        t.assert_eq_str(m.payload, f"t{q}", "payload")
+        t.assert_eq_int(m.qos, q, "delivered at publish QoS")
+        q = q + 1
+    t.assert_eq_int(pb.inflight_count(), 0, "nothing left in flight")
+    # Downgrade to the subscription QoS; binary payload.
+    mut bin = "\x00\x01\xff\x00"
+    pb.publish("all/x", bin, 2, false)?
+    mut m2 = sub.next_message(3000)?
+    t.assert_true(m2.valid and m2.qos == 0, "delivered at subscription QoS 0")
+    t.assert_eq_str(hx(m2.payload), "0001ff00", "binary payload intact")
+    mut nm = sub.next_message(150)?
+    t.assert_false(nm.valid, "next_message times out when idle")
+    # Retained: set, received on subscribe with retain flag, cleared.
+    pb.publish("ret/a", "kept", 1, true)?
+    pb.flush(3000)?
+    mut late = MqttClient.connect(opts(f"late{ver}", ver))?
+    late.subscribe("ret/#", 1)?
+    mut rm = late.next_message(3000)?
+    t.assert_true(rm.valid and rm.retain and rm.payload == "kept", "retained message on subscribe")
+    pb.publish("ret/a", "", 1, true)?
+    pb.flush(3000)?
+    mut cleared = late.next_message(3000)?
+    t.assert_true(cleared.valid and cleared.payload.len() == 0, "empty retained publish is forwarded")
+    late.unsubscribe("ret/#")?
+    late.subscribe("ret/#", 1)?
+    mut none_left = late.next_message(200)?
+    t.assert_false(none_left.valid, "retained message was deleted")
+    mut uc = late.unsubscribe("nothing/here")?
+    if ver == MQTT_V5: t.assert_eq_int(uc, 0x11, "UNSUBACK: no subscription existed")
+    late.disconnect()
+    # Refused filter.
+    mut bad: Result[int, str] = sub_try(sub, "a/#/b")
+    t.assert_true(bad.is_err, "invalid filter refused locally")
+    mut sh: Result[int, str] = sub_try(sub, "$share/g/x")
+    t.assert_true(sh.is_err, "shared subscription refused by the broker")
+    mut pg = pb.ping(2000)?
+    t.assert_true(pg, "PINGREQ / PINGRESP")
+    sub.disconnect()
+    pb.disconnect()
+
+def sub_try(c: MqttClient, f: str) throws str -> int:
+    return c.subscribe(f, 1)?
+
+def v5_features(t: TestRunner) throws str:
+    mut a = MqttClient.connect(opts("", MQTT_V5))?
+    t.assert_starts_with(a.client_id, "auto-", "server-assigned client id")
+    t.assert_eq_int(a.server_topic_alias_max, 10, "topic alias maximum from CONNACK")
+    mut o = opts("aliaser", MQTT_V5)
+    o.topic_aliases = true
+    mut b = MqttClient.connect(o)?
+    # No-local: a does not get its own message; retain-as-published keeps the flag.
+    mut sp = MqttProps.new()
+    sp.subscription_ids.append(42)
+    a.subscribe_opts("nl/#", mqtt_sub_options(1, true, true, 0), sp)?
+    a.publish("nl/self", "mine", 1, false)?
+    a.flush(2000)?
+    mut own = a.next_message(200)?
+    t.assert_false(own.valid, "no-local suppresses own messages")
+    # User properties, content type, response topic, subscription id, aliases.
+    mut i = 0
+    while i < 3:
+        mut pp = MqttProps.new()
+        pp.add_user("seq", f"{i}")
+        pp.content_type = "text/plain"
+        pp.response_topic = "reply/x"
+        b.publish_with("nl/long/topic/name", f"m{i}", 1, true, pp)?
+        mut m = a.next_message(2000)?
+        t.assert_true(m.valid, f"aliased publish {i} delivered")
+        t.assert_eq_str(m.topic, "nl/long/topic/name", "topic restored from alias by the broker")
+        t.assert_eq_str(m.props.user("seq"), f"{i}", "user property forwarded")
+        t.assert_eq_str(m.props.content_type, "text/plain", "content type forwarded")
+        t.assert_eq_str(m.props.response_topic, "reply/x", "response topic forwarded")
+        t.assert_true(m.retain, "retain-as-published keeps RETAIN")
+        t.assert_true(len(m.props.subscription_ids) == 1 and m.props.subscription_ids[0] == 42, "subscription identifier")
+        i = i + 1
+    # Retain handling 2: never send retained on subscribe; 1: only for new subscriptions.
+    mut c = MqttClient.connect(opts("rh", MQTT_V5))?
+    mut np = MqttProps.new()
+    c.subscribe_opts("nl/long/#", mqtt_sub_options(1, false, false, 2), np)?
+    mut r1 = c.next_message(200)?
+    t.assert_false(r1.valid, "retain handling 2 sends nothing")
+    c.subscribe_opts("nl/long/#", mqtt_sub_options(1, false, false, 1), np)?
+    mut r2 = c.next_message(200)?
+    t.assert_false(r2.valid, "retain handling 1 on an existing subscription sends nothing")
+    c.subscribe_opts("nl/+/topic/#", mqtt_sub_options(1, false, false, 1), np)?
+    mut r3 = c.next_message(1000)?
+    t.assert_true(r3.valid and r3.retain, "retain handling 1 on a new subscription sends the retained message")
+    b.publish("nl/long/topic/name", "", 1, true)?
+    b.flush(2000)?
+    # Will on abnormal disconnect; none on a normal DISCONNECT.
+    mut wo = opts("victim", MQTT_V5)
+    wo.set_will("wills/victim", "offline", 1, false)
+    mut v = MqttClient.connect(wo)?
+    a.subscribe("wills/#", 1)?
+    v.disconnect()
+    mut w0 = wait_for(a, "wills/victim", 300)?
+    t.assert_false(w0.valid, "no will after a clean DISCONNECT")
+    mut v2 = MqttClient.connect(wo)?
+    v2.close()
+    mut w1 = wait_for(a, "wills/victim", 3000)?
+    t.assert_true(w1.valid and w1.payload == "offline", "will published when the connection drops")
+    mut v3 = MqttClient.connect(wo)?
+    mut dp = MqttProps.new()
+    v3.disconnect_with(0x04, dp)
+    mut w2 = wait_for(a, "wills/victim", 3000)?
+    t.assert_true(w2.valid, "DISCONNECT 0x04 publishes the will")
+    # Takeover: same client id kicks the old connection (DISCONNECT 0x8E).
+    mut t1 = MqttClient.connect(opts("dup-id", MQTT_V5))?
+    mut t2 = MqttClient.connect(opts("dup-id", MQTT_V5))?
+    mut tr: Result[MqttMessage, str] = t1.next_message(2000)
+    t.assert_true(tr.is_err, "old connection is closed on takeover")
+    t.assert_eq_int(t1.disconnect_reason, 0x8E, "session taken over reason")
+    t2.disconnect()
+    a.disconnect()
+    b.disconnect()
+    c.disconnect()
+
+# Callback-style delivery.
+mut cb_count = 0
+mut cb_last_len = 0
+
+def on_msg(m: MqttMessage):
+    cb_count = cb_count + 1
+    cb_last_len = m.payload.len()
+
+def callbacks(t: TestRunner) throws str:
+    mut c = MqttClient.connect(opts("cb", MQTT_V311))?
+    c.on_message(on_msg)
+    c.subscribe("cb/#", 1)?
+    c.publish("cb/1", "abc", 1, false)?
+    c.publish("cb/2", "abcdef", 0, false)?
+    mut n = c.run_for(500)?
+    t.assert_eq_int(cb_count, 2, "callback called for each message")
+    t.assert_eq_int(n, 2, "run_for counts delivered messages")
+    t.assert_eq_int(cb_last_len, 6, "callback sees the payload")
+    c.disconnect()
+
+def sessions(t: TestRunner) throws str:
+    # Persistent session (3.1.1 clean_start = false): subscriptions survive.
+    mut o = opts("keeper", MQTT_V311)
+    o.clean_start = false
+    mut c = MqttClient.connect(o)?
+    t.assert_false(c.session_present, "first connect has no session")
+    c.subscribe("keep/#", 1)?
+    c.disconnect()
+    mut c2 = MqttClient.connect(o)?
+    t.assert_true(c2.session_present, "session present on reconnect")
+    mut p = MqttClient.connect(opts("kp", MQTT_V311))?
+    p.publish("keep/x", "still here", 1, false)?
+    mut m = c2.next_message(2000)?
+    t.assert_true(m.valid and m.payload == "still here", "stored subscription still active")
+    c2.disconnect()
+    mut o3 = opts("keeper", MQTT_V311)
+    mut c3 = MqttClient.connect(o3)?
+    t.assert_false(c3.session_present, "clean start discards the session")
+    c3.disconnect()
+    p.disconnect()
+    # v5 keep-alive with PINGREQs over a short interval.
+    mut ko = opts("ka", MQTT_V5)
+    ko.keep_alive = 1
+    mut k = MqttClient.connect(ko)?
+    k.run_for(2600)?
+    t.assert_true(k.connected, "keep-alive pings keep the connection open")
+    k.disconnect()
+
+def auth_and_ws(t: TestRunner, f: Shared[Flags]) throws str:
+    # WebSocket transport.
+    mut wo = MqttOptions.from_url(f"ws://127.0.0.1:{PORT_WS}/mqtt")?
+    wo.version = MQTT_V5
+    wo.client_id = "wsc"
+    mut w = MqttClient.connect(wo)?
+    w.subscribe("ws/#", 2)?
+    w.publish("ws/a", "over websocket", 2, false)?
+    mut m = w.next_message(3000)?
+    t.assert_true(m.valid and m.payload == "over websocket" and m.qos == 2, "MQTT over WebSocket, QoS 2 both ways")
+    w.disconnect()
+    # Reconnect with resubscribe after the broker drops the connection.
+    mut ro = opts("rc", MQTT_V5)
+    ro.auto_reconnect = true
+    ro.reconnect_min_ms = 50
+    mut rc = MqttClient.connect(ro)?
+    rc.subscribe("rc/#", 1)?
+    shared_flags_kick(f, 2)
+    Thread.sleep(150)
+    mut p = MqttClient.connect(opts("rcp", MQTT_V5))?
+    # The first operation notices the dead socket and reconnects.
+    mut m0 = rc.next_message(500)?
+    p.publish("rc/after", "back", 1, false)?
+    mut m1 = wait_for(rc, "rc/after", 3000)?
+    t.assert_eq_int(rc.reconnects, 1, "reconnected once")
+    t.assert_true(m1.valid and m1.payload == "back", "resubscribed after reconnect")
+    rc.disconnect()
+    p.disconnect()
+
+def shared_flags_kick(flags: Shared[Flags], v: int):
+    flags.kick.store(v)
+    mut i = 0
+    while i < 100 and flags.kick.load() != 0:
+        Thread.sleep(10)
+        i = i + 1
+
+def refused(t: TestRunner):
+    mut o = opts("", MQTT_V311)
+    o.clean_start = false
+    mut c: Result[MqttClient, str] = MqttClient.connect(o)
+    # (the client generates an id for 3.1.1, so this connects)
+    t.assert_true(c.is_ok, "3.1.1 with generated client id")
+    if c.is_ok:
+        t.assert_starts_with(c.ok.client_id, "tauraro-", "generated id")
+        c.ok.disconnect()
+    mut bad = MqttOptions.new("127.0.0.1", 1)
+    mut r: Result[MqttClient, str] = MqttClient.connect(bad)
+    t.assert_true(r.is_err, "connection refused raises")
+
+# ── Scripted server: in-flight resend after reconnect ───────────────────────
+
+class Frames:
+    pub carry: str
+
+extend Frames:
+    pub def init() -> Frames:
+        mut f = Frames()
+        f.carry = ""
+        return f
+
+    pub def next(self, s: TcpStream, ver: int) -> MqttPacket:
+        while true:
+            mut n = mqtt_frame_len(self.carry)
+            if n > 0:
+                mut raw = self.carry.slice(0, n)
+                self.carry = self.carry.slice(n, self.carry.len())
+                mut r: Result[MqttPacket, str] = MqttPacket.decode(raw, ver)
+                if r.is_ok: return r.ok
+                return MqttPacket.new(0)
+            mut chunk = s.recv(4096)
+            if chunk.len() == 0: return MqttPacket.new(0)
+            self.carry = self.carry + chunk
+        return MqttPacket.new(0)
+
+def expect(f: Shared[Flags], cond: bool, what: str):
+    if not cond:
+        print("  script: unexpected " + what)
+        f.bad.add(1)
+
+def script_thread(f: Shared[Flags]):
+    mut l = TcpListener.listen("127.0.0.1", PORT_SCRIPT)
+    f.ready.store(1)
+    # 1st connection: take a QoS 1 PUBLISH, then drop it unacknowledged.
+    mut c1 = l.accept()
+    mut r1 = Frames.init()
+    mut cn = r1.next(c1, MQTT_V5)
+    expect(f, cn.ptype == MQTT_CONNECT and cn.version == 5 and not cn.clean_start, "CONNECT #1")
+    expect(f, cn.props.session_expiry == 300, "session expiry property")
+    c1.send(unhex("2003000000"))
+    mut p1 = r1.next(c1, MQTT_V5)
+    expect(f, p1.ptype == MQTT_PUBLISH and p1.qos == 1 and not p1.dup and p1.payload == "one", "first PUBLISH")
+    c1.close()
+    # 2nd: session present; the PUBLISH must come again with DUP and the same id.
+    mut c2 = l.accept()
+    mut r2 = Frames.init()
+    mut cn2 = r2.next(c2, MQTT_V5)
+    expect(f, cn2.ptype == MQTT_CONNECT and cn2.client_id == "resender", "CONNECT #2")
+    c2.send(unhex("2003010000"))
+    mut p2 = r2.next(c2, MQTT_V5)
+    expect(f, p2.ptype == MQTT_PUBLISH and p2.dup and p2.packet_id == p1.packet_id and p2.payload == "one", "resent PUBLISH with DUP")
+    c2.send(MqttPacket.ack(MQTT_PUBACK, p2.packet_id, 0).encode(MQTT_V5))
+    # QoS 2: PUBREC, then drop before PUBCOMP.
+    mut q2 = r2.next(c2, MQTT_V5)
+    expect(f, q2.ptype == MQTT_PUBLISH and q2.qos == 2, "QoS 2 PUBLISH")
+    c2.send(MqttPacket.ack(MQTT_PUBREC, q2.packet_id, 0).encode(MQTT_V5))
+    mut rel = r2.next(c2, MQTT_V5)
+    expect(f, rel.ptype == MQTT_PUBREL and rel.packet_id == q2.packet_id, "PUBREL")
+    c2.close()
+    # 3rd: the PUBREL must be resent; complete it.
+    mut c3 = l.accept()
+    mut r3 = Frames.init()
+    mut cn3 = r3.next(c3, MQTT_V5)
+    expect(f, cn3.ptype == MQTT_CONNECT, "CONNECT #3")
+    c3.send(unhex("2003010000"))
+    mut rel2 = r3.next(c3, MQTT_V5)
+    expect(f, rel2.ptype == MQTT_PUBREL and rel2.packet_id == q2.packet_id, "resent PUBREL")
+    c3.send(MqttPacket.ack(MQTT_PUBCOMP, q2.packet_id, 0).encode(MQTT_V5))
+    # Server-to-client QoS 2 and a topic alias the client must resolve.
+    mut sp = MqttPacket.publish("srv/topic", "s1", 2, false)
+    sp.packet_id = 77
+    sp.props.topic_alias = 3
+    c3.send(sp.encode(MQTT_V5))
+    mut prec = r3.next(c3, MQTT_V5)
+    expect(f, prec.ptype == MQTT_PUBREC and prec.packet_id == 77, "client PUBREC")
+    # Duplicate delivery of the same QoS 2 id before PUBREL must not be delivered twice.
+    sp.dup = true
+    c3.send(sp.encode(MQTT_V5))
+    mut prec2 = r3.next(c3, MQTT_V5)
+    expect(f, prec2.ptype == MQTT_PUBREC, "client PUBREC for the duplicate")
+    c3.send(MqttPacket.ack(MQTT_PUBREL, 77, 0).encode(MQTT_V5))
+    mut pcomp = r3.next(c3, MQTT_V5)
+    expect(f, pcomp.ptype == MQTT_PUBCOMP and pcomp.packet_id == 77 and pcomp.reason_code == 0, "client PUBCOMP")
+    mut sp2 = MqttPacket.publish("", "s2", 0, false)
+    sp2.props.topic_alias = 3
+    c3.send(sp2.encode(MQTT_V5))
+    mut dc = r3.next(c3, MQTT_V5)
+    expect(f, dc.ptype == MQTT_DISCONNECT, "DISCONNECT")
+    c3.close()
+    l.close()
+    f.done.store(1)
+
+def resend(t: TestRunner) throws str:
+    t.section("in-flight resend after reconnect (scripted server)")
+    shared sf = Flags.init()
+    mut th = Thread.spawn(script_thread, sf)
+    mut i = 0
+    while sf.ready.load() == 0 and i < 300:
+        Thread.sleep(10)
+        i = i + 1
+    mut o = MqttOptions.new("127.0.0.1", PORT_SCRIPT)
+    o.version = MQTT_V5
+    o.client_id = "resender"
+    o.clean_start = false
+    o.connect_props.session_expiry = 300
+    o.auto_reconnect = true
+    o.reconnect_min_ms = 50
+    o.timeout_ms = 3000
+    mut c = MqttClient.connect(o)?
+    mut pid = c.publish("q/1", "one", 1, false)?
+    mut ok1 = c.wait_published(pid, 5000)?
+    t.assert_true(ok1, "QoS 1 completed after the resend")
+    t.assert_eq_int(c.reconnects, 1, "one reconnect")
+    mut pid2 = c.publish("q/2", "two", 2, false)?
+    mut ok2 = c.wait_published(pid2, 5000)?
+    t.assert_true(ok2, "QoS 2 completed after the PUBREL resend")
+    t.assert_eq_int(c.reconnects, 2, "second reconnect")
+    mut m1 = c.next_message(3000)?
+    t.assert_true(m1.valid and m1.topic == "srv/topic" and m1.qos == 2, "server QoS 2 delivered")
+    mut m2 = c.next_message(3000)?
+    t.assert_true(m2.valid and m2.payload == "s2", "duplicate QoS 2 suppressed")
+    t.assert_eq_str(m2.topic, "srv/topic", "incoming topic alias resolved")
+    c.disconnect()
+    th.join()
+    t.assert_eq_int(sf.bad.load(), 0, "every packet matched on the wire")
+    t.assert_eq_int(sf.done.load(), 1, "script finished")
+
+def run_live(t: TestRunner, name: str, r: Result[bool, str]):
+    t.assert_true(r.is_ok, name)
+    if r.is_err: print("  error: " + r.err)
+
+def go_pubsub(t: TestRunner, v: int) throws str -> bool:
+    pubsub(t, v)?
+    return true
+def go_v5(t: TestRunner) throws str -> bool:
+    v5_features(t)?
+    return true
+def go_cb(t: TestRunner) throws str -> bool:
+    callbacks(t)?
+    return true
+def go_sessions(t: TestRunner) throws str -> bool:
+    sessions(t)?
+    return true
+def go_ws(t: TestRunner, f: Shared[Flags]) throws str -> bool:
+    auth_and_ws(t, f)?
+    return true
+def go_resend(t: TestRunner) throws str -> bool:
+    resend(t)?
+    return true
+
+def main():
+    mut t = TestRunner.init("std.net.mqtt")
+    test_varint(t)
+    test_encode(t)
+    test_decode(t)
+    test_topics(t)
+    test_options(t)
+    shared flags = Flags.init()
+    mut th = Thread.spawn(broker_thread, flags)
+    mut i = 0
+    while flags.ready.load() == 0 and i < 300:
+        Thread.sleep(10)
+        i = i + 1
+    t.section("client <-> broker, MQTT 3.1.1")
+    run_live(t, "3.1.1 pub/sub scenario", go_pubsub(t, MQTT_V311))
+    t.section("client <-> broker, MQTT 5.0")
+    run_live(t, "5.0 pub/sub scenario", go_pubsub(t, MQTT_V5))
+    t.section("MQTT 5 options, properties, aliases, wills, takeover")
+    run_live(t, "5.0 feature scenario", go_v5(t))
+    t.section("callbacks")
+    run_live(t, "callback scenario", go_cb(t))
+    t.section("sessions and keep-alive")
+    run_live(t, "session scenario", go_sessions(t))
+    t.section("WebSocket and reconnect")
+    run_live(t, "websocket + reconnect scenario", go_ws(t, flags))
+    refused(t)
+    flags.stop.store(1)
+    th.join()
+    t.assert_eq_int(flags.bad.load(), 0, "broker started")
+    run_live(t, "resend scenario", go_resend(t))
+    t.summary()
