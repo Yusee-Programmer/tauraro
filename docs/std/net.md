@@ -16,6 +16,7 @@ from std.net.email     import EmailMessage, Address, Attachment, MimePart
 from std.net.dnsmsg    import Dns, DnsMessage
 from std.net.ntp       import Ntp
 from std.net.mdns      import Mdns
+from std.net.mqtt      import MqttClient, MqttOptions, MqttBroker
 ```
 
 > **Platform note** — All socket classes require `-lws2_32` on Windows (Winsock).  
@@ -1052,3 +1053,103 @@ if conn.ok:
 else:
     print("handshake failed: " + conn.err)
 ```
+
+---
+
+## MQTT — `std.net.mqtt`
+
+MQTT 3.1.1 and 5.0 client, packet codec, topic-filter helpers and a small embeddable broker.
+Transports: TCP (`mqtt://`, 1883), TLS 1.3 through `std.net.tls` (`mqtts://`, 8883) and MQTT
+over WebSocket (`ws://host:port/path`, subprotocol `mqtt`). The client has been run against
+`test.mosquitto.org` (3.1.1 and 5.0 over TCP, TLS and WebSocket) and `broker.emqx.io`
+(5.0); the broker has been run against the Python `paho-mqtt` client (3.1.1 and 5.0 over TCP
+and WebSocket).
+
+```tauraro
+from std.net.mqtt import MqttClient, MqttOptions, MqttProps, MqttMessage, MQTT_V5, mqtt_sub_options
+
+mut o = MqttOptions.from_url("mqtts://user:pw@broker.example.com")?   # or MqttOptions.new(host, port)
+o.version = MQTT_V5
+o.client_id = "sensor-1"
+o.set_will("status/sensor-1", "offline", 1, true)
+o.connect_props.session_expiry = 3600          # v5 CONNECT properties
+o.auto_reconnect = true                         # exponential backoff, resends in-flight messages
+mut c = MqttClient.connect(o)?
+
+c.subscribe("cmd/sensor-1/#", 1)?              # returns the granted QoS; raises if refused
+c.publish("status/sensor-1", "online", 1, true)?
+
+mut p = MqttProps.new()
+p.content_type = "application/json"
+p.add_user("unit", "C")
+mut pid = c.publish_with("data/temp", "{\"t\": 21.5}", 2, false, p)?
+c.wait_published(pid, 5000)?                   # PUBREC / PUBREL / PUBCOMP done
+
+mut m = c.next_message(1000)?                  # poll style; m.valid is false on timeout
+if m.valid: print(m.topic + ": " + m.payload)
+c.disconnect()
+```
+
+| `MqttOptions` field | Meaning |
+|---|---|
+| `host`, `port`, `transport` (`MQTT_TCP` / `MQTT_TLS` / `MQTT_WS`), `ws_path`, `tls` (`TlsOptions`) | Where and how to connect. |
+| `version` | `MQTT_V311` (default) or `MQTT_V5`. |
+| `client_id`, `clean_start`, `keep_alive` (s, default 60) | An empty id is assigned by a v5 server or generated (`tauraro-…`) on 3.1.1. |
+| `set_auth(user, pw)`, `set_will(topic, payload, qos, retain)`, `will_props` | Credentials and will message. |
+| `connect_props` | v5 CONNECT properties: `session_expiry`, `receive_maximum`, `max_packet_size`, `topic_alias_max`, user properties... |
+| `timeout_ms` | CONNACK / SUBACK / UNSUBACK wait (default 10000). |
+| `auto_reconnect`, `reconnect_min_ms`, `reconnect_max_ms`, `max_reconnect_attempts`, `resubscribe` | Reconnect with doubling delay; in-flight QoS 1/2 PUBLISHes are resent with DUP and PUBRELs are resent; subscriptions are re-sent when the server lost the session. |
+| `topic_aliases` | v5: replace repeated topics by aliases when the server allows them. |
+
+| `MqttClient` | Description |
+|---|---|
+| `connect(opts)?` | Connect and wait for CONNACK; refusals raise with the reason (`Bad User Name or Password`...). `session_present`, `client_id`, `connack_props`, `server_receive_max`, `server_topic_alias_max`, `server_max_qos`, `server_max_packet`, `keep_alive` are filled in. |
+| `publish(topic, payload, qos, retain)?`, `publish_with(..., props)?` | Returns the packet id (0 for QoS 0). Respects the server's receive maximum, maximum QoS, retain availability and maximum packet size. |
+| `wait_published(pid, ms)?`, `flush(ms)?`, `inflight_count()`, `last_ack_reason` | Track acknowledgements. |
+| `subscribe(filter, qos)?`, `subscribe_opts(filter, options, props)?`, `subscribe_many(filters, options, props)?` | `mqtt_sub_options(qos, no_local, retain_as_published, retain_handling)` builds the options byte; `props.subscription_ids` sets a subscription identifier. |
+| `unsubscribe(filter)?`, `unsubscribe_many(filters)?` | v5 reason codes (`0x11` = no subscription existed). |
+| `next_message(ms)?`, `pending()` | Poll-style delivery; keep-alive, acks and QoS 2 handshakes run while waiting. |
+| `on_message(cb)`, `run_for(ms)?`, `run_forever()?`, `poll(ms)?` | Callback-style delivery (`cb: def(MqttMessage) -> void`). |
+| `ping(ms)?` | Explicit PINGREQ / PINGRESP. |
+| `disconnect()`, `disconnect_with(reason, props)`, `close()` | Clean DISCONNECT (v5 reason, e.g. `0x04` to publish the will anyway) or an abrupt drop. |
+
+`MqttMessage`: `valid`, `topic`, `payload` (binary-safe), `qos`, `retain`, `dup`, `packet_id`,
+`props` (`content_type`, `response_topic`, `correlation_data`, `user(key)`, `subscription_ids`...).
+Incoming topic aliases are resolved; incoming QoS 2 messages are delivered exactly once.
+
+Helpers: `mqtt_topic_matches(filter, topic)` (`+`, `#`, `$`-topics not matched by a leading
+wildcard), `mqtt_valid_filter`, `mqtt_valid_topic`, `mqtt_reason_name(code)`,
+`mqtt_connack_v3_name(code)`. The codec is public: `MqttPacket.new(type)` / `publish(...)` /
+`ack(type, id, reason)`, `encode(version)`, `MqttPacket.decode(bytes, version)?`,
+`mqtt_frame_len(buf)`, `MqttProps.encode()` / `decode`.
+
+### MqttBroker
+
+A single-threaded broker for tests and local use. Run `poll(ms)` in a loop (for example on its own
+thread):
+
+```tauraro
+mut b = MqttBroker.listen("127.0.0.1", 1883)?    # MqttBroker.listen_ws(host, port)? for WebSocket
+b.require_auth("user", "pw")                     # optional
+while running: b.poll(20)
+b.close()
+```
+
+It accepts 3.1.1 and 5.0 clients; supports wildcard subscriptions, QoS 0 / 1 / 2 (incoming and
+outgoing handshakes, delivered at min(publish, subscription) QoS), retained messages (empty payload
+deletes), will messages (on a dropped connection, keep-alive timeout or v5 DISCONNECT `0x04`),
+client takeover (v5 DISCONNECT `0x8E`), persistent subscriptions for `clean_start = false` (3.1.1)
+or a session expiry > 0 (5.0), v5 no-local / retain-as-published / retain handling / subscription
+identifiers / incoming topic aliases / forwarded message properties, and server-assigned client
+ids. `kick(client_id)` drops a client as a network failure would; `client_count()`,
+`retained_count()`, `routed` report state.
+
+### Limitations
+
+- No enhanced authentication (AUTH packets), no `wss://` (WebSocket over TLS).
+- TLS reads use the TLS layer's timeout; a record split across a pause of more than the poll
+  interval (minimum 20 ms) could desynchronise the stream.
+- Client state (in-flight messages, subscriptions) is kept in memory only.
+- Broker: no queueing for offline sessions, no resend of its own unacknowledged deliveries, no
+  shared subscriptions (`$share/...` is refused), no will delay, no limits on packet size or
+  in-flight counts; one thread, blocking writes.
