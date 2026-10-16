@@ -1,0 +1,2537 @@
+# std.encoding.xlsx -- Excel workbooks (Office Open XML SpreadsheetML).
+#
+# Reads .xlsx files written by Excel, LibreOffice, openpyxl and friends, and
+# writes new workbooks that open in Excel and LibreOffice. Pure Tauraro: the
+# ZIP container goes through std.io.archive with the built-in DEFLATE codec
+# (std.compress.flate), XML through std.encoding.xlsx_xml's pull reader.
+#
+# Reading: sheet list (names, visibility), cell values (shared strings with
+# rich-text runs, inline strings, numbers, booleans, errors, formulas with
+# their cached values, shared formulas expanded per cell), dates recognised
+# through the cell's number format (built-in and custom date formats, 1900
+# and 1904 date systems), merged cells, column widths, row heights, freeze
+# panes, auto-filter, hyperlinks, sheet dimensions, sparse rows.
+#
+# Writing: several sheets, str/int/float/bool/date/formula cells, styles
+# (bold, italic, underline, strike, font name/size/color, number formats,
+# fill color, borders, alignment, wrap), column widths, row heights, freeze
+# panes, merged cells, auto-filter, hyperlinks (URLs and in-workbook
+# locations), shared strings table, [Content_Types].xml, rels and docProps.
+#
+# Rows and columns are 1-based everywhere ("A1" is row 1, column 1).
+#
+#   from std.encoding.xlsx import Workbook, Worksheet, CellStyle
+#   mut wb = Workbook.init()
+#   mut ws = wb.add_sheet("Data")?
+#   ws.set_str("A1", "Total")
+#   ws.set_float("B1", 12.5)
+#   ws.set_formula("B2", "B1*2")
+#   mut bold = CellStyle.init()
+#   bold.bold = true
+#   ws.set_style("A1", bold)
+#   wb.save("out.xlsx")?
+#
+#   mut book = Workbook.open("in.xlsx")?
+#   mut sheet = book.sheet("Data")?
+#   print(sheet.cell("B3").display())
+#   print(sheet.to_csv())
+
+from std.core.string import StringBuilder
+from std.io.archive import ZipWriter, ZipReader
+from std.io.file import File
+from std.sys.datetime import DateTime, TimeZone
+from std.encoding.csv import _csv_write_field
+from std.encoding.xlsx_xml import XlsxXml, XX_EOF, XX_START, XX_END, XX_TEXT, xlsx_put_utf8
+
+# Cell kinds.
+pub const XLSX_EMPTY = 0
+pub const XLSX_STRING = 1
+pub const XLSX_NUMBER = 2
+pub const XLSX_BOOL = 3
+pub const XLSX_ERROR = 4
+pub const XLSX_DATE = 5
+
+pub const XLSX_MAX_ROWS = 1048576
+pub const XLSX_MAX_COLS = 16384
+
+def _xb(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+# A fresh copy of `s`. Storing a List[str] element straight into a field
+# keeps a non-owning view of the list's slot (compiler issue), so copy first.
+def _own(s: str) -> str:
+    return s.slice(0, s.len())
+
+def _is_digit(c: int) -> bool:
+    return c >= 48 and c <= 57
+
+def _is_alpha(c: int) -> bool:
+    return (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+
+def _upper_c(c: int) -> int:
+    if c >= 97 and c <= 122: return c - 32
+    return c
+
+# ── cell references ─────────────────────────────────────────────────────────
+
+# Column letters for a 1-based column number: 1 -> "A", 28 -> "AB".
+pub def xlsx_col_name(col: int) -> str:
+    if col < 1: return ""
+    mut sb = StringBuilder.init(4)
+    mut digits: List[int] = []
+    mut n = col
+    while n > 0:
+        mut r = (n - 1) % 26
+        digits.append(65 + r)
+        n = (n - 1) / 26
+    mut i = digits.len() - 1
+    while i >= 0:
+        sb.append_char(digits[i])
+        i = i - 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# 1-based column number for letters ("A" -> 1, "ab" -> 28); 0 if invalid.
+pub def xlsx_col_index(name: str) -> int:
+    mut n = 0
+    mut i = 0
+    mut m = name.len()
+    if m == 0 or m > 3: return 0
+    while i < m:
+        mut c = _upper_c(_xb(name, i))
+        if c < 65 or c > 90: return 0
+        n = n * 26 + (c - 64)
+        i = i + 1
+    if n > XLSX_MAX_COLS: return 0
+    return n
+
+# "B3" for row 3, column 2.
+pub def xlsx_ref(row: int, col: int) -> str:
+    mut c = xlsx_col_name(col)
+    return f"{c}{row}"
+
+# "$B$3".
+pub def xlsx_abs_ref(row: int, col: int) -> str:
+    mut c = xlsx_col_name(col)
+    return f"${c}${row}"
+
+# Parse "B3" / "$B$3" starting at s[i]; returns end position or -1, writing
+# row and column into out[0], out[1].
+def _parse_ref_at(s: str, start: int, out: List[int]) -> int:
+    mut i = start
+    mut n = s.len()
+    if i < n and _xb(s, i) == 36: i = i + 1
+    mut col = 0
+    mut letters = 0
+    while i < n and _is_alpha(_xb(s, i)):
+        col = col * 26 + (_upper_c(_xb(s, i)) - 64)
+        letters = letters + 1
+        i = i + 1
+    if letters == 0 or letters > 3 or col > XLSX_MAX_COLS: return -1
+    if i < n and _xb(s, i) == 36: i = i + 1
+    mut row = 0
+    mut digits = 0
+    while i < n and _is_digit(_xb(s, i)):
+        row = row * 10 + (_xb(s, i) - 48)
+        digits = digits + 1
+        if row > XLSX_MAX_ROWS: return -1
+        i = i + 1
+    if digits == 0 or row < 1: return -1
+    out[0] = row
+    out[1] = col
+    return i
+
+# Row of "B3" (3), or 0 when the reference is invalid.
+pub def xlsx_ref_row(ref: str) -> int:
+    mut o: List[int] = [0, 0]
+    mut e = _parse_ref_at(ref, 0, o)
+    if e != ref.len(): return 0
+    return o[0]
+
+# Column of "B3" (2), or 0 when the reference is invalid.
+pub def xlsx_ref_col(ref: str) -> int:
+    mut o: List[int] = [0, 0]
+    mut e = _parse_ref_at(ref, 0, o)
+    if e != ref.len(): return 0
+    return o[1]
+
+pub def xlsx_ref_valid(ref: str) -> bool:
+    return xlsx_ref_row(ref) > 0
+
+# A rectangular range of cells, "A1:C10" (r1 <= r2, c1 <= c2).
+pub class CellRange:
+    pub r1: int
+    pub c1: int
+    pub r2: int
+    pub c2: int
+
+extend CellRange:
+    pub def init(r1: int, c1: int, r2: int, c2: int) -> CellRange:
+        mut r = CellRange()
+        r.r1 = r1
+        r.c1 = c1
+        r.r2 = r2
+        r.c2 = c2
+        if r2 < r1:
+            r.r1 = r2
+            r.r2 = r1
+        if c2 < c1:
+            r.c1 = c2
+            r.c2 = c1
+        return r
+
+    # "A1:C10", "B2" (a single cell) or "$A$1:$C$10".
+    pub def parse(s: str) throws str -> CellRange:
+        mut o: List[int] = [0, 0]
+        mut e = _parse_ref_at(s, 0, o)
+        if e < 0: raise(f"xlsx: invalid cell range '{s}'")
+        mut r1 = o[0]
+        mut c1 = o[1]
+        if e == s.len(): return CellRange.init(r1, c1, r1, c1)
+        if _xb(s, e) != 58: raise(f"xlsx: invalid cell range '{s}'")
+        mut e2 = _parse_ref_at(s, e + 1, o)
+        if e2 != s.len(): raise(f"xlsx: invalid cell range '{s}'")
+        return CellRange.init(r1, c1, o[0], o[1])
+
+    pub def to_string(self) -> str:
+        mut a = xlsx_ref(self.r1, self.c1)
+        if self.r1 == self.r2 and self.c1 == self.c2: return a
+        mut b = xlsx_ref(self.r2, self.c2)
+        return a + ":" + b
+
+    pub def to_abs_string(self) -> str:
+        mut a = xlsx_abs_ref(self.r1, self.c1)
+        mut b = xlsx_abs_ref(self.r2, self.c2)
+        return a + ":" + b
+
+    pub def contains(self, row: int, col: int) -> bool:
+        return row >= self.r1 and row <= self.r2 and col >= self.c1 and col <= self.c2
+
+    pub def row_count(self) -> int: return self.r2 - self.r1 + 1
+    pub def col_count(self) -> int: return self.c2 - self.c1 + 1
+
+    pub def overlaps(self, o: CellRange) -> bool:
+        return not (o.r1 > self.r2 or o.r2 < self.r1 or o.c1 > self.c2 or o.c2 < self.c1)
+
+# ── dates ───────────────────────────────────────────────────────────────────
+
+def _days_from_civil(y0: int, m: int, d: int) -> int:
+    mut y = y0
+    if m <= 2: y = y - 1
+    mut era = 0
+    if y >= 0: era = y / 400
+    else: era = (y - 399) / 400
+    mut yoe = y - era * 400
+    mut mp = (m + 9) % 12
+    mut doy = (153 * mp + 2) / 5 + d - 1
+    mut doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    return era * 146097 + doe - 719468
+
+# (year, month, day) for days since 1970-01-01 into out[0..2].
+def _civil_from_days(z0: int, out: List[int]):
+    mut z = z0 + 719468
+    mut era = 0
+    if z >= 0: era = z / 146097
+    else: era = (z - 146096) / 146097
+    mut doe = z - era * 146097
+    mut yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    mut y = yoe + era * 400
+    mut doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    mut mp = (5 * doy + 2) / 153
+    mut d = doy - (153 * mp + 2) / 5 + 1
+    mut m = mp - 9
+    if mp < 10: m = mp + 3
+    if m <= 2: y = y + 1
+    out[0] = y
+    out[1] = m
+    out[2] = d
+
+def _floor_f(x: float) -> float:
+    mut i = x as int
+    mut f = i as float
+    if f > x: f = f - 1.0
+    return f
+
+# Excel serial number for a date and time (1900 or 1904 date system).
+pub def xlsx_date_serial(year: int, month: int, day: int, hour: int, minute: int, second: int, date1904: bool) -> float:
+    mut days = _days_from_civil(year, month, day)
+    mut serial = 0
+    if date1904:
+        serial = days - _days_from_civil(1904, 1, 1)
+    else:
+        serial = days - _days_from_civil(1899, 12, 30)
+        if serial < 61: serial = serial - 1   # Excel's phantom 1900-02-29
+    mut secs = hour * 3600 + minute * 60 + second
+    return (serial as float) + (secs as float) / 86400.0
+
+# Broken-down date and time of an Excel serial number.
+pub class XlsxDate:
+    pub year:   int
+    pub month:  int
+    pub day:    int
+    pub hour:   int
+    pub minute: int
+    pub second: int
+
+extend XlsxDate:
+    pub def from_serial(serial: float, date1904: bool) -> XlsxDate:
+        mut d = XlsxDate()
+        mut whole = _floor_f(serial)
+        mut secs = ((serial - whole) * 86400.0 + 0.5) as int
+        mut days = whole as int
+        if secs >= 86400:
+            secs = secs - 86400
+            days = days + 1
+        mut abs_days = 0
+        if date1904:
+            abs_days = days + _days_from_civil(1904, 1, 1)
+        else:
+            if days < 60: days = days + 1
+            abs_days = days + _days_from_civil(1899, 12, 30)
+        mut ymd: List[int] = [0, 0, 0]
+        _civil_from_days(abs_days, ymd)
+        d.year = ymd[0]
+        d.month = ymd[1]
+        d.day = ymd[2]
+        d.hour = secs / 3600
+        d.minute = (secs / 60) % 60
+        d.second = secs % 60
+        return d
+
+    pub def date_string(self) -> str:
+        return _pad(self.year, 4) + "-" + _pad(self.month, 2) + "-" + _pad(self.day, 2)
+
+    pub def time_string(self) -> str:
+        return _pad(self.hour, 2) + ":" + _pad(self.minute, 2) + ":" + _pad(self.second, 2)
+
+    pub def to_datetime(self) -> DateTime:
+        return DateTime.in_zone(self.year, self.month, self.day, self.hour, self.minute, self.second, TimeZone.utc())
+
+def _pad(n: int, w: int) -> str:
+    mut s = str(n)
+    while s.len() < w: s = "0" + s
+    return s
+
+# Built-in number format codes (ECMA-376 18.8.30). "" when unknown.
+pub def xlsx_builtin_format(id: int) -> str:
+    if id == 0: return "General"
+    if id == 1: return "0"
+    if id == 2: return "0.00"
+    if id == 3: return "#,##0"
+    if id == 4: return "#,##0.00"
+    if id == 9: return "0%"
+    if id == 10: return "0.00%"
+    if id == 11: return "0.00E+00"
+    if id == 12: return "# ?/?"
+    if id == 13: return "# ??/??"
+    if id == 14: return "mm-dd-yy"
+    if id == 15: return "d-mmm-yy"
+    if id == 16: return "d-mmm"
+    if id == 17: return "mmm-yy"
+    if id == 18: return "h:mm AM/PM"
+    if id == 19: return "h:mm:ss AM/PM"
+    if id == 20: return "h:mm"
+    if id == 21: return "h:mm:ss"
+    if id == 22: return "m/d/yy h:mm"
+    if id == 37: return "#,##0 ;(#,##0)"
+    if id == 38: return "#,##0 ;[Red](#,##0)"
+    if id == 39: return "#,##0.00;(#,##0.00)"
+    if id == 40: return "#,##0.00;[Red](#,##0.00)"
+    if id == 45: return "mm:ss"
+    if id == 46: return "[h]:mm:ss"
+    if id == 47: return "mmss.0"
+    if id == 48: return "##0.0E+0"
+    if id == 49: return "@"
+    return ""
+
+def _builtin_is_date(id: int) -> bool:
+    return (id >= 14 and id <= 22) or (id >= 27 and id <= 36) or (id >= 45 and id <= 47) or (id >= 50 and id <= 58)
+
+# True when a number format code displays a date and/or time: it has d, m,
+# y, h or s outside quoted text, escapes and [..] sections ([h] [mm] [ss]
+# elapsed-time sections count).
+pub def xlsx_is_date_format(code: str) -> bool:
+    mut n = code.len()
+    mut i = 0
+    while i < n:
+        mut c = _xb(code, i)
+        if c == 34:
+            i = i + 1
+            while i < n and _xb(code, i) != 34: i = i + 1
+            i = i + 1
+            continue
+        if c == 92 or c == 95 or c == 42:   # \x  _x  *x
+            i = i + 2
+            continue
+        if c == 59: return false     # only the first (positive) section matters
+        if c == 91:
+            mut j = i + 1
+            mut inner = ""
+            while j < n and _xb(code, j) != 93: j = j + 1
+            if j < n: inner = code.slice(i + 1, j).to_lower()
+            if inner.len() > 0:
+                mut k0 = _xb(inner, 0)
+                if k0 == 104 or k0 == 109 or k0 == 115:
+                    mut all_same = true
+                    mut k = 1
+                    while k < inner.len():
+                        if _xb(inner, k) != k0: all_same = false
+                        k = k + 1
+                    if all_same: return true
+            i = j + 1
+            continue
+        mut l = c
+        if l >= 65 and l <= 90: l = l + 32
+        if l == 100 or l == 109 or l == 121 or l == 104 or l == 115: return true
+        if l == 101 and i + 1 < n and _upper_c(_xb(code, i + 1)) == 43: return false   # E+ scientific
+        i = i + 1
+    return false
+
+# ── number formatting ───────────────────────────────────────────────────────
+
+# Shortest decimal text that reads back as exactly `x`; integers without ".0".
+pub def xlsx_num_str(x: float) -> str:
+    if x != x: return "NaN"
+    mut ax = x
+    if ax < 0.0: ax = 0.0 - ax
+    if ax < 1e15:
+        mut i = x as int
+        if (i as float) == x: return str(i)
+    mut s = f"{x:.15g}"
+    if float(s) == x: return s
+    s = f"{x:.16g}"
+    if float(s) == x: return s
+    return f"{x:.17g}"
+
+def _is_finite(x: float) -> bool:
+    if x != x: return false
+    return x < 1e308 and x > -1e308
+
+# ── styles ──────────────────────────────────────────────────────────────────
+
+# Cell formatting. "" / 0 / false fields mean "default". Colors are "RRGGBB"
+# or "AARRGGBB" hex (a leading '#' is accepted). Border styles: "thin",
+# "medium", "thick", "dashed", "dotted", "double", "hair", ... Alignment:
+# h_align "left" / "center" / "right" / "fill" / "justify" / "general",
+# v_align "top" / "center" / "bottom". num_fmt is an Excel format code
+# ("0.00", "#,##0", "0%", "yyyy-mm-dd", ...).
+pub class CellStyle:
+    pub bold:          bool
+    pub italic:        bool
+    pub underline:     bool
+    pub strike:        bool
+    pub font_name:     str
+    pub font_size:     float
+    pub font_color:    str
+    pub fill_color:    str
+    pub num_fmt:       str
+    pub border_left:   str
+    pub border_right:  str
+    pub border_top:    str
+    pub border_bottom: str
+    pub border_color:  str
+    pub h_align:       str
+    pub v_align:       str
+    pub wrap:          bool
+    pub indent:        int
+
+extend CellStyle:
+    pub def init() -> CellStyle:
+        mut s = CellStyle()
+        s.bold = false
+        s.italic = false
+        s.underline = false
+        s.strike = false
+        s.font_name = ""
+        s.font_size = 0.0
+        s.font_color = ""
+        s.fill_color = ""
+        s.num_fmt = ""
+        s.border_left = ""
+        s.border_right = ""
+        s.border_top = ""
+        s.border_bottom = ""
+        s.border_color = ""
+        s.h_align = ""
+        s.v_align = ""
+        s.wrap = false
+        s.indent = 0
+        return s
+
+    # Same border style on all four sides.
+    pub def set_border(self, style: str):
+        self.border_left = style
+        self.border_right = style
+        self.border_top = style
+        self.border_bottom = style
+
+    pub def clone(self) -> CellStyle:
+        mut s = CellStyle.init()
+        s.bold = self.bold
+        s.italic = self.italic
+        s.underline = self.underline
+        s.strike = self.strike
+        s.font_name = self.font_name
+        s.font_size = self.font_size
+        s.font_color = self.font_color
+        s.fill_color = self.fill_color
+        s.num_fmt = self.num_fmt
+        s.border_left = self.border_left
+        s.border_right = self.border_right
+        s.border_top = self.border_top
+        s.border_bottom = self.border_bottom
+        s.border_color = self.border_color
+        s.h_align = self.h_align
+        s.v_align = self.v_align
+        s.wrap = self.wrap
+        s.indent = self.indent
+        return s
+
+    pub def font_key(self) -> str:
+        mut sz = xlsx_num_str(self.font_size)
+        mut col = _norm_color(self.font_color)
+        return f"{self.bold}|{self.italic}|{self.underline}|{self.strike}|{self.font_name}|{sz}|{col}"
+
+    pub def border_key(self) -> str:
+        mut col = _norm_color(self.border_color)
+        return f"{self.border_left}|{self.border_right}|{self.border_top}|{self.border_bottom}|{col}"
+
+    pub def key(self) -> str:
+        mut fk = self.font_key()
+        mut bk = self.border_key()
+        mut fc = _norm_color(self.fill_color)
+        return f"{fk}#{fc}#{self.num_fmt}#{bk}#{self.h_align}|{self.v_align}|{self.wrap}|{self.indent}"
+
+    pub def is_default(self) -> bool:
+        mut d = CellStyle.init()
+        return self.key() == d.key()
+
+# "FF0000" / "#ff0000" -> "FFFF0000"; 8 digits kept; "" stays "".
+def _norm_color(c: str) -> str:
+    mut s = c
+    if s.starts_with("#"): s = s.slice(1, s.len())
+    s = s.to_upper()
+    if s.len() == 6: return "FF" + s
+    return s
+
+# ── cells ───────────────────────────────────────────────────────────────────
+
+pub class Cell:
+    pub row:     int
+    pub col:     int
+    pub kind:    int     # XLSX_EMPTY / STRING / NUMBER / BOOL / ERROR / DATE
+    pub text:    str     # string value, or error code ("#DIV/0!")
+    pub num:     float   # number, date serial, or 1.0 / 0.0 for booleans
+    pub formula: str     # formula without the leading '=' ("" if none)
+    pub style:   int     # index into the sheet's style table (0 = default)
+    pub d1904:   bool    # date serial is in the 1904 system
+    pub rich:    bool    # string came from a rich-text (multi-run) entry
+
+def _new_cell(row: int, col: int) -> Cell:
+    mut c = Cell()
+    c.row = row
+    c.col = col
+    c.kind = XLSX_EMPTY
+    c.text = ""
+    c.num = 0.0
+    c.formula = ""
+    c.style = 0
+    c.d1904 = false
+    c.rich = false
+    return c
+
+extend Cell:
+    pub def ref(self) -> str: return xlsx_ref(self.row, self.col)
+    pub def is_empty(self) -> bool: return self.kind == XLSX_EMPTY
+    pub def is_string(self) -> bool: return self.kind == XLSX_STRING
+    pub def is_number(self) -> bool: return self.kind == XLSX_NUMBER
+    pub def is_bool(self) -> bool: return self.kind == XLSX_BOOL
+    pub def is_error(self) -> bool: return self.kind == XLSX_ERROR
+    pub def is_date(self) -> bool: return self.kind == XLSX_DATE
+    pub def has_formula(self) -> bool: return self.formula.len() > 0
+
+    pub def kind_name(self) -> str:
+        if self.kind == XLSX_STRING: return "string"
+        if self.kind == XLSX_NUMBER: return "number"
+        if self.kind == XLSX_BOOL: return "bool"
+        if self.kind == XLSX_ERROR: return "error"
+        if self.kind == XLSX_DATE: return "date"
+        return "empty"
+
+    # Display text: strings as-is, numbers in shortest form, TRUE/FALSE,
+    # error codes, dates as "YYYY-MM-DD", "HH:MM:SS" or "YYYY-MM-DD HH:MM:SS".
+    pub def display(self) -> str:
+        if self.kind == XLSX_STRING or self.kind == XLSX_ERROR: return self.text
+        if self.kind == XLSX_NUMBER: return xlsx_num_str(self.num)
+        if self.kind == XLSX_BOOL:
+            if self.num != 0.0: return "TRUE"
+            return "FALSE"
+        if self.kind == XLSX_DATE:
+            mut d = XlsxDate.from_serial(self.num, self.d1904)
+            mut whole = _floor_f(self.num)
+            if self.num == whole: return d.date_string()
+            if self.num < 1.0 and self.num >= 0.0: return d.time_string()
+            mut ds = d.date_string()
+            mut ts = d.time_string()
+            return ds + " " + ts
+        return ""
+
+    pub def as_float(self) -> float:
+        if self.kind == XLSX_NUMBER or self.kind == XLSX_BOOL or self.kind == XLSX_DATE: return self.num
+        if self.kind == XLSX_STRING: return float(self.text.trim())
+        return 0.0
+
+    # Truncates toward zero; strings are parsed.
+    pub def as_int(self) -> int:
+        if self.kind == XLSX_STRING: return int(self.text.trim())
+        return self.as_float() as int
+
+    pub def as_bool(self) -> bool:
+        if self.kind == XLSX_BOOL or self.kind == XLSX_NUMBER: return self.num != 0.0
+        if self.kind == XLSX_STRING:
+            mut t = self.text.trim().to_lower()
+            return t == "true" or t == "1" or t == "yes"
+        return false
+
+    # Date parts of a date cell (or of any number taken as a serial).
+    pub def as_date(self) -> XlsxDate:
+        return XlsxDate.from_serial(self.num, self.d1904)
+
+    # Date cell as a DateTime (wall-clock fields, tagged UTC).
+    pub def as_datetime(self) -> DateTime:
+        mut d = XlsxDate.from_serial(self.num, self.d1904)
+        return d.to_datetime()
+
+# One run of a rich-text string.
+pub class TextRun:
+    pub text:      str
+    pub bold:      bool
+    pub italic:    bool
+    pub underline: bool
+    pub strike:    bool
+    pub color:     str
+    pub font:      str
+    pub size:      float
+
+def _new_run() -> TextRun:
+    mut r = TextRun()
+    r.text = ""
+    r.bold = false
+    r.italic = false
+    r.underline = false
+    r.strike = false
+    r.color = ""
+    r.font = ""
+    r.size = 0.0
+    return r
+
+pub class Hyperlink:
+    pub ref:      str   # cell or range the link sits on
+    pub target:   str   # external URL ("" for an in-workbook link)
+    pub location: str   # in-workbook target, e.g. "Sheet2!A1"
+    pub tooltip:  str
+    pub display:  str
+
+pub class ColumnInfo:
+    pub min:    int
+    pub max:    int
+    pub width:  float
+    pub hidden: bool
+
+pub class RowInfo:
+    pub row:    int
+    pub height: float
+    pub hidden: bool
+
+# Dict[*, int] values are stored as index + 1: the runtime's has() reports a
+# key whose value is 0 as missing.
+def _cell_key(row: int, col: int) -> int:
+    return row * 20000 + col
+
+# ── worksheets ──────────────────────────────────────────────────────────────
+
+pub class Worksheet:
+    pub name:        str
+    pub state:       str     # "visible", "hidden" or "veryHidden"
+    pub cells:       List[Cell]
+    pub cmap:        Dict[int, int]
+    pub styles:      List[CellStyle]
+    pub style_keys:  Dict[str, int]
+    pub merged:      List[str]
+    pub columns:     List[ColumnInfo]
+    pub row_info:    List[RowInfo]
+    pub links:       List[Hyperlink]
+    pub run_keys:    List[int]
+    pub runs:        List[TextRun]
+    pub dimension:   str     # <dimension ref> as read ("" for new sheets)
+    pub freeze_rows: int
+    pub freeze_cols: int
+    pub auto_filter: str
+    pub d1904:       bool
+
+def _new_sheet(name: str, d1904: bool) -> Worksheet:
+    mut ws = Worksheet()
+    ws.name = name
+    ws.state = "visible"
+    ws.cells = []
+    ws.cmap = {}
+    ws.styles = []
+    ws.style_keys = {}
+    ws.merged = []
+    ws.columns = []
+    ws.row_info = []
+    ws.links = []
+    ws.run_keys = []
+    ws.runs = []
+    ws.dimension = ""
+    ws.freeze_rows = 0
+    ws.freeze_cols = 0
+    ws.auto_filter = ""
+    ws.d1904 = d1904
+    mut def_style = CellStyle.init()
+    ws.styles.append(def_style)
+    mut dk = def_style.key()
+    ws.style_keys.set(dk, 1)
+    return ws
+
+def _ref_or_raise(ref: str, out: List[int]) throws str:
+    mut e = _parse_ref_at(ref, 0, out)
+    if e < 0 or e != ref.len(): raise(f"xlsx: invalid cell reference '{ref}'")
+
+extend Worksheet:
+    pub def is_hidden(self) -> bool: return self.state != "visible"
+
+    # The cell at (row, col), or a fresh empty one (not stored) if unset.
+    pub def cell_at(self, row: int, col: int) -> Cell:
+        mut k = _cell_key(row, col)
+        if self.cmap.has(k): return self.cells[(self.cmap.get(k) - 1)]
+        return _new_cell(row, col)
+
+    # The cell at "B3"; an empty cell for unset or invalid references.
+    pub def cell(self, ref: str) -> Cell:
+        mut o: List[int] = [0, 0]
+        mut e = _parse_ref_at(ref, 0, o)
+        if e < 0 or e != ref.len(): return _new_cell(0, 0)
+        return self.cell_at(o[0], o[1])
+
+    pub def has_cell(self, row: int, col: int) -> bool:
+        return self.cmap.has(_cell_key(row, col))
+
+    # Stored cell at (row, col), created if missing.
+    pub def touch(self, row: int, col: int) -> Cell:
+        mut k = _cell_key(row, col)
+        if self.cmap.has(k): return self.cells[(self.cmap.get(k) - 1)]
+        mut c = _new_cell(row, col)
+        c.d1904 = self.d1904
+        self.cmap.set(k, self.cells.len() + 1)
+        self.cells.append(c)
+        return c
+
+    def _set_value(self, row: int, col: int, kind: int, text: str, num: float) -> Cell:
+        mut c = self.touch(row, col)
+        c.kind = kind
+        c.text = text
+        c.num = num
+        c.formula = ""
+        c.rich = false
+        c.d1904 = self.d1904
+        return c
+
+    # ── setters by row / column ──
+    pub def set_str_at(self, row: int, col: int, v: str):
+        self._set_value(row, col, XLSX_STRING, v, 0.0)
+
+    pub def set_int_at(self, row: int, col: int, v: int):
+        self._set_value(row, col, XLSX_NUMBER, "", v as float)
+
+    pub def set_float_at(self, row: int, col: int, v: float):
+        if _is_finite(v):
+            self._set_value(row, col, XLSX_NUMBER, "", v)
+        else:
+            self._set_value(row, col, XLSX_ERROR, "#NUM!", 0.0)
+
+    pub def set_bool_at(self, row: int, col: int, v: bool):
+        mut x = 0.0
+        if v: x = 1.0
+        self._set_value(row, col, XLSX_BOOL, "", x)
+
+    # Error value: "#N/A", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#NULL!".
+    pub def set_error_at(self, row: int, col: int, code: str):
+        self._set_value(row, col, XLSX_ERROR, code, 0.0)
+
+    pub def set_date_at(self, row: int, col: int, year: int, month: int, day: int):
+        mut s = xlsx_date_serial(year, month, day, 0, 0, 0, self.d1904)
+        self._set_value(row, col, XLSX_DATE, "", s)
+
+    pub def set_datetime_at(self, row: int, col: int, dt: DateTime):
+        mut s = xlsx_date_serial(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, self.d1904)
+        self._set_value(row, col, XLSX_DATE, "", s)
+
+    pub def set_date_serial_at(self, row: int, col: int, serial: float):
+        self._set_value(row, col, XLSX_DATE, "", serial)
+
+    # Formula text with or without the leading '='; Excel and LibreOffice
+    # compute the value on open.
+    pub def set_formula_at(self, row: int, col: int, f: str):
+        mut c = self._set_value(row, col, XLSX_EMPTY, "", 0.0)
+        mut t = f
+        if t.starts_with("="): t = t.slice(1, t.len())
+        c.formula = t
+
+    # ── setters by reference ("B3") ──
+    pub def set_str(self, ref: str, v: str) throws str:
+        mut o: List[int] = [0, 0]
+        _ref_or_raise(ref, o)?
+        self.set_str_at(o[0], o[1], v)
+
+    pub def set_int(self, ref: str, v: int) throws str:
+        mut o: List[int] = [0, 0]
+        _ref_or_raise(ref, o)?
+        self.set_int_at(o[0], o[1], v)
+
+    pub def set_float(self, ref: str, v: float) throws str:
+        mut o: List[int] = [0, 0]
+        _ref_or_raise(ref, o)?
+        self.set_float_at(o[0], o[1], v)
+
+    pub def set_bool(self, ref: str, v: bool) throws str:
+        mut o: List[int] = [0, 0]
+        _ref_or_raise(ref, o)?
+        self.set_bool_at(o[0], o[1], v)
+
+    pub def set_error(self, ref: str, code: str) throws str:
+        mut o: List[int] = [0, 0]
+        _ref_or_raise(ref, o)?
+        self.set_error_at(o[0], o[1], code)
+
+    pub def set_date(self, ref: str, year: int, month: int, day: int) throws str:
+        mut o: List[int] = [0, 0]
+        _ref_or_raise(ref, o)?
+        self.set_date_at(o[0], o[1], year, month, day)
+
+    pub def set_datetime(self, ref: str, dt: DateTime) throws str:
+        mut o: List[int] = [0, 0]
+        _ref_or_raise(ref, o)?
+        self.set_datetime_at(o[0], o[1], dt)
+
+    pub def set_formula(self, ref: str, f: str) throws str:
+        mut o: List[int] = [0, 0]
+        _ref_or_raise(ref, o)?
+        self.set_formula_at(o[0], o[1], f)
+
+    # Remove a cell's value and style.
+    pub def clear_at(self, row: int, col: int):
+        mut k = _cell_key(row, col)
+        if not self.cmap.has(k): return
+        mut c = self.cells[(self.cmap.get(k) - 1)]
+        c.kind = XLSX_EMPTY
+        c.text = ""
+        c.num = 0.0
+        c.formula = ""
+        c.style = 0
+        c.rich = false
+
+    # ── styles ──
+    # Index of `st` in this sheet's style table (added if new).
+    pub def style_id(self, st: CellStyle) -> int:
+        mut k = st.key()
+        if self.style_keys.has(k): return (self.style_keys.get(k) - 1)
+        mut id = self.styles.len()
+        self.styles.append(st.clone())
+        self.style_keys.set(k, id + 1)
+        return id
+
+    pub def set_style_at(self, row: int, col: int, st: CellStyle):
+        mut id = self.style_id(st)
+        mut c = self.touch(row, col)
+        c.style = id
+
+    pub def set_style(self, ref: str, st: CellStyle) throws str:
+        mut o: List[int] = [0, 0]
+        _ref_or_raise(ref, o)?
+        self.set_style_at(o[0], o[1], st)
+
+    # Style every cell of a range ("A1:D1"), creating empty cells as needed.
+    pub def set_range_style(self, range: str, st: CellStyle) throws str:
+        mut r = CellRange.parse(range)?
+        mut id = self.style_id(st)
+        mut row = r.r1
+        while row <= r.r2:
+            mut col = r.c1
+            while col <= r.c2:
+                mut c = self.touch(row, col)
+                c.style = id
+                col = col + 1
+            row = row + 1
+
+    # A copy of the style of a cell (the default style for unset cells).
+    pub def style_at(self, row: int, col: int) -> CellStyle:
+        mut c = self.cell_at(row, col)
+        if c.style < 0 or c.style >= self.styles.len(): return CellStyle.init()
+        return self.styles[c.style].clone()
+
+    pub def style_of(self, ref: str) -> CellStyle:
+        mut o: List[int] = [0, 0]
+        mut e = _parse_ref_at(ref, 0, o)
+        if e < 0 or e != ref.len(): return CellStyle.init()
+        return self.style_at(o[0], o[1])
+
+    # Number format code of a cell ("General" when none).
+    pub def number_format(self, ref: str) -> str:
+        mut st = self.style_of(ref)
+        if st.num_fmt == "": return "General"
+        return st.num_fmt
+
+    # ── rich text ──
+    # Runs of a rich-text string cell (empty for plain cells).
+    pub def rich_runs(self, ref: str) -> List[TextRun]:
+        mut out: List[TextRun] = []
+        mut o: List[int] = [0, 0]
+        mut e = _parse_ref_at(ref, 0, o)
+        if e < 0 or e != ref.len(): return out
+        mut k = _cell_key(o[0], o[1])
+        mut i = 0
+        while i < self.run_keys.len():
+            if self.run_keys[i] == k: out.append(self.runs[i])
+            i = i + 1
+        return out
+
+    # ── layout ──
+    pub def merge(self, range: str) throws str:
+        mut r = CellRange.parse(range)?
+        mut s = r.to_string()
+        mut i = 0
+        while i < self.merged.len():
+            mut cur = self.merged[i]
+            mut o = CellRange.parse(cur)?
+            if o.overlaps(r): raise(f"xlsx: merged range {s} overlaps {cur}")
+            i = i + 1
+        self.merged.append(s)
+
+    pub def merged_ranges(self) -> List[CellRange]:
+        mut out: List[CellRange] = []
+        for m in self.merged:
+            mut rr: Result[CellRange, str] = CellRange.parse(m)
+            if rr.is_ok: out.append(rr.ok)
+        return out
+
+    # The merged range covering (row, col), as text ("" if none).
+    pub def merged_range_at(self, row: int, col: int) -> str:
+        for m in self.merged:
+            mut rr: Result[CellRange, str] = CellRange.parse(m)
+            if rr.is_ok and rr.ok.contains(row, col): return m
+        return ""
+
+    pub def set_column_width(self, col: int, width: float):
+        self.set_columns_width(col, col, width)
+
+    # Width (in characters, like Excel) for columns c1..c2.
+    pub def set_columns_width(self, c1: int, c2: int, width: float):
+        mut out: List[ColumnInfo] = []
+        for ci in self.columns:
+            if ci.max < c1 or ci.min > c2:
+                out.append(ci)
+                continue
+            if ci.min < c1:
+                mut a = ColumnInfo()
+                a.min = ci.min
+                a.max = c1 - 1
+                a.width = ci.width
+                a.hidden = ci.hidden
+                out.append(a)
+            if ci.max > c2:
+                mut b = ColumnInfo()
+                b.min = c2 + 1
+                b.max = ci.max
+                b.width = ci.width
+                b.hidden = ci.hidden
+                out.append(b)
+        mut n = ColumnInfo()
+        n.min = c1
+        n.max = c2
+        n.width = width
+        n.hidden = false
+        out.append(n)
+        self.columns = out
+
+    # Width of a column, or 0.0 when it has the default width.
+    pub def column_width(self, col: int) -> float:
+        for ci in self.columns:
+            if col >= ci.min and col <= ci.max: return ci.width
+        return 0.0
+
+    pub def column_hidden(self, col: int) -> bool:
+        for ci in self.columns:
+            if col >= ci.min and col <= ci.max: return ci.hidden
+        return false
+
+    # Height in points.
+    pub def set_row_height(self, row: int, height: float):
+        for ri in self.row_info:
+            if ri.row == row:
+                ri.height = height
+                return
+        mut r = RowInfo()
+        r.row = row
+        r.height = height
+        r.hidden = false
+        self.row_info.append(r)
+
+    pub def row_height(self, row: int) -> float:
+        for ri in self.row_info:
+            if ri.row == row: return ri.height
+        return 0.0
+
+    pub def row_hidden(self, row: int) -> bool:
+        for ri in self.row_info:
+            if ri.row == row: return ri.hidden
+        return false
+
+    # Freeze the rows above and the columns left of `ref` ("B2" freezes row 1
+    # and column A; "A1" unfreezes).
+    pub def freeze_panes(self, ref: str) throws str:
+        mut o: List[int] = [0, 0]
+        _ref_or_raise(ref, o)?
+        self.freeze_rows = o[0] - 1
+        self.freeze_cols = o[1] - 1
+
+    pub def set_auto_filter(self, range: str) throws str:
+        mut r = CellRange.parse(range)?
+        self.auto_filter = r.to_string()
+
+    # Link a cell to a URL ("https://...", "mailto:...").
+    pub def add_link(self, ref: str, url: str) throws str:
+        mut o: List[int] = [0, 0]
+        _ref_or_raise(ref, o)?
+        mut h = Hyperlink()
+        h.ref = ref.replace("$", "")
+        h.target = url
+        h.location = ""
+        h.tooltip = ""
+        h.display = ""
+        self.links.append(h)
+
+    # Link a cell to a place in the workbook ("Sheet2!A1").
+    pub def add_internal_link(self, ref: str, location: str) throws str:
+        mut o: List[int] = [0, 0]
+        _ref_or_raise(ref, o)?
+        mut h = Hyperlink()
+        h.ref = ref.replace("$", "")
+        h.target = ""
+        h.location = location
+        h.tooltip = ""
+        h.display = ""
+        self.links.append(h)
+
+    # The link on a cell, or one with empty target and location.
+    pub def link_at(self, ref: str) -> Hyperlink:
+        mut r = xlsx_ref_row(ref)
+        mut c = xlsx_ref_col(ref)
+        for h in self.links:
+            mut rr: Result[CellRange, str] = CellRange.parse(h.ref)
+            if rr.is_ok and rr.ok.contains(r, c): return h
+        mut e = Hyperlink()
+        e.ref = ""
+        e.target = ""
+        e.location = ""
+        e.tooltip = ""
+        e.display = ""
+        return e
+
+    # ── extent and iteration ──
+    def _has_content(self, c: Cell) -> bool:
+        return c.kind != XLSX_EMPTY or c.formula.len() > 0
+
+    # Last row / column holding a value or formula (0 for an empty sheet).
+    pub def max_row(self) -> int:
+        mut m = 0
+        for c in self.cells:
+            if self._has_content(c) and c.row > m: m = c.row
+        return m
+
+    pub def max_col(self) -> int:
+        mut m = 0
+        for c in self.cells:
+            if self._has_content(c) and c.col > m: m = c.col
+        return m
+
+    pub def min_row(self) -> int:
+        mut m = 0
+        for c in self.cells:
+            if self._has_content(c) and (m == 0 or c.row < m): m = c.row
+        return m
+
+    pub def min_col(self) -> int:
+        mut m = 0
+        for c in self.cells:
+            if self._has_content(c) and (m == 0 or c.col < m): m = c.col
+        return m
+
+    # Used range "A1:C10" from the cells (for an empty sheet "A1").
+    pub def used_range(self) -> str:
+        mut r2 = self.max_row()
+        if r2 == 0: return "A1"
+        mut rng = CellRange.init(self.min_row(), self.min_col(), r2, self.max_col())
+        return rng.to_string()
+
+    # Number of stored cells with a value or formula.
+    pub def cell_count(self) -> int:
+        mut n = 0
+        for c in self.cells:
+            if self._has_content(c): n = n + 1
+        return n
+
+    # All stored cells with a value or formula, in row-major order.
+    pub def all_cells(self) -> List[Cell]:
+        mut keys: List[int] = []
+        for c in self.cells:
+            if self._has_content(c): keys.append(_cell_key(c.row, c.col))
+        keys.sort()
+        mut out: List[Cell] = []
+        for k in keys: out.append(self.cells[(self.cmap.get(k) - 1)])
+        return out
+
+    # Rows 1..max_row(), each with columns 1..max_col() (missing cells empty).
+    pub def rows(self) -> List[List[Cell]]:
+        mut out: List[List[Cell]] = []
+        mut nr = self.max_row()
+        mut nc = self.max_col()
+        mut r = 1
+        while r <= nr:
+            mut line: List[Cell] = []
+            mut c = 1
+            while c <= nc:
+                line.append(self.cell_at(r, c))
+                c = c + 1
+            out.append(line)
+            r = r + 1
+        return out
+
+    # Display text of row `row`, columns 1..max_col().
+    pub def row_values(self, row: int) -> List[str]:
+        mut out: List[str] = []
+        mut nc = self.max_col()
+        mut c = 1
+        while c <= nc:
+            mut cc = self.cell_at(row, c)
+            out.append(cc.display())
+            c = c + 1
+        return out
+
+    pub def values(self) -> List[List[str]]:
+        mut out: List[List[str]] = []
+        mut nr = self.max_row()
+        mut r = 1
+        while r <= nr:
+            out.append(self.row_values(r))
+            r = r + 1
+        return out
+
+    # CSV (RFC 4180, CRLF line ends) of rows 1..max_row(), cols 1..max_col().
+    pub def to_csv(self) -> str:
+        return self.to_csv_with_delimiter(44)
+
+    pub def to_csv_with_delimiter(self, delim: int) -> str:
+        mut sb = StringBuilder.init(1024)
+        mut nr = self.max_row()
+        mut nc = self.max_col()
+        mut r = 1
+        while r <= nr:
+            mut c = 1
+            while c <= nc:
+                if c > 1: sb.append_char(delim)
+                mut cc = self.cell_at(r, c)
+                mut v = cc.display()
+                _csv_write_field(v, delim, sb)
+                c = c + 1
+            sb.append("\r\n")
+            r = r + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+# ── shared formulas ─────────────────────────────────────────────────────────
+
+def _is_name_char(c: int) -> bool:
+    return _is_alpha(c) or _is_digit(c) or c == 95 or c == 46
+
+# Move the relative cell references of formula `f` by (dr, dc): what Excel
+# does when it expands a shared formula into its other cells.
+pub def xlsx_shift_formula(f: str, dr: int, dc: int) -> str:
+    mut sb = StringBuilder.init(f.len() + 8)
+    mut n = f.len()
+    mut i = 0
+    while i < n:
+        mut c = _xb(f, i)
+        if c == 34 or c == 39:
+            sb.append_char(c)
+            i = i + 1
+            while i < n:
+                mut d = _xb(f, i)
+                sb.append_char(d)
+                i = i + 1
+                if d == c:
+                    if i < n and _xb(f, i) == c:
+                        sb.append_char(c)
+                        i = i + 1
+                    else:
+                        break
+            continue
+        if c == 36 or _is_alpha(c):
+            mut prev_ok = i == 0 or not _is_name_char(_xb(f, i - 1))
+            if prev_ok:
+                # try a cell reference
+                mut j = i
+                mut cabs = false
+                mut rabs = false
+                if _xb(f, j) == 36:
+                    cabs = true
+                    j = j + 1
+                mut ca = j
+                while j < n and _is_alpha(_xb(f, j)): j = j + 1
+                mut cb = j
+                if j < n and _xb(f, j) == 36:
+                    rabs = true
+                    j = j + 1
+                mut ra = j
+                while j < n and _is_digit(_xb(f, j)): j = j + 1
+                mut rb = j
+                mut next_ok = j >= n or not (_is_name_char(_xb(f, j)) or _xb(f, j) == 40 or _xb(f, j) == 33)
+                if cb > ca and cb - ca <= 3 and rb > ra and next_ok:
+                    mut col = xlsx_col_index(f.slice(ca, cb))
+                    mut row = int(f.slice(ra, rb))
+                    if col > 0 and row > 0:
+                        if not cabs: col = col + dc
+                        if not rabs: row = row + dr
+                        if col < 1 or row < 1:
+                            sb.append("#REF!")
+                        else:
+                            if cabs: sb.append_char(36)
+                            sb.append(xlsx_col_name(col))
+                            if rabs: sb.append_char(36)
+                            sb.append(str(row))
+                        i = j
+                        continue
+            # a name / function: copy it whole
+            sb.append_char(c)
+            i = i + 1
+            while i < n and (_is_name_char(_xb(f, i)) or _xb(f, i) == 36):
+                sb.append_char(_xb(f, i))
+                i = i + 1
+            continue
+        if _is_digit(c):
+            # numbers (and things like "1E+10") copied whole
+            while i < n and _is_name_char(_xb(f, i)):
+                sb.append_char(_xb(f, i))
+                i = i + 1
+            continue
+        sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# ── OOXML string escapes (_xHHHH_) ──────────────────────────────────────────
+
+def _hex4(s: str, i: int) -> int:
+    mut v = 0
+    mut k = 0
+    while k < 4:
+        mut c = _xb(s, i + k)
+        mut d = -1
+        if c >= 48 and c <= 57: d = c - 48
+        elif c >= 97 and c <= 102: d = c - 87
+        elif c >= 65 and c <= 70: d = c - 55
+        if d < 0: return -1
+        v = v * 16 + d
+        k = k + 1
+    return v
+
+# Decode "_x000D_"-style escapes in stored strings.
+pub def xlsx_unescape_ooxml(s: str) -> str:
+    if s.find("_x") < 0: return s
+    mut sb = StringBuilder.init(s.len())
+    mut n = s.len()
+    mut i = 0
+    while i < n:
+        mut c = _xb(s, i)
+        if c == 95 and i + 6 < n and _xb(s, i + 1) == 120 and _xb(s, i + 6) == 95:
+            mut v = _hex4(s, i + 2)
+            if v >= 0:
+                xlsx_put_utf8(sb, v)
+                i = i + 7
+                continue
+        sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# ── reader ──────────────────────────────────────────────────────────────────
+
+class _Rel:
+    id:     str
+    rtype:  str
+    target: str
+    mode:   str
+
+class _Xf:
+    style:   CellStyle
+    is_date: bool
+
+def _zip_part(z: ZipReader, name: str) -> str:
+    mut i = z.find_entry(name)
+    if i < 0: return ""
+    return z.read_entry(i)
+
+def _parse_rels(src: str) -> List[_Rel]:
+    mut out: List[_Rel] = []
+    if src.len() == 0: return out
+    mut r = XlsxXml.init(src)
+    while r.next() != XX_EOF:
+        if r.kind == XX_START and r.name == "Relationship":
+            mut rel = _Rel()
+            rel.id = r.attr("Id")
+            rel.rtype = r.attr("Type")
+            rel.target = r.attr("Target")
+            rel.mode = r.attr("TargetMode")
+            out.append(rel)
+    return out
+
+# Resolve a relationship target against the directory of its source part.
+def _resolve(base_dir: str, target: str) -> str:
+    if target.starts_with("/"): return target.slice(1, target.len())
+    mut parts: List[str] = []
+    if base_dir.len() > 0:
+        for p in base_dir.split_exact("/"):
+            if p.len() > 0: parts.append(p)
+    for p in target.split_exact("/"):
+        if p == "..":
+            if parts.len() > 0: parts.pop()
+        elif p != "." and p.len() > 0:
+            parts.append(p)
+    mut sb = StringBuilder.init(32)
+    mut i = 0
+    while i < parts.len():
+        if i > 0: sb.append("/")
+        sb.append(parts[i])
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _dir_of(path: str) -> str:
+    mut i = path.len() - 1
+    while i >= 0 and _xb(path, i) != 47: i = i - 1
+    if i <= 0: return ""
+    return path.slice(0, i)
+
+def _rel_by_type(rels: List[_Rel], suffix: str) -> str:
+    for r in rels:
+        if r.rtype.ends_with(suffix): return r.target
+    return ""
+
+def _attr_on(v: str) -> bool:
+    return not (v == "0" or v == "false" or v == "none")
+
+# styles.xml -> list of cell formats.
+def _parse_styles(src: str) -> List[_Xf]:
+    mut out: List[_Xf] = []
+    if src.len() == 0: return out
+    mut fmt_ids: List[int] = []
+    mut fmt_codes: List[str] = []
+    mut fonts: List[CellStyle] = []
+    mut fills: List[str] = []
+    mut borders: List[CellStyle] = []
+    mut r = XlsxXml.init(src)
+    mut section = ""
+    mut cur = CellStyle.init()
+    mut side = ""
+    mut in_font = false
+    mut in_fill = false
+    mut fill_col = ""
+    mut in_xf = false
+    while r.next() != XX_EOF:
+        if r.kind == XX_START:
+            mut nm = r.name
+            if nm == "numFmt":
+                fmt_ids.append(int(r.attr("numFmtId")))
+                fmt_codes.append(r.attr("formatCode"))
+            elif nm == "fonts" or nm == "fills" or nm == "borders" or nm == "cellXfs" or nm == "cellStyleXfs" or nm == "dxfs":
+                section = nm
+            elif section == "fonts" and nm == "font":
+                cur = CellStyle.init()
+                in_font = true
+            elif in_font:
+                mut v = r.attr("val")
+                if nm == "b": cur.bold = _attr_on(v)
+                elif nm == "i": cur.italic = _attr_on(v)
+                elif nm == "u": cur.underline = _attr_on(v)
+                elif nm == "strike": cur.strike = _attr_on(v)
+                elif nm == "sz": cur.font_size = float(v)
+                elif nm == "name": cur.font_name = v
+                elif nm == "color": cur.font_color = r.attr("rgb")
+            elif section == "fills" and nm == "fill":
+                in_fill = true
+                fill_col = ""
+            elif in_fill and nm == "patternFill":
+                if r.attr("patternType") == "none" or r.attr("patternType") == "gray125": fill_col = "-"
+            elif in_fill and nm == "fgColor":
+                if fill_col != "-": fill_col = r.attr("rgb")
+            elif section == "borders" and nm == "border":
+                cur = CellStyle.init()
+            elif section == "borders" and (nm == "left" or nm == "right" or nm == "top" or nm == "bottom" or nm == "start" or nm == "end"):
+                side = nm
+                mut bs = r.attr("style")
+                if nm == "left" or nm == "start": cur.border_left = bs
+                elif nm == "right" or nm == "end": cur.border_right = bs
+                elif nm == "top": cur.border_top = bs
+                else: cur.border_bottom = bs
+            elif section == "borders" and nm == "color" and side != "":
+                mut bc = r.attr("rgb")
+                if bc != "": cur.border_color = bc
+            elif section == "cellXfs" and nm == "xf":
+                in_xf = true
+                mut xf = _Xf()
+                mut st = CellStyle.init()
+                mut fid = int(r.attr("fontId"))
+                if fid >= 0 and fid < fonts.len():
+                    mut f = fonts[fid]
+                    st.bold = f.bold
+                    st.italic = f.italic
+                    st.underline = f.underline
+                    st.strike = f.strike
+                    st.font_name = f.font_name
+                    st.font_size = f.font_size
+                    st.font_color = f.font_color
+                mut flid = int(r.attr("fillId"))
+                if flid >= 0 and flid < fills.len(): st.fill_color = _own(fills[flid])
+                mut bid = int(r.attr("borderId"))
+                if bid >= 0 and bid < borders.len():
+                    mut b = borders[bid]
+                    st.border_left = b.border_left
+                    st.border_right = b.border_right
+                    st.border_top = b.border_top
+                    st.border_bottom = b.border_bottom
+                    st.border_color = b.border_color
+                mut nid = int(r.attr("numFmtId"))
+                mut code = ""
+                mut k = 0
+                while k < fmt_ids.len():
+                    if fmt_ids[k] == nid: code = fmt_codes[k]
+                    k = k + 1
+                xf.is_date = false
+                if code.len() > 0:
+                    xf.is_date = xlsx_is_date_format(code)
+                else:
+                    code = xlsx_builtin_format(nid)
+                    xf.is_date = _builtin_is_date(nid)
+                    if code == "" and xf.is_date: code = "yyyy-mm-dd"
+                if code == "General": code = ""
+                st.num_fmt = code
+                xf.style = st
+                out.append(xf)
+                if r.pending_end: in_xf = false
+            elif in_xf and nm == "alignment":
+                mut last = out[out.len() - 1]
+                last.style.h_align = r.attr("horizontal")
+                last.style.v_align = r.attr("vertical")
+                last.style.wrap = r.attr("wrapText") == "1" or r.attr("wrapText") == "true"
+                mut ind = r.attr("indent")
+                if ind != "": last.style.indent = int(ind)
+        elif r.kind == XX_END:
+            mut en = r.name
+            if en == "font" and in_font:
+                in_font = false
+                fonts.append(cur)
+            elif en == "fill" and in_fill:
+                in_fill = false
+                if fill_col == "-": fill_col = ""
+                fills.append(fill_col)
+            elif en == "border" and section == "borders":
+                borders.append(cur)
+                side = ""
+            elif en == "left" or en == "right" or en == "top" or en == "bottom" or en == "start" or en == "end":
+                side = ""
+            elif en == "xf":
+                in_xf = false
+            elif en == section:
+                section = ""
+    return out
+
+# One <si>/<is>: concatenated text plus runs (rPh phonetic runs skipped).
+# Assumes the reader is just past the START of `si` / `is`.
+def _read_string_item(r: XlsxXml, runs: List[TextRun]) -> str:
+    mut d = r.depth
+    mut sb = StringBuilder.init(16)
+    mut in_run = false
+    mut in_rpr = false
+    mut run = _new_run()
+    mut run_sb = StringBuilder.init(16)
+    while true:
+        mut e = r.next()
+        if e == XX_EOF: break
+        if e == XX_END and r.depth < d: break
+        if e == XX_START:
+            mut nm = r.name
+            if nm == "rPh" or nm == "phoneticPr":
+                r.skip()
+            elif nm == "r":
+                in_run = true
+                run = _new_run()
+                run_sb.clear()
+            elif nm == "rPr":
+                in_rpr = true
+            elif in_rpr:
+                mut v = r.attr("val")
+                if nm == "b": run.bold = _attr_on(v)
+                elif nm == "i": run.italic = _attr_on(v)
+                elif nm == "u": run.underline = _attr_on(v)
+                elif nm == "strike": run.strike = _attr_on(v)
+                elif nm == "sz": run.size = float(v)
+                elif nm == "rFont": run.font = v
+                elif nm == "color": run.color = r.attr("rgb")
+            elif nm == "t":
+                mut t = r.read_text()
+                sb.append(t)
+                if in_run: run_sb.append(t)
+        elif e == XX_END:
+            if r.name == "rPr": in_rpr = false
+            elif r.name == "r" and in_run:
+                in_run = false
+                mut rt = run_sb.to_owned()
+                run.text = xlsx_unescape_ooxml(rt)
+                runs.append(run)
+    run_sb.free()
+    mut out = sb.to_owned()
+    sb.free()
+    return xlsx_unescape_ooxml(out)
+
+class _Sst:
+    texts:      List[str]
+    run_start:  List[int]
+    run_count:  List[int]
+    runs:       List[TextRun]
+
+def _parse_sst(src: str) -> _Sst:
+    mut s = _Sst()
+    s.texts = []
+    s.run_start = []
+    s.run_count = []
+    s.runs = []
+    if src.len() == 0: return s
+    mut r = XlsxXml.init(src)
+    while r.next() != XX_EOF:
+        if r.kind == XX_START and r.name == "si":
+            mut runs: List[TextRun] = []
+            mut t = _read_string_item(r, runs)
+            s.texts.append(t)
+            if runs.len() > 0:
+                s.run_start.append(s.runs.len())
+                s.run_count.append(runs.len())
+                for x in runs: s.runs.append(x)
+            else:
+                s.run_start.append(-1)
+                s.run_count.append(0)
+    return s
+
+# "2024-01-15T13:45:30" (t="d" cells) -> serial.
+def _iso_to_serial(v: str, d1904: bool) -> float:
+    mut nums: List[int] = [0, 0, 0, 0, 0, 0]
+    mut k = 0
+    mut i = 0
+    mut n = v.len()
+    mut cur = 0
+    mut have = false
+    while i < n and k < 6:
+        mut c = _xb(v, i)
+        if _is_digit(c):
+            cur = cur * 10 + (c - 48)
+            have = true
+        else:
+            if have:
+                nums[k] = cur
+                k = k + 1
+            cur = 0
+            have = false
+            if c == 46 or c == 90 or c == 43: break
+        i = i + 1
+    if have and k < 6: nums[k] = cur
+    if nums[0] == 0: return 0.0
+    return xlsx_date_serial(nums[0], nums[1], nums[2], nums[3], nums[4], nums[5], d1904)
+
+def _read_sheet(ws: Worksheet, src: str, sst: _Sst, xfs: List[_Xf], rels: List[_Rel], xfmap: Dict[int, int]):
+    mut r = XlsxXml.init(src)
+    mut row = 0
+    mut col = 0
+    mut sf_si: List[int] = []
+    mut sf_text: List[str] = []
+    mut sf_row: List[int] = []
+    mut sf_col: List[int] = []
+    mut o: List[int] = [0, 0]
+    while r.next() != XX_EOF:
+        if r.kind != XX_START: continue
+        mut nm = r.name
+        if nm == "row":
+            mut rs = r.attr("r")
+            if rs != "": row = int(rs)
+            else: row = row + 1
+            col = 0
+            mut ht = r.attr("ht")
+            mut hid = r.attr("hidden")
+            if ht != "" or hid == "1" or hid == "true":
+                mut ri = RowInfo()
+                ri.row = row
+                ri.height = float(ht)
+                ri.hidden = hid == "1" or hid == "true"
+                ws.row_info.append(ri)
+        elif nm == "c":
+            mut cr = r.attr("r")
+            if cr != "" and _parse_ref_at(cr, 0, o) == cr.len():
+                row = o[0]
+                col = o[1]
+            else:
+                col = col + 1
+                if row == 0: row = 1
+            mut t = r.attr("t")
+            mut sidx = r.attr("s")
+            mut v = ""
+            mut has_v = false
+            mut ftext = ""
+            mut inline = ""
+            mut inline_runs: List[TextRun] = []
+            if not r.pending_end:
+                mut d = r.depth
+                while true:
+                    mut e = r.next()
+                    if e == XX_EOF: break
+                    if e == XX_END and r.depth < d: break
+                    if e == XX_START:
+                        if r.name == "v":
+                            v = r.read_text()
+                            has_v = true
+                        elif r.name == "f":
+                            mut ft = r.attr("t")
+                            mut si = r.attr("si")
+                            mut fref = r.attr("ref")
+                            ftext = r.read_text()
+                            if ft == "shared" and si != "":
+                                mut sid = int(si)
+                                if ftext.len() > 0 and fref != "":
+                                    sf_si.append(sid)
+                                    sf_text.append(ftext)
+                                    sf_row.append(row)
+                                    sf_col.append(col)
+                                elif ftext.len() == 0:
+                                    mut q = 0
+                                    while q < sf_si.len():
+                                        if sf_si[q] == sid:
+                                            ftext = xlsx_shift_formula(sf_text[q], row - sf_row[q], col - sf_col[q])
+                                        q = q + 1
+                        elif r.name == "is":
+                            inline = _read_string_item(r, inline_runs)
+                        else:
+                            r.skip()
+            else:
+                r.next()
+            mut c = ws.touch(row, col)
+            c.d1904 = ws.d1904
+            c.formula = ftext
+            if sidx != "":
+                mut xi = int(sidx)
+                if xfmap.has(xi):
+                    c.style = (xfmap.get(xi) - 1)
+                elif xi >= 0 and xi < xfs.len():
+                    mut id = ws.style_id(xfs[xi].style)
+                    xfmap.set(xi, id + 1)
+                    c.style = id
+            mut is_date_style = false
+            if sidx != "":
+                mut xi2 = int(sidx)
+                if xi2 >= 0 and xi2 < xfs.len(): is_date_style = xfs[xi2].is_date
+            if t == "s":
+                if has_v:
+                    mut k = int(v.trim())
+                    if k >= 0 and k < sst.texts.len():
+                        c.kind = XLSX_STRING
+                        c.text = _own(sst.texts[k])
+                        mut rs0 = sst.run_start[k]
+                        if rs0 >= 0:
+                            c.rich = true
+                            mut q2 = 0
+                            mut ck = _cell_key(row, col)
+                            while q2 < sst.run_count[k]:
+                                ws.run_keys.append(ck)
+                                ws.runs.append(sst.runs[rs0 + q2])
+                                q2 = q2 + 1
+            elif t == "inlineStr":
+                c.kind = XLSX_STRING
+                c.text = inline
+                if inline_runs.len() > 0:
+                    c.rich = true
+                    mut ck2 = _cell_key(row, col)
+                    for x in inline_runs:
+                        ws.run_keys.append(ck2)
+                        ws.runs.append(x)
+            elif t == "str":
+                if has_v or ftext.len() > 0:
+                    c.kind = XLSX_STRING
+                    c.text = xlsx_unescape_ooxml(v)
+            elif t == "b":
+                if has_v:
+                    c.kind = XLSX_BOOL
+                    mut bv = v.trim()
+                    if bv == "1" or bv == "true": c.num = 1.0
+                    else: c.num = 0.0
+            elif t == "e":
+                if has_v:
+                    c.kind = XLSX_ERROR
+                    c.text = v
+            elif t == "d":
+                if has_v and v.len() > 0:
+                    c.kind = XLSX_DATE
+                    c.num = _iso_to_serial(v, ws.d1904)
+            else:
+                mut tv = v.trim()
+                if has_v and tv.len() > 0:
+                    c.num = float(tv)
+                    if is_date_style: c.kind = XLSX_DATE
+                    else: c.kind = XLSX_NUMBER
+        elif nm == "dimension":
+            ws.dimension = r.attr("ref")
+        elif nm == "pane":
+            mut st = r.attr("state")
+            if st == "frozen" or st == "frozenSplit":
+                mut xs = r.attr("xSplit")
+                mut ys = r.attr("ySplit")
+                if xs != "": ws.freeze_cols = float(xs) as int
+                if ys != "": ws.freeze_rows = float(ys) as int
+        elif nm == "col":
+            mut ci = ColumnInfo()
+            ci.min = int(r.attr("min"))
+            ci.max = int(r.attr("max"))
+            mut w = r.attr("width")
+            ci.width = 0.0
+            if w != "": ci.width = float(w)
+            mut h = r.attr("hidden")
+            ci.hidden = h == "1" or h == "true"
+            if ci.min >= 1 and ci.max >= ci.min: ws.columns.append(ci)
+        elif nm == "mergeCell":
+            mut mr = r.attr("ref")
+            if mr != "": ws.merged.append(mr)
+        elif nm == "autoFilter":
+            ws.auto_filter = r.attr("ref")
+            r.skip()
+        elif nm == "hyperlink":
+            mut hl = Hyperlink()
+            hl.ref = r.attr("ref")
+            hl.location = r.attr("location")
+            hl.tooltip = r.attr("tooltip")
+            hl.display = r.attr("display")
+            hl.target = ""
+            mut rid = r.attr("id")
+            if rid != "":
+                for rel in rels:
+                    if rel.id == rid: hl.target = rel.target
+            ws.links.append(hl)
+        elif nm == "extLst" or nm == "conditionalFormatting" or nm == "dataValidations" or nm == "headerFooter":
+            r.skip()
+
+# ── workbook ────────────────────────────────────────────────────────────────
+
+pub class Workbook:
+    pub sheets:     List[Worksheet]
+    pub date1904:   bool
+    pub active:     int     # index of the sheet shown when the file opens
+    pub title:      str     # docProps
+    pub creator:    str
+    pub subject:    str
+    pub keywords:   str
+    pub description: str
+
+extend Workbook:
+    # A new, empty workbook (add sheets with add_sheet()).
+    pub def init() -> Workbook:
+        mut wb = Workbook()
+        wb.sheets = []
+        wb.date1904 = false
+        wb.active = 0
+        wb.title = ""
+        wb.creator = "Tauraro"
+        wb.subject = ""
+        wb.keywords = ""
+        wb.description = ""
+        return wb
+
+    pub def open(path: str) throws str -> Workbook:
+        if not File.file_exists(path): raise(f"xlsx: cannot open '{path}'")
+        mut data = File.read_text(path)
+        return Workbook.from_bytes(data)?
+
+    pub def from_bytes(data: str) throws str -> Workbook:
+        mut z = ZipReader.open(data, data.len())
+        if not z.ok: raise("xlsx: not a ZIP archive")
+        mut wb = Workbook.init()
+        wb.creator = ""
+        mut root_rels = _parse_rels(_zip_part(z, "_rels/.rels"))
+        mut wb_path = _rel_by_type(root_rels, "/officeDocument")
+        if wb_path == "": wb_path = "xl/workbook.xml"
+        wb_path = _resolve("", wb_path)
+        mut wb_xml = _zip_part(z, wb_path)
+        if wb_xml.len() == 0: raise(f"xlsx: workbook part '{wb_path}' is missing")
+        mut base = _dir_of(wb_path)
+        mut rels_path = base + "/_rels/" + wb_path.slice(base.len() + 1, wb_path.len()) + ".rels"
+        if base == "": rels_path = "_rels/" + wb_path + ".rels"
+        mut rels = _parse_rels(_zip_part(z, rels_path))
+
+        # docProps
+        mut core_path = _rel_by_type(root_rels, "/core-properties")
+        if core_path != "":
+            mut core = _zip_part(z, _resolve("", core_path))
+            mut cr = XlsxXml.init(core)
+            while cr.next() != XX_EOF:
+                if cr.kind == XX_START:
+                    if cr.name == "title": wb.title = cr.read_text()
+                    elif cr.name == "creator": wb.creator = cr.read_text()
+                    elif cr.name == "subject": wb.subject = cr.read_text()
+                    elif cr.name == "keywords": wb.keywords = cr.read_text()
+                    elif cr.name == "description": wb.description = cr.read_text()
+
+        mut sst_path = _rel_by_type(rels, "/sharedStrings")
+        mut sst = _parse_sst("")
+        if sst_path != "": sst = _parse_sst(_zip_part(z, _resolve(base, sst_path)))
+        mut sty_path = _rel_by_type(rels, "/styles")
+        mut xfs: List[_Xf] = []
+        if sty_path != "": xfs = _parse_styles(_zip_part(z, _resolve(base, sty_path)))
+
+        # sheet list
+        mut names: List[str] = []
+        mut states: List[str] = []
+        mut rids: List[str] = []
+        mut r = XlsxXml.init(wb_xml)
+        while r.next() != XX_EOF:
+            if r.kind != XX_START: continue
+            if r.name == "workbookPr":
+                mut d = r.attr("date1904")
+                wb.date1904 = d == "1" or d == "true"
+            elif r.name == "workbookView":
+                mut at = r.attr("activeTab")
+                if at != "": wb.active = int(at)
+            elif r.name == "sheet":
+                names.append(r.attr("name"))
+                mut st = r.attr("state")
+                if st == "": st = "visible"
+                states.append(st)
+                rids.append(r.attr("id"))
+        mut i = 0
+        while i < names.len():
+            mut ws = _new_sheet(names[i], wb.date1904)
+            ws.state = _own(states[i])
+            mut target = ""
+            for rel in rels:
+                if rel.id == rids[i]: target = rel.target
+            if target != "":
+                mut sp = _resolve(base, target)
+                mut sxml = _zip_part(z, sp)
+                mut sdir = _dir_of(sp)
+                mut srels_path = sdir + "/_rels/" + sp.slice(sdir.len() + 1, sp.len()) + ".rels"
+                mut srels = _parse_rels(_zip_part(z, srels_path))
+                mut xfmap: Dict[int, int] = {}
+                _read_sheet(ws, sxml, sst, xfs, srels, xfmap)
+            wb.sheets.append(ws)
+            i = i + 1
+        if wb.active < 0 or wb.active >= wb.sheets.len(): wb.active = 0
+        return wb
+
+    pub def sheet_count(self) -> int: return self.sheets.len()
+
+    pub def sheet_names(self) -> List[str]:
+        mut out: List[str] = []
+        for s in self.sheets: out.append(s.name)
+        return out
+
+    pub def has_sheet(self, name: str) -> bool:
+        for s in self.sheets:
+            if s.name.to_lower() == name.to_lower(): return true
+        return false
+
+    pub def sheet(self, name: str) throws str -> Worksheet:
+        for s in self.sheets:
+            if s.name == name: return s
+        for s in self.sheets:
+            if s.name.to_lower() == name.to_lower(): return s
+        raise(f"xlsx: no sheet named '{name}'")
+
+    pub def sheet_at(self, i: int) throws str -> Worksheet:
+        if i < 0 or i >= self.sheets.len(): raise(f"xlsx: sheet index {i} out of range")
+        return self.sheets[i]
+
+    # Add a sheet (names: 1..31 chars, none of : \ / ? * [ ], unique ignoring case).
+    pub def add_sheet(self, name: str) throws str -> Worksheet:
+        if name.len() == 0 or name.len() > 31: raise(f"xlsx: sheet name '{name}' must be 1 to 31 characters")
+        mut i = 0
+        while i < name.len():
+            mut c = _xb(name, i)
+            if c == 58 or c == 92 or c == 47 or c == 63 or c == 42 or c == 91 or c == 93:
+                raise(f"xlsx: sheet name '{name}' contains a forbidden character")
+            i = i + 1
+        if name.starts_with("'") or name.ends_with("'"): raise(f"xlsx: sheet name '{name}' may not start or end with an apostrophe")
+        if self.has_sheet(name): raise(f"xlsx: duplicate sheet name '{name}'")
+        mut ws = _new_sheet(name, self.date1904)
+        self.sheets.append(ws)
+        return ws
+
+    pub def remove_sheet(self, name: str) throws str:
+        mut out: List[Worksheet] = []
+        mut found = false
+        for s in self.sheets:
+            if s.name == name: found = true
+            else: out.append(s)
+        if not found: raise(f"xlsx: no sheet named '{name}'")
+        self.sheets = out
+        if self.active >= self.sheets.len(): self.active = 0
+
+    pub def save(self, path: str) throws str:
+        mut data = self.to_bytes()?
+        if not File.write_text(path, data): raise(f"xlsx: cannot write '{path}'")
+
+    # The .xlsx file contents.
+    pub def to_bytes(self) throws str -> str:
+        if self.sheets.len() == 0: raise("xlsx: a workbook needs at least one sheet")
+        return _write_workbook(self)
+
+# ── writer ──────────────────────────────────────────────────────────────────
+
+# Escape for element text; control characters become _xHHHH_.
+def _esc_text(s: str, sb: StringBuilder):
+    mut n = s.len()
+    mut i = 0
+    while i < n:
+        mut c = _xb(s, i)
+        if c == 38: sb.append("&amp;")
+        elif c == 60: sb.append("&lt;")
+        elif c == 62: sb.append("&gt;")
+        elif c < 32 and c != 9 and c != 10 and c != 13:
+            sb.append("_x00")
+            sb.append_char(48 + c / 16)
+            mut lo = c % 16
+            if lo < 10: sb.append_char(48 + lo)
+            else: sb.append_char(55 + lo)
+            sb.append_char(95)
+        elif c == 13: sb.append("_x000D_")
+        elif c == 95 and i + 6 < n and _xb(s, i + 1) == 120 and _xb(s, i + 6) == 95 and _hex4(s, i + 2) >= 0:
+            sb.append("_x005F_")
+        else: sb.append_char(c)
+        i = i + 1
+
+def _esc_attr(s: str, sb: StringBuilder):
+    mut n = s.len()
+    mut i = 0
+    while i < n:
+        mut c = _xb(s, i)
+        if c == 38: sb.append("&amp;")
+        elif c == 60: sb.append("&lt;")
+        elif c == 62: sb.append("&gt;")
+        elif c == 34: sb.append("&quot;")
+        elif c == 10: sb.append("&#10;")
+        elif c == 13: sb.append("&#13;")
+        elif c == 9: sb.append("&#9;")
+        elif c < 32: sb.append_char(32)
+        else: sb.append_char(c)
+        i = i + 1
+
+def _attr(sb: StringBuilder, name: str, v: str):
+    sb.append(" ")
+    sb.append(name)
+    sb.append("=\"")
+    _esc_attr(v, sb)
+    sb.append("\"")
+
+def _needs_preserve(s: str) -> bool:
+    mut n = s.len()
+    if n == 0: return false
+    mut a = _xb(s, 0)
+    mut b = _xb(s, n - 1)
+    if a == 32 or a == 9 or a == 10 or b == 32 or b == 9 or b == 10: return true
+    return s.find("\n") >= 0 or s.find("\t") >= 0 or s.find("  ") >= 0
+
+def _builtin_fmt_id(code: str) -> int:
+    mut i = 1
+    while i < 50:
+        mut b = xlsx_builtin_format(i)
+        if b != "" and b == code: return i
+        i = i + 1
+    return -1
+
+class _StyleTable:
+    xf_keys:     Dict[str, int]
+    xfs:         List[CellStyle]
+    font_keys:   Dict[str, int]
+    fonts:       List[CellStyle]
+    border_keys: Dict[str, int]
+    borders:     List[CellStyle]
+    fill_keys:   Dict[str, int]
+    fills:       List[str]
+    fmt_keys:    Dict[str, int]
+    fmt_codes:   List[str]
+    xf_font:     List[int]
+    xf_fill:     List[int]
+    xf_border:   List[int]
+    xf_fmt:      List[int]
+
+def _new_style_table() -> _StyleTable:
+    mut t = _StyleTable()
+    t.xf_keys = {}
+    t.xfs = []
+    t.font_keys = {}
+    t.fonts = []
+    t.border_keys = {}
+    t.borders = []
+    t.fill_keys = {}
+    t.fills = []
+    t.fmt_keys = {}
+    t.fmt_codes = []
+    t.xf_font = []
+    t.xf_fill = []
+    t.xf_border = []
+    t.xf_fmt = []
+    mut d = CellStyle.init()
+    _xf_id(t, d)
+    return t
+
+def _xf_id(t: _StyleTable, st: CellStyle) -> int:
+    mut k = st.key()
+    if t.xf_keys.has(k): return (t.xf_keys.get(k) - 1)
+    mut fk = st.font_key()
+    mut fid = 0
+    if t.font_keys.has(fk): fid = (t.font_keys.get(fk) - 1)
+    else:
+        fid = t.fonts.len()
+        t.fonts.append(st)
+        t.font_keys.set(fk, fid + 1)
+    mut bk = st.border_key()
+    mut bid = 0
+    if t.border_keys.has(bk): bid = (t.border_keys.get(bk) - 1)
+    else:
+        bid = t.borders.len()
+        t.borders.append(st)
+        t.border_keys.set(bk, bid + 1)
+    mut fill = _norm_color(st.fill_color)
+    mut flid = 0
+    if fill != "":
+        if t.fill_keys.has(fill): flid = (t.fill_keys.get(fill) - 1)
+        else:
+            flid = t.fills.len() + 2
+            t.fills.append(fill)
+            t.fill_keys.set(fill, flid + 1)
+    mut nid = 0
+    if st.num_fmt != "" and st.num_fmt != "General":
+        nid = _builtin_fmt_id(st.num_fmt)
+        if nid < 0:
+            if t.fmt_keys.has(st.num_fmt): nid = (t.fmt_keys.get(st.num_fmt) - 1)
+            else:
+                nid = 164 + t.fmt_codes.len()
+                t.fmt_codes.append(st.num_fmt)
+                t.fmt_keys.set(st.num_fmt, nid + 1)
+    mut id = t.xfs.len()
+    t.xfs.append(st)
+    t.xf_font.append(fid)
+    t.xf_fill.append(flid)
+    t.xf_border.append(bid)
+    t.xf_fmt.append(nid)
+    t.xf_keys.set(k, id + 1)
+    return id
+
+def _font_xml(st: CellStyle, sb: StringBuilder):
+    sb.append("<font>")
+    if st.bold: sb.append("<b/>")
+    if st.italic: sb.append("<i/>")
+    if st.strike: sb.append("<strike/>")
+    if st.underline: sb.append("<u/>")
+    mut sz = "11"
+    if st.font_size > 0.0: sz = xlsx_num_str(st.font_size)
+    sb.append("<sz val=\"" + sz + "\"/>")
+    mut col = _norm_color(st.font_color)
+    if col != "":
+        sb.append("<color")
+        _attr(sb, "rgb", col)
+        sb.append("/>")
+    else:
+        sb.append("<color theme=\"1\"/>")
+    mut nm = st.font_name
+    if nm == "": nm = "Calibri"
+    sb.append("<name")
+    _attr(sb, "val", nm)
+    sb.append("/><family val=\"2\"/>")
+    if st.font_name == "" or st.font_name == "Calibri": sb.append("<scheme val=\"minor\"/>")
+    sb.append("</font>")
+
+def _border_side(sb: StringBuilder, tag: str, style: str, color: str):
+    if style == "" or style == "none":
+        sb.append("<" + tag + "/>")
+        return
+    sb.append("<" + tag)
+    _attr(sb, "style", style)
+    sb.append(">")
+    if color != "":
+        sb.append("<color")
+        _attr(sb, "rgb", color)
+        sb.append("/>")
+    else:
+        sb.append("<color auto=\"1\"/>")
+    sb.append("</" + tag + ">")
+
+def _styles_xml(t: _StyleTable) -> str:
+    mut sb = StringBuilder.init(2048)
+    sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n")
+    sb.append("<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">")
+    if t.fmt_codes.len() > 0:
+        sb.append("<numFmts count=\"" + str(t.fmt_codes.len()) + "\">")
+        mut i = 0
+        while i < t.fmt_codes.len():
+            sb.append("<numFmt numFmtId=\"" + str(164 + i) + "\"")
+            _attr(sb, "formatCode", t.fmt_codes[i])
+            sb.append("/>")
+            i = i + 1
+        sb.append("</numFmts>")
+    sb.append("<fonts count=\"" + str(t.fonts.len()) + "\">")
+    for f in t.fonts: _font_xml(f, sb)
+    sb.append("</fonts>")
+    sb.append("<fills count=\"" + str(t.fills.len() + 2) + "\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill>")
+    for fc in t.fills:
+        sb.append("<fill><patternFill patternType=\"solid\"><fgColor")
+        _attr(sb, "rgb", fc)
+        sb.append("/><bgColor indexed=\"64\"/></patternFill></fill>")
+    sb.append("</fills>")
+    sb.append("<borders count=\"" + str(t.borders.len()) + "\">")
+    for b in t.borders:
+        mut bc = _norm_color(b.border_color)
+        sb.append("<border>")
+        _border_side(sb, "left", b.border_left, bc)
+        _border_side(sb, "right", b.border_right, bc)
+        _border_side(sb, "top", b.border_top, bc)
+        _border_side(sb, "bottom", b.border_bottom, bc)
+        sb.append("<diagonal/></border>")
+    sb.append("</borders>")
+    sb.append("<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>")
+    sb.append("<cellXfs count=\"" + str(t.xfs.len()) + "\">")
+    mut i2 = 0
+    while i2 < t.xfs.len():
+        mut st = t.xfs[i2]
+        mut nid = t.xf_fmt[i2]
+        mut fid = t.xf_font[i2]
+        mut flid = t.xf_fill[i2]
+        mut bid = t.xf_border[i2]
+        sb.append(f"<xf numFmtId=\"{nid}\" fontId=\"{fid}\" fillId=\"{flid}\" borderId=\"{bid}\" xfId=\"0\"")
+        if nid != 0: sb.append(" applyNumberFormat=\"1\"")
+        if fid != 0: sb.append(" applyFont=\"1\"")
+        if flid != 0: sb.append(" applyFill=\"1\"")
+        if bid != 0: sb.append(" applyBorder=\"1\"")
+        mut has_align = st.h_align != "" or st.v_align != "" or st.wrap or st.indent > 0
+        if has_align:
+            sb.append(" applyAlignment=\"1\"><alignment")
+            if st.h_align != "": _attr(sb, "horizontal", st.h_align)
+            if st.v_align != "": _attr(sb, "vertical", st.v_align)
+            if st.wrap: sb.append(" wrapText=\"1\"")
+            if st.indent > 0: sb.append(" indent=\"" + str(st.indent) + "\"")
+            sb.append("/></xf>")
+        else:
+            sb.append("/>")
+        i2 = i2 + 1
+    sb.append("</cellXfs>")
+    sb.append("<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>")
+    sb.append("<dxfs count=\"0\"/><tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium9\" defaultPivotStyle=\"PivotStyleLight16\"/>")
+    sb.append("</styleSheet>")
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+class _Sstw:
+    keys:  Dict[str, int]
+    items: List[str]
+    count: int
+
+def _sst_id(s: _Sstw, v: str) -> int:
+    s.count = s.count + 1
+    if s.keys.has(v): return (s.keys.get(v) - 1)
+    mut id = s.items.len()
+    s.items.append(v)
+    s.keys.set(v, id + 1)
+    return id
+
+def _sst_xml(s: _Sstw) -> str:
+    mut sb = StringBuilder.init(1024)
+    sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n")
+    sb.append("<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"" + str(s.count) + "\" uniqueCount=\"" + str(s.items.len()) + "\">")
+    for v in s.items:
+        if _needs_preserve(v): sb.append("<si><t xml:space=\"preserve\">")
+        else: sb.append("<si><t>")
+        _esc_text(v, sb)
+        sb.append("</t></si>")
+    sb.append("</sst>")
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Style for a cell: the sheet style, with a date format filled in for date
+# cells that have none.
+def _cell_xf(t: _StyleTable, ws: Worksheet, c: Cell) -> int:
+    mut sidx = 0
+    if c.style > 0 and c.style < ws.styles.len(): sidx = c.style
+    mut st = ws.styles[sidx]
+    if c.kind == XLSX_DATE and (st.num_fmt == "" or st.num_fmt == "General" or not xlsx_is_date_format(st.num_fmt)):
+        mut st2 = st.clone()
+        mut whole = _floor_f(c.num)
+        if c.num == whole: st2.num_fmt = "yyyy-mm-dd"
+        elif c.num < 1.0 and c.num >= 0.0: st2.num_fmt = "hh:mm:ss"
+        else: st2.num_fmt = "yyyy-mm-dd hh:mm:ss"
+        return _xf_id(t, st2)
+    if c.style == 0: return 0
+    return _xf_id(t, st)
+
+def _sheet_xml(ws: Worksheet, idx: int, selected: bool, t: _StyleTable, sst: _Sstw, wb_d1904: bool, link_rids: List[str]) -> str:
+    mut sb = StringBuilder.init(4096)
+    sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n")
+    sb.append("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">")
+    if ws.auto_filter != "": sb.append("<sheetPr filterMode=\"0\"/>")
+    # collect stored cells in row-major order (styled empty cells included)
+    mut keys: List[int] = []
+    for c in ws.cells:
+        if c.kind != XLSX_EMPTY or c.formula.len() > 0 or c.style != 0:
+            keys.append(_cell_key(c.row, c.col))
+    keys.sort()
+    mut dim = "A1"
+    if keys.len() > 0:
+        mut r1 = 0
+        mut c1 = 0
+        mut r2 = 0
+        mut c2 = 0
+        for k in keys:
+            mut cc = ws.cells[(ws.cmap.get(k) - 1)]
+            if r1 == 0 or cc.row < r1: r1 = cc.row
+            if c1 == 0 or cc.col < c1: c1 = cc.col
+            if cc.row > r2: r2 = cc.row
+            if cc.col > c2: c2 = cc.col
+        mut rng = CellRange.init(r1, c1, r2, c2)
+        dim = rng.to_string()
+    sb.append("<dimension ref=\"" + dim + "\"/>")
+    sb.append("<sheetViews><sheetView")
+    if selected: sb.append(" tabSelected=\"1\"")
+    sb.append(" workbookViewId=\"0\"")
+    if ws.freeze_rows > 0 or ws.freeze_cols > 0:
+        sb.append(">")
+        mut tl = xlsx_ref(ws.freeze_rows + 1, ws.freeze_cols + 1)
+        mut pane = "bottomRight"
+        if ws.freeze_cols == 0: pane = "bottomLeft"
+        if ws.freeze_rows == 0: pane = "topRight"
+        sb.append("<pane")
+        if ws.freeze_cols > 0: sb.append(" xSplit=\"" + str(ws.freeze_cols) + "\"")
+        if ws.freeze_rows > 0: sb.append(" ySplit=\"" + str(ws.freeze_rows) + "\"")
+        sb.append(" topLeftCell=\"" + tl + "\" activePane=\"" + pane + "\" state=\"frozen\"/>")
+        sb.append("<selection pane=\"" + pane + "\" activeCell=\"" + tl + "\" sqref=\"" + tl + "\"/>")
+        sb.append("</sheetView></sheetViews>")
+    else:
+        sb.append("/></sheetViews>")
+    sb.append("<sheetFormatPr defaultRowHeight=\"15\"/>")
+    if ws.columns.len() > 0:
+        # sorted by first column
+        mut order: List[int] = []
+        for ci in ws.columns: order.append(ci.min * 100000 + order.len())
+        order.sort()
+        sb.append("<cols>")
+        for o in order:
+            mut ci = ws.columns[o % 100000]
+            sb.append("<col min=\"" + str(ci.min) + "\" max=\"" + str(ci.max) + "\"")
+            if ci.width > 0.0:
+                mut w = xlsx_num_str(ci.width)
+                sb.append(" width=\"" + w + "\" customWidth=\"1\"")
+            else:
+                sb.append(" width=\"9.140625\"")
+            if ci.hidden: sb.append(" hidden=\"1\"")
+            sb.append("/>")
+        sb.append("</cols>")
+    sb.append("<sheetData>")
+    # rows with only a height still get a <row>
+    mut extra_rows: List[int] = []
+    for ri in ws.row_info: extra_rows.append(ri.row)
+    extra_rows.sort()
+    mut ki = 0
+    mut ei = 0
+    while ki < keys.len() or ei < extra_rows.len():
+        mut row = 0
+        if ki < keys.len(): row = ws.cells[(ws.cmap.get(keys[ki]) - 1)].row
+        if ei < extra_rows.len() and (row == 0 or extra_rows[ei] < row): row = extra_rows[ei]
+        while ei < extra_rows.len() and extra_rows[ei] <= row: ei = ei + 1
+        sb.append("<row r=\"" + str(row) + "\"")
+        mut ht = ws.row_height(row)
+        if ht > 0.0:
+            mut hs = xlsx_num_str(ht)
+            sb.append(" ht=\"" + hs + "\" customHeight=\"1\"")
+        if ws.row_hidden(row): sb.append(" hidden=\"1\"")
+        sb.append(">")
+        while ki < keys.len():
+            mut c = ws.cells[(ws.cmap.get(keys[ki]) - 1)]
+            if c.row != row: break
+            ki = ki + 1
+            mut ref = xlsx_ref(c.row, c.col)
+            mut xf = _cell_xf(t, ws, c)
+            sb.append("<c r=\"" + ref + "\"")
+            if xf != 0: sb.append(" s=\"" + str(xf) + "\"")
+            mut fx = ""
+            if c.formula.len() > 0:
+                mut fsb = StringBuilder.init(c.formula.len() + 8)
+                fsb.append("<f>")
+                _esc_text(c.formula, fsb)
+                fsb.append("</f>")
+                fx = fsb.to_owned()
+                fsb.free()
+            if c.kind == XLSX_STRING:
+                if c.formula.len() > 0:
+                    sb.append(" t=\"str\">" + fx + "<v>")
+                    _esc_text(c.text, sb)
+                    sb.append("</v></c>")
+                else:
+                    mut sid = _sst_id(sst, c.text)
+                    sb.append(" t=\"s\"><v>" + str(sid) + "</v></c>")
+            elif c.kind == XLSX_NUMBER or c.kind == XLSX_DATE:
+                mut v = c.num
+                if c.kind == XLSX_DATE and c.d1904 != wb_d1904:
+                    if c.d1904: v = v + 1462.0
+                    else: v = v - 1462.0
+                mut vs = xlsx_num_str(v)
+                sb.append(">" + fx + "<v>" + vs + "</v></c>")
+            elif c.kind == XLSX_BOOL:
+                mut bv = "0"
+                if c.num != 0.0: bv = "1"
+                sb.append(" t=\"b\">" + fx + "<v>" + bv + "</v></c>")
+            elif c.kind == XLSX_ERROR:
+                sb.append(" t=\"e\">" + fx + "<v>")
+                _esc_text(c.text, sb)
+                sb.append("</v></c>")
+            else:
+                if c.formula.len() > 0: sb.append(">" + fx + "</c>")
+                else: sb.append("/>")
+        sb.append("</row>")
+    sb.append("</sheetData>")
+    if ws.auto_filter != "": sb.append("<autoFilter ref=\"" + ws.auto_filter + "\"/>")
+    if ws.merged.len() > 0:
+        sb.append("<mergeCells count=\"" + str(ws.merged.len()) + "\">")
+        for m in ws.merged:
+            sb.append("<mergeCell")
+            _attr(sb, "ref", m)
+            sb.append("/>")
+        sb.append("</mergeCells>")
+    if ws.links.len() > 0:
+        sb.append("<hyperlinks>")
+        mut li = 0
+        while li < ws.links.len():
+            mut h = ws.links[li]
+            sb.append("<hyperlink")
+            _attr(sb, "ref", h.ref)
+            if h.target != "": _attr(sb, "r:id", link_rids[li])
+            if h.location != "": _attr(sb, "location", h.location)
+            if h.tooltip != "": _attr(sb, "tooltip", h.tooltip)
+            if h.display != "": _attr(sb, "display", h.display)
+            sb.append("/>")
+            li = li + 1
+        sb.append("</hyperlinks>")
+    sb.append("<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>")
+    sb.append("</worksheet>")
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _quote_sheet(name: str) -> str:
+    mut q = name.replace("'", "''")
+    return "'" + q + "'"
+
+def _w3c_now() -> str:
+    mut d = DateTime.utc_now()
+    return _pad(d.year, 4) + "-" + _pad(d.month, 2) + "-" + _pad(d.day, 2) + "T" + _pad(d.hour, 2) + ":" + _pad(d.minute, 2) + ":" + _pad(d.second, 2) + "Z"
+
+def _add_part(w: ZipWriter, name: str, data: str):
+    w.add_file(name, data, data.len())
+
+def _write_workbook(wb: Workbook) -> str:
+    mut w = ZipWriter.init()
+    mut n = wb.sheets.len()
+    mut t = _new_style_table()
+    mut sst = _Sstw()
+    sst.keys = {}
+    sst.items = []
+    sst.count = 0
+    mut active = wb.active
+    if active < 0 or active >= n: active = 0
+
+    # sheets first: they fill the style and string tables
+    mut sheet_xml: List[str] = []
+    mut sheet_rels: List[str] = []
+    mut i = 0
+    while i < n:
+        mut ws = wb.sheets[i]
+        mut rids: List[str] = []
+        mut rsb = StringBuilder.init(256)
+        mut nlinks = 0
+        for h in ws.links:
+            if h.target != "":
+                nlinks = nlinks + 1
+                mut rid = "rId" + str(nlinks)
+                rids.append(rid)
+                rsb.append("<Relationship Id=\"" + rid + "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\"")
+                _attr(rsb, "Target", h.target)
+                rsb.append(" TargetMode=\"External\"/>")
+            else:
+                rids.append("")
+        mut body = rsb.to_owned()
+        rsb.free()
+        if nlinks > 0:
+            sheet_rels.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" + body + "</Relationships>")
+        else:
+            sheet_rels.append("")
+        mut sx = _sheet_xml(ws, i, i == active, t, sst, wb.date1904, rids)
+        sheet_xml.append(sx)
+        i = i + 1
+
+    # [Content_Types].xml
+    mut ct = StringBuilder.init(1024)
+    ct.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n")
+    ct.append("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">")
+    ct.append("<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>")
+    ct.append("<Default Extension=\"xml\" ContentType=\"application/xml\"/>")
+    ct.append("<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>")
+    i = 0
+    while i < n:
+        ct.append("<Override PartName=\"/xl/worksheets/sheet" + str(i + 1) + ".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>")
+        i = i + 1
+    ct.append("<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>")
+    ct.append("<Override PartName=\"/xl/sharedStrings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/>")
+    ct.append("<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>")
+    ct.append("<Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/>")
+    ct.append("</Types>")
+    mut ct_s = ct.to_owned()
+    ct.free()
+    _add_part(w, "[Content_Types].xml", ct_s)
+
+    _add_part(w, "_rels/.rels", "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties\" Target=\"docProps/core.xml\"/><Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties\" Target=\"docProps/app.xml\"/></Relationships>")
+
+    # docProps
+    mut now = _w3c_now()
+    mut cp = StringBuilder.init(512)
+    cp.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n")
+    cp.append("<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:dcmitype=\"http://purl.org/dc/dcmitype/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">")
+    if wb.title != "":
+        cp.append("<dc:title>")
+        _esc_text(wb.title, cp)
+        cp.append("</dc:title>")
+    if wb.subject != "":
+        cp.append("<dc:subject>")
+        _esc_text(wb.subject, cp)
+        cp.append("</dc:subject>")
+    if wb.creator != "":
+        cp.append("<dc:creator>")
+        _esc_text(wb.creator, cp)
+        cp.append("</dc:creator>")
+    if wb.keywords != "":
+        cp.append("<cp:keywords>")
+        _esc_text(wb.keywords, cp)
+        cp.append("</cp:keywords>")
+    if wb.description != "":
+        cp.append("<dc:description>")
+        _esc_text(wb.description, cp)
+        cp.append("</dc:description>")
+    cp.append("<dcterms:created xsi:type=\"dcterms:W3CDTF\">" + now + "</dcterms:created>")
+    cp.append("<dcterms:modified xsi:type=\"dcterms:W3CDTF\">" + now + "</dcterms:modified>")
+    cp.append("</cp:coreProperties>")
+    mut cp_s = cp.to_owned()
+    cp.free()
+    _add_part(w, "docProps/core.xml", cp_s)
+
+    mut ap = StringBuilder.init(512)
+    ap.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n")
+    ap.append("<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\" xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\">")
+    ap.append("<Application>Tauraro</Application><DocSecurity>0</DocSecurity><ScaleCrop>false</ScaleCrop>")
+    ap.append("<HeadingPairs><vt:vector size=\"2\" baseType=\"variant\"><vt:variant><vt:lpstr>Worksheets</vt:lpstr></vt:variant><vt:variant><vt:i4>" + str(n) + "</vt:i4></vt:variant></vt:vector></HeadingPairs>")
+    ap.append("<TitlesOfParts><vt:vector size=\"" + str(n) + "\" baseType=\"lpstr\">")
+    for ws in wb.sheets:
+        ap.append("<vt:lpstr>")
+        _esc_text(ws.name, ap)
+        ap.append("</vt:lpstr>")
+    ap.append("</vt:vector></TitlesOfParts><LinksUpToDate>false</LinksUpToDate><SharedDoc>false</SharedDoc><HyperlinksChanged>false</HyperlinksChanged><AppVersion>16.0300</AppVersion></Properties>")
+    mut ap_s = ap.to_owned()
+    ap.free()
+    _add_part(w, "docProps/app.xml", ap_s)
+
+    # workbook.xml
+    mut wx = StringBuilder.init(1024)
+    wx.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n")
+    wx.append("<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">")
+    if wb.date1904: wx.append("<workbookPr date1904=\"1\"/>")
+    else: wx.append("<workbookPr/>")
+    wx.append("<bookViews><workbookView xWindow=\"0\" yWindow=\"0\" windowWidth=\"28800\" windowHeight=\"12300\"")
+    if active > 0:
+        wx.append(" firstSheet=\"0\" activeTab=\"" + str(active) + "\"")
+    wx.append("/></bookViews><sheets>")
+    i = 0
+    while i < n:
+        mut ws2 = wb.sheets[i]
+        wx.append("<sheet")
+        _attr(wx, "name", ws2.name)
+        wx.append(" sheetId=\"" + str(i + 1) + "\"")
+        if ws2.state == "hidden" or ws2.state == "veryHidden": wx.append(" state=\"" + ws2.state + "\"")
+        wx.append(" r:id=\"rId" + str(i + 1) + "\"/>")
+        i = i + 1
+    wx.append("</sheets>")
+    mut any_filter = false
+    for ws3 in wb.sheets:
+        if ws3.auto_filter != "": any_filter = true
+    if any_filter:
+        wx.append("<definedNames>")
+        i = 0
+        while i < n:
+            mut ws4 = wb.sheets[i]
+            if ws4.auto_filter != "":
+                mut fr: Result[CellRange, str] = CellRange.parse(ws4.auto_filter)
+                if fr.is_ok:
+                    mut qn = _quote_sheet(ws4.name)
+                    mut ab = fr.ok.to_abs_string()
+                    mut dn = qn + "!" + ab
+                    wx.append("<definedName name=\"_xlnm._FilterDatabase\" localSheetId=\"" + str(i) + "\" hidden=\"1\">")
+                    _esc_text(dn, wx)
+                    wx.append("</definedName>")
+            i = i + 1
+        wx.append("</definedNames>")
+    wx.append("<calcPr calcId=\"191029\" fullCalcOnLoad=\"1\"/></workbook>")
+    mut wx_s = wx.to_owned()
+    wx.free()
+    _add_part(w, "xl/workbook.xml", wx_s)
+
+    mut wr = StringBuilder.init(1024)
+    wr.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n")
+    wr.append("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">")
+    i = 0
+    while i < n:
+        wr.append("<Relationship Id=\"rId" + str(i + 1) + "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet" + str(i + 1) + ".xml\"/>")
+        i = i + 1
+    wr.append("<Relationship Id=\"rId" + str(n + 1) + "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>")
+    wr.append("<Relationship Id=\"rId" + str(n + 2) + "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" Target=\"sharedStrings.xml\"/>")
+    wr.append("</Relationships>")
+    mut wr_s = wr.to_owned()
+    wr.free()
+    _add_part(w, "xl/_rels/workbook.xml.rels", wr_s)
+
+    i = 0
+    while i < n:
+        mut sname = "xl/worksheets/sheet" + str(i + 1) + ".xml"
+        _add_part(w, sname, sheet_xml[i])
+        if sheet_rels[i] != "":
+            mut rname = "xl/worksheets/_rels/sheet" + str(i + 1) + ".xml.rels"
+            _add_part(w, rname, sheet_rels[i])
+        i = i + 1
+    mut sty = _styles_xml(t)
+    _add_part(w, "xl/styles.xml", sty)
+    mut ss = _sst_xml(sst)
+    _add_part(w, "xl/sharedStrings.xml", ss)
+    return w.finish()

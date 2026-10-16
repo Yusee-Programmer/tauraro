@@ -17,6 +17,10 @@ codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
 ### Changed
+- `std.io.archive` (and so `std.compress.zip`) compresses and inflates entries with the built-in
+  DEFLATE codec (`std.compress.flate`), so deflated ZIP entries written by other tools read
+  correctly without `-lz`; the runtime zlib stub used to return nothing and fail the CRC check.
+  `ZipReader` also rejects central-directory and local-header offsets past the end of the data.
 - `HttpConn.close()` only closes the socket; the request and response state are released with
   the reference-counted `HttpConn`. Freeing them in `close()` as well was a use-after-free in the
   documented `accept` / `close` loop.
@@ -94,6 +98,18 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.encoding.xlsx`**: Excel workbooks (Office Open XML SpreadsheetML), pure Tauraro.
+  - Reads sheets (names, visibility), shared strings with rich-text runs, inline strings, numbers,
+    booleans, errors, formulas with cached values (shared formulas expanded per cell), dates from
+    built-in and custom number formats in the 1900 and 1904 systems, merged cells, column widths,
+    row heights, freeze panes, auto-filter, hyperlinks and dimensions; `Workbook.open(path)?`,
+    `Workbook.from_bytes(data)?`, `sheet.cell("B3")`, `rows()`, typed accessors, `to_csv()`.
+  - Writes workbooks with several sheets, str / int / float / bool / date / formula / error cells,
+    styles (font, number format, fill, borders, alignment, wrap), column widths, row heights,
+    freeze panes, merges, auto-filter, URL and in-workbook hyperlinks, a shared strings table and
+    docProps. Output checked with openpyxl 3.1.5; workbooks written by openpyxl are read back.
+  - Cell reference helpers (`xlsx_col_name`, `xlsx_ref`, `CellRange.parse`, ...) and
+    `std.encoding.xlsx_xml`, the small pull XML reader it uses.
 - **TLS 1.3 server** in `std.net.tls`:
   - `TlsServerConfig` (PEM chain + RSA / EC key, ALPN), `TlsListener` and `TlsStream.accept_fd`;
     certificates RSA-PSS and ECDSA P-256 / P-384, key exchange X25519 / P-256 / P-384 with

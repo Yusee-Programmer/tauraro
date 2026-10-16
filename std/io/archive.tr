@@ -2,8 +2,8 @@
 #
 # Pure Tauraro: local file header + central directory + end-of-central-
 # directory record, byte-exact per spec. Compression goes through the same
-# runtime routines std.compress.zlib.Zlib wraps (_tr_deflate/_tr_inflate,
-# raw DEFLATE, no zlib/gzip wrapper) or STORED (no compression). CRC32
+# built-in raw DEFLATE codec in std.compress.flate (no -lz needed) or
+# STORED (no compression). CRC32
 # (IEEE 802.3, polynomial 0xEDB88320 — the ZIP/PNG/gzip polynomial) is
 # implemented from scratch here: a 256-entry lookup table built once, plus
 # a byte-at-a-time update loop.
@@ -23,9 +23,6 @@
 # Note on binary strings: ZIP bytes (headers + compressed data) may contain
 # embedded NUL bytes, so every length here is tracked explicitly — nothing
 # in this file relies on C strlen()/NUL-termination for archive payloads.
-# Local extern bindings below declare _tr_deflate/_tr_inflate with the
-# correct C-ABI out_len pointer width (Pointer[c_int], a real C 'int') —
-# these are the exact same runtime symbols std.compress.zlib.Zlib calls.
 
 extern "C":
     def _tr_c_malloc(size: int) -> Pointer[char]
@@ -34,10 +31,9 @@ extern "C":
     def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
     def _tr_str_wrap(s: Pointer[char]) -> str
     def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
-    def _tr_deflate(input: str, ilen: int, out_len: Pointer[c_int]) -> str
-    def _tr_inflate(input: str, ilen: int, max_out: int) -> str
 
 from std.core.vec import Vec
+from std.compress.flate import Flate
 
 # ── CRC32 (IEEE 802.3 / zlib / PKZIP polynomial 0xEDB88320) ───────────────────
 
@@ -226,10 +222,9 @@ extend ZipWriter:
         w.records = Vec[ZipCentralRec].init(4)
         return w
 
-    # Add one entry, compressed with DEFLATE when that actually shrinks the
-    # data; falls back to STORED automatically when DEFLATE isn't available
-    # (e.g. this runtime build lacks -DTAURARO_COMPRESS_ZLIB) or doesn't
-    # help (tiny/incompressible input) — always correct either way.
+    # Add one entry, compressed with DEFLATE (std.compress.flate, built in)
+    # when that actually shrinks the data; STORED when it doesn't help
+    # (tiny/incompressible input).
     pub def add_file(self, name: str, data: str, len_: int):
         mut crc = Crc32.compute(data, len_)
         mut method = METHOD_STORED()
@@ -237,12 +232,10 @@ extend ZipWriter:
         mut plen    = len_
 
         if len_ > 0:
-            mut outlen_buf = _tr_c_malloc(8) as Pointer[c_int]
-            unsafe: outlen_buf.write(0 as c_int)
-            mut compressed = _tr_deflate(data, len_, outlen_buf)
-            mut clen = 0
-            unsafe: clen = outlen_buf.read() as int
-            _tr_c_free(outlen_buf as Pointer[char])
+            mut src = data
+            if data.len() != len_: src = data.slice(0, len_)
+            mut compressed = Flate.deflate(src, 6)
+            mut clen = compressed.len()
             if clen > 0 and clen < len_:
                 method  = METHOD_DEFLATE()
                 payload = compressed
@@ -393,6 +386,7 @@ extend ZipReader:
         mut off = cd_offset
         mut n = 0
         while n < total_entries:
+            if off < 0 or off + 46 > r.len: return r          # truncated
             if _rd_u32(data, off) != 0x02014b50: return r   # malformed
             mut method     = _rd_u16(data, off + 10)
             mut crc        = _rd_u32(data, off + 16)
@@ -402,6 +396,7 @@ extend ZipReader:
             mut extra_len  = _rd_u16(data, off + 30)
             mut comment_len = _rd_u16(data, off + 32)
             mut lh_offset  = _rd_u32(data, off + 42)
+            if off + 46 + name_len > r.len: return r
 
             mut name = _raw_slice(data, off + 46, name_len)
 
@@ -451,12 +446,15 @@ extend ZipReader:
         # copy (rare in practice) — read them from the local header itself
         # to find where the payload actually starts.
         mut lh = e.lh_offset
-        if _rd_u32(self.data, lh) != 0x04034b50:
+        if lh < 0 or lh + 30 > self.len or _rd_u32(self.data, lh) != 0x04034b50:
             print("ZipReader.read_entry: bad local file header signature for '" + e.name + "'")
             return ""
         mut lh_name_len  = _rd_u16(self.data, lh + 26)
         mut lh_extra_len = _rd_u16(self.data, lh + 28)
         mut payload_off  = lh + 30 + lh_name_len + lh_extra_len
+        if payload_off + e.csize > self.len or e.csize < 0:
+            print("ZipReader.read_entry: entry '" + e.name + "' runs past the end of the archive")
+            return ""
 
         mut raw = _raw_slice(self.data, payload_off, e.csize)
 
@@ -467,7 +465,14 @@ extend ZipReader:
             if e.usize <= 0:
                 plain = ""
             else:
-                plain = _tr_inflate(raw, e.csize, e.usize)
+                mut fr: Result[str, str] = Flate.inflate_max(raw, e.usize)
+                if fr.is_err:
+                    print("ZipReader.read_entry: cannot inflate '" + e.name + "': " + fr.err)
+                    return ""
+                plain = fr.ok
+                if plain.len() != e.usize:
+                    print("ZipReader.read_entry: size mismatch for '" + e.name + "'")
+                    return ""
 
         mut got_crc = Crc32.compute(plain, e.usize)
         if got_crc != e.crc32:
