@@ -24,6 +24,14 @@
 #   c.close()
 #
 #   mut r = c.get("/httpbin/get")?      # one-shot convenience
+#
+# Streaming (both directions at once, e.g. gRPC):
+#   mut sid = c.open_stream("POST", "/svc/Method", hdrs)?
+#   c.send_data(sid, chunk, false)?      # ... more chunks ...
+#   c.send_data(sid, "", true)?          # END_STREAM
+#   mut part = c.read_data(sid, 5000)?   # "" once the response has ended
+#
+# The HTTP/2 server side lives in std.net.http2_server.
 
 from std.crypto.native import _cn_alloc, _cn_take, _cn_free
 from std.crypto.x509 import TrustStore
@@ -45,6 +53,11 @@ extern "C":
     def trc_h2_release(h: Pointer[char], sid: int)
     def trc_h2_ping(h: Pointer[char], timeout_ms: int) -> int
     def trc_h2_close(h: Pointer[char])
+    def trc_h2_send(h: Pointer[char], sid: int, data: Pointer[char], n: int, end: int, timeout_ms: int) -> int
+    def trc_h2_wait_for(h: Pointer[char], sid: int, cond: int, timeout_ms: int) -> int
+    def trc_h2_take(h: Pointer[char], sid: int, out: Pointer[char], cap: int) -> int
+    def trc_h2_reset(h: Pointer[char], sid: int, code: int)
+    def trc_h2_rst_code(h: Pointer[char], sid: int) -> int
     def trc_hpack_new(max_size: int) -> Pointer[char]
     def trc_hpack_free(h: Pointer[char])
     def trc_hpack_set_max(h: Pointer[char], m: int)
@@ -252,6 +265,11 @@ extend Http2Client:
     # default headers (same-named defaults are replaced). Connection-specific
     # headers (Connection, Host, Transfer-Encoding, ...) are dropped.
     pub def submit(self, method: str, path: str, headers: H2Headers, body: str, has_body: bool) throws str -> int:
+        mut hb = 0
+        if has_body: hb = 1
+        return self._submit_mode(method, path, headers, body, hb)?
+
+    def _submit_mode(self, method: str, path: str, headers: H2Headers, body: str, hb: int) throws str -> int:
         mut all = H2Headers.init()
         mut i = 0
         while i < len(self.default_headers.names):
@@ -267,8 +285,6 @@ extend Http2Client:
         mut pp = path as Pointer[char]
         mut bp = blob as Pointer[char]
         mut dp = body as Pointer[char]
-        mut hb = 0
-        if has_body: hb = 1
         mut sid = trc_h2_submit(self._h, mp, pp, bp, blob.len(), dp, body.len(), hb)
         if sid < 0:
             mut e = self._err()
@@ -315,6 +331,53 @@ extend Http2Client:
         r.error = _cn_take(eb, en)
         if r.status == 0 and r.error.len() == 0: r.error = "HTTP/2: no response"
         return r
+
+    # Open a request whose body is streamed with send_data(); returns the stream id.
+    pub def open_stream(self, method: str, path: str, headers: H2Headers) throws str -> int:
+        return self._submit_mode(method, path, headers, "", 2)?
+
+    # Queue request body bytes (end: send END_STREAM after them). Blocks only
+    # while more than 1 MiB is waiting for flow-control credit.
+    pub def send_data(self, sid: int, data: str, end: bool) throws str:
+        mut e = 0
+        if end: e = 1
+        mut r = trc_h2_send(self._h, sid, data as Pointer[char], data.len(), e, self.timeout_ms)
+        if r == -2: raise("HTTP/2: timed out")
+        if r == -3: raise("HTTP/2: stream is closed")
+        if r < 0:
+            mut m = self._err()
+            if m.len() == 0: m = "HTTP/2: send failed"
+            raise(m)
+
+    # Next chunk of response body (waits up to timeout_ms; < 0 = no limit
+    # beyond the connection timeout). "" once the response has ended.
+    pub def read_data(self, sid: int, timeout_ms: int) throws str -> str:
+        mut t = timeout_ms
+        if t < 0: t = self.timeout_ms
+        mut r = trc_h2_wait_for(self._h, sid, 1, t)
+        if r == -2: raise("HTTP/2: timed out")
+        mut z = 0 as Pointer[char]
+        mut n = trc_h2_take(self._h, sid, z, 0)
+        if n <= 0:
+            if r < 0:
+                mut m = self._err()
+                if m.len() > 0: raise(m)
+            return ""
+        mut out = _cn_alloc(n)
+        mut k = trc_h2_take(self._h, sid, out, n)
+        return _cn_take(out, k)
+
+    # Wait until the response headers (or the end of the stream) arrived.
+    pub def wait_headers(self, sid: int, timeout_ms: int) throws str:
+        mut r = trc_h2_wait_for(self._h, sid, 2, timeout_ms)
+        if r == -2: raise("HTTP/2: timed out")
+
+    # Reset the stream with an HTTP/2 error code (8 = CANCEL); response()
+    # still works afterwards.
+    pub def reset(self, sid: int, code: int): trc_h2_reset(self._h, sid, code)
+
+    # RST_STREAM error code received or sent for the stream (0 if none).
+    pub def reset_code(self, sid: int) -> int: return trc_h2_rst_code(self._h, sid)
 
     # Forget a stream (cancelling it with RST_STREAM if it is still open).
     pub def release(self, sid: int): trc_h2_release(self._h, sid)

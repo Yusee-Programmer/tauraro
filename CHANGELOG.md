@@ -98,6 +98,18 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.net.http2_server`**: HTTP/2 server (RFC 9113) over h2c or TLS 1.3 with ALPN `h2`. Preface,
+  SETTINGS, HPACK, HEADERS/CONTINUATION, DATA with connection and stream flow control, WINDOW_UPDATE,
+  PING, RST_STREAM, GOAWAY (graceful `shutdown()`), request and response trailers, concurrent streams;
+  protocol violations are answered with the proper error codes. `Http2Server` / `H2ServerRequest`
+  (streaming reads, `respond` / `send` / `send_trailers` / `reply`, cancellation detection).
+  `std.net.http2.Http2Client` gains streaming request bodies and response reads (`open_stream`,
+  `send_data`, `read_data`, `wait_headers`, `reset`); the native client no longer deadlocks when both
+  sides write large bodies at once.
+- **`std.net.grpc`**: gRPC over HTTP/2 on raw message bytes: client (`GrpcChannel`: unary, server-,
+  client- and bidirectional streaming, deadlines, cancellation, metadata incl. `-bin`, gzip, h2c and
+  TLS) and server (`GrpcServer`: unary and streaming handlers, status/trailers, deadline propagation,
+  built-in `grpc.health.v1` Check/Watch). Tested against Python grpcio in both directions.
 - **`std.encoding.xlsx`**: Excel workbooks (Office Open XML SpreadsheetML), pure Tauraro.
   - Reads sheets (names, visibility), shared strings with rich-text runs, inline strings, numbers,
     booleans, errors, formulas with cached values (shared formulas expanded per cell), dates from

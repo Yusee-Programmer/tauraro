@@ -1,0 +1,343 @@
+# tauraro-cpp-shim: h2_native.c
+#
+# std.net.http2_server -- HTTP/2 server (RFC 9113) over h2c (cleartext, prior
+# knowledge) or TLS 1.3 with ALPN "h2" (std.net.tls server side).
+#
+# One Http2Server owns the listening socket and every connection accepted
+# on it and drives them all from the calling thread: connection preface,
+# SETTINGS, HPACK (shared with the client in std.net.http2), HEADERS +
+# CONTINUATION, DATA with connection and stream flow control (credit is
+# returned as the application reads), WINDOW_UPDATE, PING, RST_STREAM,
+# GOAWAY, request and response trailers and many concurrent streams per
+# connection.
+#
+# `next(timeout_ms)` returns the next request whose headers are complete.
+# While a handler reads the body or waits for flow-control credit, the
+# server keeps servicing every connection (new requests are queued), so
+# streaming in both directions works. Handlers run one at a time.
+#
+# Usage:
+#   from std.net.http2_server import Http2Server, H2ServerRequest
+#   from std.net.http2 import H2Headers
+#
+#   def handle(r: H2ServerRequest):
+#       mut body = r.read_all()?          # (inside a `throws` helper)
+#       mut h = H2Headers.init()
+#       h.add("content-type", "text/plain")
+#       r.reply(200, h, "you sent " + str(body.len()) + " bytes")?
+#
+#   mut srv = Http2Server.listen("127.0.0.1", 8080)?       # h2c
+#   # mut srv = Http2Server.listen_tls("0.0.0.0", 8443, cfg)?   # https (ALPN h2)
+#   srv.serve(handle, -1)                                   # forever
+#
+# Streaming response with trailers:
+#   r.respond(200, hdrs)?  r.send("part 1")?  r.send("part 2")?
+#   r.send_trailers(trailer_hdrs)?        # ends the stream
+
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free
+from std.net.http2 import H2Headers
+from std.net.tls import TlsServerConfig
+
+extern "C":
+    def trc_h2srv_new(host: Pointer[char], hostlen: int, port: int, tls_cfg: Pointer[char], timeout_ms: int, max_streams: int) -> Pointer[char]
+    def trc_h2srv_ok(h: Pointer[char]) -> int
+    def trc_h2srv_error(h: Pointer[char], out: Pointer[char], cap: int) -> int
+    def trc_h2srv_port(h: Pointer[char]) -> int
+    def trc_h2srv_conn_count(h: Pointer[char]) -> int
+    def trc_h2srv_poll(h: Pointer[char], timeout_ms: int) -> int
+    def trc_h2srv_run(h: Pointer[char], timeout_ms: int)
+    def trc_h2srv_pending(h: Pointer[char]) -> int
+    def trc_h2srv_wait(h: Pointer[char], key: int, cond: int, timeout_ms: int, stop_on_new: int) -> int
+    def trc_h2srv_part(h: Pointer[char], key: int, part: int, out: Pointer[char], cap: int) -> int
+    def trc_h2srv_take(h: Pointer[char], key: int, out: Pointer[char], cap: int) -> int
+    def trc_h2srv_info(h: Pointer[char], key: int, what: int) -> int
+    def trc_h2srv_respond(h: Pointer[char], key: int, status: int, extra: Pointer[char], elen: int, end: int) -> int
+    def trc_h2srv_send(h: Pointer[char], key: int, data: Pointer[char], n: int, end: int) -> int
+    def trc_h2srv_trailers(h: Pointer[char], key: int, extra: Pointer[char], elen: int) -> int
+    def trc_h2srv_reset(h: Pointer[char], key: int, code: int)
+    def trc_h2srv_release(h: Pointer[char], key: int)
+    def trc_h2srv_shutdown(h: Pointer[char])
+    def trc_h2srv_close(h: Pointer[char])
+
+def _h2s_null(p: Pointer[char]) -> bool:
+    return (p as usize) == (0 as usize)
+
+# HTTP/2 error codes (RFC 9113 section 7), for reset().
+pub def H2_NO_ERROR() -> int: return 0
+pub def H2_PROTOCOL_ERROR() -> int: return 1
+pub def H2_INTERNAL_ERROR() -> int: return 2
+pub def H2_FLOW_CONTROL_ERROR() -> int: return 3
+pub def H2_STREAM_CLOSED() -> int: return 5
+pub def H2_REFUSED_STREAM() -> int: return 7
+pub def H2_CANCEL() -> int: return 8
+pub def H2_ENHANCE_YOUR_CALM() -> int: return 11
+
+pub class Http2ServerOptions:
+    pub timeout_ms:  int      # per-read / handshake timeout on connections
+    pub max_streams: int      # SETTINGS_MAX_CONCURRENT_STREAMS per connection
+
+extend Http2ServerOptions:
+    pub def default() -> Http2ServerOptions:
+        mut o = Http2ServerOptions()
+        o.timeout_ms = 30000
+        o.max_streams = 100
+        return o
+
+# One request (one HTTP/2 stream) handed to the application.
+pub class H2ServerRequest:
+    pub key:       int        # 0: no request (next() timed out)
+    pub method:    str
+    pub path:      str
+    pub scheme:    str
+    pub authority: str
+    pub headers:   H2Headers  # regular request headers (pseudo-headers are the fields above)
+    pub timeout_ms: int       # default wait for read() / send() (-1 = no limit)
+    _srv: Pointer[char]
+
+extend H2ServerRequest:
+    pub def valid(self) -> bool: return self.key != 0
+
+    pub def stream_id(self) -> int: return self.key % 4294967296
+
+    # True for requests that arrived over TLS.
+    pub def is_tls(self) -> bool: return trc_h2srv_info(self._srv, self.key, 6) == 1
+
+    def _blob(self, part: int) -> str:
+        mut z = 0 as Pointer[char]
+        mut n = trc_h2srv_part(self._srv, self.key, part, z, 0)
+        if n <= 0: return ""
+        mut out = _cn_alloc(n)
+        trc_h2srv_part(self._srv, self.key, part, out, n)
+        return _cn_take(out, n)
+
+    # Low level: drive the server until request data is available (cond 1)
+    # or the queued response has been sent (cond 2). Returns 1 when the
+    # condition holds, 2 when stop_on_new and another request became ready
+    # first, 0 on timeout, -1 if the server is gone.
+    pub def wait_event(self, cond: int, timeout_ms: int, stop_on_new: bool) -> int:
+        mut s = 0
+        if stop_on_new: s = 1
+        return trc_h2srv_wait(self._srv, self.key, cond, timeout_ms, s)
+
+    # Bytes of request body buffered right now (without waiting).
+    pub def available(self) -> int:
+        mut z = 0 as Pointer[char]
+        mut n = trc_h2srv_take(self._srv, self.key, z, 0)
+        if n < 0: return 0
+        return n
+
+    # Take whatever request body is buffered (possibly "") without waiting.
+    pub def take(self) -> str:
+        mut n = self.available()
+        if n <= 0: return ""
+        mut out = _cn_alloc(n)
+        mut k = trc_h2srv_take(self._srv, self.key, out, n)
+        return _cn_take(out, k)
+
+    # Next chunk of the request body; "" once the client ended the stream.
+    # Raises on timeout and when the client reset the stream.
+    pub def read(self, timeout_ms: int) throws str -> str:
+        if self.available() == 0:
+            mut r = self.wait_event(1, timeout_ms, false)
+            if r == 0: raise("HTTP/2: read timed out")
+        mut chunk = self.take()
+        if chunk.len() > 0: return chunk
+        if self.cancelled(): raise("HTTP/2: stream reset by the client (error code " + str(self.reset_code()) + ")")
+        return ""
+
+    pub def read_all(self) throws str -> str:
+        mut out = ""
+        while true:
+            mut chunk = self.read(self.timeout_ms)?
+            if chunk.len() == 0: break
+            out = out + chunk
+        return out
+
+    # True once the client sent END_STREAM (all body data has arrived).
+    pub def body_complete(self) -> bool: return trc_h2srv_info(self._srv, self.key, 0) == 1
+
+    # Request trailers (available once the body is complete).
+    pub def trailers(self) -> H2Headers: return H2Headers.from_blob(self._blob(1))
+
+    # The client reset the stream or its connection went away.
+    pub def cancelled(self) -> bool:
+        if trc_h2srv_info(self._srv, self.key, 1) > 0: return true
+        return trc_h2srv_info(self._srv, self.key, 3) != 1
+
+    # RST_STREAM error code (-1 if the stream is not reset).
+    pub def reset_code(self) -> int: return trc_h2srv_info(self._srv, self.key, 1) - 1
+
+    # True once the response has been ended (END_STREAM sent).
+    pub def finished(self) -> bool: return trc_h2srv_info(self._srv, self.key, 2) == 1
+
+    pub def headers_sent(self) -> bool: return trc_h2srv_info(self._srv, self.key, 5) == 1
+
+    def _check(self, r: int, what: str) throws str:
+        if r == -3: raise("HTTP/2: stream reset by the client")
+        if r == -4: raise("HTTP/2: " + what + " not allowed in this state")
+        if r < 0: raise("HTTP/2: connection lost")
+
+    # Send the response headers; the body follows with send()/finish().
+    pub def respond(self, status: int, headers: H2Headers) throws str:
+        mut blob = headers.to_blob()
+        mut r = trc_h2srv_respond(self._srv, self.key, status, blob as Pointer[char], blob.len(), 0)
+        self._check(r, "respond")?
+
+    # Headers-only response (END_STREAM on HEADERS; gRPC "trailers-only").
+    pub def respond_end(self, status: int, headers: H2Headers) throws str:
+        mut blob = headers.to_blob()
+        mut r = trc_h2srv_respond(self._srv, self.key, status, blob as Pointer[char], blob.len(), 1)
+        self._check(r, "respond")?
+
+    # Queue body bytes (sent as the client's flow-control windows allow;
+    # waits while more than 1 MiB is queued).
+    pub def send(self, data: str) throws str:
+        mut r = trc_h2srv_send(self._srv, self.key, data as Pointer[char], data.len(), 0)
+        self._check(r, "send")?
+        if trc_h2srv_info(self._srv, self.key, 4) > 1048576:
+            self.flush(self.timeout_ms)?
+
+    # Send the last body bytes and END_STREAM.
+    pub def finish(self, data: str) throws str:
+        mut r = trc_h2srv_send(self._srv, self.key, data as Pointer[char], data.len(), 1)
+        self._check(r, "finish")?
+
+    # End the response with trailers (after the queued body).
+    pub def send_trailers(self, trailers: H2Headers) throws str:
+        mut blob = trailers.to_blob()
+        mut r = trc_h2srv_trailers(self._srv, self.key, blob as Pointer[char], blob.len())
+        self._check(r, "trailers")?
+
+    # Wait until the queued response bytes have been written.
+    pub def flush(self, timeout_ms: int) throws str:
+        mut r = self.wait_event(2, timeout_ms, false)
+        if r == 0: raise("HTTP/2: send timed out (client is not reading)")
+        if self.cancelled(): raise("HTTP/2: stream reset by the client")
+
+    # respond + finish.
+    pub def reply(self, status: int, headers: H2Headers, body: str) throws str:
+        if body.len() == 0:
+            self.respond_end(status, headers)?
+            return
+        self.respond(status, headers)?
+        self.finish(body)?
+
+    # RST_STREAM with an HTTP/2 error code (H2_CANCEL(), ...).
+    pub def reset(self, code: int): trc_h2srv_reset(self._srv, self.key, code)
+
+    # Hand the stream back to the server (done automatically by serve()). An
+    # unfinished response is reset; queued data is still delivered.
+    pub def release(self):
+        if self.key != 0:
+            trc_h2srv_release(self._srv, self.key)
+            self.key = 0
+
+pub class Http2Server:
+    _h: Pointer[char]
+    pub host: str
+    pub port: int
+    pub timeout_ms: int
+    pub tls: bool
+    _cfg: TlsServerConfig
+
+extend Http2Server:
+    # Cleartext h2c (prior knowledge). port 0 picks a free port (see .port).
+    pub def listen(host: str, port: int) throws str -> Http2Server:
+        mut o = Http2ServerOptions.default()
+        return Http2Server._open(host, port, 0 as Pointer[char], false, o)?
+
+    pub def listen_with(host: str, port: int, opts: Http2ServerOptions) throws str -> Http2Server:
+        return Http2Server._open(host, port, 0 as Pointer[char], false, opts)?
+
+    # TLS 1.3; the config's ALPN list is set to "h2".
+    pub def listen_tls(host: str, port: int, cfg: TlsServerConfig) throws str -> Http2Server:
+        mut o = Http2ServerOptions.default()
+        return Http2Server.listen_tls_with(host, port, cfg, o)?
+
+    pub def listen_tls_with(host: str, port: int, cfg: TlsServerConfig, opts: Http2ServerOptions) throws str -> Http2Server:
+        cfg.set_alpn("h2")?
+        mut s = Http2Server._open(host, port, cfg.handle(), true, opts)?
+        s._cfg = cfg
+        return s
+
+    def _open(host: str, port: int, cfgh: Pointer[char], tls: bool, opts: Http2ServerOptions) throws str -> Http2Server:
+        mut h = trc_h2srv_new(host as Pointer[char], host.len(), port, cfgh, opts.timeout_ms, opts.max_streams)
+        if _h2s_null(h): raise("HTTP/2 server: out of memory")
+        if trc_h2srv_ok(h) != 1:
+            mut eb = _cn_alloc(300)
+            mut en = trc_h2srv_error(h, eb, 300)
+            mut msg = _cn_take(eb, en)
+            trc_h2srv_close(h)
+            raise(msg)
+        mut s = Http2Server()
+        s._h = h
+        s.host = host
+        s.port = trc_h2srv_port(h)
+        s.timeout_ms = opts.timeout_ms
+        s.tls = tls
+        return s
+
+    # The next request whose headers are complete. Waits up to timeout_ms
+    # (< 0: forever); on timeout the result has key 0 (`valid()` is false).
+    # Raises once the server has been shut down and every connection is gone.
+    pub def next(self, timeout_ms: int) throws str -> H2ServerRequest:
+        mut r = H2ServerRequest()
+        r._srv = self._h
+        r.key = 0
+        r.method = ""
+        r.path = ""
+        r.scheme = ""
+        r.authority = ""
+        r.headers = H2Headers.init()
+        r.timeout_ms = self.timeout_ms
+        if _h2s_null(self._h): raise("HTTP/2 server: closed")
+        mut key = trc_h2srv_poll(self._h, timeout_ms)
+        if key < 0: raise("HTTP/2 server: closed")
+        if key == 0: return r
+        r.key = key
+        mut all = H2Headers.from_blob(r._blob(0))
+        mut i = 0
+        while i < len(all.names):
+            mut n = all.names[i]
+            if n == ":method": r.method = all.values[i]
+            elif n == ":path": r.path = all.values[i]
+            elif n == ":scheme": r.scheme = all.values[i]
+            elif n == ":authority": r.authority = all.values[i]
+            elif n.len() > 0 and not n.starts_with(":"): r.headers.add(n, all.values[i])
+            i = i + 1
+        if r.authority.len() == 0: r.authority = r.headers.get("host")
+        return r
+
+    # Requests already received but not yet returned by next().
+    pub def pending(self) -> int: return trc_h2srv_pending(self._h)
+
+    # Run handler(request) for each request (release() after it returns),
+    # until `max_requests` have been handled (< 0: forever) or the server
+    # stops. A handler that does not end its response gets it reset.
+    pub def serve(self, handler: def(H2ServerRequest), max_requests: int):
+        mut n = 0
+        while max_requests < 0 or n < max_requests:
+            mut rr: Result[H2ServerRequest, str] = self.next(-1)
+            if rr.is_err: return
+            mut req = rr.ok
+            if req.valid():
+                handler(req)
+                req.release()
+                n = n + 1
+        # deliver what the last handlers queued
+        trc_h2srv_run(self._h, 0)
+
+    # Keep servicing connections (PING, flow control, queued data) for up to ms.
+    pub def run(self, ms: int): trc_h2srv_run(self._h, ms)
+
+    pub def connections(self) -> int: return trc_h2srv_conn_count(self._h)
+
+    # Graceful shutdown: stop accepting, GOAWAY(NO_ERROR) to every client;
+    # streams already open may complete (keep calling next()/run()).
+    pub def shutdown(self): trc_h2srv_shutdown(self._h)
+
+    # Close every connection (after GOAWAY) and the listener.
+    pub def close(self):
+        if not _h2s_null(self._h):
+            trc_h2srv_close(self._h)
+            self._h = 0 as Pointer[char]

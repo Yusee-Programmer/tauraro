@@ -471,6 +471,123 @@ c.close()
 exposes the compressor (`encode(headers)?`, `decode(block)?`, `set_max_table`, `table_size`) and `Huffman.encode/decode`
 the RFC 7541 Huffman code. Sensitive headers (`authorization`, `cookie`, ...) are sent never-indexed.
 
+### Streaming requests
+
+`open_stream(method, path, headers)? -> int` starts a request whose body is sent with
+`send_data(sid, chunk, end)?` (queued against the flow-control windows; blocks only while more than
+1 MiB is waiting). `read_data(sid, timeout_ms)?` returns the next chunk of the response body (`""` at the
+end), `wait_headers(sid, ms)?` waits for the response headers, `reset(sid, code)` sends RST_STREAM
+(`response()` keeps working) and `reset_code(sid)` reports the code. Both directions can be used at once.
+
+---
+
+## std.net.http2_server — HTTP/2 server
+
+An HTTP/2 server (RFC 9113) over cleartext h2c (prior knowledge) or TLS 1.3 with ALPN `h2`
+(`TlsServerConfig`, see `std.net.tls`). One `Http2Server` owns the listener and all its connections and drives
+them from the calling thread: preface, SETTINGS, HPACK (shared with the client), HEADERS + CONTINUATION,
+DATA with connection and stream flow control (credit is returned as the handler reads), WINDOW_UPDATE, PING,
+RST_STREAM, GOAWAY, request and response trailers, many concurrent streams. Protocol violations get
+GOAWAY / RST_STREAM with the right error code; invalid requests (upper-case header names, missing
+pseudo-headers, `te` other than `trailers`, ...) are reset.
+
+```tauraro
+from std.net.http2_server import Http2Server, H2ServerRequest
+from std.net.http2 import H2Headers
+
+def respond_to(r: H2ServerRequest) throws str -> bool:
+    mut body = r.read_all()?
+    mut h = H2Headers.init()
+    h.add("content-type", "text/plain")
+    r.reply(200, h, r.method + " " + r.path + " got " + str(body.len()) + " bytes")?
+    return true
+
+def handle(r: H2ServerRequest):
+    mut res: Result[bool, str] = respond_to(r)    # errors: client reset, timeout
+
+mut srv: Result[Http2Server, str] = Http2Server.listen("127.0.0.1", 8080)    # h2c; listen_tls(host, port, cfg) for https
+srv.ok.serve(handle, -1)                          # next() + handle + release, forever
+```
+
+| Member | Description |
+|---|---|
+| `Http2Server.listen(host, port)?`, `listen_tls(host, port, cfg)?`, `listen_with` / `listen_tls_with(..., Http2ServerOptions)` | `port` 0 picks a free port (`srv.port`). Options: `timeout_ms`, `max_streams` (SETTINGS_MAX_CONCURRENT_STREAMS, default 100). |
+| `next(timeout_ms)? -> H2ServerRequest` | Next request; `valid()` is false on timeout. Other connections are serviced while waiting. |
+| `serve(handler, max_requests)` | Loop `next` + handler + `release` (`max_requests < 0`: forever). Write your own loop with `next`. |
+| `run(ms)`, `pending()`, `connections()` | Keep serving (PING, flow control, queued data); queue length; live connections. |
+| `shutdown()`, `close()` | GOAWAY(NO_ERROR) and stop accepting (open streams may finish); close everything. |
+
+`H2ServerRequest`: `method`, `path`, `scheme`, `authority`, `headers` (regular headers), `is_tls()`,
+`stream_id()`; body: `read(timeout_ms)?` (a chunk, `""` at the end, raises on timeout or reset), `read_all()?`,
+`take()`, `available()`, `body_complete()`, `trailers()`; response: `respond(status, headers)?`,
+`send(data)?`, `finish(data)?`, `send_trailers(headers)?`, `reply(status, headers, body)?`, `respond_end`;
+state: `cancelled()`, `reset_code()`, `finished()`, `flush(ms)?`, `reset(code)`, `release()`. `send` queues data and
+waits only when more than 1 MiB is queued; DATA goes out as the client's windows allow. Handlers run one at a
+time, but while one waits (`read`, `flush`, `wait_event`) the server keeps servicing every connection, so
+streaming in both directions works and slow clients do not stall others' I/O.
+
+---
+
+## std.net.grpc — gRPC
+
+gRPC over HTTP/2 (grpc.io PROTOCOL-HTTP2), client and server, on raw message bytes: encode messages with
+`std.encoding.protobuf` (or anything else). Handles length-prefixed messages (optional gzip message
+compression via `std.compress.flate`), `content-type: application/grpc`, `te: trailers`, `grpc-status` /
+`grpc-message` (percent-encoded) trailers and trailers-only responses, `grpc-timeout` deadlines, metadata
+including `-bin` (base64) headers, and the status codes (`GRPC_OK()` ... `GRPC_UNAUTHENTICATED()`).
+
+```tauraro
+from std.net.grpc import GrpcChannel, GrpcCallOptions, GrpcServer, GrpcServerCall, GRPC_NOT_FOUND
+
+# server
+def say_hello(c: GrpcServerCall, req: str) -> str:
+    if req.len() == 0:
+        c.fail(GRPC_NOT_FOUND(), "no name")
+        return ""
+    return "Hello " + req
+mut s = GrpcServer.listen("127.0.0.1", 50051)?        # listen_tls(host, port, cfg)? for TLS
+s.add_unary("/helloworld.Greeter/SayHello", say_hello)
+s.enable_health()                                    # grpc.health.v1 Check + Watch
+s.serve(-1)
+
+# client
+mut ch = GrpcChannel.connect("127.0.0.1", 50051)?     # connect_tls(host, port, ca_pem)? for TLS
+mut o = GrpcCallOptions.with_timeout(2000)           # deadline in ms
+o.metadata.add("x-user", "ann")
+mut r = ch.unary("/helloworld.Greeter/SayHello", "Ann", o)
+if r.ok(): print(r.message) else: print(r.code, r.details)
+```
+
+| Client member | Description |
+|---|---|
+| `GrpcChannel.connect(host, port)?`, `connect_tls(host, port, ca_pem)?`, `connect_with(host, port, Http2Options)?` | h2c / TLS (ALPN h2). |
+| `unary(method, request, opts) -> GrpcReply` | Never raises: `code`, `details`, `message`, `messages`, `headers`, `trailers`, `ok()`, `status_name()`. Connection errors give `UNAVAILABLE`. |
+| `server_streaming(method, request, opts)?`, `client_streaming(method, opts)?`, `bidi(method, opts)?`, `open_call` | Return a `GrpcCall`. |
+| `GrpcCall`: `send(msg)`, `close_send()`, `recv()` (message in `.message`), `collect() -> GrpcReply`, `finish()`, `cancel()`, `response_headers()` | After the end `code` / `details` / `trailers` hold the status. A deadline gives `DEADLINE_EXCEEDED` (RST_STREAM CANCEL sent), `cancel()` gives `CANCELLED`. |
+| `GrpcCallOptions`: `timeout_ms`, `metadata`, `compress` (gzip requests), `max_message` | `default()`, `with_timeout(ms)`. |
+
+| Server member | Description |
+|---|---|
+| `GrpcServer.listen(host, port)?`, `listen_tls(host, port, cfg)?`, `port()` | |
+| `add_unary(path, def(GrpcServerCall, str) -> str)`, `add_server_streaming(path, def(GrpcServerCall, str))`, `add_client_streaming(path, def(GrpcServerCall) -> str)`, `add_bidi(path, def(GrpcServerCall))` | Register by full method path. |
+| `enable_health()`, `set_health(service, status)`, `health_of(service)` | `grpc.health.v1.Health/Check` and `Watch`; `health_request`, `health_response`, `health_parse_response` build / read the messages. |
+| `serve(max_calls)`, `serve_one(timeout_ms)`, `run(ms)`, `shutdown()`, `close()` | `max_calls < 0` serves forever. |
+
+`GrpcServerCall` (handler context): `method`, `metadata` (request), `header_metadata` / `trailer_metadata`
+(sent back), `fail(code, details)`, `recv()` (request message in `.message`), `send(msg)`, `send_headers()`,
+`compress` (gzip responses when the client accepts them), `cancelled()`, `deadline_exceeded()`,
+`time_remaining()`, `sleep(ms)` (returns early on cancel / deadline) and `metadata_bin(name)`. A handler
+that returns normally ends the call with the status set by `fail` (OK by default); requests on other
+streams are dispatched (nested) while a handler waits in `recv` / `send` / `sleep`, so a long-lived Watch
+does not block unary calls. Helpers on `Grpc`: `frame`, `encode_timeout`, `parse_timeout`, `percent_encode` /
+`percent_decode`, `b64_encode` / `b64_decode`, `add_bin` / `get_bin`, `compress` / `decompress`, `status_name`;
+`GrpcFramer` parses a stream of messages.
+
+Interoperability was checked against Python `grpcio` 1.84 in both directions (h2c and TLS): unary,
+all three streaming kinds, metadata and `-bin` metadata, error details, deadlines, cancellation, gzip,
+3 MB messages, health Check / Watch and concurrent clients; and against `curl --http2-prior-knowledge`
+for the HTTP/2 server.
+
 ---
 
 ## std.net.https — HTTPS/TLS Client
