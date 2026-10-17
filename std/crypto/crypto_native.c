@@ -24,6 +24,10 @@
  *   Argon2 i/d/id (RFC 9106) ...... trc_argon2
  *   bcrypt ($2a/$2b/$2y) .......... trc_bcrypt_raw
  *   AEAD .......................... trc_aead_seal/open (AES-128/256-GCM, ChaCha20-Poly1305)
+ *   scrypt (RFC 7914) ............. trc_scrypt, trc_scrypt_mem
+ *   bcrypt_pbkdf (OpenSSH) ........ trc_bcrypt_pbkdf
+ *   AES-CTR ....................... trc_aes_ctr
+ *   age STREAM .................... trc_stream_chunk/seal/open, trc_stream_open_chunk
  */
 #if !defined(_WIN32) && !defined(__APPLE__) && !defined(_GNU_SOURCE)
 #  define _GNU_SOURCE
@@ -1600,3 +1604,221 @@ int64_t trc_chachapoly_crypt(const char* key, int64_t enc, const char* nonce, co
     return chachapoly_crypt((const u8*)key, (int)enc, (const u8*)nonce, (const u8*)aad, (size_t)alen, (const u8*)in, (size_t)n, (u8*)out, (u8*)tag);
 }
 
+
+/* ═══════════════════════════ scrypt (RFC 7914) ═══════════════════════════ */
+static void salsa20_8(u32 B[16]) {
+    u32 x[16]; int i;
+    memcpy(x, B, sizeof x);
+#define SR(a, b) (((a) << (b)) | ((a) >> (32 - (b))))
+    for (i = 0; i < 8; i += 2) {
+        x[ 4] ^= SR(x[ 0]+x[12], 7);  x[ 8] ^= SR(x[ 4]+x[ 0], 9);
+        x[12] ^= SR(x[ 8]+x[ 4],13);  x[ 0] ^= SR(x[12]+x[ 8],18);
+        x[ 9] ^= SR(x[ 5]+x[ 1], 7);  x[13] ^= SR(x[ 9]+x[ 5], 9);
+        x[ 1] ^= SR(x[13]+x[ 9],13);  x[ 5] ^= SR(x[ 1]+x[13],18);
+        x[14] ^= SR(x[10]+x[ 6], 7);  x[ 2] ^= SR(x[14]+x[10], 9);
+        x[ 6] ^= SR(x[ 2]+x[14],13);  x[10] ^= SR(x[ 6]+x[ 2],18);
+        x[ 3] ^= SR(x[15]+x[11], 7);  x[ 7] ^= SR(x[ 3]+x[15], 9);
+        x[11] ^= SR(x[ 7]+x[ 3],13);  x[15] ^= SR(x[11]+x[ 7],18);
+        x[ 1] ^= SR(x[ 0]+x[ 3], 7);  x[ 2] ^= SR(x[ 1]+x[ 0], 9);
+        x[ 3] ^= SR(x[ 2]+x[ 1],13);  x[ 0] ^= SR(x[ 3]+x[ 2],18);
+        x[ 6] ^= SR(x[ 5]+x[ 4], 7);  x[ 7] ^= SR(x[ 6]+x[ 5], 9);
+        x[ 4] ^= SR(x[ 7]+x[ 6],13);  x[ 5] ^= SR(x[ 4]+x[ 7],18);
+        x[11] ^= SR(x[10]+x[ 9], 7);  x[ 8] ^= SR(x[11]+x[10], 9);
+        x[ 9] ^= SR(x[ 8]+x[11],13);  x[10] ^= SR(x[ 9]+x[ 8],18);
+        x[12] ^= SR(x[15]+x[14], 7);  x[13] ^= SR(x[12]+x[15], 9);
+        x[14] ^= SR(x[13]+x[12],13);  x[15] ^= SR(x[14]+x[13],18);
+    }
+#undef SR
+    for (i = 0; i < 16; i++) B[i] += x[i];
+}
+/* BlockMix: B (2r blocks of 16 words) -> Y. */
+static void scrypt_blockmix(const u32* B, u32* Y, size_t r) {
+    u32 X[16]; size_t i; int k;
+    memcpy(X, B + (2 * r - 1) * 16, 64);
+    for (i = 0; i < 2 * r; i++) {
+        for (k = 0; k < 16; k++) X[k] ^= B[i * 16 + k];
+        salsa20_8(X);
+        memcpy(Y + ((i & 1) * r + i / 2) * 16, X, 64);
+    }
+}
+/* Validates scrypt parameters; returns the bytes of working memory needed, or -1. */
+int64_t trc_scrypt_mem(int64_t N, int64_t r, int64_t p) {
+    if (N < 2 || (N & (N - 1)) != 0 || r < 1 || p < 1) return -1;
+    if ((u64)r * (u64)p >= ((u64)1 << 30)) return -1;
+    if ((u64)r > ((u64)1 << 40) / 128 || (u64)N > ((u64)1 << 40) / (128 * (u64)r)) return -1;
+    if (r < 4 && (u64)N >= ((u64)1 << (16 * r))) return -1;   /* N < 2^(128 r / 8) */
+    return (int64_t)(128 * (u64)r * (u64)N + 256 * (u64)r + 128 * (u64)r * (u64)p);
+}
+/* scrypt(P, S, N, r, p) -> dklen bytes. Returns 0, -1 on bad params, -2 if out of memory. */
+int64_t trc_scrypt(const char* pwd, int64_t plen, const char* salt, int64_t slen,
+                   int64_t N, int64_t r, int64_t p, char* out, int64_t dklen) {
+    size_t blen, ru, i, k; u64 j, n; u8* B; u32 *V, *X, *Y;
+    if (trc_scrypt_mem(N, r, p) < 0 || dklen < 1) return -1;
+    ru = (size_t)r; n = (u64)N;
+    blen = 128 * ru * (size_t)p;
+    B = (u8*)malloc(blen);
+    V = (u32*)malloc(128 * ru * (size_t)n);
+    X = (u32*)malloc(256 * ru);
+    if (!B || !V || !X) { free(B); free(V); free(X); return -2; }
+    Y = X + 32 * ru;
+    trc_pbkdf2(256, pwd, plen, salt, slen, 1, (char*)B, (int64_t)blen);
+    for (i = 0; i < (size_t)p; i++) {
+        u8* Bi = B + i * 128 * ru;
+        for (k = 0; k < 32 * ru; k++) X[k] = ld32le(Bi + 4 * k);
+        for (j = 0; j < n; j++) {
+            memcpy(V + j * 32 * ru, X, 128 * ru);
+            scrypt_blockmix(X, Y, ru);
+            memcpy(X, Y, 128 * ru);
+        }
+        for (j = 0; j < n; j++) {
+            u64 idx = (u64)X[(2 * ru - 1) * 16] & (n - 1);
+            const u32* Vj = V + idx * 32 * ru;
+            for (k = 0; k < 32 * ru; k++) X[k] ^= Vj[k];
+            scrypt_blockmix(X, Y, ru);
+            memcpy(X, Y, 128 * ru);
+        }
+        for (k = 0; k < 32 * ru; k++) st32le(Bi + 4 * k, X[k]);
+    }
+    trc_pbkdf2(256, pwd, plen, (const char*)B, (int64_t)blen, 1, out, dklen);
+    wipe(B, blen); wipe(V, 128 * ru * (size_t)n); wipe(X, 256 * ru);
+    free(B); free(V); free(X);
+    return 0;
+}
+
+/* ═══════════════════════ bcrypt_pbkdf (OpenBSD / OpenSSH) ════════════════ */
+static void bcrypt_pbkdf_hash(const u8* sha2pass, const u8* sha2salt, u8* out, bf_ctx* c) {
+    static const u8 ctext[33] = "OxychromaticBlowfishSwatDynamite";
+    u32 cdata[8]; int i, k;
+    memcpy(c->P, bf_P_init, sizeof c->P); memcpy(c->S, bf_S_init, sizeof c->S);
+    bf_expand(c, sha2salt, 64, sha2pass, 64);
+    for (i = 0; i < 64; i++) {
+        bf_expand(c, NULL, 0, sha2salt, 64);
+        bf_expand(c, NULL, 0, sha2pass, 64);
+    }
+    for (i = 0; i < 8; i++) cdata[i] = ld32be(ctext + 4 * i);
+    for (k = 0; k < 64; k++)
+        for (i = 0; i < 8; i += 2) bf_encrypt(c, &cdata[i], &cdata[i + 1]);
+    for (i = 0; i < 8; i++) st32le(out + 4 * i, cdata[i]);
+    wipe(cdata, sizeof cdata);
+}
+/* bcrypt_pbkdf as used by openssh-key-v1 and signify. Returns 0 or -1. */
+int64_t trc_bcrypt_pbkdf(const char* pass, int64_t passlen, const char* salt, int64_t saltlen,
+                         int64_t rounds, char* key, int64_t keylen) {
+    u8 sha2pass[64], sha2salt[64], out[32], tmp[32], cnt[4]; md_ctx m;
+    size_t stride, amt, i, j, left, orig; u32 count; int64_t r; bf_ctx* c;
+    if (rounds < 1 || passlen < 0 || saltlen < 1 || saltlen > (1 << 20) || keylen < 1 || keylen > 32 * 32) return -1;
+    c = (bf_ctx*)malloc(sizeof(bf_ctx));
+    if (!c) return -1;
+    orig = left = (size_t)keylen;
+    stride = (left + 31) / 32;
+    amt = (left + stride - 1) / stride;
+    md_init(&m, 512); md_update(&m, (const u8*)pass, (size_t)passlen); md_final(&m, sha2pass);
+    for (count = 1; left > 0; count++) {
+        st32be(cnt, count);
+        md_init(&m, 512); md_update(&m, (const u8*)salt, (size_t)saltlen); md_update(&m, cnt, 4); md_final(&m, sha2salt);
+        bcrypt_pbkdf_hash(sha2pass, sha2salt, tmp, c);
+        memcpy(out, tmp, 32);
+        for (r = 1; r < rounds; r++) {
+            md_init(&m, 512); md_update(&m, tmp, 32); md_final(&m, sha2salt);
+            bcrypt_pbkdf_hash(sha2pass, sha2salt, tmp, c);
+            for (j = 0; j < 32; j++) out[j] ^= tmp[j];
+        }
+        if (amt > left) amt = left;
+        for (i = 0; i < amt; i++) {
+            size_t dest = i * stride + (count - 1);
+            if (dest >= orig) break;
+            key[dest] = (char)out[i];
+        }
+        left -= i;
+    }
+    wipe(c, sizeof *c); free(c);
+    wipe(sha2pass, sizeof sha2pass); wipe(sha2salt, sizeof sha2salt); wipe(out, sizeof out); wipe(tmp, sizeof tmp);
+    return 0;
+}
+
+/* ═══════════════════════ AES-CTR (128-bit big-endian counter) ════════════ */
+/* klen 16/24/32, iv 16 bytes. out may equal in. Returns 0 or -1. */
+int64_t trc_aes_ctr(const char* key, int64_t klen, const char* iv16, const char* in, int64_t n, char* out) {
+    aes_ctx a; u8 ctr[16], ks[16]; int64_t off = 0; int i;
+    if (klen != 16 && klen != 24 && klen != 32) return -1;
+    aes_init(&a, (const u8*)key, (int)klen);
+    memcpy(ctr, iv16, 16);
+    while (off < n) {
+        int64_t take = n - off < 16 ? n - off : 16;
+        aes_enc(&a, ctr, ks);
+        for (i = 0; i < take; i++) out[off + i] = (char)((u8)in[off + i] ^ ks[i]);
+        off += take;
+        for (i = 15; i >= 0; i--) { if (++ctr[i] != 0) break; }
+    }
+    wipe(&a, sizeof a); wipe(ks, sizeof ks);
+    return 0;
+}
+
+/* ═══════════════ age STREAM (ChaCha20-Poly1305, 64 KiB chunks) ═══════════
+ * nonce = 11-byte big-endian chunk counter || last-chunk flag. */
+#define AGE_CHUNK 65536
+int64_t trc_stream_chunk(int64_t enc, const char* key, int64_t counter, int64_t last,
+                         const char* in, int64_t n, char* out) {
+    u8 nonce[12]; int i; u64 c = (u64)counter;
+    memset(nonce, 0, sizeof nonce);
+    for (i = 10; i >= 3; i--) { nonce[i] = (u8)c; c >>= 8; }
+    nonce[11] = last ? 1 : 0;
+    if (enc) {
+        if (n < 0 || n > AGE_CHUNK) return -1;
+        chachapoly_crypt((const u8*)key, 1, nonce, NULL, 0, (const u8*)in, (size_t)n, (u8*)out, (u8*)out + n);
+        return n + 16;
+    }
+    if (n < 16 || n > AGE_CHUNK + 16) return -1;
+    if (chachapoly_crypt((const u8*)key, 0, nonce, NULL, 0, (const u8*)in, (size_t)(n - 16), (u8*)out, (u8*)(in + n - 16)) < 0) return -1;
+    return n - 16;
+}
+/* Size of the STREAM ciphertext for an n-byte plaintext. */
+int64_t trc_stream_sealed_len(int64_t n) {
+    int64_t chunks = n == 0 ? 1 : (n + AGE_CHUNK - 1) / AGE_CHUNK;
+    return n + 16 * chunks;
+}
+/* Whole-payload STREAM encryption; out needs trc_stream_sealed_len(n) bytes. */
+int64_t trc_stream_seal(const char* key, const char* in, int64_t n, char* out) {
+    int64_t off = 0, o = 0, ctr = 0;
+    do {
+        int64_t take = n - off > AGE_CHUNK ? AGE_CHUNK : n - off;
+        int last = off + take == n;
+        o += trc_stream_chunk(1, key, ctr++, last, in + off, take, out + o);
+        off += take;
+    } while (off < n);
+    return o;
+}
+/* Decrypt one received chunk the way age's reference reader does: a short
+ * chunk must carry the last-chunk flag; a full-size chunk is tried as a
+ * middle chunk, then as a final one. Returns the plaintext length and sets
+ * *is_last, or -1. */
+int64_t trc_stream_open_chunk(const char* key, int64_t counter, const char* in, int64_t n, char* out, int64_t* is_last) {
+    int64_t r;
+    *is_last = 0;
+    if (n < AGE_CHUNK + 16) {
+        if (n < 16 || (n == 16 && counter > 0)) return -1;
+        *is_last = 1;
+        return trc_stream_chunk(0, key, counter, 1, in, n, out);
+    }
+    if (n != AGE_CHUNK + 16) return -1;
+    r = trc_stream_chunk(0, key, counter, 0, in, n, out);
+    if (r >= 0) return r;
+    *is_last = 1;
+    return trc_stream_chunk(0, key, counter, 1, in, n, out);
+}
+/* Whole-payload STREAM decryption. out needs n bytes. *released gets the
+ * plaintext bytes produced by chunks that authenticated. Returns the
+ * plaintext length, or -1 if a chunk fails, the final chunk is missing or
+ * data follows it. */
+int64_t trc_stream_open(const char* key, const char* in, int64_t n, char* out, int64_t* released) {
+    int64_t off = 0, o = 0, ctr = 0, last = 0;
+    *released = 0;
+    while (off < n && !last) {
+        int64_t take = n - off > AGE_CHUNK + 16 ? AGE_CHUNK + 16 : n - off;
+        int64_t r = trc_stream_open_chunk(key, ctr++, in + off, take, out + o, &last);
+        if (r < 0) return -1;
+        o += r; off += take; *released = o;
+    }
+    if (!last || off != n) return -1;
+    return o;
+}

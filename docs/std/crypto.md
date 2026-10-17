@@ -624,3 +624,94 @@ subjectAltName, basicConstraints / keyUsage for CAs, keyUsage + serverAuth for l
 `add_extension(oid, critical, value_der)`. `cert_extension(der, oid)?` and `cert_names(der)?` read
 extensions back. Signatures: SHA-256 with RSA (PKCS#1 v1.5) and P-256, SHA-384 with P-384. Generated
 CSRs and certificates pass `openssl req -verify` / `openssl verify`. RSA keys cannot be generated.
+## scrypt — `std.crypto.scrypt`
+
+scrypt (RFC 7914), implemented in C. `Scrypt.derive(password, salt, n, r, p, dklen)?` returns `dklen` raw bytes.
+Parameters are validated (`n` a power of two > 1, `r, p >= 1`, `r·p < 2^30`, `n < 2^(16r)`) and the working
+memory (≈ `128·r·n` bytes) is capped at `SCRYPT_DEFAULT_MAX_MEM` (1 GiB); `derive_limited(..., max_mem)?` takes
+an explicit cap, `Scrypt.memory_needed(n, r, p)` reports it.
+
+Password hashes use the PHC-style string also produced by passlib: `$scrypt$ln=17,r=8,p=1$<salt>$<hash>`
+(unpadded base64, `ln = log2(n)`).
+
+| Method | Description |
+|---|---|
+| `Scrypt.hash(password)?` | Defaults (`ScryptParams.default()`): `ln=17, r=8, p=1` (128 MiB, OWASP), 16-byte salt, 32-byte hash. |
+| `Scrypt.hash_with(password, params)?` / `hash_with_salt(password, salt, params)?` | Custom costs (`ScryptParams.init(log_n, r, p)`). |
+| `Scrypt.verify(encoded, password) -> bool` | Constant-time; false for malformed or over-limit strings. |
+| `Scrypt.needs_rehash(encoded, params) -> bool`, `Scrypt.decode(encoded)? -> ScryptHash`, `Scrypt.encode(...)` | |
+
+## age file encryption — `std.crypto.age`
+
+The [age v1 format](https://age-encryption.org/v1), interoperable with `age`/`rage`: X25519 recipients
+(`age1...`) and identities (`AGE-SECRET-KEY-1...`), passphrase (scrypt) recipients, the HMAC-SHA256 header MAC,
+the STREAM payload (ChaCha20-Poly1305, 64 KiB chunks) and ASCII armor.
+
+```tauraro
+from std.crypto.age import Age, AgeIdentity, AgeRecipient
+
+mut id = AgeIdentity.generate()?
+write_file("key.txt", id.to_string() + "\n")
+mut rcpt = id.recipient()?                 # rcpt.to_string() -> "age1..."
+mut rs: List[AgeRecipient] = []
+rs.append(AgeRecipient.parse("age1xmwwc06ly3ee5rytxm9mflaz2u56jjj36s0mypdrwsvlul66mv4q47ryef")?)
+rs.append(rcpt)
+mut ct = Age.encrypt(data, rs)?            # binary; Age.encrypt_armored for text
+mut ids = AgeIdentity.parse_file(read_file("key.txt"))?
+mut pt = Age.decrypt(ct, ids)?             # binary or armored input
+mut sealed = Age.encrypt_passphrase(data, "correct horse")?
+```
+
+| API | Description |
+|---|---|
+| `AgeRecipient.parse(text)?`, `x25519(pub32)`, `passphrase(pw)`, `passphrase_with_work_factor(pw, log_n)`, `to_string()` | Recipients (default scrypt work factor 18). A passphrase recipient must be the only one. |
+| `AgeIdentity.generate()?`, `parse(text)?`, `parse_file(text)?`, `x25519(secret32)`, `passphrase(pw)`, `passphrase_with_max_work_factor(pw, n)`, `recipient()?`, `to_string()` | Identities; passphrase identities accept work factors up to 22 by default. |
+| `Age.encrypt(data, recipients)?`, `encrypt_armored(...)?`, `encrypt_passphrase(data, pw)?` | One-shot encryption. |
+| `Age.decrypt(data, identities)?`, `decrypt_binary(...)?`, `decrypt_passphrase(data, pw)?` | One-shot decryption (armor detected automatically by `decrypt`). |
+| `Age.armor(bin)`, `Age.dearmor(text)?`, `Age.is_armored(data)` | Strict armor: LF or CRLF, 64-column lines, canonical padded base64, whitespace allowed only outside. |
+| `AgeEncryptor.init(recipients)?` → `update(chunk)? -> str`, `finish()? -> str` | Streaming encryption; output is released as soon as each 64 KiB chunk is final. |
+| `AgeDecryptor.init(identities)` → `update(chunk)? -> str`, `finish()? -> str`, `partial()` | Streaming decryption; only authenticated plaintext is released. |
+| `Age.encrypt_file(in, out, recipients)?`, `Age.decrypt_file(in, out, identities)?` | Files in 1 MiB reads (binary format). On a decryption error delete the partial output. |
+
+Decryption is strict and errors are categorised by prefix: `age: header:`, `age: no identity matched`,
+`age: bad header MAC`, `age: payload:`, `age: armor:`. Post-quantum hybrid (`age1pq`) and SSH recipients are not
+supported; their stanzas are ignored like any unknown type.
+
+Tested in `tests/lang/138_crypto_age_ssh.tr` with the 108 small non-hybrid vectors of the C2SP/CCTV age testkit
+(the full 128-vector non-hybrid set, including the multi-megabyte STREAM vectors, passed during development);
+files encrypted here were decrypted by an independent pyca/cryptography implementation.
+
+## SSH keys and signatures — `std.crypto.ssh`
+
+OpenSSH formats for `ssh-ed25519`, `ecdsa-sha2-nistp256`, `ecdsa-sha2-nistp384` and `ssh-rsa` keys.
+
+```tauraro
+from std.crypto.ssh import SshKey, SshSig, SshAuthorizedKey
+
+mut key = SshKey.parse_private(read_file("id_ed25519"), "passphrase or empty")?
+print(key.public_line(), key.fingerprint_sha256())      # as in id_ed25519.pub / ssh-keygen -l
+mut sig = SshSig.sign(key, data, "file")?                # ssh-keygen -Y sign -n file
+mut signer = SshSig.verify(sig, data, "file")?           # returns the signing key
+for ak in SshAuthorizedKey.parse_file(read_file("authorized_keys")): print(ak.options, ak.key.comment)
+```
+
+| API | Description |
+|---|---|
+| `SshKey.parse_public(line)?`, `from_blob(blob, comment)?`, `public_line()`, `blob`, `key_type`, `comment`, `bits()` | Public keys (`type base64 comment`); blobs are validated (EC points on the curve). |
+| `fingerprint_sha256()`, `fingerprint_md5()` | `SHA256:...` / `MD5:aa:bb:...` exactly as `ssh-keygen -l [-E md5]`. |
+| `SshKey.parse_private(text, passphrase)?`, `parse_private_binary(data, pw)?` | `openssh-key-v1`, unencrypted or `aes256-ctr` + `bcrypt` KDF; check bytes, padding and public/private consistency are verified. |
+| `private_pem(passphrase, rounds)?` | Writes `openssh-key-v1` (encrypted with aes256-ctr / bcrypt-pbkdf when `passphrase` is non-empty; OpenSSH uses 16 rounds). |
+| `SshKey.generate_ed25519(comment)?`, `ed25519_from_seed(seed, comment)?`, `generate_ecdsa(curve, comment)?` | New keys. |
+| `SshKey.from_pkey(pk, comment)?`, `to_pkey()?`, `public_key()` | std.crypto.pk conversion (public keys of all types, EC and RSA private keys to PKey, EC private keys from PKey). |
+| `sign_ssh(msg)?`, `verify_ssh(msg, sig_blob, allow_sha1) -> bool` | Raw SSH signature blobs (RSA signs with `rsa-sha2-512`). |
+| `SshSig.sign(key, data, namespace)?`, `SshSig.verify(armored, data, namespace)? -> SshKey`, `SshSig.verify_with(armored, data, namespace, allowed) -> bool` | SSHSIG (`ssh-keygen -Y sign/verify`); SHA-512 for signing, SHA-256/512 accepted. |
+| `SshAuthorizedKey.parse(line)?`, `parse_file(text)`, `options`, `key`, `has_option(name)`, `option(name)` | `authorized_keys` lines with options (`command="..."` quoting, `\"` escapes); `parse_file` skips bad lines like sshd. |
+
+Limitations: Ed25519 keys convert to PKey as public keys only (PKey cannot sign with Ed25519); RSA private keys
+cannot be built from a PKey (no private exponent) or generated here; `aes256-gcm@openssh.com` and
+`chacha20-poly1305@openssh.com` encrypted keys, certificates and `sk-*` security-key types are not supported.
+`std.crypto.native` also exposes `trc_bcrypt_pbkdf` (OpenBSD bcrypt_pbkdf) and `trc_aes_ctr`.
+
+Verified against OpenSSH 10.2 `ssh-keygen`: keys, fingerprints and SSHSIG signatures it made are parsed and
+verified, and keys (unencrypted and encrypted) and signatures written here are accepted by `ssh-keygen -y` and
+`ssh-keygen -Y verify` (`tests/lang/138_crypto_age_ssh.tr`).

@@ -1,0 +1,886 @@
+# tauraro-cpp-shim: ssh_native.c
+#
+# std.crypto.ssh -- OpenSSH key formats and SSH signatures.
+#
+#   public keys      "ssh-ed25519 AAAA... comment" lines (also
+#                    ecdsa-sha2-nistp256/384 and ssh-rsa), the wire-format
+#                    blob, SHA256 / MD5 fingerprints as `ssh-keygen -l` shows
+#   private keys     "-----BEGIN OPENSSH PRIVATE KEY-----" (openssh-key-v1),
+#                    unencrypted or bcrypt-pbkdf + aes256-ctr encrypted,
+#                    read and written
+#   authorized_keys  lines with options (command="...",no-pty,...)
+#   PKey             conversion to and from std.crypto.pk keys
+#   SSHSIG           `ssh-keygen -Y sign` / `-Y verify` compatible signatures
+#
+# Ed25519 keys can be converted to a PKey only as public keys (PKey cannot
+# sign with Ed25519); SshKey signs with them directly. RSA private keys can be
+# read, written and used for signing, but not built from a PKey (PKey does not
+# expose the private exponent) and not generated here -- use ssh-keygen.
+#
+# Usage:
+#   from std.crypto.ssh import SshKey, SshSig
+#   mut key = SshKey.parse_private(read_file("id_ed25519"), "")?
+#   print(key.public_line(), key.fingerprint_sha256())
+#   mut sig = SshSig.sign(key, data, "file")?           # armored SSHSIG
+#   mut signer = SshSig.verify(sig, data, "file")?       # the signing key
+#   if signer.fingerprint_sha256() == trusted.fingerprint_sha256(): ...
+
+from std.crypto.native import ALG_SHA256, ALG_SHA384, ALG_SHA512, trc_digest, trc_ct_eq, trc_bcrypt_pbkdf, trc_aes_ctr, _cn_alloc, _cn_take, _cn_free, _cn_b64, _cn_unb64, _cn_hex, _cn_unhex
+from std.crypto.pk import PKey, Pem, KEY_RSA, KEY_EC_P256, KEY_EC_P384, KEY_ED25519, CURVE_P256, CURVE_P384, SIG_PKCS1
+from std.crypto.ed25519 import Ed25519
+from std.crypto.random import SecureRandom
+from std.core.string import StringBuilder
+from std.string.str import Str
+
+extern "C":
+    def trc_ssh_md5(data: Pointer[char], n: int, out: Pointer[char]) -> int
+    def trc_ssh_mod_minus1(d: Pointer[char], dlen: int, p: Pointer[char], plen: int, out: Pointer[char]) -> int
+
+def _sb(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+def _s_eq(a: str, b: str) -> bool:
+    mut ap = a as Pointer[char]
+    mut bp = b as Pointer[char]
+    return trc_ct_eq(ap, a.len(), bp, b.len()) == 1
+
+def _s_hash(alg: int, data: str) -> str:
+    mut n = 32
+    if alg == ALG_SHA384: n = 48
+    if alg == ALG_SHA512: n = 64
+    mut out = _cn_alloc(n)
+    mut dp = data as Pointer[char]
+    trc_digest(alg, dp, data.len(), out)
+    return _cn_take(out, n)
+
+def _s_md5(data: str) -> str:
+    mut out = _cn_alloc(16)
+    mut dp = data as Pointer[char]
+    trc_ssh_md5(dp, data.len(), out)
+    return _cn_take(out, 16)
+
+# ─── wire format ─────────────────────────────────────────────────────────────
+def _w_u32(sb: StringBuilder, v: int):
+    sb.append_char((v >> 24) & 255)
+    sb.append_char((v >> 16) & 255)
+    sb.append_char((v >> 8) & 255)
+    sb.append_char(v & 255)
+
+def _w_str(sb: StringBuilder, s: str):
+    _w_u32(sb, s.len())
+    sb.append(s)
+
+# Strip leading zero bytes of an unsigned big-endian number.
+def _s_strip(b: str) -> str:
+    mut i = 0
+    while i < b.len() and _sb(b, i) == 0: i = i + 1
+    return b.slice(i, b.len())
+
+# mpint content of an unsigned big-endian number (also the DER INTEGER body
+# for non-zero values).
+def _s_mpint_body(b: str) -> str:
+    mut m = _s_strip(b)
+    if m.len() > 0 and _sb(m, 0) >= 128:
+        mut z = _cn_take(_cn_alloc(1), 1)
+        return z + m
+    return m
+
+def _w_mpint(sb: StringBuilder, b: str):
+    mut body = _s_mpint_body(b)
+    _w_str(sb, body)
+
+pub class SshReader:
+    pub data: str
+    pub pos: int
+
+extend SshReader:
+    pub def init(data: str) -> SshReader:
+        mut r = SshReader()
+        r.data = data
+        r.pos = 0
+        return r
+
+    pub def remaining(self) -> int: return self.data.len() - self.pos
+
+    pub def u32(self) throws str -> int:
+        if self.pos + 4 > self.data.len(): raise("ssh: truncated data")
+        mut v = (_sb(self.data, self.pos) << 24) | (_sb(self.data, self.pos + 1) << 16) | (_sb(self.data, self.pos + 2) << 8) | _sb(self.data, self.pos + 3)
+        self.pos = self.pos + 4
+        return v
+
+    pub def string(self) throws str -> str:
+        mut n = self.u32()?
+        if n > self.data.len() - self.pos: raise("ssh: truncated string")
+        mut s = self.data.slice(self.pos, self.pos + n)
+        self.pos = self.pos + n
+        return s
+
+    # A non-negative mpint as unsigned big-endian magnitude.
+    pub def mpint(self) throws str -> str:
+        mut s = self.string()?
+        if s.len() > 0 and _sb(s, 0) >= 128: raise("ssh: negative mpint")
+        return _s_strip(s)
+
+    pub def raw(self, n: int) throws str -> str:
+        if n < 0 or n > self.data.len() - self.pos: raise("ssh: truncated data")
+        mut s = self.data.slice(self.pos, self.pos + n)
+        self.pos = self.pos + n
+        return s
+
+def _s_curve_name(kind: str) -> str:
+    if kind == "ecdsa-sha2-nistp256": return "nistp256"
+    if kind == "ecdsa-sha2-nistp384": return "nistp384"
+    return ""
+
+def _s_curve_id(kind: str) -> int:
+    if kind == "ecdsa-sha2-nistp256": return CURVE_P256
+    if kind == "ecdsa-sha2-nistp384": return CURVE_P384
+    return 0
+
+def _s_curve_bytes(kind: str) -> int:
+    if kind == "ecdsa-sha2-nistp256": return 32
+    return 48
+
+def _s_curve_hash(kind: str) -> int:
+    if kind == "ecdsa-sha2-nistp256": return ALG_SHA256
+    return ALG_SHA384
+
+def _s_left_pad(b: str, n: int) -> str:
+    mut m = _s_strip(b)
+    if m.len() >= n: return m
+    mut z = _cn_take(_cn_alloc(n - m.len()), n - m.len())
+    return z + m
+
+def _s_supported(kind: str) -> bool:
+    return kind == "ssh-ed25519" or kind == "ssh-rsa" or kind == "ecdsa-sha2-nistp256" or kind == "ecdsa-sha2-nistp384"
+
+# ─── DER for RSA private keys ────────────────────────────────────────────────
+def _der_len(sb: StringBuilder, n: int):
+    if n < 128:
+        sb.append_char(n)
+    elif n < 256:
+        sb.append_char(0x81)
+        sb.append_char(n)
+    else:
+        sb.append_char(0x82)
+        sb.append_char((n >> 8) & 255)
+        sb.append_char(n & 255)
+
+def _der_int(sb: StringBuilder, b: str):
+    mut body = _s_mpint_body(b)
+    sb.append_char(2)
+    if body.len() == 0:
+        sb.append_char(1)
+        sb.append_char(0)
+        return
+    _der_len(sb, body.len())
+    sb.append(body)
+
+def _s_mod_minus1(d: str, p: str) throws str -> str:
+    mut out = _cn_alloc(p.len())
+    mut dp = d as Pointer[char]
+    mut pp = p as Pointer[char]
+    if trc_ssh_mod_minus1(dp, d.len(), pp, p.len(), out) < 0:
+        _cn_free(out)
+        raise("ssh: invalid RSA key")
+    return _cn_take(out, p.len())
+
+def _s_rsa_pkcs1(n: str, e: str, d: str, iqmp: str, p: str, q: str) throws str -> str:
+    if p.len() == 0 or q.len() == 0: raise("ssh: invalid RSA key")
+    mut dp = _s_mod_minus1(d, p)?
+    mut dq = _s_mod_minus1(d, q)?
+    mut inner = StringBuilder.init(n.len() * 5 + 64)
+    mut zero = ""
+    _der_int(inner, zero)
+    _der_int(inner, n)
+    _der_int(inner, e)
+    _der_int(inner, d)
+    _der_int(inner, p)
+    _der_int(inner, q)
+    _der_int(inner, dp)
+    _der_int(inner, dq)
+    _der_int(inner, iqmp)
+    mut body = inner.to_owned()
+    inner.free()
+    mut sb = StringBuilder.init(body.len() + 8)
+    sb.append_char(0x30)
+    _der_len(sb, body.len())
+    sb.append(body)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _s_ed_spki(pub32: str) -> str:
+    mut h: Result[str, str] = _cn_unhex("302a300506032b6570032100")
+    if h.is_err: return ""
+    return h.ok + pub32
+
+# PEM-style block with 70-column lines, as OpenSSH writes them.
+def _s_armor(der: str, label: str) -> str:
+    mut b64 = _cn_b64(0, true, der)
+    mut sb = StringBuilder.init(b64.len() + b64.len() / 70 + 80)
+    sb.append("-----BEGIN ")
+    sb.append(label)
+    sb.append("-----\n")
+    mut i = 0
+    while i < b64.len():
+        mut e = i + 70
+        if e > b64.len(): e = b64.len()
+        mut line = b64.slice(i, e)
+        sb.append(line)
+        sb.append("\n")
+        i = e
+    sb.append("-----END ")
+    sb.append(label)
+    sb.append("-----\n")
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# ─── keys ────────────────────────────────────────────────────────────────────
+pub class SshKey:
+    pub key_type: str        # "ssh-ed25519", "ecdsa-sha2-nistp256", ...
+    pub comment: str
+    pub blob: str            # public key in SSH wire format
+    pub has_private: bool
+    _priv: str               # private fields in openssh-key-v1 order
+
+# Validate a public blob; returns its key type.
+def _s_check_blob(blob: str) throws str -> str:
+    mut r = SshReader.init(blob)
+    mut kind = r.string()?
+    if kind == "ssh-ed25519":
+        mut pk = r.string()?
+        if pk.len() != 32: raise("ssh: Ed25519 key must be 32 bytes")
+    elif kind == "ssh-rsa":
+        mut e = r.mpint()?
+        mut n = r.mpint()?
+        if e.len() == 0 or n.len() < 64: raise("ssh: invalid RSA key")
+    elif kind == "ecdsa-sha2-nistp256" or kind == "ecdsa-sha2-nistp384":
+        mut curve = r.string()?
+        if curve != _s_curve_name(kind): raise("ssh: ECDSA curve name does not match the key type")
+        mut q = r.string()?
+        mut pkr: Result[PKey, str] = PKey.ec_from_public(_s_curve_id(kind), q)
+        if pkr.is_err: raise("ssh: invalid ECDSA point")
+        mut pk = pkr.ok
+        pk.dispose()
+    else:
+        raise(f"ssh: unsupported key type {kind}")
+    if r.remaining() != 0: raise("ssh: trailing data in key blob")
+    return kind
+
+def _s_new_key(kind: str, blob: str, comment: str) -> SshKey:
+    mut k = SshKey()
+    k.key_type = kind
+    k.blob = blob
+    k.comment = comment
+    k.has_private = false
+    k._priv = ""
+    return k
+
+def _s_ed_blob(pub32: str) -> str:
+    mut sb = StringBuilder.init(64)
+    _w_str(sb, "ssh-ed25519")
+    _w_str(sb, pub32)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _s_ec_blob(kind: str, point: str) -> str:
+    mut sb = StringBuilder.init(160)
+    _w_str(sb, kind)
+    _w_str(sb, _s_curve_name(kind))
+    _w_str(sb, point)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _s_rsa_blob(e: str, n: str) -> str:
+    mut sb = StringBuilder.init(n.len() + 64)
+    _w_str(sb, "ssh-rsa")
+    _w_mpint(sb, e)
+    _w_mpint(sb, n)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _s_ec_kind(curve: int) -> str:
+    if curve == CURVE_P384: return "ecdsa-sha2-nistp384"
+    return "ecdsa-sha2-nistp256"
+
+# Read one key's private fields (after its type string) and check them
+# against the public blob; returns the SshKey.
+def _s_read_private(r: SshReader, kind: str, outer_blob: str) throws str -> SshKey:
+    mut start = r.pos
+    mut blob = ""
+    if kind == "ssh-ed25519":
+        mut pub32 = r.string()?
+        mut priv = r.string()?
+        if pub32.len() != 32 or priv.len() != 64: raise("ssh: invalid Ed25519 private key")
+        mut seed = priv.slice(0, 32)
+        mut derived = _cn_unhex(Ed25519.pubkey(_cn_hex(seed)))?
+        if not _s_eq(derived, pub32) or not _s_eq(priv.slice(32, 64), pub32): raise("ssh: Ed25519 private key does not match its public key")
+        blob = _s_ed_blob(pub32)
+    elif kind == "ecdsa-sha2-nistp256" or kind == "ecdsa-sha2-nistp384":
+        mut curve = r.string()?
+        if curve != _s_curve_name(kind): raise("ssh: ECDSA curve name does not match the key type")
+        mut q = r.string()?
+        mut d = r.mpint()?
+        mut nb = _s_curve_bytes(kind)
+        if d.len() > nb: raise("ssh: invalid ECDSA private key")
+        mut pkr: Result[PKey, str] = PKey.ec_from_private(_s_curve_id(kind), _s_left_pad(d, nb))
+        if pkr.is_err: raise("ssh: invalid ECDSA private key")
+        mut pk = pkr.ok
+        mut pt = pk.public_bytes()
+        pk.dispose()
+        if not _s_eq(pt, q): raise("ssh: ECDSA private key does not match its public key")
+        blob = _s_ec_blob(kind, q)
+    elif kind == "ssh-rsa":
+        mut n = r.mpint()?
+        mut e = r.mpint()?
+        mut d = r.mpint()?
+        mut iqmp = r.mpint()?
+        mut p = r.mpint()?
+        mut q = r.mpint()?
+        mut der = _s_rsa_pkcs1(n, e, d, iqmp, p, q)?
+        mut pkr: Result[PKey, str] = PKey.from_der(der)
+        if pkr.is_err: raise("ssh: invalid RSA private key")
+        mut pk = pkr.ok
+        mut mod = pk.public_bytes()
+        pk.dispose()
+        if not _s_eq(_s_strip(mod), n): raise("ssh: invalid RSA private key")
+        blob = _s_rsa_blob(e, n)
+    else:
+        raise(f"ssh: unsupported key type {kind}")
+    mut privf = r.data.slice(start, r.pos)
+    mut comment = r.string()?
+    if outer_blob.len() > 0 and not _s_eq(blob, outer_blob): raise("ssh: private key does not match the public key in the file")
+    mut k = _s_new_key(kind, blob, comment)
+    k.has_private = true
+    k._priv = privf
+    return k
+
+# Encode an SSH signature blob: string type, string signature.
+def _s_sig_blob(kind: str, sig: str) -> str:
+    mut sb = StringBuilder.init(sig.len() + 40)
+    _w_str(sb, kind)
+    _w_str(sb, sig)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+extend SshKey:
+    # Parse "type base64 [comment]".
+    pub def parse_public(line: str) throws str -> SshKey:
+        mut t = line.trim()
+        mut parts = Str.split(t, " ")
+        if parts.len < 2: raise("ssh: expected 'type base64 [comment]'")
+        mut kind = parts.get(0)
+        mut br: Result[str, str] = _cn_unb64(0, parts.get(1))
+        if br.is_err: raise("ssh: invalid base64 in public key")
+        mut blob = br.ok
+        mut inner = _s_check_blob(blob)?
+        if inner != kind: raise("ssh: key type does not match the encoded key")
+        mut comment = ""
+        if parts.len > 2:
+            mut sp = t.find(" ")
+            mut rest = t.slice(sp + 1, t.len()).trim()
+            mut sp2 = rest.find(" ")
+            comment = rest.slice(sp2 + 1, rest.len()).trim()
+        return _s_new_key(kind, blob, comment)
+
+    # From a wire-format public key blob.
+    pub def from_blob(blob: str, comment: str) throws str -> SshKey:
+        mut kind = _s_check_blob(blob)?
+        return _s_new_key(kind, blob, comment)
+
+    # A new Ed25519 key pair.
+    pub def generate_ed25519(comment: str) throws str -> SshKey:
+        mut seed = SecureRandom.bytes(32)?
+        return SshKey.ed25519_from_seed(seed, comment)?
+
+    pub def ed25519_from_seed(seed: str, comment: str) throws str -> SshKey:
+        if seed.len() != 32: raise("ssh: Ed25519 seed must be 32 bytes")
+        mut pub32 = _cn_unhex(Ed25519.pubkey(_cn_hex(seed)))?
+        mut sb = StringBuilder.init(140)
+        _w_str(sb, pub32)
+        _w_str(sb, seed + pub32)
+        mut privf = sb.to_owned()
+        sb.free()
+        mut k = _s_new_key("ssh-ed25519", _s_ed_blob(pub32), comment)
+        k.has_private = true
+        k._priv = privf
+        return k
+
+    # A new ECDSA key pair on CURVE_P256 or CURVE_P384.
+    pub def generate_ecdsa(curve: int, comment: str) throws str -> SshKey:
+        mut pk = PKey.generate_ec(curve)?
+        mut r: Result[SshKey, str] = SshKey.from_pkey(pk, comment)
+        pk.dispose()
+        if r.is_err: raise(r.err)
+        return r.ok
+
+    # From a std.crypto.pk key: public keys of every type, plus EC private keys.
+    pub def from_pkey(pk: PKey, comment: str) throws str -> SshKey:
+        mut kind = pk.kind()
+        if kind == KEY_ED25519:
+            return _s_new_key("ssh-ed25519", _s_ed_blob(pk.public_bytes()), comment)
+        if kind == KEY_RSA:
+            mut e = pk.rsa_exponent()
+            return _s_new_key("ssh-rsa", _s_rsa_blob(e, pk.public_bytes()), comment)
+        if kind == KEY_EC_P256 or kind == KEY_EC_P384:
+            mut curve = CURVE_P256
+            if kind == KEY_EC_P384: curve = CURVE_P384
+            mut sk = _s_ec_kind(curve)
+            mut pt = pk.public_bytes()
+            mut k = _s_new_key(sk, _s_ec_blob(sk, pt), comment)
+            if pk.has_private():
+                mut d = pk.ec_private_bytes()?
+                mut sb = StringBuilder.init(160)
+                _w_str(sb, _s_curve_name(sk))
+                _w_str(sb, pt)
+                _w_mpint(sb, d)
+                k._priv = sb.to_owned()
+                sb.free()
+                k.has_private = true
+            return k
+        raise("ssh: unsupported key type")
+
+    # The key as a std.crypto.pk PKey (call dispose() on it). Ed25519 keys
+    # convert as public keys only.
+    pub def to_pkey(self) throws str -> PKey:
+        mut r = SshReader.init(self.blob)
+        mut kind = r.string()?
+        if kind == "ssh-ed25519":
+            mut pub32 = r.string()?
+            return PKey.from_der(_s_ed_spki(pub32))?
+        if kind == "ssh-rsa":
+            mut e = r.mpint()?
+            mut n = r.mpint()?
+            if not self.has_private: return PKey.rsa_from_public(n, e)?
+            mut pr = SshReader.init(self._priv)
+            mut n2 = pr.mpint()?
+            mut e2 = pr.mpint()?
+            mut d = pr.mpint()?
+            mut iqmp = pr.mpint()?
+            mut p = pr.mpint()?
+            mut q = pr.mpint()?
+            mut der = _s_rsa_pkcs1(n2, e2, d, iqmp, p, q)?
+            return PKey.from_der(der)?
+        mut curve = r.string()?
+        mut q = r.string()?
+        if not self.has_private: return PKey.ec_from_public(_s_curve_id(kind), q)?
+        mut pr = SshReader.init(self._priv)
+        mut c2 = pr.string()?
+        mut q2 = pr.string()?
+        mut d = pr.mpint()?
+        return PKey.ec_from_private(_s_curve_id(kind), _s_left_pad(d, _s_curve_bytes(kind)))?
+
+    # The public half (no private fields).
+    pub def public_key(self) -> SshKey:
+        return _s_new_key(self.key_type, self.blob, self.comment)
+
+    # "type base64 comment", as in a .pub file or authorized_keys.
+    pub def public_line(self) -> str:
+        mut b = _cn_b64(0, true, self.blob)
+        if self.comment.len() == 0: return f"{self.key_type} {b}"
+        return f"{self.key_type} {b} {self.comment}"
+
+    # "SHA256:<base64>" as printed by ssh-keygen -l.
+    pub def fingerprint_sha256(self) -> str:
+        mut h = _s_hash(ALG_SHA256, self.blob)
+        mut b = _cn_b64(0, false, h)
+        return "SHA256:" + b
+
+    # "MD5:aa:bb:..." as printed by ssh-keygen -l -E md5.
+    pub def fingerprint_md5(self) -> str:
+        mut h = _cn_hex(_s_md5(self.blob))
+        mut sb = StringBuilder.init(56)
+        sb.append("MD5:")
+        mut i = 0
+        while i < 32:
+            if i > 0: sb.append(":")
+            mut pair = h.slice(i, i + 2)
+            sb.append(pair)
+            i = i + 2
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Key size in bits (RSA modulus, curve size, 256 for Ed25519).
+    pub def bits(self) -> int:
+        if self.key_type == "ecdsa-sha2-nistp384": return 384
+        if self.key_type != "ssh-rsa": return 256
+        mut r = SshReader.init(self.blob)
+        mut kr: Result[str, str] = r.string()
+        mut er: Result[str, str] = r.mpint()
+        mut nr: Result[str, str] = r.mpint()
+        if nr.is_err: return 0
+        mut n = nr.ok
+        if n.len() == 0: return 0
+        mut top = _sb(n, 0)
+        mut b = (n.len() - 1) * 8
+        while top > 0:
+            b = b + 1
+            top = top >> 1
+        return b
+
+    # ── private keys (openssh-key-v1) ─────────────────────────────────────
+    # Parse "-----BEGIN OPENSSH PRIVATE KEY-----". passphrase "" for
+    # unencrypted keys; encrypted keys use bcrypt-pbkdf + aes256-ctr.
+    pub def parse_private(text: str, passphrase: str) throws str -> SshKey:
+        mut der = Pem.decode(text, "OPENSSH PRIVATE KEY")?
+        return SshKey.parse_private_binary(der, passphrase)?
+
+    pub def parse_private_binary(data: str, passphrase: str) throws str -> SshKey:
+        mut magic = "openssh-key-v1"
+        if data.len() < 15 or data.slice(0, 14) != magic or _sb(data, 14) != 0: raise("ssh: not an openssh-key-v1 private key")
+        mut r = SshReader.init(data)
+        r.pos = 15
+        mut cipher = r.string()?
+        mut kdf = r.string()?
+        mut kdfopts = r.string()?
+        mut nkeys = r.u32()?
+        if nkeys != 1: raise("ssh: only single-key files are supported")
+        mut outer_blob = r.string()?
+        mut section = r.string()?
+        if r.remaining() != 0: raise("ssh: trailing data after the private key")
+        mut block = 8
+        if cipher == "none":
+            if kdf != "none" or kdfopts.len() != 0: raise("ssh: unencrypted key with a KDF")
+        elif cipher == "aes256-ctr":
+            if kdf != "bcrypt": raise("ssh: unsupported KDF")
+            if passphrase.len() == 0: raise("ssh: key is encrypted; a passphrase is required")
+            mut kr = SshReader.init(kdfopts)
+            mut salt = kr.string()?
+            mut rounds = kr.u32()?
+            if kr.remaining() != 0 or salt.len() == 0 or rounds < 1 or rounds > 1000000: raise("ssh: invalid bcrypt KDF options")
+            block = 16
+            if section.len() % 16 != 0: raise("ssh: encrypted section is not a whole number of blocks")
+            mut km = _cn_alloc(48)
+            mut pp = passphrase as Pointer[char]
+            mut sp = salt as Pointer[char]
+            if trc_bcrypt_pbkdf(pp, passphrase.len(), sp, salt.len(), rounds, km, 48) != 0:
+                _cn_free(km)
+                raise("ssh: bcrypt-pbkdf failed")
+            mut keyiv = _cn_take(km, 48)
+            mut ak = keyiv.slice(0, 32)
+            mut iv = keyiv.slice(32, 48)
+            mut plain = _cn_alloc(section.len())
+            mut akp = ak as Pointer[char]
+            mut ivp = iv as Pointer[char]
+            mut secp = section as Pointer[char]
+            trc_aes_ctr(akp, 32, ivp, secp, section.len(), plain)
+            section = _cn_take(plain, section.len())
+        else:
+            raise(f"ssh: unsupported private key cipher {cipher}")
+        if section.len() % block != 0: raise("ssh: private section has bad padding")
+        mut sr = SshReader.init(section)
+        mut c1 = sr.u32()?
+        mut c2 = sr.u32()?
+        if c1 != c2:
+            if cipher != "none": raise("ssh: wrong passphrase")
+            raise("ssh: corrupt private key (check bytes differ)")
+        mut kind = sr.string()?
+        mut k = _s_read_private(sr, kind, outer_blob)?
+        mut pad = 1
+        while sr.remaining() > 0:
+            mut pr: Result[str, str] = sr.raw(1)
+            if _sb(pr.ok, 0) != pad: raise("ssh: private section has bad padding")
+            pad = pad + 1
+        if pad > block: raise("ssh: private section has bad padding")
+        return k
+
+    # Write the key as an openssh-key-v1 PEM. passphrase "" writes it
+    # unencrypted; otherwise aes256-ctr with bcrypt-pbkdf (`rounds`, OpenSSH
+    # uses 16).
+    pub def private_pem(self, passphrase: str, rounds: int) throws str -> str:
+        if not self.has_private: raise("ssh: not a private key")
+        mut check = SecureRandom.bytes(4)?
+        mut block = 8
+        if passphrase.len() > 0: block = 16
+        mut sec = StringBuilder.init(self._priv.len() + 128)
+        sec.append(check)
+        sec.append(check)
+        _w_str(sec, self.key_type)
+        sec.append(self._priv)
+        _w_str(sec, self.comment)
+        mut pad = 1
+        while sec.len() % block != 0:
+            sec.append_char(pad)
+            pad = pad + 1
+        mut section = sec.to_owned()
+        sec.free()
+        mut cipher = "none"
+        mut kdf = "none"
+        mut kdfopts = ""
+        if passphrase.len() > 0:
+            if rounds < 1: raise("ssh: rounds must be >= 1")
+            mut salt = SecureRandom.bytes(16)?
+            mut ko = StringBuilder.init(32)
+            _w_str(ko, salt)
+            _w_u32(ko, rounds)
+            kdfopts = ko.to_owned()
+            ko.free()
+            cipher = "aes256-ctr"
+            kdf = "bcrypt"
+            mut km = _cn_alloc(48)
+            mut pp = passphrase as Pointer[char]
+            mut sp = salt as Pointer[char]
+            trc_bcrypt_pbkdf(pp, passphrase.len(), sp, salt.len(), rounds, km, 48)
+            mut keyiv = _cn_take(km, 48)
+            mut ak = keyiv.slice(0, 32)
+            mut iv = keyiv.slice(32, 48)
+            mut enc = _cn_alloc(section.len())
+            mut akp = ak as Pointer[char]
+            mut ivp = iv as Pointer[char]
+            mut secp = section as Pointer[char]
+            trc_aes_ctr(akp, 32, ivp, secp, section.len(), enc)
+            section = _cn_take(enc, section.len())
+        mut sb = StringBuilder.init(section.len() + self.blob.len() + 128)
+        sb.append("openssh-key-v1")
+        sb.append_char(0)
+        _w_str(sb, cipher)
+        _w_str(sb, kdf)
+        _w_str(sb, kdfopts)
+        _w_u32(sb, 1)
+        _w_str(sb, self.blob)
+        _w_str(sb, section)
+        mut bin = sb.to_owned()
+        sb.free()
+        return _s_armor(bin, "OPENSSH PRIVATE KEY")
+
+    # ── raw SSH signatures (RFC 4253 / 5656 / 8332 / 8709 encoding) ───────
+    # Sign `msg`; returns the signature blob (string type, string sig).
+    # RSA keys sign with rsa-sha2-512.
+    pub def sign_ssh(self, msg: str) throws str -> str:
+        if not self.has_private: raise("ssh: signing needs a private key")
+        if self.key_type == "ssh-ed25519":
+            mut pr = SshReader.init(self._priv)
+            mut pub32 = pr.string()?
+            mut priv = pr.string()?
+            mut seed = priv.slice(0, 32)
+            mut sig = _cn_unhex(Ed25519.sign_bytes(msg, msg.len(), _cn_hex(seed)))?
+            return _s_sig_blob("ssh-ed25519", sig)
+        mut pk = self.to_pkey()?
+        if self.key_type == "ssh-rsa":
+            mut sr: Result[str, str] = pk.sign(msg, ALG_SHA512, SIG_PKCS1)
+            pk.dispose()
+            if sr.is_err: raise(sr.err)
+            return _s_sig_blob("rsa-sha2-512", sr.ok)
+        mut rr: Result[str, str] = pk.sign_raw(msg, _s_curve_hash(self.key_type))
+        pk.dispose()
+        if rr.is_err: raise(rr.err)
+        mut rs = rr.ok
+        mut half = rs.len() / 2
+        mut inner = StringBuilder.init(rs.len() + 16)
+        _w_mpint(inner, rs.slice(0, half))
+        _w_mpint(inner, rs.slice(half, rs.len()))
+        mut body = inner.to_owned()
+        inner.free()
+        return _s_sig_blob(self.key_type, body)
+
+    # Verify a signature blob over `msg`. ssh-rsa (SHA-1) signatures are
+    # accepted only when allow_sha1 is true.
+    pub def verify_ssh(self, msg: str, sig_blob: str, allow_sha1: bool) -> bool:
+        mut r = SshReader.init(sig_blob)
+        mut kr: Result[str, str] = r.string()
+        if kr.is_err: return false
+        mut sr: Result[str, str] = r.string()
+        if sr.is_err or r.remaining() != 0: return false
+        mut kind = kr.ok
+        mut sig = sr.ok
+        if self.key_type == "ssh-ed25519":
+            if kind != "ssh-ed25519" or sig.len() != 64: return false
+            mut br = SshReader.init(self.blob)
+            mut t1: Result[str, str] = br.string()
+            mut pkr: Result[str, str] = br.string()
+            if pkr.is_err: return false
+            return Ed25519.verify_bytes(msg, msg.len(), _cn_hex(sig), _cn_hex(pkr.ok))
+        mut pubk = self.public_key()
+        mut pr: Result[PKey, str] = pubk.to_pkey()
+        if pr.is_err: return false
+        mut pk = pr.ok
+        mut ok = false
+        if self.key_type == "ssh-rsa":
+            mut alg = 0
+            if kind == "rsa-sha2-512": alg = ALG_SHA512
+            elif kind == "rsa-sha2-256": alg = ALG_SHA256
+            elif kind == "ssh-rsa" and allow_sha1: alg = 1
+            if alg != 0: ok = pk.verify(msg, sig, alg, SIG_PKCS1)
+        elif kind == self.key_type:
+            mut ir = SshReader.init(sig)
+            mut rr: Result[str, str] = ir.mpint()
+            mut ss: Result[str, str] = ir.mpint()
+            mut nb = _s_curve_bytes(kind)
+            if rr.is_ok and ss.is_ok and ir.remaining() == 0 and rr.ok.len() <= nb and ss.ok.len() <= nb:
+                mut raw = _s_left_pad(rr.ok, nb) + _s_left_pad(ss.ok, nb)
+                ok = pk.verify_raw(msg, raw, _s_curve_hash(kind))
+        pk.dispose()
+        return ok
+
+# ─── authorized_keys ─────────────────────────────────────────────────────────
+pub class SshAuthorizedKey:
+    pub options: List[str]   # raw options, e.g. `command="ls -l"`, `no-pty`
+    pub key: SshKey
+
+extend SshAuthorizedKey:
+    # Parse one line (raises on comments, blank lines and malformed keys).
+    pub def parse(line: str) throws str -> SshAuthorizedKey:
+        mut t = line.trim()
+        if t.len() == 0 or t.starts_with("#"): raise("ssh: not a key line")
+        mut a = SshAuthorizedKey()
+        a.options = []
+        mut first_end = t.find(" ")
+        mut first = t
+        if first_end > 0: first = t.slice(0, first_end)
+        if _s_supported(first) or first.starts_with("sk-") or first.contains("-cert-v01@openssh.com"):
+            a.key = SshKey.parse_public(t)?
+            return a
+        # Options: comma-separated, double quotes may contain commas/spaces.
+        mut i = 0
+        mut in_q = false
+        mut cur = StringBuilder.init(64)
+        mut done = false
+        while i < t.len() and not done:
+            mut c = _sb(t, i)
+            if in_q:
+                if c == 92 and i + 1 < t.len() and _sb(t, i + 1) == 34:
+                    cur.append_char(92)
+                    cur.append_char(34)
+                    i = i + 1
+                elif c == 34:
+                    in_q = false
+                    cur.append_char(c)
+                else:
+                    cur.append_char(c)
+            elif c == 34:
+                in_q = true
+                cur.append_char(c)
+            elif c == 44:
+                mut o = cur.to_owned()
+                cur.clear()
+                if o.len() == 0:
+                    cur.free()
+                    raise("ssh: empty option")
+                a.options.append(o)
+            elif c == 32 or c == 9:
+                done = true
+            else:
+                cur.append_char(c)
+            if not done: i = i + 1
+        if in_q:
+            cur.free()
+            raise("ssh: unterminated quote in options")
+        mut last = cur.to_owned()
+        cur.free()
+        if last.len() == 0: raise("ssh: empty option")
+        a.options.append(last)
+        mut rest = t.slice(i, t.len()).trim()
+        a.key = SshKey.parse_public(rest)?
+        return a
+
+    # Every valid key line in an authorized_keys file (like sshd, malformed
+    # lines are skipped).
+    pub def parse_file(text: str) -> List[SshAuthorizedKey]:
+        mut out: List[SshAuthorizedKey] = []
+        mut lines = Str.split_keep_empty(text, "\n")
+        mut i = 0
+        while i < lines.len:
+            mut line = lines.get(i).trim()
+            i = i + 1
+            if line.len() == 0 or line.starts_with("#"): continue
+            mut r: Result[SshAuthorizedKey, str] = SshAuthorizedKey.parse(line)
+            if r.is_ok: out.append(r.ok)
+        return out
+
+    pub def has_option(self, name: str) -> bool:
+        mut i = 0
+        while i < len(self.options):
+            mut o = self.options[i]
+            if o.lower() == name.lower() or o.lower().starts_with(name.lower() + "="): return true
+            i = i + 1
+        return false
+
+    # The value of name="value" (quotes removed, \" unescaped), or "".
+    pub def option(self, name: str) -> str:
+        mut i = 0
+        mut want = name.lower() + "="
+        while i < len(self.options):
+            mut o = self.options[i]
+            if o.lower().starts_with(want):
+                mut v = o.slice(want.len(), o.len())
+                if v.len() >= 2 and _sb(v, 0) == 34 and _sb(v, v.len() - 1) == 34:
+                    v = v.slice(1, v.len() - 1).replace("\\\"", "\"")
+                return v
+            i = i + 1
+        return ""
+
+# ─── SSHSIG ──────────────────────────────────────────────────────────────────
+def _s_sig_signed_data(namespace: str, hash_name: str, digest: str) -> str:
+    mut sb = StringBuilder.init(digest.len() + namespace.len() + 64)
+    sb.append("SSHSIG")
+    _w_str(sb, namespace)
+    _w_str(sb, "")
+    _w_str(sb, hash_name)
+    _w_str(sb, digest)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+pub class SshSig:
+    _dummy: int
+
+extend SshSig:
+    # `ssh-keygen -Y sign -n <namespace>` compatible: an armored SSHSIG over
+    # SHA-512(data).
+    pub def sign(key: SshKey, data: str, namespace: str) throws str -> str:
+        if namespace.len() == 0: raise("ssh: SSHSIG namespace must not be empty")
+        mut digest = _s_hash(ALG_SHA512, data)
+        mut signed = _s_sig_signed_data(namespace, "sha512", digest)
+        mut sig = key.sign_ssh(signed)?
+        mut sb = StringBuilder.init(sig.len() + key.blob.len() + 64)
+        sb.append("SSHSIG")
+        _w_u32(sb, 1)
+        _w_str(sb, key.blob)
+        _w_str(sb, namespace)
+        _w_str(sb, "")
+        _w_str(sb, "sha512")
+        _w_str(sb, sig)
+        mut bin = sb.to_owned()
+        sb.free()
+        return _s_armor(bin, "SSH SIGNATURE")
+
+    # Check an armored SSHSIG over `data` in `namespace`; returns the
+    # signer's public key. The caller must still decide whether that key is
+    # trusted (compare fingerprints, or use verify_with).
+    pub def verify(armored: str, data: str, namespace: str) throws str -> SshKey:
+        mut bin = Pem.decode(armored, "SSH SIGNATURE")?
+        if bin.len() < 10 or bin.slice(0, 6) != "SSHSIG": raise("ssh: not an SSHSIG signature")
+        mut r = SshReader.init(bin)
+        r.pos = 6
+        mut ver = r.u32()?
+        if ver != 1: raise("ssh: unsupported SSHSIG version")
+        mut blob = r.string()?
+        mut ns = r.string()?
+        mut reserved = r.string()?
+        mut hash_name = r.string()?
+        mut sig = r.string()?
+        if r.remaining() != 0: raise("ssh: trailing data in SSHSIG")
+        if ns != namespace: raise("ssh: signature namespace does not match")
+        mut alg = 0
+        if hash_name == "sha512": alg = ALG_SHA512
+        elif hash_name == "sha256": alg = ALG_SHA256
+        else: raise("ssh: unsupported SSHSIG hash")
+        mut key = SshKey.from_blob(blob, "")?
+        mut signed = _s_sig_signed_data(ns, hash_name, _s_hash(alg, data))
+        if not key.verify_ssh(signed, sig, false): raise("ssh: bad signature")
+        return key
+
+    # True if the signature is valid and made by `allowed`.
+    pub def verify_with(armored: str, data: str, namespace: str, allowed: SshKey) -> bool:
+        mut r: Result[SshKey, str] = SshSig.verify(armored, data, namespace)
+        if r.is_err: return false
+        return _s_eq(r.ok.blob, allowed.blob)

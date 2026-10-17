@@ -42,6 +42,7 @@ extern "C":
     def trc_pk_rsa_from_public(n: Pointer[char], nlen: int, e: Pointer[char], elen: int) -> Pointer[char]
     def trc_pk_ec_private_raw(h: Pointer[char], out: Pointer[char]) -> int
     def trc_pk_ecdh(h: Pointer[char], peer: Pointer[char], plen: int, out: Pointer[char]) -> int
+    def trc_pk_rsa_exponent(h: Pointer[char], out: Pointer[char], cap: int) -> int
     def trc_pem_decode(pem: Pointer[char], n: int, index: int, label: Pointer[char], llen: int, out: Pointer[char], cap: int, label_out: Pointer[char]) -> int
 
 pub const KEY_RSA = 1
@@ -199,6 +200,13 @@ extend PKey:
     pub def public_bytes(self) -> str:
         mut out = _cn_alloc(1100)
         mut n = trc_pk_public_raw(self._h, out, 1100)
+        if n < 0: n = 0
+        return _cn_take(out, n)
+
+    # RSA public exponent bytes (big-endian, minimal); "" for non-RSA keys.
+    pub def rsa_exponent(self) -> str:
+        mut out = _cn_alloc(530)
+        mut n = trc_pk_rsa_exponent(self._h, out, 530)
         if n < 0: n = 0
         return _cn_take(out, n)
 
