@@ -483,7 +483,7 @@ def test_write(t: TestRunner) throws str:
     t.assert_eq_float(o.cell("A1").as_float(), 1.0 / 3.0, 0.0, "full float precision")
 
     # save to disk, reopen, and re-save what was read
-    mut path = "/tmp/tauraro_139_xlsx.xlsx"
+    mut path = "build/tauraro_139_xlsx.xlsx"
     wb.save(path)?
     mut disk = Workbook.open(path)?
     mut dws = disk.sheet("Sales Q1")?
