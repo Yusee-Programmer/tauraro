@@ -147,6 +147,7 @@ pub class FStringPart:
     pub text_len: int    # true byte length of `text` (embedded-NUL-safe; see PLitStr)
     pub expr:     Pointer[Expr]
     pub fmt_spec: str    # e.g. ".2f", ">10", "05d" - empty means default
+    pub spec_args: Vec[Pointer[Expr]]   # `{w}` / `{p}` nested in fmt_spec, in order
 
 extend FStringPart:
     pub def init_text(s: str, blen: int) -> FStringPart:
@@ -156,6 +157,7 @@ extend FStringPart:
         p.text_len = blen
         p.expr     = Pointer[Expr](0)
         p.fmt_spec = ""
+        p.spec_args = Vec[Pointer[Expr]].init(0)
         return p
 
     pub def init_expr(e: Pointer[Expr]) -> FStringPart:
@@ -165,6 +167,7 @@ extend FStringPart:
         p.text_len = 0
         p.expr     = e
         p.fmt_spec = ""
+        p.spec_args = Vec[Pointer[Expr]].init(0)
         return p
 
     pub def init_expr_fmt(e: Pointer[Expr], spec: str) -> FStringPart:
@@ -174,6 +177,7 @@ extend FStringPart:
         p.text_len = 0
         p.expr     = e
         p.fmt_spec = spec
+        p.spec_args = Vec[Pointer[Expr]].init(0)
         return p
 
 # --- Expressions --------------------------------------------------------------

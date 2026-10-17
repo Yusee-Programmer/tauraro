@@ -1788,6 +1788,10 @@ extend Sema:
                     mut fpart = fparts.get(fpi)
                     if fpart.is_expr and fpart.expr as usize != 0 as usize:
                         self.collect_idents(fpart.expr, out)
+                    mut fsa = 0
+                    while fsa < fpart.spec_args.len:
+                        self.collect_idents(fpart.spec_args.get(fsa), out)
+                        fsa = fsa + 1
                     fpi = fpi + 1
             case _: pass
 
@@ -6958,6 +6962,10 @@ extend Sema:
                     hp.text_len = p_ast.text_len
                     hp.fmt_spec = p_ast.fmt_spec
                     hp.expr     = self.lower_expr(p_ast.expr)
+                    mut sai = 0
+                    while sai < p_ast.spec_args.len:
+                        hp.spec_args.push(self.lower_expr(p_ast.spec_args.get(sai)))
+                        sai = sai + 1
                     hparts.push(hp)
                     m = m + 1
                 return box_hirexpr(HirExpr.EFString(hparts, AstType.init("str")))
