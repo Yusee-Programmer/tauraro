@@ -640,7 +640,7 @@ while r.next_field()?:
 
 ## PDF writer — `std.encoding.pdf`
 
-Writes PDF 1.7 documents with no external libraries: text in the twelve standard Latin fonts
+Writes PDF 1.7 documents with no external libraries: text in the twelve standard Latin fonts or embedded TrueType/OpenType fonts (any Unicode text)
 (Helvetica, Times and Courier families, so nothing is embedded), exact text measurement and
 word-wrapped text boxes, vector graphics, images, links, bookmarks and metadata. Content and image
 streams are Flate-compressed by a built-in deflate encoder (no `-lz` needed).
@@ -703,8 +703,42 @@ Fonts: `PDF_HELVETICA`, `PDF_HELVETICA_BOLD`, `PDF_HELVETICA_OBLIQUE`, `PDF_HELV
 `PDF_TIMES`, `PDF_TIMES_BOLD`, `PDF_TIMES_ITALIC`, `PDF_TIMES_BOLD_ITALIC`, `PDF_COURIER`,
 `PDF_COURIER_BOLD`, `PDF_COURIER_OBLIQUE`, `PDF_COURIER_BOLD_OBLIQUE`.
 
-Not supported: embedded TrueType/OpenType fonts (so no text outside Windows-1252), reading or
-editing existing PDFs, forms, encryption, PDF/A.
+### Unicode text with embedded fonts
+
+The standard fonts only cover Windows-1252. For any other text embed a TrueType/OpenType font
+(TTF, OTF with CFF outlines, WOFF, or a face of a .ttc) with `add_font_ttf`; it returns a font id
+that works with `set_font` and every text method.
+
+```tauraro
+from std.io.file import File
+mut doc = PdfDocument.init()
+mut f = doc.add_font_ttf(File.read_text("DejaVuSans.ttf"))?
+mut page = doc.add_page_a4()
+page.set_font(f, 12.0)
+page.text(72.0, 700.0, "Grüße · Ελληνικά · Русский")
+page.text_box(72.0, 680.0, 300.0, long_text, PDF_ALIGN_JUSTIFY, 1.4)   # wraps on UAX #29 boundaries
+doc.save("unicode.pdf")?
+```
+
+Each font is written as a Type0 / CIDFontType2 font with Identity-H encoding, subset to the
+glyphs actually used (glyph ids renumbered; CFF outlines are converted to TrueType quadratics),
+with a `/W` widths array and a ToUnicode CMap, so the text can be searched and copied (checked
+with pdftotext, and rendered with Ghostscript). Text is shaped with `std.font`: cmap, `liga`
+ligatures and kerning are applied through the TJ array. `text_width`, `text_aligned`, `text_box`
+(including justification) and `wrap_text(text, width)` use the font's real metrics; CJK text wraps
+between ideographs.
+
+| Method | Description |
+|---|---|
+| `doc.add_font_ttf(bytes)?` / `add_font_ttf_index(bytes, index)?` | Embed a font; returns a font id (100 and up). Raises for unparsable fonts and fonts whose OS/2 `fsType` forbids embedding. |
+| `doc.add_font(font)` | Embed an already-loaded `std.font.Font` (keep it alive until saved). |
+| `doc.ttf_font(id)` | The `Font` behind an id, for measuring. |
+| `page.wrap_text(text, width)` | Lines that fit `width` in the current font (standard or embedded). |
+
+Limitations: no complex-script shaping (Arabic joining, Indic reordering), no vertical writing,
+no colour/emoji glyph tables (monochrome outlines only), no font variations.
+
+Not supported: reading or editing existing PDFs, forms, encryption, PDF/A.
 
 ---
 

@@ -1,0 +1,124 @@
+# std.font.system -- best-effort lookup of installed fonts.
+#
+# system_font_dirs() lists the usual font directories that exist on this
+# machine: /usr/share/fonts, /usr/local/share/fonts, ~/.local/share/fonts,
+# ~/.fonts (Linux/BSD), /System/Library/Fonts, /Library/Fonts,
+# ~/Library/Fonts (macOS) and %WINDIR%\Fonts, %LOCALAPPDATA%\Microsoft\
+# Windows\Fonts (Windows). system_font_files() scans them recursively for
+# .ttf / .otf / .ttc / .otc / .woff files. find_system_font("DejaVu Sans")
+# returns the path of the first font whose family (or full name) matches,
+# preferring regular styles, or "" when none does. No fontconfig library is
+# needed; the scan parses each candidate's name table.
+#
+#   from std.font import Font, find_system_font
+#   mut path = find_system_font("DejaVu Sans")
+#   if path.len() > 0: mut f = Font.open(path)?
+
+from std.font.mod import Font
+from std.font.native import trc_font_scan, trc_font_scan_take, _tr_c_malloc, _tr_str_wrap_len
+from std.io.file import File
+from std.sys.env import Env
+from std.sys.platform import Platform
+
+def _dir_ok(path: str) -> bool:
+    return path.len() > 0 and File.dir_exists(path)
+
+pub def system_font_dirs() -> List[str]:
+    mut out: List[str] = []
+    mut env = Env.init()
+    mut cands: List[str] = []
+    if Platform.is_windows():
+        mut win = env.get_var("WINDIR")
+        if win.len() == 0: win = env.get_var("SystemRoot")
+        if win.len() == 0: win = "C:\\Windows"
+        cands.append(win + "\\Fonts")
+        mut local = env.get_var("LOCALAPPDATA")
+        if local.len() > 0: cands.append(local + "\\Microsoft\\Windows\\Fonts")
+    else:
+        mut home = env.get_var("HOME")
+        if Platform.is_macos():
+            cands.append("/System/Library/Fonts")
+            cands.append("/Library/Fonts")
+            if home.len() > 0: cands.append(home + "/Library/Fonts")
+        mut xdg = env.get_var("XDG_DATA_HOME")
+        if xdg.len() > 0: cands.append(xdg + "/fonts")
+        elif home.len() > 0: cands.append(home + "/.local/share/fonts")
+        if home.len() > 0: cands.append(home + "/.fonts")
+        cands.append("/usr/share/fonts")
+        cands.append("/usr/local/share/fonts")
+        cands.append("/usr/X11R6/lib/X11/fonts")
+    mut i = 0
+    while i < len(cands):
+        if _dir_ok(cands[i]): out.append(cands[i])
+        i = i + 1
+    return out
+
+# Font files found (recursively) under `dir`.
+pub def font_files_in(dir: str) -> List[str]:
+    mut out: List[str] = []
+    mut dp = dir as Pointer[char]
+    mut n = trc_font_scan(dp, dir.len())
+    if n <= 0: return out
+    mut buf = _tr_c_malloc(n + 1)
+    trc_font_scan_take(buf)
+    unsafe: buf.offset(n).write('\0')
+    mut all = _tr_str_wrap_len(buf, n)
+    mut parts = all.split_exact("\n")
+    mut i = 0
+    while i < len(parts):
+        if parts[i].len() > 0: out.append(parts[i])
+        i = i + 1
+    return out
+
+pub def system_font_files() -> List[str]:
+    mut out: List[str] = []
+    mut dirs = system_font_dirs()
+    mut i = 0
+    while i < len(dirs):
+        mut fs = font_files_in(dirs[i])
+        mut k = 0
+        while k < len(fs):
+            out.append(fs[k])
+            k = k + 1
+        i = i + 1
+    return out
+
+def _norm(s: str) -> str:
+    return s.lower().replace(" ", "").replace("-", "").replace("_", "")
+
+# Path of an installed font whose family or full name matches `family`
+# (case, spaces and hyphens ignored), "" if none is found. Regular styles
+# win over bold/italic ones; for collections only the first font is checked.
+pub def find_system_font(family: str) -> str:
+    mut want = _norm(family)
+    if want.len() == 0: return ""
+    mut files = system_font_files()
+    mut best = ""
+    mut best_score = -1
+    mut i = 0
+    while i < len(files):
+        mut path = files[i]
+        mut base = _norm(path)
+        mut slash = path.rfind("/")
+        mut bs = path.rfind("\\")
+        if bs > slash: slash = bs
+        if slash >= 0: base = _norm(path.slice(slash + 1, path.len()))
+        # cheap prefilter on the file name: the first 4 letters must appear
+        mut key = want
+        if key.len() > 4: key = key.slice(0, 4)
+        if base.find(key) >= 0:
+            mut r: Result[Font, str] = Font.open(path)
+            if r.is_ok:
+                mut f = r.ok
+                mut score = -1
+                if _norm(f.family) == want or _norm(f.name(1)) == want: score = 2
+                elif _norm(f.full_name) == want: score = 3
+                if score >= 0:
+                    mut sub = _norm(f.subfamily)
+                    if sub == "regular" or sub == "book" or sub == "roman" or sub == "normal": score = score + 2
+                    if score > best_score:
+                        best_score = score
+                        best = path
+                f.free()
+        i = i + 1
+    return best

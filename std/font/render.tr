@@ -1,0 +1,77 @@
+# std.font.render -- anti-aliased text drawing into std.image Images.
+#
+# Outlines are flattened (quadratic and cubic Beziers) and filled with exact
+# signed-area coverage, then composited source-over in the given colour.
+# Coordinates are pixels with y pointing down; (x, y) is the pen position on
+# the baseline. Glyphs are placed at fractional positions (no hinting, no
+# pixel snapping).
+#
+#   from std.font import Font, draw_text, render_text
+#   mut img = Image.init(300, 50)
+#   mut end_x = draw_text(img, f, "Grüße", 32.0, 4.0, 36.0, 0, 0, 0, 255)
+#   mut label = render_text(f, "Label", 18.0, 255, 255, 255, 255)
+
+from std.image.mod import Image
+from std.image.native import _im_alloc
+from std.font.mod import Font
+from std.font.native import trc_font_draw_glyph, trc_font_raster, trc_font_raster_box, trc_font_raster_copy, _tr_c_malloc
+
+# A rendered glyph: white pixels whose alpha is the coverage. `left` / `top`
+# are the offsets of the image's top-left pixel from the pen position.
+pub class GlyphBitmap:
+    pub image: Image
+    pub left:  int
+    pub top:   int
+
+# Draw one glyph with its pen origin at (x, y). Returns true if anything was
+# drawn (false for empty glyphs or when entirely clipped).
+pub def draw_glyph(img: Image, font: Font, gid: int, size: float, x: float, y: float, r: int, g: int, b: int, a: int) -> bool:
+    mut px: Pointer[char] = img.pixels.data
+    return trc_font_draw_glyph(font.handle, gid, size, x, y, px, img.width, img.height, r, g, b, a) != 0
+
+# Draw a line of text with its baseline starting at (x, y). Returns the pen
+# x position after the text. Newlines are not interpreted (see wrap_text).
+pub def draw_text(img: Image, font: Font, text: str, size: float, x: float, y: float, r: int, g: int, b: int, a: int) -> float:
+    mut glyphs = font.shape(text)
+    mut sc = size / (font.units_per_em as float)
+    mut px: Pointer[char] = img.pixels.data
+    mut i = 0
+    while i < len(glyphs):
+        trc_font_draw_glyph(font.handle, glyphs[i].gid, size, x + glyphs[i].x * sc, y, px, img.width, img.height, r, g, b, a)
+        i = i + 1
+    mut total = 0.0
+    if len(glyphs) > 0:
+        mut last = glyphs[len(glyphs) - 1]
+        total = last.x + last.advance
+    return x + total * sc
+
+# Coverage bitmap of one glyph at `size` (pen at a whole pixel).
+pub def render_glyph(font: Font, gid: int, size: float) -> GlyphBitmap:
+    mut out = GlyphBitmap()
+    out.left = 0
+    out.top = 0
+    if trc_font_raster(font.handle, gid, size, 0.0, 0.0) == 0:
+        out.image = Image.init(0, 0)
+        return out
+    out.left = trc_font_raster_box(0)
+    out.top = trc_font_raster_box(1)
+    mut w = trc_font_raster_box(2)
+    mut h = trc_font_raster_box(3)
+    out.image = _im_alloc(w, h)
+    mut px: Pointer[char] = out.image.pixels.data
+    trc_font_raster_copy(px)
+    return out
+
+# A new transparent image just large enough for one line of text (advance
+# width x line height, baseline at the ascent), with the text drawn in it.
+pub def render_text(font: Font, text: str, size: float, r: int, g: int, b: int, a: int) -> Image:
+    mut w = (font.measure(text, size) + 2.0) as int + 1
+    mut asc = font.ascent_at(size)
+    mut h = (font.line_height(size) + 0.999) as int
+    if h < 1: h = 1
+    mut img = Image.init(w, h)
+    mut bx = 0.0
+    mut bl, bb, br, bt = font.text_bounds(text, size)
+    if bl < 0.0: bx = 0.0 - bl
+    draw_text(img, font, text, size, bx + 1.0, asc, r, g, b, a)
+    return img

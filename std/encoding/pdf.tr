@@ -2,7 +2,10 @@
 # tauraro-cpp-shim: pdf_native.c
 #
 # Pages with text in the twelve standard Latin fonts (Helvetica, Times,
-# Courier and their bold/italic variants -- no embedding needed), exact text
+# Courier and their bold/italic variants -- no embedding needed) or in
+# embedded TrueType/OpenType fonts (any Unicode text: subset CIDFontType2
+# fonts with Identity-H encoding, /W widths and a ToUnicode CMap so the text
+# can be searched and copied; kerning and ligatures applied), exact text
 # measurement and word-wrapped text boxes, vector graphics (lines, rectangles,
 # rounded rectangles, ellipses, polygons, Bezier paths, dashes, transparency,
 # transforms), raster images (any std.image Image, with alpha as a soft mask;
@@ -10,8 +13,12 @@
 # metadata. Content and image streams are Flate-compressed.
 #
 # Coordinates are PDF points (1/72 inch) with the origin at the bottom-left
-# corner of the page. Text is UTF-8; characters outside Windows-1252 (the
-# standard fonts' WinAnsiEncoding) print as "?".
+# corner of the page. Text is UTF-8; with the standard fonts, characters
+# outside Windows-1252 (their WinAnsiEncoding) print as "?". For other
+# scripts embed a font:
+#   mut f = doc.add_font_ttf(File.read_text("DejaVuSans.ttf"))?
+#   page.set_font(f, 12.0)
+#   page.text(72.0, 700.0, "Grüße · Ελληνικά · Русский")
 #
 # Usage:
 #   from std.encoding.pdf import PdfDocument, PDF_HELVETICA_BOLD, PDF_FILL
@@ -28,6 +35,9 @@ from std.core.string import StringBuilder
 from std.image.mod import Image
 from std.sys.datetime import DateTime
 from std.io.file import File
+from std.font.mod import Font, ShapedGlyph
+from std.font.subset import FontSubset
+from std.font.layout import wrap_text
 
 extern "C":
     def trc_pdf_deflate_bound(n: int) -> int
@@ -327,6 +337,62 @@ pub def pdf_wrap_text(font: int, size: float, text: str, width: float) -> List[s
     mut ends: List[int] = []
     return _wrap_encoded(font, size, text, width, ends)
 
+# ── embedded TrueType fonts ─────────────────────────────────────────────────
+
+# First font id returned by PdfDocument.add_font_ttf (ids 0-11 are the
+# standard fonts).
+pub const PDF_TTF_BASE = 100
+
+# One embedded font: the parsed font, its glyph subset (subset glyph id =
+# CID), and per-CID Unicode text for the ToUnicode CMap.
+pub class PdfTtfFont:
+    pub font:   Font
+    pub subset: FontSubset
+    pub uni:    List[str]          # UTF-16BE hex per CID ("" = unknown)
+
+# Fonts shared by a document and its pages.
+pub class PdfFontSet:
+    pub fonts: List[PdfTtfFont]
+
+def _utf16_hex(s: str) -> str:
+    mut cps = _codepoints(s)
+    mut sb = StringBuilder.init(4 * len(cps) + 4)
+    mut i = 0
+    while i < len(cps):
+        mut cp = cps[i]
+        if cp >= 0x10000:
+            mut v = cp - 0x10000
+            mut hi = 0xD800 + (v >> 10)
+            mut lo = 0xDC00 + (v & 0x3FF)
+            sb.append(_hex2(hi >> 8))
+            sb.append(_hex2(hi & 255))
+            sb.append(_hex2(lo >> 8))
+            sb.append(_hex2(lo & 255))
+        else:
+            sb.append(_hex2(cp >> 8))
+            sb.append(_hex2(cp & 255))
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _hex4(v: int) -> str:
+    return _hex2((v >> 8) & 255) + _hex2(v & 255)
+
+# A PDF name token body from a PostScript name (unsafe characters dropped).
+def _pdf_name_chars(s: str) -> str:
+    mut sb = StringBuilder.init(s.len() + 1)
+    mut i = 0
+    while i < s.len():
+        mut c = _byte(s, i)
+        if c > 32 and c < 127 and c != 40 and c != 41 and c != 60 and c != 62 and c != 91 and c != 93 and c != 123 and c != 125 and c != 47 and c != 37 and c != 35:
+            sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    if out.len() == 0: return "Font"
+    return out
+
 # ── images ──────────────────────────────────────────────────────────────────
 
 # An image registered with PdfDocument.add_image / add_jpeg; draw it on any page.
@@ -351,6 +417,8 @@ pub class PdfPage:
     _an_uri:    List[str]
     _an_page:   List[int]
     _an_y:      List[float]
+    _fs:        PdfFontSet
+    _ttf_used:  List[int]          # indices into _fs.fonts
 
 extend PdfPage:
     def _op(self, s: str):
@@ -361,17 +429,66 @@ extend PdfPage:
     pub def raw(self, ops: str): self._op(ops)
 
     # ── text ──
+    # A standard font (PDF_HELVETICA...) or an id from add_font_ttf.
     pub def set_font(self, font: int, size: float):
         mut f = font
-        if f < 0 or f > 11: f = 0
+        if f >= PDF_TTF_BASE and f - PDF_TTF_BASE < len(self._fs.fonts): f = font
+        elif f < 0 or f > 11: f = 0
         self._font = f
         self._size = size
 
     pub def font(self) -> int: return self._font
     pub def font_size(self) -> float: return self._size
 
+    def _is_ttf(self) -> bool: return self._font >= PDF_TTF_BASE
+
+
     pub def text_width(self, text: str) -> float:
+        if self._is_ttf():
+            mut tf = self._fs.fonts[self._font - PDF_TTF_BASE]
+            return tf.font.measure(text.replace("\n", " "), self._size)
         return pdf_text_width(self._font, self._size, text)
+
+    # Break text into lines no wider than `width` in the current font.
+    pub def wrap_text(self, text: str, width: float) -> List[str]:
+        if self._is_ttf():
+            mut tf = self._fs.fonts[self._font - PDF_TTF_BASE]
+            return wrap_text(tf.font, text, self._size, width)
+        return pdf_wrap_text(self._font, self._size, text, width)
+
+    # Show UTF-8 text in an embedded font: glyph ids (CIDs of the subset) as
+    # a TJ array, with kerning and extra word spacing as adjustments.
+    def _show_ttf(self, x: float, y: float, text: str, word_space: float):
+        mut idx = self._font - PDF_TTF_BASE
+        mut tf = self._fs.fonts[self._font - PDF_TTF_BASE]
+        mut seen = false
+        mut k = 0
+        while k < len(self._ttf_used):
+            if self._ttf_used[k] == idx: seen = true
+            k = k + 1
+        if not seen: self._ttf_used.append(idx)
+        mut upem = tf.font.units_per_em as float
+        mut glyphs = tf.font.shape(text)
+        mut sb = StringBuilder.init(16 + 6 * len(glyphs))
+        sb.append("BT /T" + f"{idx} " + pdf_num(self._size) + " Tf " + pdf_num(x) + " " + pdf_num(y) + " Td [<")
+        mut i = 0
+        while i < len(glyphs):
+            mut g = glyphs[i]
+            mut cid = tf.subset.add(g.gid)
+            while len(tf.uni) <= cid: tf.uni.append("")
+            mut cl = text.slice(g.cluster, g.cluster_end)
+            if tf.uni[cid].len() == 0 and cl.len() > 0: tf.uni[cid] = _utf16_hex(cl)
+            sb.append(_hex4(cid))
+            mut adj = 0.0
+            mut nominal = tf.font.glyph_advance(g.gid) as float
+            if g.advance != nominal: adj = 0.0 - (g.advance - nominal) * 1000.0 / upem
+            if word_space != 0.0 and cl == " ": adj = adj - word_space * 1000.0 / self._size
+            if (adj > 0.0005 or adj < -0.0005) and i + 1 < len(glyphs):
+                sb.append("> " + pdf_num(adj) + " <")
+            i = i + 1
+        sb.append(">] TJ ET")
+        self._op(sb.as_str())
+        sb.free()
 
     def _show(self, x: float, y: float, enc: str, word_space: float):
         self._font_mask = self._font_mask | (1 << self._font)
@@ -383,10 +500,21 @@ extend PdfPage:
 
     # Text with its baseline starting at (x, y).
     pub def text(self, x: float, y: float, text: str):
+        if self._is_ttf():
+            self._show_ttf(x, y, text.replace("\n", " "), 0.0)
+            return
         self._show(x, y, pdf_winansi(text).replace("\n", " "), 0.0)
 
     # Text aligned on (x, y): PDF_ALIGN_LEFT / CENTER / RIGHT.
     pub def text_aligned(self, x: float, y: float, text: str, align: int):
+        if self._is_ttf():
+            mut line = text.replace("\n", " ")
+            mut tw = self.text_width(line)
+            mut tx = x
+            if align == PDF_ALIGN_CENTER: tx = x - tw / 2.0
+            elif align == PDF_ALIGN_RIGHT: tx = x - tw
+            self._show_ttf(tx, y, line, 0.0)
+            return
         mut enc = pdf_winansi(text).replace("\n", " ")
         mut w = (_ws_width(self._font, enc) as float) * self._size / 1000.0
         mut x0 = x
@@ -399,6 +527,7 @@ extend PdfPage:
     # apart. Justified text leaves the last line of each paragraph ragged.
     # Returns y - lines * size * line_height (where the next line would start).
     pub def text_box(self, x: float, y: float, width: float, text: str, align: int, line_height: float) -> float:
+        if self._is_ttf(): return self._text_box_ttf(x, y, width, text, align, line_height)
         mut ends: List[int] = []
         mut lines = _wrap_encoded(self._font, self._size, text, width, ends)
         mut lead = self._size * line_height
@@ -419,6 +548,43 @@ extend PdfPage:
                     k = k + 1
                 if spaces > 0: ws = (width - w) / (spaces as float)
             if ln.len() > 0: self._show(x0, base, ln, ws)
+            base = base - lead
+            i = i + 1
+        return y - (len(lines) as float) * lead
+
+    def _text_box_ttf(self, x: float, y: float, width: float, text: str, align: int, line_height: float) -> float:
+        mut tf = self._fs.fonts[self._font - PDF_TTF_BASE]
+        mut lines: List[str] = []
+        mut ends: List[int] = []
+        mut paras = _split_lines(text)
+        mut p = 0
+        while p < len(paras):
+            mut pl = wrap_text(tf.font, paras[p], self._size, width)
+            mut q = 0
+            while q < len(pl):
+                lines.append(pl[q])
+                if q + 1 == len(pl): ends.append(1)
+                else: ends.append(0)
+                q = q + 1
+            p = p + 1
+        mut lead = self._size * line_height
+        mut base = y - self._size
+        mut i = 0
+        while i < len(lines):
+            mut ln = lines[i]
+            mut w = self.text_width(ln)
+            mut x0 = x
+            mut ws = 0.0
+            if align == PDF_ALIGN_CENTER: x0 = x + (width - w) / 2.0
+            elif align == PDF_ALIGN_RIGHT: x0 = x + width - w
+            elif align == PDF_ALIGN_JUSTIFY and ends[i] == 0:
+                mut spaces = 0
+                mut k = 0
+                while k < ln.len():
+                    if _byte(ln, k) == 32: spaces = spaces + 1
+                    k = k + 1
+                if spaces > 0: ws = (width - w) / (spaces as float)
+            if ln.len() > 0: self._show_ttf(x0, base, ln, ws)
             base = base - lead
             i = i + 1
         return y - (len(lines) as float) * lead
@@ -592,6 +758,7 @@ pub class PdfDocument:
     _bm_title:    List[str]
     _bm_page:     List[int]
     _bm_y:        List[float]
+    _fs:          PdfFontSet
 
 def _pad10(n: int) -> str:
     mut s = f"{n}"
@@ -624,7 +791,40 @@ extend PdfDocument:
         d._bm_title = []
         d._bm_page = []
         d._bm_y = []
+        d._fs = PdfFontSet()
+        d._fs.fonts = []
         return d
+
+    # Embed a TrueType / OpenType font (TTF, OTF with CFF outlines, WOFF);
+    # returns a font id for PdfPage.set_font. Only the glyphs used are
+    # embedded. Raises for unparsable fonts and fonts that forbid embedding.
+    pub def add_font_ttf(self, data: str) throws str -> int:
+        return self.add_font_ttf_index(data, 0)?
+
+    # Font number `index` of a collection (.ttc).
+    pub def add_font_ttf_index(self, data: str, index: int) throws str -> int:
+        mut f = Font.load_index(data, index)?
+        if not f.embeddable():
+            f.free()
+            raise("pdf: the font's licence does not allow embedding")
+        return self._add_font(f)
+
+    # Embed an already-loaded std.font Font (the document keeps using it;
+    # do not free it before saving).
+    pub def add_font(self, font: Font) -> int:
+        return self._add_font(font)
+
+    def _add_font(self, f: Font) -> int:
+        mut t = PdfTtfFont()
+        t.font = f
+        t.subset = FontSubset.init(f)
+        t.uni = [""]
+        self._fs.fonts.append(t)
+        return PDF_TTF_BASE + len(self._fs.fonts) - 1
+
+    # The std.font Font behind an add_font_ttf id (for measuring).
+    pub def ttf_font(self, id: int) -> Font:
+        return self._fs.fonts[id - PDF_TTF_BASE].font
 
     # A new page of w x h points (A4 is 595.28 x 841.89, Letter 612 x 792).
     pub def add_page(self, w: float, h: float) -> PdfPage:
@@ -642,6 +842,8 @@ extend PdfDocument:
         p._an_uri = []
         p._an_page = []
         p._an_y = []
+        p._fs = self._fs
+        p._ttf_used = []
         self.pages.append(p)
         return p
 
@@ -715,6 +917,87 @@ extend PdfDocument:
         out.append(body)
         out.append("\nendstream")
 
+    # The five objects of embedded font `i`, numbered from `first`.
+    def _write_ttf(self, out: StringBuilder, offsets: List[int], i: int, first: int):
+        mut tf = self._fs.fonts[i]
+        mut f = tf.font
+        mut upem = f.units_per_em as float
+        mut r: Result[str, str] = tf.subset.build()
+        mut ttf = ""
+        if r.is_ok: ttf = r.ok
+        mut n = tf.subset.count()
+        # subset tag: six letters from a hash of the glyph list
+        mut hv = 5381 + i * 7919
+        mut k = 0
+        while k < n:
+            hv = (hv * 33 + tf.subset.original(k)) % 308915776
+            k = k + 1
+        mut tag = ""
+        k = 0
+        while k < 6:
+            tag = tag + "ABCDEFGHIJKLMNOPQRSTUVWXYZ".slice(hv % 26, hv % 26 + 1)
+            hv = hv / 26
+            k = k + 1
+        mut base = tag + "+" + _pdf_name_chars(f.postscript_name)
+        mut sc = 1000.0 / upem
+        # 1: Type0 font
+        offsets.append(out.len())
+        out.append(f"{first} 0 obj\n<< /Type /Font /Subtype /Type0 /BaseFont /" + base + f" /Encoding /Identity-H /DescendantFonts [{first + 1} 0 R] /ToUnicode {first + 4} 0 R >>\nendobj\n")
+        # 2: CIDFontType2 with widths
+        offsets.append(out.len())
+        mut dw = ((f.glyph_advance(0) as float) * sc + 0.5) as int
+        out.append(f"{first + 1} 0 obj\n<< /Type /Font /Subtype /CIDFontType2 /BaseFont /" + base + " /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >>" + f" /FontDescriptor {first + 2} 0 R /DW {dw} /CIDToGIDMap /Identity /W [")
+        if n > 1:
+            out.append("1 [")
+            k = 1
+            while k < n:
+                if k > 1: out.append(" ")
+                out.append(pdf_num((f.glyph_advance(tf.subset.original(k)) as float) * sc))
+                k = k + 1
+            out.append("]")
+        out.append("] >>\nendobj\n")
+        # 3: descriptor
+        offsets.append(out.len())
+        mut bx0, by0, bx1, by1 = f.bbox()
+        mut cap = f.cap_height()
+        if cap <= 0: cap = f.ascent
+        mut flags = 4
+        if f.is_fixed_pitch(): flags = flags | 1
+        if f.is_italic(): flags = flags | 64
+        mut stemv = 50 + (f.weight() * f.weight()) / 1440
+        out.append(f"{first + 2} 0 obj\n<< /Type /FontDescriptor /FontName /" + base + f" /Flags {flags} /FontBBox [" + pdf_num((bx0 as float) * sc) + " " + pdf_num((by0 as float) * sc) + " " + pdf_num((bx1 as float) * sc) + " " + pdf_num((by1 as float) * sc) + "] /ItalicAngle " + pdf_num(f.italic_angle()) + " /Ascent " + pdf_num((f.ascent as float) * sc) + " /Descent " + pdf_num((f.descent as float) * sc) + " /CapHeight " + pdf_num((cap as float) * sc) + f" /StemV {stemv} /FontFile2 {first + 3} 0 R >>\nendobj\n")
+        # 4: the subset font program
+        offsets.append(out.len())
+        out.append(f"{first + 3} 0 obj\n")
+        self._stream(out, f" /Length1 {ttf.len()}", ttf, true)
+        out.append("\nendobj\n")
+        # 5: ToUnicode CMap
+        mut cm = StringBuilder.init(256 + 24 * n)
+        cm.append("/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n")
+        mut ids: List[int] = []
+        k = 1
+        while k < len(tf.uni):
+            if tf.uni[k].len() > 0: ids.append(k)
+            k = k + 1
+        mut b = 0
+        while b < len(ids):
+            mut cnt = len(ids) - b
+            if cnt > 100: cnt = 100
+            cm.append(f"{cnt} beginbfchar\n")
+            mut e = 0
+            while e < cnt:
+                mut cid = ids[b + e]
+                cm.append("<" + _hex4(cid) + "> <" + tf.uni[cid] + ">\n")
+                e = e + 1
+            cm.append("endbfchar\n")
+            b = b + cnt
+        cm.append("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n")
+        offsets.append(out.len())
+        out.append(f"{first + 4} 0 obj\n")
+        self._stream(out, "", cm.as_str(), true)
+        out.append("\nendobj\n")
+        cm.free()
+
     # Serialize the document.
     pub def to_bytes(self) -> str:
         mut npages = len(self.pages)
@@ -732,6 +1015,24 @@ extend PdfDocument:
                 font_obj.append(next)
                 next = next + 1
             else: font_obj.append(0)
+            i = i + 1
+        # embedded fonts: Type0, CIDFont, descriptor, FontFile2, ToUnicode
+        mut nttf = len(self._fs.fonts)
+        mut ttf_obj: List[int] = []
+        i = 0
+        while i < nttf:
+            mut is_used = false
+            mut pi = 0
+            while pi < npages:
+                mut u = 0
+                while u < len(self.pages[pi]._ttf_used):
+                    if self.pages[pi]._ttf_used[u] == i: is_used = true
+                    u = u + 1
+                pi = pi + 1
+            if is_used:
+                ttf_obj.append(next)
+                next = next + 5
+            else: ttf_obj.append(0)
             i = i + 1
         mut img_obj: List[int] = []
         mut mask_obj: List[int] = []
@@ -806,6 +1107,10 @@ extend PdfDocument:
                 offsets.append(out.len())
                 out.append(f"{font_obj[i]} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /" + pdf_font_name(i) + " /Encoding /WinAnsiEncoding >>\nendobj\n")
             i = i + 1
+        i = 0
+        while i < nttf:
+            if ttf_obj[i] != 0: self._write_ttf(out, offsets, i, ttf_obj[i])
+            i = i + 1
         # images
         i = 0
         while i < nimg:
@@ -829,12 +1134,17 @@ extend PdfDocument:
             mut pg = self.pages[i]
             offsets.append(out.len())
             out.append(f"{page_obj[i]} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + pdf_num(pg.width) + " " + pdf_num(pg.height) + f"] /Contents {content_obj[i]} 0 R /Resources <<")
-            if pg._font_mask != 0:
+            if pg._font_mask != 0 or len(pg._ttf_used) > 0:
                 out.append(" /Font <<")
                 mut f = 0
                 while f < 12:
                     if (pg._font_mask & (1 << f)) != 0: out.append(f" /F{f} {font_obj[f]} 0 R")
                     f = f + 1
+                mut tu = 0
+                while tu < len(pg._ttf_used):
+                    mut ti = pg._ttf_used[tu]
+                    out.append(f" /T{ti} {ttf_obj[ti]} 0 R")
+                    tu = tu + 1
                 out.append(" >>")
             if len(pg._images) > 0:
                 out.append(" /XObject <<")
