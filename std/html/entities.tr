@@ -1,0 +1,251 @@
+# std.html.entities -- HTML character references and escaping.
+# tauraro-cpp-shim: html_native.c
+#
+# Decodes character references exactly as the WHATWG tokenizer does: all
+# 2231 named references (std/html/html_native.c holds the table), the
+# legacy names that are recognised without a trailing ';' (`&amp`, `&copy`,
+# `&eacute` ...; longest match wins, so "&notit;" is "¬it;"), decimal and
+# hex numeric references with or without ';', and the numeric fix-ups
+# (0 / surrogates / > U+10FFFF become U+FFFD, 0x80-0x9F map through
+# Windows-1252).
+#
+#   html_escape(s)       & < > " '  ->  &amp; &lt; &gt; &quot; &#x27;
+#   html_unescape(s)     decode every character reference in s
+#
+# Unlike Python's html.unescape, control characters and noncharacters that a
+# numeric reference names are kept (that is what browsers do), not dropped.
+
+from std.core.string import StringBuilder
+
+extern "C":
+    def trc_html_entity_match(s: Pointer[char], n: int, cps: Pointer[int]) -> int
+    def trc_html_entity_lookup(s: Pointer[char], n: int, cps: Pointer[int]) -> int
+    def trc_html_entity_count() -> int
+
+def _eb(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe: return (p.offset(i).read() as int) & 255
+
+def _is_alnum(c: int) -> bool:
+    return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+
+def _hexval(c: int) -> int:
+    if c >= 48 and c <= 57: return c - 48
+    if c >= 97 and c <= 102: return c - 87
+    if c >= 65 and c <= 70: return c - 55
+    return -1
+
+# Append code point cp to sb as UTF-8.
+pub def html_put_utf8(sb: StringBuilder, cp: int):
+    if cp < 128:
+        sb.append_char(cp)
+    elif cp < 2048:
+        sb.append_char(192 | (cp >> 6))
+        sb.append_char(128 | (cp & 63))
+    elif cp < 65536:
+        sb.append_char(224 | (cp >> 12))
+        sb.append_char(128 | ((cp >> 6) & 63))
+        sb.append_char(128 | (cp & 63))
+    else:
+        sb.append_char(240 | (cp >> 18))
+        sb.append_char(128 | ((cp >> 12) & 63))
+        sb.append_char(128 | ((cp >> 6) & 63))
+        sb.append_char(128 | (cp & 63))
+
+# Windows-1252 code points for numeric references 0x80..0x9F (0 = unchanged).
+def _c1_fix(v: int) -> int:
+    if v == 128: return 8364
+    if v == 130: return 8218
+    if v == 131: return 402
+    if v == 132: return 8222
+    if v == 133: return 8230
+    if v == 134: return 8224
+    if v == 135: return 8225
+    if v == 136: return 710
+    if v == 137: return 8240
+    if v == 138: return 352
+    if v == 139: return 8249
+    if v == 140: return 338
+    if v == 142: return 381
+    if v == 145: return 8216
+    if v == 146: return 8217
+    if v == 147: return 8220
+    if v == 148: return 8221
+    if v == 149: return 8226
+    if v == 150: return 8211
+    if v == 151: return 8212
+    if v == 152: return 732
+    if v == 153: return 8482
+    if v == 154: return 353
+    if v == 155: return 8250
+    if v == 156: return 339
+    if v == 158: return 382
+    if v == 159: return 376
+    return 0
+
+# Decode the character reference starting at s[i] == '&' (n = s.len()),
+# appending the result to sb, and return the index just past it. With
+# in_attr, a legacy name without ';' followed by '=' or an alphanumeric is
+# left as literal text (the attribute-value rule). Anything that is not a
+# reference appends "&" and returns i + 1.
+pub def html_char_ref(s: str, i: int, n: int, in_attr: bool, sb: StringBuilder) -> int:
+    if i + 1 >= n:
+        sb.append_char(38)
+        return i + 1
+    mut c = _eb(s, i + 1)
+    if c == 35:  # '#'
+        mut j = i + 2
+        mut hex = false
+        if j < n and (_eb(s, j) == 120 or _eb(s, j) == 88):
+            hex = true
+            j = j + 1
+        mut start = j
+        mut v = 0
+        while j < n:
+            mut d = _eb(s, j)
+            mut dv = -1
+            if hex: dv = _hexval(d)
+            elif d >= 48 and d <= 57: dv = d - 48
+            if dv < 0: break
+            if v <= 1114111:
+                if hex: v = v * 16 + dv
+                else: v = v * 10 + dv
+            j = j + 1
+        if j == start:
+            # "&#" / "&#x" without digits: literal text
+            sb.append_char(38)
+            sb.append_char(35)
+            if hex: sb.append_char(_eb(s, i + 2))
+            return start
+        if j < n and _eb(s, j) == 59: j = j + 1
+        if v == 0 or v > 1114111 or (v >= 55296 and v <= 57343):
+            v = 65533
+        elif v >= 128 and v <= 159:
+            mut f = _c1_fix(v)
+            if f != 0: v = f
+        html_put_utf8(sb, v)
+        return j
+    if not _is_alnum(c):
+        sb.append_char(38)
+        return i + 1
+    mut cps: List[int] = [0, 0]
+    mut cp = cps as Pointer[int]
+    mut base = s as Pointer[char]
+    mut m = 0
+    unsafe: m = trc_html_entity_match(base.offset(i + 1), n - i - 1, cp)
+    if m == 0:
+        sb.append_char(38)
+        return i + 1
+    mut end = i + 1 + m
+    if _eb(s, end - 1) != 59 and in_attr and end < n:
+        mut nx = _eb(s, end)
+        if nx == 61 or _is_alnum(nx):
+            mut lit = s.slice(i, end)
+            sb.append(lit)
+            return end
+    html_put_utf8(sb, cps[0])
+    if cps[1] != 0: html_put_utf8(sb, cps[1])
+    return end
+
+# Decode all character references in s (as in text content).
+pub def html_unescape(s: str) -> str:
+    mut n = s.len()
+    if s.find("&") < 0: return s
+    mut sb = StringBuilder.init(n + 1)
+    mut i = 0
+    while i < n:
+        mut c = _eb(s, i)
+        if c == 38:
+            i = html_char_ref(s, i, n, false, sb)
+        else:
+            sb.append_char(c)
+            i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Decode references the way an attribute value is decoded (legacy names
+# before '=' or an alphanumeric stay literal).
+pub def html_unescape_attr(s: str) -> str:
+    mut n = s.len()
+    if s.find("&") < 0: return s
+    mut sb = StringBuilder.init(n + 1)
+    mut i = 0
+    while i < n:
+        mut c = _eb(s, i)
+        if c == 38:
+            i = html_char_ref(s, i, n, true, sb)
+        else:
+            sb.append_char(c)
+            i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Escape & < > " ' (like Python's html.escape(s, quote=True)).
+pub def html_escape(s: str) -> str:
+    mut n = s.len()
+    mut sb = StringBuilder.init(n + 16)
+    mut i = 0
+    while i < n:
+        mut c = _eb(s, i)
+        if c == 38: sb.append("&amp;")
+        elif c == 60: sb.append("&lt;")
+        elif c == 62: sb.append("&gt;")
+        elif c == 34: sb.append("&quot;")
+        elif c == 39: sb.append("&#x27;")
+        else: sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Code points of a named reference given with or without '&' and ';'
+# ("amp", "&amp;", "NotEqualTilde;"); empty list when unknown.
+pub def html_entity(name: str) -> List[int]:
+    mut out: List[int] = []
+    mut nm = name
+    if nm.starts_with("&"): nm = nm.slice(1, nm.len())
+    if not nm.ends_with(";"): nm = nm + ";"
+    mut cps: List[int] = [0, 0]
+    mut cp = cps as Pointer[int]
+    if trc_html_entity_lookup(nm as Pointer[char], nm.len(), cp) != 0:
+        out.append(cps[0])
+        if cps[1] != 0: out.append(cps[1])
+    return out
+
+# Number of named references in the table (2231).
+pub def html_entity_count() -> int:
+    return trc_html_entity_count()
+
+# Serializer escaping (HTML fragment serialization algorithm): text escapes
+# & U+00A0 < >, attribute values escape & U+00A0 " and also < > (as current browsers
+# do, so serialized markup cannot be re-tokenized differently).
+pub def html_escape_text_to(sb: StringBuilder, s: str):
+    mut n = s.len()
+    mut i = 0
+    while i < n:
+        mut c = _eb(s, i)
+        if c == 38: sb.append("&amp;")
+        elif c == 60: sb.append("&lt;")
+        elif c == 62: sb.append("&gt;")
+        elif c == 194 and i + 1 < n and _eb(s, i + 1) == 160:
+            sb.append("&nbsp;")
+            i = i + 1
+        else: sb.append_char(c)
+        i = i + 1
+
+pub def html_escape_attr_to(sb: StringBuilder, s: str):
+    mut n = s.len()
+    mut i = 0
+    while i < n:
+        mut c = _eb(s, i)
+        if c == 38: sb.append("&amp;")
+        elif c == 34: sb.append("&quot;")
+        elif c == 60: sb.append("&lt;")
+        elif c == 62: sb.append("&gt;")
+        elif c == 194 and i + 1 < n and _eb(s, i + 1) == 160:
+            sb.append("&nbsp;")
+            i = i + 1
+        else: sb.append_char(c)
+        i = i + 1
