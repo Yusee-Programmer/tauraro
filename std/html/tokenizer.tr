@@ -1,0 +1,534 @@
+# std.html.tokenizer -- the HTML5 tokenizer used by std.html.
+#
+# Follows the WHATWG tokenization states closely enough for real pages:
+# start/end tags with quoted, unquoted and valueless attributes (names
+# lowercased, duplicates dropped, missing whitespace between attributes
+# tolerated), self-closing flags, comments (including the abrupt `<!-->`
+# forms and `--!>`), bogus comments (`<?...>`, `</ 1>`, unknown `<!...>`),
+# DOCTYPE with public/system identifiers and the force-quirks flag, CDATA
+# sections (only when the tree builder says the current node is foreign),
+# RCDATA / RAWTEXT / script data / PLAINTEXT states driven by the tree
+# builder, character references (std.html.entities) in text and attribute
+# values, and newline normalisation (CRLF and CR become LF).
+#
+# Runs of text are emitted as one CHARS token. NUL bytes in data are kept
+# (the tree builder drops or replaces them); elsewhere they become U+FFFD.
+# A tag cut off by end of input is dropped, as the specification says.
+#
+# Script data includes the escape states, so `<!--<script>...</script>-->`
+# inside a <script> does not end it.
+
+from std.core.string import StringBuilder
+from std.html.entities import html_char_ref
+
+pub const HTML_TOK_DOCTYPE = 1
+pub const HTML_TOK_START = 2
+pub const HTML_TOK_END = 3
+pub const HTML_TOK_COMMENT = 4
+pub const HTML_TOK_CHARS = 5
+pub const HTML_TOK_EOF = 6
+
+# Tokenizer content states (set by the tree builder).
+pub const HTML_TS_DATA = 0
+pub const HTML_TS_RCDATA = 1
+pub const HTML_TS_RAWTEXT = 2
+pub const HTML_TS_SCRIPT = 3
+pub const HTML_TS_PLAINTEXT = 4
+
+pub class HtmlToken:
+    pub kind: int
+    pub name: str           # tag name / doctype name
+    pub data: str           # characters / comment text
+    pub anames: List[str]
+    pub avals: List[str]
+    pub self_closing: bool
+    pub public_id: str
+    pub system_id: str
+    pub has_public: bool
+    pub has_system: bool
+    pub has_name: bool
+    pub force_quirks: bool
+
+pub def html_token(kind: int) -> HtmlToken:
+    mut t = HtmlToken()
+    t.kind = kind
+    t.name = ""
+    t.data = ""
+    mut a: List[str] = []
+    mut b: List[str] = []
+    t.anames = a
+    t.avals = b
+    t.self_closing = false
+    t.public_id = ""
+    t.system_id = ""
+    t.has_public = false
+    t.has_system = false
+    t.has_name = false
+    t.force_quirks = false
+    return t
+
+extend HtmlToken:
+    pub def attr(self, name: str) -> str:
+        mut i = 0
+        while i < len(self.anames):
+            if self.anames[i] == name:
+                mut v = self.avals[i]
+                return v
+            i = i + 1
+        return ""
+
+    pub def has_attr(self, name: str) -> bool:
+        mut i = 0
+        while i < len(self.anames):
+            if self.anames[i] == name: return true
+            i = i + 1
+        return false
+
+def _tb(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe: return (p.offset(i).read() as int) & 255
+
+def _is_ws(c: int) -> bool:
+    return c == 32 or c == 10 or c == 9 or c == 12 or c == 13
+
+def _is_alpha(c: int) -> bool:
+    return (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+
+def _lower(c: int) -> int:
+    if c >= 65 and c <= 90: return c + 32
+    return c
+
+# CRLF / CR -> LF.
+def _normalize_newlines(s: str) -> str:
+    if s.find("\r") < 0: return s
+    mut n = s.len()
+    mut sb = StringBuilder.init(n + 1)
+    mut i = 0
+    while i < n:
+        mut c = _tb(s, i)
+        if c == 13:
+            sb.append_char(10)
+            if i + 1 < n and _tb(s, i + 1) == 10: i = i + 1
+        else:
+            sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+pub class HtmlTokenizer:
+    pub src: str
+    pub pos: int
+    pub n: int
+    pub state: int
+    pub last_start: str     # for "appropriate end tag" in RCDATA/RAWTEXT
+    pub cdata_ok: bool      # adjusted current node is not an HTML element
+
+extend HtmlTokenizer:
+    pub def init(src: str) -> HtmlTokenizer:
+        mut t = HtmlTokenizer()
+        t.src = _normalize_newlines(src)
+        t.pos = 0
+        t.n = t.src.len()
+        t.state = HTML_TS_DATA
+        t.last_start = ""
+        t.cdata_ok = false
+        return t
+
+    def _c(self, i: int) -> int:
+        if i >= self.n: return -1
+        return _tb(self.src, i)
+
+    # Case-insensitive match of ASCII word w at position i.
+    def _match_ci(self, i: int, w: str) -> bool:
+        mut k = 0
+        mut m = w.len()
+        if i + m > self.n: return false
+        while k < m:
+            if _lower(_tb(self.src, i + k)) != _tb(w, k): return false
+            k = k + 1
+        return true
+
+    def _match(self, i: int, w: str) -> bool:
+        mut k = 0
+        mut m = w.len()
+        if i + m > self.n: return false
+        while k < m:
+            if _tb(self.src, i + k) != _tb(w, k): return false
+            k = k + 1
+        return true
+
+    pub def next(self) -> HtmlToken:
+        if self.pos >= self.n: return html_token(HTML_TOK_EOF)
+        if self.state == HTML_TS_PLAINTEXT:
+            mut t = html_token(HTML_TOK_CHARS)
+            t.data = self._fix_nul(self.src.slice(self.pos, self.n))
+            self.pos = self.n
+            return t
+        if self.state != HTML_TS_DATA: return self._raw_text()
+        mut c = _tb(self.src, self.pos)
+        if c == 60:
+            return self._tag_open()
+        return self._data_text()
+
+    def _fix_nul(self, s: str) -> str:
+        if s.find("\0") < 0: return s
+        return s.replace("\0", "�")
+
+    def _data_text(self) -> HtmlToken:
+        mut sb = StringBuilder.init(64)
+        while self.pos < self.n:
+            mut c = _tb(self.src, self.pos)
+            if c == 60: break
+            if c == 38:
+                self.pos = html_char_ref(self.src, self.pos, self.n, false, sb)
+            else:
+                sb.append_char(c)
+                self.pos = self.pos + 1
+        mut t = html_token(HTML_TOK_CHARS)
+        t.data = sb.to_owned()
+        sb.free()
+        return t
+
+    def _find(self, w: str, from_i: int) -> int:
+        mut i = from_i
+        while i < self.n:
+            if self._match(i, w): return i
+            i = i + 1
+        return -1
+
+    # RCDATA / RAWTEXT / script data up to the appropriate end tag.
+    def _raw_text(self) -> HtmlToken:
+        mut st = self.state
+        mut start = self.pos
+        mut i = self.pos
+        mut end = self.n
+        mut ln = self.last_start.len()
+        mut esc = 0     # script data: 0 plain, 1 escaped (<!--), 2 double escaped
+        while i + 1 < self.n:
+            if st == HTML_TS_SCRIPT:
+                mut ch = _tb(self.src, i)
+                if esc == 0 and ch == 60 and self._match(i, "<!--"):
+                    esc = 1
+                    i = i + 4
+                    continue
+                if esc > 0 and ch == 62 and i - 2 >= start and _tb(self.src, i - 1) == 45 and _tb(self.src, i - 2) == 45:
+                    esc = 0
+                    i = i + 1
+                    continue
+                if esc > 0 and ch == 60:
+                    mut j = i + 1
+                    if esc == 2 and self._c(j) == 47: j = j + 1
+                    if (esc == 1 and self._c(j) != 47) or (esc == 2 and j == i + 2):
+                        if self._match_ci(j, "script"):
+                            mut a2 = self._c(j + 6)
+                            if a2 == 47 or a2 == 62 or (a2 >= 0 and _is_ws(a2)):
+                                if esc == 1: esc = 2
+                                else: esc = 1
+                                i = j + 6
+                                continue
+                if esc == 2:
+                    i = i + 1
+                    continue
+            if _tb(self.src, i) == 60 and _tb(self.src, i + 1) == 47:
+                if self._match_ci(i + 2, self.last_start):
+                    mut after = self._c(i + 2 + ln)
+                    if after == 47 or after == 62 or (after >= 0 and _is_ws(after)):
+                        end = i
+                        break
+            i = i + 1
+        mut raw = self.src.slice(start, end)
+        self.pos = end
+        if end < self.n: self.state = HTML_TS_DATA
+        if raw.len() == 0: return self.next()
+        mut t = html_token(HTML_TOK_CHARS)
+        if st == HTML_TS_RCDATA and raw.find("&") >= 0:
+            mut sb = StringBuilder.init(raw.len() + 1)
+            mut k = 0
+            mut rn = raw.len()
+            while k < rn:
+                mut c = _tb(raw, k)
+                if c == 38:
+                    k = html_char_ref(raw, k, rn, false, sb)
+                else:
+                    sb.append_char(c)
+                    k = k + 1
+            mut dec = sb.to_owned()
+            sb.free()
+            t.data = self._fix_nul(dec)
+        else:
+            t.data = self._fix_nul(raw)
+        return t
+
+    def _chars(self, s: str) -> HtmlToken:
+        mut t = html_token(HTML_TOK_CHARS)
+        t.data = s
+        return t
+
+    def _eof(self) -> HtmlToken:
+        self.pos = self.n
+        return html_token(HTML_TOK_EOF)
+
+    # At '<' in the data state.
+    def _tag_open(self) -> HtmlToken:
+        mut i = self.pos + 1
+        mut c = self._c(i)
+        if c == 33:  # '!'
+            return self._markup_decl(i + 1)
+        if c == 47:  # '/'
+            mut c2 = self._c(i + 1)
+            if c2 >= 0 and _is_alpha(c2): return self._tag(HTML_TOK_END, i + 1)
+            if c2 == 62:
+                self.pos = i + 2
+                return self.next()
+            if c2 < 0:
+                self.pos = self.n
+                return self._chars("</")
+            return self._bogus_comment(i + 1)
+        if c >= 0 and _is_alpha(c): return self._tag(HTML_TOK_START, i)
+        if c == 63:  # '?'
+            return self._bogus_comment(i)
+        self.pos = i
+        return self._chars("<")
+
+    def _tag(self, kind: int, start: int) -> HtmlToken:
+        mut i = start
+        mut nb = StringBuilder.init(16)
+        while i < self.n:
+            mut c = _tb(self.src, i)
+            if _is_ws(c) or c == 47 or c == 62: break
+            if c == 0: nb.append("�")
+            else: nb.append_char(_lower(c))
+            i = i + 1
+        mut tname = nb.to_owned()
+        nb.free()
+        if i >= self.n: return self._eof()
+        mut t = html_token(kind)
+        t.name = tname
+        while true:
+            while i < self.n and _is_ws(_tb(self.src, i)): i = i + 1
+            if i >= self.n: return self._eof()
+            mut c = _tb(self.src, i)
+            if c == 62:
+                i = i + 1
+                break
+            if c == 47:
+                if self._c(i + 1) == 62:
+                    t.self_closing = true
+                    i = i + 2
+                    break
+                i = i + 1
+                continue
+            # attribute name (a leading '=' is part of the name)
+            mut ab = StringBuilder.init(16)
+            if c == 0: ab.append("�")
+            else: ab.append_char(_lower(c))
+            i = i + 1
+            while i < self.n:
+                mut d = _tb(self.src, i)
+                if _is_ws(d) or d == 47 or d == 62 or d == 61: break
+                if d == 0: ab.append("�")
+                else: ab.append_char(_lower(d))
+                i = i + 1
+            mut aname = ab.to_owned()
+            ab.free()
+            if i >= self.n: return self._eof()
+            mut k = i
+            while k < self.n and _is_ws(_tb(self.src, k)): k = k + 1
+            mut aval = ""
+            if k < self.n and _tb(self.src, k) == 61:
+                i = k + 1
+                while i < self.n and _is_ws(_tb(self.src, i)): i = i + 1
+                if i >= self.n: return self._eof()
+                mut q = _tb(self.src, i)
+                if q == 34 or q == 39:
+                    i = i + 1
+                    mut vb = StringBuilder.init(32)
+                    mut closed = false
+                    while i < self.n:
+                        mut d = _tb(self.src, i)
+                        if d == q:
+                            closed = true
+                            i = i + 1
+                            break
+                        if d == 38:
+                            i = html_char_ref(self.src, i, self.n, true, vb)
+                        else:
+                            if d == 0: vb.append("�")
+                            else: vb.append_char(d)
+                            i = i + 1
+                    aval = vb.to_owned()
+                    vb.free()
+                    if not closed: return self._eof()
+                elif q != 62:
+                    mut vb = StringBuilder.init(32)
+                    while i < self.n:
+                        mut d = _tb(self.src, i)
+                        if _is_ws(d) or d == 62: break
+                        if d == 38:
+                            i = html_char_ref(self.src, i, self.n, true, vb)
+                        else:
+                            if d == 0: vb.append("�")
+                            else: vb.append_char(d)
+                            i = i + 1
+                    aval = vb.to_owned()
+                    vb.free()
+            else:
+                i = k
+            if not t.has_attr(aname):
+                t.anames.append(aname)
+                t.avals.append(aval)
+        self.pos = i
+        if kind == HTML_TOK_START: self.last_start = t.name
+        return t
+
+    # `<!` seen; i is just past it.
+    def _markup_decl(self, i: int) -> HtmlToken:
+        if self._match(i, "--"): return self._comment(i + 2)
+        if self._match_ci(i, "doctype"): return self._doctype(i + 7)
+        if self.cdata_ok and self._match(i, "[CDATA["):
+            mut j = i + 7
+            mut e = self._find("]]>", j)
+            mut body = ""
+            if e < 0:
+                body = self.src.slice(j, self.n)
+                self.pos = self.n
+            else:
+                body = self.src.slice(j, e)
+                self.pos = e + 3
+            if body.len() == 0: return self.next()
+            return self._chars(body)
+        return self._bogus_comment(i)
+
+    def _bogus_comment(self, i: int) -> HtmlToken:
+        mut j = i
+        while j < self.n and _tb(self.src, j) != 62: j = j + 1
+        mut t = html_token(HTML_TOK_COMMENT)
+        t.data = self._fix_nul(self.src.slice(i, j))
+        if j < self.n: self.pos = j + 1
+        else: self.pos = self.n
+        return t
+
+    def _comment(self, i: int) -> HtmlToken:
+        mut t = html_token(HTML_TOK_COMMENT)
+        if self._c(i) == 62:
+            self.pos = i + 1
+            return t
+        if self._c(i) == 45 and self._c(i + 1) == 62:
+            self.pos = i + 2
+            return t
+        mut k = i
+        while k + 1 < self.n:
+            if _tb(self.src, k) == 45 and _tb(self.src, k + 1) == 45:
+                mut a = self._c(k + 2)
+                if a == 62:
+                    t.data = self._fix_nul(self.src.slice(i, k))
+                    self.pos = k + 3
+                    return t
+                if a == 33 and self._c(k + 3) == 62:
+                    t.data = self._fix_nul(self.src.slice(i, k))
+                    self.pos = k + 4
+                    return t
+            k = k + 1
+        # end of input inside the comment
+        mut body = self.src.slice(i, self.n)
+        if body.ends_with("--!"): body = body.slice(0, body.len() - 3)
+        elif body.ends_with("--"): body = body.slice(0, body.len() - 2)
+        elif body.ends_with("-"): body = body.slice(0, body.len() - 1)
+        t.data = self._fix_nul(body)
+        self.pos = self.n
+        return t
+
+    # Read a quoted DOCTYPE identifier at i (the quote); returns the index
+    # after it. A '>' or end of input inside it sets force_quirks and
+    # returns the index of the '>' (or n).
+    def _doctype_id(self, t: HtmlToken, i: int, sys_id: bool) -> int:
+        mut q = _tb(self.src, i)
+        mut j = i + 1
+        while j < self.n:
+            mut c = _tb(self.src, j)
+            if c == q or c == 62: break
+            j = j + 1
+        mut v = self._fix_nul(self.src.slice(i + 1, j))
+        if sys_id:
+            t.system_id = v
+            t.has_system = true
+        else:
+            t.public_id = v
+            t.has_public = true
+        if j >= self.n:
+            t.force_quirks = true
+            return j
+        if _tb(self.src, j) == 62:
+            t.force_quirks = true
+            return j
+        return j + 1
+
+    def _bogus_doctype(self, t: HtmlToken, i: int) -> HtmlToken:
+        mut j = i
+        while j < self.n and _tb(self.src, j) != 62: j = j + 1
+        if j < self.n: self.pos = j + 1
+        else: self.pos = self.n
+        return t
+
+    def _dt_end(self, t: HtmlToken, i: int) -> HtmlToken:
+        if i < self.n: self.pos = i + 1
+        else: self.pos = self.n
+        return t
+
+    def _doctype(self, start: int) -> HtmlToken:
+        mut t = html_token(HTML_TOK_DOCTYPE)
+        mut i = start
+        while i < self.n and _is_ws(_tb(self.src, i)): i = i + 1
+        if i >= self.n or _tb(self.src, i) == 62:
+            t.force_quirks = true
+            return self._dt_end(t, i)
+        mut nb = StringBuilder.init(8)
+        while i < self.n:
+            mut c = _tb(self.src, i)
+            if _is_ws(c) or c == 62: break
+            if c == 0: nb.append("�")
+            else: nb.append_char(_lower(c))
+            i = i + 1
+        t.name = nb.to_owned()
+        nb.free()
+        t.has_name = true
+        while i < self.n and _is_ws(_tb(self.src, i)): i = i + 1
+        if i >= self.n:
+            t.force_quirks = true
+            return self._dt_end(t, i)
+        if _tb(self.src, i) == 62: return self._dt_end(t, i)
+        mut is_pub = self._match_ci(i, "public")
+        mut is_sys = self._match_ci(i, "system")
+        if not is_pub and not is_sys:
+            t.force_quirks = true
+            return self._bogus_doctype(t, i)
+        i = i + 6
+        while i < self.n and _is_ws(_tb(self.src, i)): i = i + 1
+        if i >= self.n or _tb(self.src, i) == 62:
+            t.force_quirks = true
+            return self._dt_end(t, i)
+        mut c = _tb(self.src, i)
+        if c != 34 and c != 39:
+            t.force_quirks = true
+            return self._bogus_doctype(t, i)
+        i = self._doctype_id(t, i, is_sys)
+        if t.force_quirks: return self._dt_end(t, i)
+        while i < self.n and _is_ws(_tb(self.src, i)): i = i + 1
+        if i >= self.n:
+            t.force_quirks = true
+            return self._dt_end(t, i)
+        c = _tb(self.src, i)
+        if c == 62: return self._dt_end(t, i)
+        if is_pub and (c == 34 or c == 39):
+            i = self._doctype_id(t, i, true)
+            if t.force_quirks: return self._dt_end(t, i)
+            while i < self.n and _is_ws(_tb(self.src, i)): i = i + 1
+            if i >= self.n:
+                t.force_quirks = true
+                return self._dt_end(t, i)
+            if _tb(self.src, i) == 62: return self._dt_end(t, i)
+            return self._bogus_doctype(t, i)
+        if is_pub: t.force_quirks = true
+        return self._bogus_doctype(t, i)
+

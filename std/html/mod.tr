@@ -1,0 +1,31 @@
+# std.html -- forgiving HTML5 parser and toolkit.
+#
+#   from std.html import html_parse, html_to_text, html_sanitize_default
+#   from std.html import HtmlDocument, HtmlNode, HtmlSelector, HtmlPolicy
+#
+# Sub-modules (importable directly):
+#   std.html.entities   html_escape, html_unescape, character references
+#                       (all 2231 WHATWG named references, C table)
+#   std.html.tokenizer  HtmlTokenizer (WHATWG tokenization states)
+#   std.html.dom        HtmlDocument / HtmlNode, tree builder, serializer,
+#                       CSS selectors
+#   std.html.util       html_to_text, html_strip_tags, html_links,
+#                       HtmlPolicy / html_sanitize
+
+from std.html.entities import html_escape
+from std.html.entities import html_unescape
+from std.html.entities import html_unescape_attr
+from std.html.entities import html_entity
+from std.html.dom import HtmlDocument
+from std.html.dom import HtmlNode
+from std.html.dom import HtmlAttr
+from std.html.dom import HtmlSelector
+from std.html.dom import html_parse
+from std.html.dom import html_parse_fragment
+from std.html.util import HtmlPolicy
+from std.html.util import HtmlLink
+from std.html.util import html_to_text
+from std.html.util import html_strip_tags
+from std.html.util import html_links
+from std.html.util import html_sanitize
+from std.html.util import html_sanitize_default

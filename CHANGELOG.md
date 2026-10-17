@@ -171,6 +171,7 @@ added here as each phase lands.
   PKey conversion and SSHSIG signatures compatible with `ssh-keygen -Y sign/verify`.
 - `std.encoding.bech32`: Bech32 / Bech32m. `PKey.rsa_exponent()`. C kernels for bcrypt_pbkdf,
   AES-CTR and age STREAM chunks in `std/crypto/crypto_native.c`.
+- `std.html`: forgiving HTML5 parser and toolkit. WHATWG tokenizer (all 2231 named character references via a C table plus numeric forms and legacy no-semicolon names, raw-text/RCDATA/script-data states, CDATA in foreign content), a tree builder with the insertion modes, adoption agency algorithm, foster parenting and SVG/MathML foreign content (identical to html5lib on 5000 fuzzed and hand-made inputs apart from a few documented quirks), `HtmlDocument`/`HtmlNode` DOM with serialization, CSS selectors (`select`, `select_one`, combinators, attribute operators, `:nth-child(an+b)`, `:not`, `:is`, `:has`, ...), `html_escape`/`html_unescape`, `html_to_text`/`html_strip_tags`, `html_links` (via `std.net.url`) and an allow-list sanitizer (`HtmlPolicy`, `html_sanitize`).
 - String escapes `\xHH` (a byte), `\uXXXX` and `\UXXXXXXXX` (a code point as UTF-8); `str.rfind`
   (alias of `last_index_of`); `str.split_exact(sep)`, Python-style splitting on a whole substring
   that keeps empty parts (`split` splits on any byte of `sep` and drops empty parts).

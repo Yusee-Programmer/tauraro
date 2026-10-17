@@ -1,0 +1,470 @@
+# std.html.util -- readable text, link extraction and an allow-list
+# sanitizer on top of std.html.dom (all re-exported by std.html).
+#
+#   html_to_text(node)          readable plain text of a subtree
+#   html_strip_tags(markup)     the same for a markup string (fragment)
+#   html_links(doc, base_url)   <a>/<area> hrefs resolved via std.net.url
+#   html_sanitize(markup, pol)  allow-list sanitizer -> safe markup
+#
+# Text extraction: <script>, <style>, <template>, <noscript>, <head>,
+# <title> and comments are skipped; whitespace is collapsed except inside
+# <pre>/<textarea>/<listing>/<plaintext>; block elements start new lines,
+# paragraphs, headings, lists, tables, blockquotes and <pre> are separated
+# by a blank line; <br> is a newline, list items get "- " (or "1. " in an
+# <ol>), table cells in a row are separated by a tab, <img alt> is used.
+
+from std.core.string import StringBuilder
+from std.net.url import Url
+from std.html.dom import HtmlDocument, HtmlNode, html_parse, html_parse_fragment, html_collapse_ws, _inset, _ascii_lower, HTML_ELEMENT, HTML_TEXT, HTML_DOCUMENT
+
+const _SKIP = " script style template noscript head title noembed noframes iframe object svg math "
+const _BLOCK = " address article aside blockquote body center dd details dialog dir div dl dt fieldset figcaption figure footer form frameset h1 h2 h3 h4 h5 h6 header hgroup hr html legend li listing main menu nav ol p plaintext pre search section summary table tbody tfoot thead tr ul caption option optgroup select textarea "
+const _PARA = " p h1 h2 h3 h4 h5 h6 blockquote pre ul ol dl table figure hr address details fieldset "
+
+def _ub(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe: return (p.offset(i).read() as int) & 255
+
+def _uws(c: int) -> bool:
+    return c == 32 or c == 10 or c == 9 or c == 12 or c == 13
+
+class _TX:
+    pub sb: StringBuilder
+    pub nl: int          # newlines wanted before the next text (0, 1, 2)
+    pub space: bool      # a collapsed space is pending
+    pub at_start: bool
+    pub pre: int
+
+extend _TX:
+    def want(self, n: int):
+        if n > self.nl: self.nl = n
+
+    def emit(self, s: str):
+        if s.len() == 0: return
+        if not self.at_start:
+            if self.nl > 0:
+                mut k = 0
+                while k < self.nl:
+                    self.sb.append_char(10)
+                    k = k + 1
+                self.space = false
+            elif self.space:
+                self.sb.append_char(32)
+        self.nl = 0
+        self.space = false
+        self.at_start = false
+        self.sb.append(s)
+
+    def text(self, s: str):
+        if self.pre > 0:
+            self.emit(s)
+            return
+        mut n = s.len()
+        mut i = 0
+        while i < n:
+            mut c = _ub(s, i)
+            if _uws(c):
+                if not self.at_start: self.space = true
+                i = i + 1
+                continue
+            mut st = i
+            while i < n and not _uws(_ub(s, i)): i = i + 1
+            mut w = s.slice(st, i)
+            self.emit(w)
+            if i < n:
+                self.space = true
+
+def _walk_text(d: HtmlDocument, id: int, tx: _TX, ol_index: int):
+    mut k = d.nodes[id].kind
+    if k == HTML_TEXT:
+        tx.text(d.nodes[id].data)
+        return
+    if k != HTML_ELEMENT and k != HTML_DOCUMENT: return
+    mut tag = ""
+    if k == HTML_ELEMENT and d.nodes[id].ns == 0: tag = d.nodes[id].tag
+    if k == HTML_ELEMENT and _inset(_SKIP, tag): return
+    if tag == "br":
+        tx.sb.append_char(10)
+        tx.nl = 0
+        tx.space = false
+        tx.at_start = false
+        return
+    if tag == "img":
+        mut alt = d._attr(id, "alt")
+        if alt.len() > 0: tx.text(alt)
+        return
+    mut is_block = _inset(_BLOCK, tag)
+    mut is_para = _inset(_PARA, tag)
+    if is_para: tx.want(2)
+    elif is_block: tx.want(1)
+    if tag == "td" or tag == "th":
+        mut prev = d.nodes[id].prev
+        while prev >= 0 and d.nodes[prev].kind != HTML_ELEMENT: prev = d.nodes[prev].prev
+        if prev >= 0 and not tx.at_start and tx.nl == 0:
+            tx.sb.append_char(9)
+            tx.space = false
+    if tag == "li":
+        mut p = d.nodes[id].parent
+        mut bullet = "- "
+        if p >= 0 and d.nodes[p].tag == "ol":
+            bullet = f"{ol_index}. "
+        tx.emit(bullet)
+        tx.space = false
+    mut pre = tag == "pre" or tag == "textarea" or tag == "listing" or tag == "plaintext"
+    if pre: tx.pre = tx.pre + 1
+    mut c = d.nodes[id].first
+    mut li_n = 0
+    if tag == "ol":
+        mut st = d._attr(id, "start")
+        li_n = _parse_int(st) - 1
+    while c >= 0:
+        if d.nodes[c].kind == HTML_ELEMENT and d.nodes[c].tag == "li": li_n = li_n + 1
+        _walk_text(d, c, tx, li_n)
+        c = d.nodes[c].next
+    if pre: tx.pre = tx.pre - 1
+    if is_para: tx.want(2)
+    elif is_block: tx.want(1)
+
+def _parse_int(s: str) -> int:
+    mut t = s.strip()
+    if t.len() == 0: return 1
+    mut v = 0
+    mut i = 0
+    mut neg = false
+    if _ub(t, 0) == 45:
+        neg = true
+        i = 1
+    while i < t.len():
+        mut c = _ub(t, i)
+        if c < 48 or c > 57: break
+        if v < 100000000: v = v * 10 + c - 48
+        i = i + 1
+    if neg: return 0 - v
+    return v
+
+# Readable plain text of a node's subtree (see the module comment).
+pub def html_to_text(node: HtmlNode) -> str:
+    if node.is_null(): return ""
+    mut tx = _TX()
+    tx.sb = StringBuilder.init(256)
+    tx.nl = 0
+    tx.space = false
+    tx.at_start = true
+    tx.pre = 0
+    _walk_text(node.doc, node.id, tx, 0)
+    mut raw = tx.sb.to_owned()
+    tx.sb.free()
+    # trim trailing spaces on each line
+    mut sb = StringBuilder.init(raw.len() + 1)
+    mut lines = raw.split_exact("\n")
+    mut i = 0
+    while i < len(lines):
+        mut ln = lines[i]
+        mut e = ln.len()
+        while e > 0 and (_ub(ln, e - 1) == 32 or _ub(ln, e - 1) == 9): e = e - 1
+        if i > 0: sb.append_char(10)
+        mut part = ln.slice(0, e)
+        sb.append(part)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out.strip()
+
+# Plain text of an HTML fragment or document string.
+pub def html_strip_tags(markup: str) -> str:
+    mut low = _ascii_lower(markup)
+    if low.find("<html") >= 0 or low.find("<body") >= 0 or low.find("<!doctype") >= 0:
+        mut d = html_parse(markup)
+        mut b = d.body()
+        if b.is_null(): return html_to_text(d.document())
+        return html_to_text(b)
+    mut f = html_parse_fragment(markup)
+    return html_to_text(f)
+
+# ── links ───────────────────────────────────────────────────────────────────
+
+pub class HtmlLink:
+    pub url: str        # resolved absolute URL (or the raw href if it has another scheme)
+    pub href: str       # attribute value as written (trimmed)
+    pub text: str       # normalized link text
+    pub rel: str
+    pub node: HtmlNode
+
+def _strip_url(s: str) -> str:
+    # browsers strip leading/trailing C0 controls and spaces, and remove tabs/newlines
+    mut sb = StringBuilder.init(s.len() + 1)
+    mut i = 0
+    while i < s.len():
+        mut c = _ub(s, i)
+        if c != 9 and c != 10 and c != 13: sb.append_char(c)
+        i = i + 1
+    mut t = sb.to_owned()
+    sb.free()
+    mut a = 0
+    mut b = t.len()
+    while a < b and _ub(t, a) <= 32: a = a + 1
+    while b > a and _ub(t, b - 1) <= 32: b = b - 1
+    return t.slice(a, b)
+
+# Lowercased URL scheme ("http", "javascript", ...) or "" for relative URLs.
+pub def html_url_scheme(url: str) -> str:
+    mut u = _strip_url(url)
+    mut i = 0
+    while i < u.len():
+        mut c = _ub(u, i)
+        if c == 58:
+            if i == 0: return ""
+            mut sc = u.slice(0, i)
+            return _ascii_lower(sc)
+        mut alpha = (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+        mut other = (c >= 48 and c <= 57) or c == 43 or c == 45 or c == 46
+        if not alpha and (i == 0 or not other): return ""
+        i = i + 1
+    return ""
+
+# Resolve href against base (absolute http(s) URL); hrefs with another
+# scheme (mailto:, tel:, ...) are returned as written.
+pub def html_resolve_url(base: str, href: str) -> str:
+    mut h = _strip_url(href)
+    mut sc = html_url_scheme(h)
+    if sc.len() > 0:
+        if (sc == "http" or sc == "https") and h.find("://") < 0:
+            # "http:foo" relative-with-scheme form: treat as relative
+            mut rest = h.slice(sc.len() + 1, h.len())
+            h = rest
+        else:
+            return h
+    if base.len() == 0: return h
+    mut b = Url.parse(base)
+    if not b.is_valid(): return h
+    mut r = b.resolve(h)
+    return r.to_string()
+
+# All <a href> and <area href> links of a document, in document order,
+# resolved against base_url (and the document's <base href>, if any).
+pub def html_links(doc: HtmlDocument, base_url: str) -> List[HtmlLink]:
+    mut out: List[HtmlLink] = []
+    mut base = base_url
+    mut be = doc.select_one("base[href]")
+    if not be.is_null():
+        mut bh = be.attr("href")
+        base = html_resolve_url(base_url, bh)
+    mut els = doc.select("a[href], area[href]")
+    mut i = 0
+    while i < len(els):
+        mut e = els[i]
+        mut l = HtmlLink()
+        mut raw = e.attr("href")
+        l.href = _strip_url(raw)
+        l.url = html_resolve_url(base, l.href)
+        l.text = e.normalized_text()
+        l.rel = e.attr("rel")
+        l.node = e
+        out.append(l)
+        i = i + 1
+    return out
+
+# ── sanitizer ───────────────────────────────────────────────────────────────
+
+pub class HtmlPolicy:
+    pub tags: str              # " a b ... " allowed elements (unwrapped otherwise)
+    pub drop: str              # elements removed together with their content
+    pub attrs: List[str]       # parallel to attr_tags: " name name "
+    pub attr_tags: List[str]   # tag name or "*"
+    pub url_attrs: str         # attributes holding URLs
+    pub schemes: str           # allowed URL schemes (relative URLs always ok)
+    pub allow_data_images: bool
+    pub allow_relative: bool
+    pub keep_comments: bool
+    pub link_rel: str          # forced rel="" on <a> (e.g. "nofollow noopener"), "" = untouched
+
+extend HtmlPolicy:
+    # Nothing allowed: text only.
+    pub def empty() -> HtmlPolicy:
+        mut p = HtmlPolicy()
+        p.tags = " "
+        p.drop = " script style template iframe object embed applet noscript noembed noframes frame frameset svg math title textarea select option optgroup head meta link base xmp plaintext param source track audio video canvas portal "
+        mut a: List[str] = []
+        mut b: List[str] = []
+        p.attrs = a
+        p.attr_tags = b
+        p.url_attrs = " href src cite action formaction poster background longdesc usemap xlink:href srcset ping data "
+        p.schemes = " http https mailto "
+        p.allow_data_images = false
+        p.allow_relative = true
+        p.keep_comments = false
+        p.link_rel = ""
+        return p
+
+    # A safe default for user-generated rich text: formatting, lists, links,
+    # images (http/https/relative only), tables; no scripts, styles, forms,
+    # event handlers, ids or style attributes.
+    pub def default() -> HtmlPolicy:
+        mut p = HtmlPolicy.empty()
+        p.tags = " a abbr acronym address b bdi bdo big blockquote br caption center cite code col colgroup dd del details dfn div dl dt em figcaption figure font h1 h2 h3 h4 h5 h6 hr i img ins kbd li mark ol p pre q rp rt ruby s samp small span strike strong sub summary sup table tbody td tfoot th thead time tr tt u ul var wbr "
+        p.allow_attrs("*", " title lang dir class ")
+        p.allow_attrs("a", " href rel hreflang ")
+        p.allow_attrs("img", " src alt width height ")
+        p.allow_attrs("td", " colspan rowspan headers ")
+        p.allow_attrs("th", " colspan rowspan headers scope abbr ")
+        p.allow_attrs("col", " span ")
+        p.allow_attrs("colgroup", " span ")
+        p.allow_attrs("ol", " start reversed type ")
+        p.allow_attrs("li", " value ")
+        p.allow_attrs("blockquote", " cite ")
+        p.allow_attrs("q", " cite ")
+        p.allow_attrs("del", " cite datetime ")
+        p.allow_attrs("ins", " cite datetime ")
+        p.allow_attrs("time", " datetime ")
+        p.allow_attrs("details", " open ")
+        p.allow_attrs("abbr", " title ")
+        p.allow_attrs("font", " color ")
+        return p
+
+    # Inline formatting only (b i em strong code a br ...), no images.
+    pub def basic() -> HtmlPolicy:
+        mut p = HtmlPolicy.empty()
+        p.tags = " a b br code em i p s small strong sub sup u span "
+        p.allow_attrs("a", " href ")
+        return p
+
+    # Allow tags (space- or comma-separated list).
+    pub def allow_tags(self, list: str):
+        mut l = _ascii_lower(list.replace(",", " "))
+        self.tags = self.tags + l + " "
+        self.drop = _remove_words(self.drop, l)
+
+    pub def deny_tags(self, list: str):
+        mut l = _ascii_lower(list.replace(",", " "))
+        self.tags = _remove_words(self.tags, l)
+
+    # Remove tags together with their content.
+    pub def drop_tags(self, list: str):
+        mut l = _ascii_lower(list.replace(",", " "))
+        self.drop = self.drop + l + " "
+        self.tags = _remove_words(self.tags, l)
+
+    # Allow attributes on a tag ("*" = every allowed tag).
+    pub def allow_attrs(self, tag: str, list: str):
+        mut l = _ascii_lower(list.replace(",", " "))
+        mut padded = " " + l + " "
+        self.attr_tags.append(_ascii_lower(tag))
+        self.attrs.append(padded)
+
+    pub def allow_schemes(self, list: str):
+        mut l = _ascii_lower(list.replace(",", " "))
+        self.schemes = self.schemes + l + " "
+
+    pub def tag_allowed(self, tag: str) -> bool:
+        return _inset(self.tags, tag)
+
+    pub def attr_allowed(self, tag: str, name: str) -> bool:
+        if name.starts_with("on"): return false
+        mut i = 0
+        while i < len(self.attr_tags):
+            mut t = self.attr_tags[i]
+            if t == "*" or t == tag:
+                mut set = self.attrs[i]
+                if _inset(set, name): return true
+            i = i + 1
+        return false
+
+    # Is a URL attribute value acceptable for tag/attr?
+    pub def url_allowed(self, tag: str, name: str, value: str) -> bool:
+        mut sc = html_url_scheme(value)
+        if sc.len() == 0:
+            return self.allow_relative
+        if sc == "data":
+            if not self.allow_data_images: return false
+            if not ((tag == "img" and name == "src") or (tag == "source" and name == "src")): return false
+            mut v = _ascii_lower(_strip_url(value))
+            return v.starts_with("data:image/png") or v.starts_with("data:image/jpeg") or v.starts_with("data:image/jpg") or v.starts_with("data:image/gif") or v.starts_with("data:image/webp") or v.starts_with("data:image/avif") or v.starts_with("data:image/bmp")
+        return _inset(self.schemes, sc)
+
+def _remove_words(set: str, words: str) -> str:
+    mut parts = set.split(" ")
+    mut rm = words.split(" ")
+    mut sb = StringBuilder.init(set.len() + 2)
+    sb.append(" ")
+    mut i = 0
+    while i < len(parts):
+        mut w = parts[i]
+        mut keep = true
+        mut j = 0
+        while j < len(rm):
+            if rm[j] == w: keep = false
+            j = j + 1
+        if keep and w.len() > 0:
+            sb.append(w)
+            sb.append(" ")
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Copy the allowed parts of src subtree children (of sid) under parent pid
+# in dst.
+def _san_children(src: HtmlDocument, sid: int, dst: HtmlDocument, pid: int, pol: HtmlPolicy):
+    mut c = src.nodes[sid].first
+    while c >= 0:
+        _san_node(src, c, dst, pid, pol)
+        c = src.nodes[c].next
+
+def _san_node(src: HtmlDocument, id: int, dst: HtmlDocument, pid: int, pol: HtmlPolicy):
+    mut k = src.nodes[id].kind
+    if k == HTML_TEXT:
+        mut t = dst._new_node(HTML_TEXT, 0, "#text", src.nodes[id].data)
+        dst._append(pid, t)
+        return
+    if k == 8:
+        if pol.keep_comments:
+            mut data = src.nodes[id].data.replace("--", "- -")
+            mut cm = dst._new_node(8, 0, "#comment", data)
+            dst._append(pid, cm)
+        return
+    if k != HTML_ELEMENT: return
+    mut tag = _ascii_lower(src.nodes[id].tag)
+    if src.nodes[id].ns != 0:
+        # foreign content is never copied as markup
+        if _inset(pol.drop, tag) or _inset(pol.drop, "svg"): return
+        _san_children(src, id, dst, pid, pol)
+        return
+    if _inset(pol.drop, tag): return
+    if not pol.tag_allowed(tag):
+        _san_children(src, id, dst, pid, pol)
+        return
+    mut e = dst._new_node(HTML_ELEMENT, 0, tag, "")
+    mut i = 0
+    while i < len(src.nodes[id].an):
+        mut nm = src.nodes[id].an[i]
+        mut v = src.nodes[id].av[i]
+        if pol.attr_allowed(tag, nm):
+            mut ok = true
+            if _inset(pol.url_attrs, nm): ok = pol.url_allowed(tag, nm, v)
+            if ok: dst._set_attr(e, nm, v)
+        i = i + 1
+    if tag == "a" and pol.link_rel.len() > 0 and dst._attr_index(e, "href") >= 0:
+        dst._set_attr(e, "rel", pol.link_rel)
+    dst._append(pid, e)
+    _san_children(src, id, dst, e, pol)
+
+# Sanitize an HTML fragment with an allow-list policy and return safe
+# markup: disallowed elements are unwrapped (their content kept) or, for
+# the policy's drop list (script, style, iframe, svg, ...), removed with
+# their content; disallowed attributes, event handlers and URLs with a
+# disallowed scheme (javascript:, vbscript:, data: unless allowed for
+# images) are removed. The result is re-serialized from the parsed tree,
+# so it is well-formed and escaped.
+pub def html_sanitize(markup: str, pol: HtmlPolicy) -> str:
+    mut f = html_parse_fragment(markup)
+    mut out = HtmlDocument.empty()
+    mut root = out._new_node(HTML_ELEMENT, 0, "div", "")
+    out._append(0, root)
+    _san_children(f.doc, f.id, out, root, pol)
+    mut r = out.node(root)
+    return r.inner_html()
+
+# html_sanitize with HtmlPolicy.default().
+pub def html_sanitize_default(markup: str) -> str:
+    mut p = HtmlPolicy.default()
+    return html_sanitize(markup, p)
