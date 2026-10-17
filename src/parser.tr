@@ -2430,7 +2430,25 @@ extend Parser:
                     mut parser = Parser.init(_fstr_tokens, lexer.token_lines)
                     mut e = parser.parse_expr()
                     if fmt_spec.len() > 0:
-                        fl.push(FStringPart.init_expr_fmt(e, fmt_spec))
+                        mut fpart = FStringPart.init_expr_fmt(e, fmt_spec)
+                        # Nested replacement fields in the spec: f"{x:.{p}f}", f"{s:>{w}}".
+                        mut sk = 0
+                        while sk < fmt_spec.len():
+                            if fmt_spec.char_at(sk) == 123:
+                                mut se = sk + 1
+                                while se < fmt_spec.len() and fmt_spec.char_at(se) != 125: se = se + 1
+                                if se >= fmt_spec.len(): break
+                                mut sub_raw = fmt_spec.slice(sk + 1, se)
+                                mut sub_src = sub_raw.trim()
+                                mut slex = Lexer.init(sub_src)
+                                mut stoks = slex.tokenize()
+                                if stoks.len > 0:
+                                    mut sparser = Parser.init(stoks, slex.token_lines)
+                                    fpart.spec_args.push(sparser.parse_expr())
+                                sk = se + 1
+                            else:
+                                sk = sk + 1
+                        fl.push(fpart)
                     else:
                         fl.push(FStringPart.init_expr(e))
             elif c == 92 and i + 1 < raw_blen: # '\' escape in literal text

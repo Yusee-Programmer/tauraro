@@ -6319,7 +6319,13 @@ static inline void* _tr_idict_get(TrIDict* d, long long k) {
     while (n) { if (n->key == k) return n->value; n = n->next; }
     return NULL;
 }
-static inline bool   _tr_idict_contains(TrIDict* d, long long k) { return _tr_idict_get(d,k) != NULL; }
+/* Walk the chain itself: a stored 0 / false / NULL value is still present. */
+static inline bool   _tr_idict_contains(TrIDict* d, long long k) {
+    if (!d) return false;
+    _TrIDictNode* n = d->buckets[(size_t)((unsigned long long)k % d->cap)];
+    while (n) { if (n->key == k) return true; n = n->next; }
+    return false;
+}
 static inline void   _tr_idict_remove(TrIDict* d, long long k) {
     if (!d) return;
     size_t idx = (size_t)((unsigned long long)k % d->cap);

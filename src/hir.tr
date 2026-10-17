@@ -73,6 +73,7 @@ pub class HirFStringPart:
     pub text_len: int    # true byte length of `text` (embedded-NUL-safe; see HirExpr.ELitStr)
     pub expr:     Pointer[HirExpr]
     pub fmt_spec: str    # e.g. ".2f", ">10", "05d"
+    pub spec_args: Vec[Pointer[HirExpr]]   # nested `{w}` / `{p}` in fmt_spec (printf `*`)
 
 extend HirFStringPart:
     pub def init() -> HirFStringPart:
@@ -82,6 +83,7 @@ extend HirFStringPart:
         p.text_len = 0
         p.expr     = Pointer[HirExpr](0)
         p.fmt_spec = ""
+        p.spec_args = Vec[Pointer[HirExpr]].init(0)
         return p
 
 # --- Match arms -------------------------------------------------------------

@@ -307,6 +307,7 @@ added here as each phase lands.
   layer does not verify certificates.
 
 ### Fixed
+- Compiler: a user method named `as_str` is no longer treated as the builtin cast; `Dict[int, V].has` is true for a stored 0; `return list[i]` / `self.f = list[i]` of a str retain the element; an owned class local or list slot reassigned from a list element retains it; `List[List[T]]` element reads and slot assignment compile; nested f-string format specs (`f"{x:.{p}g}"`, `{s:>{w}}`) are applied.
 - `std.net.http` / `std.net.https` declared `Map[str]` (one type argument) for
   the response/header maps, which fails to compile
   (`'V' undeclared` in `HttpClientResponse_header`) as soon as the module is
