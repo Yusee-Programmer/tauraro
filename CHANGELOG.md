@@ -149,6 +149,16 @@ added here as each phase lands.
   detection, `expect(...)` specs with `validate` / `check`, `unknown_keys`,
   `validate_schema` (std.validate.schema), masked `dump()`, `reload()` and `ConfigWatcher`
   (std.io.watch).
+- `std.crypto.scrypt`: scrypt (RFC 7914) in C with parameter validation and a memory cap
+  (1 GiB by default), plus `$scrypt$ln=..,r=..,p=..$salt$hash` password hashing (passlib-compatible).
+- `std.crypto.age`: age v1 file encryption -- X25519 (`age1...` / `AGE-SECRET-KEY-1...`) and
+  passphrase recipients, header MAC, STREAM payload, ASCII armor, one-shot, streaming
+  (`AgeEncryptor` / `AgeDecryptor`) and file APIs. Passes the C2SP/CCTV age testkit (non-hybrid).
+- `std.crypto.ssh`: OpenSSH public key lines, `openssh-key-v1` private keys (unencrypted and
+  bcrypt-pbkdf + aes256-ctr, read and write), SHA256/MD5 fingerprints, `authorized_keys` options,
+  PKey conversion and SSHSIG signatures compatible with `ssh-keygen -Y sign/verify`.
+- `std.encoding.bech32`: Bech32 / Bech32m. `PKey.rsa_exponent()`. C kernels for bcrypt_pbkdf,
+  AES-CTR and age STREAM chunks in `std/crypto/crypto_native.c`.
 - String escapes `\xHH` (a byte), `\uXXXX` and `\UXXXXXXXX` (a code point as UTF-8); `str.rfind`
   (alias of `last_index_of`); `str.split_exact(sep)`, Python-style splitting on a whole substring
   that keeps empty parts (`split` splits on any byte of `sep` and drops empty parts).

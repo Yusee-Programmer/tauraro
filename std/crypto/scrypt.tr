@@ -1,0 +1,173 @@
+# std.crypto.scrypt -- the scrypt memory-hard KDF (RFC 7914).
+#
+# Scrypt.derive(password, salt, n, r, p, dklen) returns dklen raw bytes. The
+# parameters are validated (n a power of two > 1, r >= 1, p >= 1,
+# r * p < 2^30, n < 2^(16 r)) and the working memory (about 128 * r * n
+# bytes) is capped: derive() refuses anything over SCRYPT_DEFAULT_MAX_MEM
+# (1 GiB); derive_limited() takes an explicit cap. This keeps a hostile
+# parameter set -- say, from an attacker-supplied age header or hash string
+# -- from exhausting memory.
+#
+# Password hashes use the PHC-style string format also produced by passlib:
+#
+#   $scrypt$ln=17,r=8,p=1$<salt, base64>$<hash, base64>
+#
+# where ln = log2(n). Defaults (ScryptParams.default()) follow OWASP:
+# n = 2^17, r = 8, p = 1 (128 MiB), 16-byte salt, 32-byte hash.
+#
+# Usage:
+#   from std.crypto.scrypt import Scrypt
+#   mut key = Scrypt.derive("password", salt, 16384, 8, 1, 32)?
+#   mut stored = Scrypt.hash("hunter2")?
+#   if Scrypt.verify(stored, "hunter2"): ...
+
+from std.crypto.native import trc_scrypt, trc_scrypt_mem, trc_ct_eq, _cn_alloc, _cn_take, _cn_free, _cn_b64, _cn_unb64
+from std.crypto.random import SecureRandom
+from std.core.string import StringBuilder
+from std.string.str import Str
+
+pub const SCRYPT_DEFAULT_MAX_MEM = 1073741824
+
+def _sc_uint(s: str) -> int:
+    if s.len() == 0 or s.len() > 10: return -1
+    mut p = s as Pointer[char]
+    mut v = 0
+    mut i = 0
+    while i < s.len():
+        mut c = 0
+        unsafe: c = (p.offset(i).read() as int) & 255
+        if c < 48 or c > 57: return -1
+        v = v * 10 + (c - 48)
+        i = i + 1
+    return v
+
+# Cost settings for Scrypt.hash_with.
+pub class ScryptParams:
+    pub log_n:    int
+    pub r:        int
+    pub p:        int
+    pub hash_len: int
+    pub salt_len: int
+
+extend ScryptParams:
+    # OWASP baseline: n = 2^17, r = 8, p = 1.
+    pub def default() -> ScryptParams:
+        return ScryptParams.init(17, 8, 1)
+
+    pub def init(log_n: int, r: int, p: int) -> ScryptParams:
+        mut s = ScryptParams()
+        s.log_n = log_n
+        s.r = r
+        s.p = p
+        s.hash_len = 32
+        s.salt_len = 16
+        return s
+
+# A parsed $scrypt$ string.
+pub class ScryptHash:
+    pub log_n: int
+    pub r:     int
+    pub p:     int
+    pub salt:  str
+    pub hash:  str
+
+pub class Scrypt:
+    _dummy: int
+
+extend Scrypt:
+    # Bytes of working memory scrypt needs for (n, r, p), or -1 if the
+    # parameters are invalid.
+    pub def memory_needed(n: int, r: int, p: int) -> int:
+        return trc_scrypt_mem(n, r, p)
+
+    # scrypt(password, salt, n, r, p) -> dklen bytes, with the default 1 GiB cap.
+    pub def derive(password: str, salt: str, n: int, r: int, p: int, dklen: int) throws str -> str:
+        return Scrypt.derive_limited(password, salt, n, r, p, dklen, SCRYPT_DEFAULT_MAX_MEM)?
+
+    # Same, refusing parameters that need more than max_mem bytes.
+    pub def derive_limited(password: str, salt: str, n: int, r: int, p: int, dklen: int, max_mem: int) throws str -> str:
+        mut need = trc_scrypt_mem(n, r, p)
+        if need < 0: raise("scrypt: invalid parameters (n must be a power of two > 1, r, p >= 1, r*p < 2^30)")
+        if need > max_mem: raise(f"scrypt: parameters need {need} bytes, over the {max_mem}-byte limit")
+        if dklen < 1 or dklen > 1073741824: raise("scrypt: dklen out of range")
+        mut out = _cn_alloc(dklen)
+        mut pp = password as Pointer[char]
+        mut sp = salt as Pointer[char]
+        mut rc = trc_scrypt(pp, password.len(), sp, salt.len(), n, r, p, out, dklen)
+        if rc != 0:
+            _cn_free(out)
+            if rc == -2: raise("scrypt: out of memory")
+            raise("scrypt: invalid parameters")
+        return _cn_take(out, dklen)
+
+    # Hash a password with the default parameters and a random salt.
+    pub def hash(password: str) throws str -> str:
+        mut params = ScryptParams.default()
+        return Scrypt.hash_with(password, params)?
+
+    pub def hash_with(password: str, params: ScryptParams) throws str -> str:
+        mut salt = SecureRandom.bytes(params.salt_len)?
+        return Scrypt.hash_with_salt(password, salt, params)?
+
+    pub def hash_with_salt(password: str, salt: str, params: ScryptParams) throws str -> str:
+        if params.log_n < 1 or params.log_n > 40: raise("scrypt: log_n must be 1..40")
+        mut raw = Scrypt.derive(password, salt, 1 << params.log_n, params.r, params.p, params.hash_len)?
+        return Scrypt.encode(params.log_n, params.r, params.p, salt, raw)
+
+    pub def encode(log_n: int, r: int, p: int, salt: str, hash: str) -> str:
+        mut sb = StringBuilder.init(128)
+        mut head = f"$scrypt$ln={log_n},r={r},p={p}$"
+        sb.append(head)
+        mut s64 = _cn_b64(0, false, salt)
+        mut h64 = _cn_b64(0, false, hash)
+        sb.append(s64)
+        sb.append("$")
+        sb.append(h64)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def decode(encoded: str) throws str -> ScryptHash:
+        mut parts = Str.split_keep_empty(encoded, "$")
+        if parts.len != 5 or parts.get(0).len() != 0 or parts.get(1) != "scrypt": raise("scrypt: not a $scrypt$ string")
+        mut h = ScryptHash()
+        h.log_n = -1
+        h.r = -1
+        h.p = -1
+        mut kv = Str.split_keep_empty(parts.get(2), ",")
+        mut i = 0
+        while i < kv.len:
+            mut item = kv.get(i)
+            mut eq = item.find("=")
+            if eq < 1: raise("scrypt: malformed parameters")
+            mut key = item.slice(0, eq)
+            mut val = _sc_uint(item.slice(eq + 1, item.len()))
+            if val < 0: raise("scrypt: malformed parameter value")
+            if key == "ln": h.log_n = val
+            elif key == "r": h.r = val
+            elif key == "p": h.p = val
+            else: raise("scrypt: unknown parameter")
+            i = i + 1
+        if h.log_n < 1 or h.log_n > 40 or h.r < 1 or h.p < 1: raise("scrypt: missing or invalid ln, r or p")
+        h.salt = _cn_unb64(0, parts.get(3))?
+        h.hash = _cn_unb64(0, parts.get(4))?
+        if h.hash.len() < 8: raise("scrypt: hash too short")
+        return h
+
+    # True if `password` matches (false for malformed strings or over-limit costs).
+    pub def verify(encoded: str, password: str) -> bool:
+        mut r: Result[ScryptHash, str] = Scrypt.decode(encoded)
+        if r.is_err: return false
+        mut h = r.ok
+        mut got: Result[str, str] = Scrypt.derive(password, h.salt, 1 << h.log_n, h.r, h.p, h.hash.len())
+        if got.is_err: return false
+        mut g = got.ok
+        mut gp = g as Pointer[char]
+        mut hp = h.hash as Pointer[char]
+        return trc_ct_eq(gp, g.len(), hp, h.hash.len()) == 1
+
+    pub def needs_rehash(encoded: str, params: ScryptParams) -> bool:
+        mut r: Result[ScryptHash, str] = Scrypt.decode(encoded)
+        if r.is_err: return true
+        mut h = r.ok
+        return h.log_n != params.log_n or h.r != params.r or h.p != params.p or h.hash.len() != params.hash_len

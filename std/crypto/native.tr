@@ -129,3 +129,14 @@ pub def _cn_unb64(kind: int, s: str) throws str -> str:
 extern "C":
     def trc_aead_seal(alg: int, key: Pointer[char], nonce: Pointer[char], aad: Pointer[char], alen: int, pt: Pointer[char], n: int, out: Pointer[char]) -> int
     def trc_aead_open(alg: int, key: Pointer[char], nonce: Pointer[char], aad: Pointer[char], alen: int, ct: Pointer[char], n: int, out: Pointer[char]) -> int
+
+extern "C":
+    def trc_scrypt_mem(n: int, r: int, p: int) -> int
+    def trc_scrypt(pwd: Pointer[char], plen: int, salt: Pointer[char], slen: int, n: int, r: int, p: int, out: Pointer[char], dklen: int) -> int
+    def trc_bcrypt_pbkdf(pwd: Pointer[char], plen: int, salt: Pointer[char], slen: int, rounds: int, out: Pointer[char], dklen: int) -> int
+    def trc_aes_ctr(key: Pointer[char], klen: int, iv16: Pointer[char], data: Pointer[char], n: int, out: Pointer[char]) -> int
+    def trc_stream_chunk(enc: int, key: Pointer[char], counter: int, last: int, data: Pointer[char], n: int, out: Pointer[char]) -> int
+    def trc_stream_sealed_len(n: int) -> int
+    def trc_stream_seal(key: Pointer[char], data: Pointer[char], n: int, out: Pointer[char]) -> int
+    def trc_stream_open(key: Pointer[char], data: Pointer[char], n: int, out: Pointer[char], released: Pointer[int]) -> int
+    def trc_stream_open_chunk(key: Pointer[char], counter: int, data: Pointer[char], n: int, out: Pointer[char], is_last: Pointer[int]) -> int

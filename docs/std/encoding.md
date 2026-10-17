@@ -831,3 +831,11 @@ colours are read as "no colour"; number formats other than dates are kept but no
 ---
 
 *See `TAURARO_MASTER_SPECIFICATION.md` for the full language specification.*
+
+## Bech32 — `std.encoding.bech32`
+
+Bech32 (BIP 173) and Bech32m (BIP 350): `Bech32.encode(hrp, data)?`, `Bech32.encode_m(hrp, data)?`,
+`Bech32.encode_variant(hrp, data, variant)?`, `Bech32.decode(s)? -> Bech32Data` (`hrp` lower-cased, `data` bytes,
+`variant` = `BECH32` or `BECH32M`), `Bech32.decode_limited(s, max_len)?`. Decoding rejects mixed case, bad
+checksums and non-zero padding. There is no 90-character limit by default (age keys exceed it). Used by
+`std.crypto.age` for `age1...` / `AGE-SECRET-KEY-1...` keys.

@@ -1732,3 +1732,14 @@ int64_t trc_x509_verify_tls_sig(const char* leaf_der, int64_t leaf_len, int64_t 
     x_free(x);
     return ok;
 }
+
+/* RSA public exponent as minimal big-endian bytes (std.crypto.ssh). Returns the length or -1. */
+int64_t trc_pk_rsa_exponent(void* h, char* out, int64_t cap) {
+    pk_key* k = (pk_key*)h; u8 tmp[4 * MAXL]; size_t len = (size_t)(4 * MAXL), i = 0;
+    if (!k || k->kind != 1) return -1;
+    bn_to_be(tmp, len, k->rsa.e, k->rsa.n_limbs);
+    while (i < len - 1 && tmp[i] == 0) i++;
+    if ((int64_t)(len - i) > cap) return -1;
+    memcpy(out, tmp + i, len - i);
+    return (int64_t)(len - i);
+}

@@ -1,0 +1,885 @@
+# std.crypto.age -- age file encryption (age-encryption.org/v1).
+#
+# Interoperable with the age / rage command-line tools and libraries:
+#
+#   recipients   X25519 public keys  "age1..."            (Bech32)
+#                passphrases (scrypt; must be the only recipient)
+#   identities   X25519 secret keys  "AGE-SECRET-KEY-1..." (Bech32, upper-case)
+#                passphrases
+#   header       stanzas + HMAC-SHA256 header MAC
+#   payload      STREAM: ChaCha20-Poly1305 over 64 KiB chunks
+#   armor        "-----BEGIN AGE ENCRYPTED FILE-----" (PEM-like, strict)
+#
+# Decryption is strict, following the age specification and the C2SP/CCTV
+# test vectors: non-canonical base64, malformed stanzas, low-order X25519
+# shares, scrypt work factors above the limit (default 22, settable per
+# identity), truncated or extended payloads are all rejected. Error messages
+# start with a category:
+#
+#   "age: header: ..."           the header is malformed
+#   "age: no identity matched"   well-formed, but no identity unwraps a stanza
+#   "age: bad header MAC"        a file key was found but the MAC is wrong
+#   "age: payload: ..."          the encrypted payload is damaged or truncated
+#   "age: armor: ..."            the ASCII armor is malformed
+#
+# Post-quantum hybrid (ML-KEM) and SSH recipients are not supported; their
+# stanzas are skipped like any unknown type.
+#
+# Usage:
+#   from std.crypto.age import Age, AgeIdentity, AgeRecipient
+#   mut id = AgeIdentity.generate()?
+#   print(id.to_string())                    # AGE-SECRET-KEY-1...
+#   mut rcpt = id.recipient()                # age1...
+#   mut ct = Age.encrypt(data, [rcpt])?
+#   mut pt = Age.decrypt(ct, [id])?
+#   mut armored = Age.encrypt_armored(data, [AgeRecipient.passphrase("pw")])?
+#
+# For large inputs use AgeEncryptor / AgeDecryptor (feed chunks, get output
+# as soon as it is final) or Age.encrypt_file / Age.decrypt_file.
+
+from std.crypto.native import ALG_SHA256, trc_hmac, trc_ct_eq, trc_stream_chunk, trc_stream_sealed_len, trc_stream_seal, trc_stream_open, trc_stream_open_chunk, _cn_alloc, _cn_take, _cn_free, _cn_b64, _cn_unb64
+from std.crypto.kdf import Kdf
+from std.crypto.aead import Aead, AEAD_CHACHA20_POLY1305
+from std.crypto.x25519 import X25519
+from std.crypto.scrypt import Scrypt
+from std.crypto.random import SecureRandom
+from std.encoding.bech32 import Bech32, Bech32Data
+from std.core.string import StringBuilder
+from std.string.str import Str
+
+extern "C":
+    def _tr_c_fopen(path: str, mode: str) -> Pointer[char]
+    def _tr_c_fclose(fp: Pointer[char]) -> int
+    def _tr_c_fread(buf: Pointer[char], size: int, nmemb: int, fp: Pointer[char]) -> int
+    def _tr_c_fwrite(buf: Pointer[char], size: int, nmemb: int, fp: Pointer[char]) -> int
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+
+pub const AGE_X25519 = 1
+pub const AGE_SCRYPT = 2
+
+pub const AGE_CHUNK_SIZE = 65536
+pub const AGE_DEFAULT_WORK_FACTOR = 18
+pub const AGE_MAX_WORK_FACTOR = 22
+
+def _age_intro() -> str: return "age-encryption.org/v1"
+def _age_armor_begin() -> str: return "-----BEGIN AGE ENCRYPTED FILE-----"
+def _age_armor_end() -> str: return "-----END AGE ENCRYPTED FILE-----"
+
+def _ab(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+def _age_zero12() -> str:
+    mut p = _cn_alloc(12)
+    return _cn_take(p, 12)
+
+def _age_bytes_eq(a: str, b: str) -> bool:
+    mut ap = a as Pointer[char]
+    mut bp = b as Pointer[char]
+    return trc_ct_eq(ap, a.len(), bp, b.len()) == 1
+
+def _age_hmac(key: str, msg: str) -> str:
+    mut out = _cn_alloc(32)
+    mut kp = key as Pointer[char]
+    mut mp = msg as Pointer[char]
+    trc_hmac(ALG_SHA256, kp, key.len(), mp, msg.len(), out)
+    return _cn_take(out, 32)
+
+def _age_is_b64(c: int) -> bool:
+    if c >= 65 and c <= 90: return true
+    if c >= 97 and c <= 122: return true
+    if c >= 48 and c <= 57: return true
+    return c == 43 or c == 47
+
+# Unpadded, canonical standard base64 (the header encoding).
+def _age_unb64(s: str) throws str -> str:
+    mut i = 0
+    while i < s.len():
+        if not _age_is_b64(_ab(s, i)): raise("age: header: invalid base64")
+        i = i + 1
+    mut r: Result[str, str] = _cn_unb64(0, s)
+    if r.is_err: raise("age: header: non-canonical base64")
+    return r.ok
+
+def _age_all_zero(s: str) -> bool:
+    mut acc = 0
+    mut i = 0
+    while i < s.len():
+        acc = acc | _ab(s, i)
+        i = i + 1
+    return acc == 0
+
+# Canonical decimal 1..99 (no sign, no leading zero).
+def _age_work_factor(s: str) -> int:
+    if s.len() == 0 or s.len() > 2: return -1
+    if _ab(s, 0) == 48: return -1
+    mut v = 0
+    mut i = 0
+    while i < s.len():
+        mut c = _ab(s, i)
+        if c < 48 or c > 57: return -1
+        v = v * 10 + c - 48
+        i = i + 1
+    return v
+
+# ─── recipients and identities ───────────────────────────────────────────────
+pub class AgeRecipient:
+    pub kind: int            # AGE_X25519 or AGE_SCRYPT
+    pub public_key: str      # X25519: 32 bytes
+    pub passphrase: str      # scrypt
+    pub work_factor: int     # scrypt: log2(N)
+
+extend AgeRecipient:
+    # Parse an "age1..." recipient.
+    pub def parse(text: str) throws str -> AgeRecipient:
+        mut t = text.trim()
+        mut r: Result[Bech32Data, str] = Bech32.decode(t)
+        if r.is_err: raise(f"age: invalid recipient: {r.err}")
+        mut d = r.ok
+        if d.hrp != "age": raise("age: invalid recipient: not an age1 key")
+        if d.data.len() != 32: raise("age: invalid recipient: wrong key length")
+        if _ab(t, 0) != 97: raise("age: invalid recipient: must be lower-case")
+        return AgeRecipient.x25519(d.data)
+
+    # From a raw 32-byte X25519 public key.
+    pub def x25519(public_key: str) -> AgeRecipient:
+        mut a = AgeRecipient()
+        a.kind = AGE_X25519
+        a.public_key = public_key
+        a.passphrase = ""
+        a.work_factor = 0
+        return a
+
+    # A passphrase recipient with the default work factor (2^18).
+    pub def passphrase(pw: str) -> AgeRecipient:
+        return AgeRecipient.passphrase_with_work_factor(pw, AGE_DEFAULT_WORK_FACTOR)
+
+    pub def passphrase_with_work_factor(pw: str, log_n: int) -> AgeRecipient:
+        mut a = AgeRecipient()
+        a.kind = AGE_SCRYPT
+        a.public_key = ""
+        a.passphrase = pw
+        a.work_factor = log_n
+        return a
+
+    # "age1..." (empty for passphrase recipients).
+    pub def to_string(self) -> str:
+        if self.kind != AGE_X25519: return ""
+        mut r: Result[str, str] = Bech32.encode("age", self.public_key)
+        if r.is_err: return ""
+        return r.ok
+
+pub class AgeIdentity:
+    pub kind: int            # AGE_X25519 or AGE_SCRYPT
+    pub secret_key: str      # X25519: 32 bytes
+    pub passphrase: str
+    pub max_work_factor: int # scrypt: largest log2(N) accepted when decrypting
+
+extend AgeIdentity:
+    # A fresh X25519 identity.
+    pub def generate() throws str -> AgeIdentity:
+        mut sk = X25519.generate_private()?
+        return AgeIdentity.x25519(sk)
+
+    pub def x25519(secret_key: str) -> AgeIdentity:
+        mut a = AgeIdentity()
+        a.kind = AGE_X25519
+        a.secret_key = secret_key
+        a.passphrase = ""
+        a.max_work_factor = 0
+        return a
+
+    # Parse "AGE-SECRET-KEY-1..." (upper-case, as age writes it; lower-case is accepted).
+    pub def parse(text: str) throws str -> AgeIdentity:
+        mut t = text.trim()
+        mut r: Result[Bech32Data, str] = Bech32.decode(t)
+        if r.is_err: raise(f"age: invalid identity: {r.err}")
+        mut d = r.ok
+        if d.hrp != "age-secret-key-": raise("age: invalid identity: not an AGE-SECRET-KEY-1 key")
+        if d.data.len() != 32: raise("age: invalid identity: wrong key length")
+        return AgeIdentity.x25519(d.data)
+
+    # Every identity in an identity file (blank lines and # comments skipped).
+    pub def parse_file(text: str) throws str -> List[AgeIdentity]:
+        mut out: List[AgeIdentity] = []
+        mut lines = Str.split_keep_empty(text, "\n")
+        mut i = 0
+        while i < lines.len:
+            mut line = lines.get(i).trim()
+            i = i + 1
+            if line.len() == 0 or line.starts_with("#"): continue
+            mut id = AgeIdentity.parse(line)?
+            out.append(id)
+        if len(out) == 0: raise("age: no identities found")
+        return out
+
+    # A passphrase identity (accepts work factors up to AGE_MAX_WORK_FACTOR).
+    pub def passphrase(pw: str) -> AgeIdentity:
+        mut a = AgeIdentity()
+        a.kind = AGE_SCRYPT
+        a.secret_key = ""
+        a.passphrase = pw
+        a.max_work_factor = AGE_MAX_WORK_FACTOR
+        return a
+
+    pub def passphrase_with_max_work_factor(pw: str, max_log_n: int) -> AgeIdentity:
+        mut a = AgeIdentity.passphrase(pw)
+        a.max_work_factor = max_log_n
+        return a
+
+    # The matching "age1..." recipient (X25519 identities only).
+    pub def recipient(self) throws str -> AgeRecipient:
+        if self.kind != AGE_X25519: raise("age: passphrase identities have no public recipient")
+        mut pk = X25519.public_key(self.secret_key)?
+        return AgeRecipient.x25519(pk)
+
+    # "AGE-SECRET-KEY-1..." (empty for passphrase identities).
+    pub def to_string(self) -> str:
+        if self.kind != AGE_X25519: return ""
+        mut r: Result[str, str] = Bech32.encode("age-secret-key-", self.secret_key)
+        if r.is_err: return ""
+        return r.ok.upper()
+
+# ─── header ──────────────────────────────────────────────────────────────────
+pub class AgeStanza:
+    pub kind: str
+    pub args: List[str]      # arguments after the type
+    pub body: str
+
+pub class AgeHeader:
+    pub stanzas: List[AgeStanza]
+    pub mac: str
+    pub mac_input: str       # the header bytes covered by the MAC
+    pub length: int          # bytes up to and including the MAC line's newline
+
+def _age_body_lines(sb: StringBuilder, body: str):
+    mut b64 = _cn_b64(0, false, body)
+    mut i = 0
+    while i + 64 <= b64.len():
+        mut line = b64.slice(i, i + 64)
+        sb.append(line)
+        sb.append("\n")
+        i = i + 64
+    mut tail = b64.slice(i, b64.len())
+    sb.append(tail)
+    sb.append("\n")
+
+def _age_write_stanza(sb: StringBuilder, kind: str, args: List[str], body: str):
+    sb.append("-> ")
+    sb.append(kind)
+    mut i = 0
+    while i < len(args):
+        sb.append(" ")
+        sb.append(args[i])
+        i = i + 1
+    sb.append("\n")
+    _age_body_lines(sb, body)
+
+# Position just past the MAC line's "\n", or -1 if `buf` does not hold a
+# complete header yet. The MAC line is the first line starting with "---".
+def _age_header_end(buf: str) -> int:
+    mut n = buf.len()
+    mut i = 0
+    mut line_start = 0
+    while i < n:
+        if i == line_start and i + 3 <= n and _ab(buf, i) == 45 and _ab(buf, i + 1) == 45 and _ab(buf, i + 2) == 45:
+            mut j = i
+            while j < n:
+                if _ab(buf, j) == 10: return j + 1
+                j = j + 1
+            return -1
+        if _ab(buf, i) == 10: line_start = i + 1
+        i = i + 1
+    return -1
+
+def _age_valid_arg(a: str) -> bool:
+    if a.len() == 0: return false
+    mut i = 0
+    while i < a.len():
+        mut c = _ab(a, i)
+        if c < 33 or c > 126: return false
+        i = i + 1
+    return true
+
+# Parse header bytes buf[0:hend] (hend from _age_header_end).
+def _age_parse_header(buf: str, hend: int) throws str -> AgeHeader:
+    mut text = buf.slice(0, hend - 1)
+    mut lines = Str.split_keep_empty(text, "\n")
+    if lines.len < 2: raise("age: header: truncated")
+    mut first = lines.get(0)
+    if first != _age_intro():
+        if first.starts_with("age-encryption.org/"): raise("age: header: unsupported version")
+        raise("age: header: not an age file")
+    mut h = AgeHeader()
+    h.stanzas = []
+    mut i = 1
+    while true:
+        if i >= lines.len: raise("age: header: missing MAC line")
+        mut line = lines.get(i)
+        if line.starts_with("---"):
+            if i != lines.len - 1: raise("age: header: malformed")
+            if not line.starts_with("--- "): raise("age: header: malformed MAC line")
+            mut m64 = line.slice(4, line.len())
+            if m64.len() != 43: raise("age: header: malformed MAC")
+            h.mac = _age_unb64(m64)?
+            if h.mac.len() != 32: raise("age: header: malformed MAC")
+            h.mac_input = buf.slice(0, hend - 1 - line.len() + 3)
+            h.length = hend
+            return h
+        if not line.starts_with("-> "): raise("age: header: malformed stanza line")
+        mut parts = Str.split_keep_empty(line.slice(3, line.len()), " ")
+        mut st = AgeStanza()
+        st.args = []
+        mut k = 0
+        while k < parts.len:
+            mut a = parts.get(k)
+            if not _age_valid_arg(a): raise("age: header: invalid stanza argument")
+            if k == 0: st.kind = a
+            else: st.args.append(a)
+            k = k + 1
+        i = i + 1
+        mut b64 = StringBuilder.init(64)
+        mut done = false
+        while not done:
+            if i >= lines.len - 1:
+                b64.free()
+                raise("age: header: stanza body not terminated by a short line")
+            mut bl = lines.get(i)
+            if bl.len() > 64:
+                b64.free()
+                raise("age: header: stanza body line longer than 64 columns")
+            mut c = 0
+            while c < bl.len():
+                if not _age_is_b64(_ab(bl, c)):
+                    b64.free()
+                    raise("age: header: invalid character in stanza body")
+                c = c + 1
+            b64.append(bl)
+            if bl.len() < 64: done = true
+            i = i + 1
+        mut body_txt = b64.to_owned()
+        b64.free()
+        st.body = _age_unb64(body_txt)?
+        h.stanzas.append(st)
+    raise("age: header: malformed")
+
+def _age_wrap(key: str, file_key: str) throws str -> str:
+    mut z = _age_zero12()
+    return Aead.seal(AEAD_CHACHA20_POLY1305, key, z, "", file_key)?
+
+# Unwrap a 32-byte stanza body; "" if the tag does not verify.
+def _age_unwrap(key: str, body: str) -> str:
+    mut z = _age_zero12()
+    mut r: Result[str, str] = Aead.open(AEAD_CHACHA20_POLY1305, key, z, "", body)
+    if r.is_err: return ""
+    return r.ok
+
+def _age_scrypt_salt(salt: str) -> str:
+    mut s = "age-encryption.org/v1/scrypt"
+    return s + salt
+
+# Try one identity against the stanzas: the 16-byte file key, or "".
+def _age_try_identity(id: AgeIdentity, h: AgeHeader) throws str -> str:
+    mut i = 0
+    while i < len(h.stanzas):
+        mut st = h.stanzas[i]
+        i = i + 1
+        if st.kind == "X25519" and id.kind == AGE_X25519:
+            if len(st.args) != 1: raise("age: header: X25519 stanza must have one argument")
+            mut share = _age_unb64(st.args[0])?
+            if share.len() != 32: raise("age: header: X25519 share must be 32 bytes")
+            if st.body.len() != 32: raise("age: header: X25519 stanza body must be 32 bytes")
+            mut dh = X25519.scalar_mult(id.secret_key, share)?
+            if _age_all_zero(dh): raise("age: header: X25519 share is a low-order point")
+            mut our_pub = X25519.public_key(id.secret_key)?
+            mut salt = share + our_pub
+            mut wk = Kdf.hkdf(ALG_SHA256, dh, salt, "age-encryption.org/v1/X25519", 32)?
+            mut fk = _age_unwrap(wk, st.body)
+            if fk.len() == 16: return fk
+        elif st.kind == "scrypt" and id.kind == AGE_SCRYPT:
+            if len(st.args) != 2: raise("age: header: scrypt stanza must have two arguments")
+            mut salt = _age_unb64(st.args[0])?
+            if salt.len() != 16: raise("age: header: scrypt salt must be 16 bytes")
+            mut wf = _age_work_factor(st.args[1])
+            if wf < 1: raise("age: header: invalid scrypt work factor")
+            if wf > id.max_work_factor: raise(f"age: header: scrypt work factor {wf} exceeds the limit {id.max_work_factor}")
+            if st.body.len() != 32: raise("age: header: scrypt stanza body must be 32 bytes")
+            mut full_salt = _age_scrypt_salt(salt)
+            mut wk = Scrypt.derive(id.passphrase, full_salt, 1 << wf, 8, 1, 32)?
+            mut fk = _age_unwrap(wk, st.body)
+            if fk.len() == 16: return fk
+    return ""
+
+# Find the file key and check the header MAC.
+def _age_file_key(h: AgeHeader, identities: List[AgeIdentity]) throws str -> str:
+    mut i = 0
+    while i < len(h.stanzas):
+        if h.stanzas[i].kind == "scrypt" and len(h.stanzas) != 1: raise("age: header: an scrypt stanza must be the only one")
+        i = i + 1
+    mut fk = ""
+    i = 0
+    while i < len(identities) and fk.len() == 0:
+        fk = _age_try_identity(identities[i], h)?
+        i = i + 1
+    if fk.len() == 0: raise("age: no identity matched any recipient")
+    mut mk = Kdf.hkdf(ALG_SHA256, fk, "", "header", 32)?
+    mut mac = _age_hmac(mk, h.mac_input)
+    if not _age_bytes_eq(mac, h.mac): raise("age: bad header MAC")
+    return fk
+
+def _age_payload_key(file_key: str, nonce: str) throws str -> str:
+    return Kdf.hkdf(ALG_SHA256, file_key, nonce, "payload", 32)?
+
+# Header bytes (through the MAC line) + 16-byte nonce, and the payload key.
+def _age_build_header(recipients: List[AgeRecipient], file_key: str) throws str -> str:
+    if len(recipients) == 0: raise("age: no recipients")
+    mut i = 0
+    while i < len(recipients):
+        if recipients[i].kind == AGE_SCRYPT and len(recipients) != 1: raise("age: a passphrase recipient must be the only one")
+        if recipients[i].kind != AGE_SCRYPT and recipients[i].kind != AGE_X25519: raise("age: unknown recipient kind")
+        if recipients[i].kind == AGE_X25519 and recipients[i].public_key.len() != 32: raise("age: X25519 recipient must be 32 bytes")
+        if recipients[i].kind == AGE_SCRYPT and (recipients[i].work_factor < 1 or recipients[i].work_factor > 30): raise("age: scrypt work factor must be 1..30")
+        i = i + 1
+    mut sb = StringBuilder.init(256)
+    sb.append(_age_intro())
+    sb.append("\n")
+    i = 0
+    while i < len(recipients):
+        mut r = recipients[i]
+        i = i + 1
+        mut args: List[str] = []
+        if r.kind == AGE_X25519:
+            mut eph = X25519.generate_private()?
+            mut share = X25519.public_key(eph)?
+            mut dh = X25519.shared_secret(eph, r.public_key)?
+            mut salt = share + r.public_key
+            mut wk = Kdf.hkdf(ALG_SHA256, dh, salt, "age-encryption.org/v1/X25519", 32)?
+            mut body = _age_wrap(wk, file_key)?
+            args.append(_cn_b64(0, false, share))
+            _age_write_stanza(sb, "X25519", args, body)
+        elif r.kind == AGE_SCRYPT:
+            mut salt = SecureRandom.bytes(16)?
+            mut full_salt = _age_scrypt_salt(salt)
+            mut wk = Scrypt.derive(r.passphrase, full_salt, 1 << r.work_factor, 8, 1, 32)?
+            mut body = _age_wrap(wk, file_key)?
+            args.append(_cn_b64(0, false, salt))
+            args.append(f"{r.work_factor}")
+            _age_write_stanza(sb, "scrypt", args, body)
+    sb.append("---")
+    mut mac_input = sb.to_owned()
+    mut mk = Kdf.hkdf(ALG_SHA256, file_key, "", "header", 32)?
+    mut mac = _age_hmac(mk, mac_input)
+    sb.append(" ")
+    sb.append(_cn_b64(0, false, mac))
+    sb.append("\n")
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# ─── armor ───────────────────────────────────────────────────────────────────
+def _age_is_ws(c: int) -> bool:
+    return c == 32 or c == 9 or c == 10 or c == 13
+
+def _age_looks_armored(data: str) -> bool:
+    mut i = 0
+    while i < data.len() and _age_is_ws(_ab(data, i)): i = i + 1
+    mut b = _age_armor_begin()
+    if data.len() - i < b.len(): return false
+    return data.slice(i, i + b.len()) == b
+
+# ─── streaming encryptor ─────────────────────────────────────────────────────
+pub class AgeEncryptor:
+    _key: str
+    _buf: str
+    _counter: int
+    _header: str
+    _header_sent: bool
+    _done: bool
+
+extend AgeEncryptor:
+    pub def init(recipients: List[AgeRecipient]) throws str -> AgeEncryptor:
+        mut fk = SecureRandom.bytes(16)?
+        mut hdr = _age_build_header(recipients, fk)?
+        mut nonce = SecureRandom.bytes(16)?
+        mut e = AgeEncryptor()
+        e._key = _age_payload_key(fk, nonce)?
+        e._header = hdr + nonce
+        e._header_sent = false
+        e._buf = ""
+        e._counter = 0
+        e._done = false
+        return e
+
+    def _take_header(self) -> str:
+        if self._header_sent: return ""
+        self._header_sent = true
+        return self._header
+
+    # Feed plaintext; returns the ciphertext that is final so far (the
+    # header on the first call, then whole 64 KiB chunks).
+    pub def update(self, data: str) throws str -> str:
+        if self._done: raise("age: encryptor already finished")
+        mut head = self._take_header()
+        mut all = self._buf + data
+        mut n = all.len()
+        mut full = 0
+        if n > AGE_CHUNK_SIZE: full = (n - 1) / AGE_CHUNK_SIZE
+        mut out = _cn_alloc(head.len() + full * (AGE_CHUNK_SIZE + 16))
+        mut hp = head as Pointer[char]
+        mut o = head.len()
+        if o > 0: _tr_c_memcpy(out, hp, o)
+        mut ap = all as Pointer[char]
+        mut k = 0
+        while k < full:
+            trc_stream_chunk(1, self._key as Pointer[char], self._counter, 0, ap.offset(k * AGE_CHUNK_SIZE), AGE_CHUNK_SIZE, out.offset(o))
+            o = o + AGE_CHUNK_SIZE + 16
+            self._counter = self._counter + 1
+            k = k + 1
+        self._buf = all.slice(full * AGE_CHUNK_SIZE, n)
+        return _cn_take(out, o)
+
+    # Encrypt the final chunk; returns the remaining ciphertext.
+    pub def finish(self) throws str -> str:
+        if self._done: raise("age: encryptor already finished")
+        self._done = true
+        mut head = self._take_header()
+        mut n = self._buf.len()
+        mut out = _cn_alloc(n + 16)
+        mut bp = self._buf as Pointer[char]
+        trc_stream_chunk(1, self._key as Pointer[char], self._counter, 1, bp, n, out)
+        mut tail = _cn_take(out, n + 16)
+        self._buf = ""
+        return head + tail
+
+# ─── streaming decryptor ─────────────────────────────────────────────────────
+pub class AgeDecryptor:
+    _ids: List[AgeIdentity]
+    _key: str
+    _buf: str
+    _counter: int
+    _have_header: bool
+    _seen_last: bool
+    _done: bool
+    _failed: bool
+
+extend AgeDecryptor:
+    pub def init(identities: List[AgeIdentity]) -> AgeDecryptor:
+        mut d = AgeDecryptor()
+        d._ids = identities
+        d._key = ""
+        d._buf = ""
+        d._counter = 0
+        d._have_header = false
+        d._seen_last = false
+        d._done = false
+        d._failed = false
+        return d
+
+    # Parse the header once enough bytes have arrived. Returns false if more
+    # input is needed.
+    def _try_header(self, at_end: bool) throws str -> bool:
+        mut hend = _age_header_end(self._buf)
+        if hend < 0:
+            if at_end or self._buf.len() > 1048576:
+                if self._buf.len() == 0: raise("age: header: empty input")
+                raise("age: header: missing MAC line")
+            return false
+        if self._buf.len() < hend + 16:
+            if at_end:
+                _age_parse_header(self._buf, hend)?
+                raise("age: header: missing payload nonce")
+            return false
+        mut h = _age_parse_header(self._buf, hend)?
+        mut fk = _age_file_key(h, self._ids)?
+        mut nonce = self._buf.slice(hend, hend + 16)
+        self._key = _age_payload_key(fk, nonce)?
+        self._buf = self._buf.slice(hend + 16, self._buf.len())
+        self._have_header = true
+        return true
+
+    # Feed ciphertext; returns plaintext from chunks that authenticated.
+    # Like the reference implementation, a full-size chunk is released as
+    # soon as it arrives.
+    pub def update(self, data: str) throws str -> str:
+        if self._done or self._failed: raise("age: decryptor is finished")
+        self._buf = self._buf + data
+        if not self._have_header:
+            mut rh: Result[bool, str] = self._try_header(false)
+            if rh.is_err:
+                self._failed = true
+                self._buf = ""
+                raise(rh.err)
+            if not rh.ok: return ""
+        mut enc = AGE_CHUNK_SIZE + 16
+        mut n = self._buf.len()
+        mut full = n / enc
+        mut out = _cn_alloc(full * AGE_CHUNK_SIZE)
+        mut bp = self._buf as Pointer[char]
+        mut last = [0]
+        mut lp = last as Pointer[int]
+        mut k = 0
+        mut o = 0
+        mut err = ""
+        while k < full and err.len() == 0:
+            if self._seen_last:
+                err = "age: payload: trailing data after the final chunk"
+            else:
+                mut r = trc_stream_open_chunk(self._key as Pointer[char], self._counter, bp.offset(k * enc), enc, out.offset(o), lp)
+                if r < 0: err = "age: payload: chunk authentication failed"
+                else:
+                    o = o + r
+                    self._counter = self._counter + 1
+                    if last[0] == 1: self._seen_last = true
+                    k = k + 1
+        if err.len() > 0:
+            self._failed = true
+            self._buf = _cn_take(out, o)
+            raise(err)
+        if self._seen_last and n > full * enc:
+            self._failed = true
+            self._buf = _cn_take(out, o)
+            raise("age: payload: trailing data after the final chunk")
+        self._buf = self._buf.slice(full * enc, n)
+        return _cn_take(out, o)
+
+    # Plaintext released by the update()/finish() call that failed, from the
+    # chunks that authenticated before the error.
+    pub def partial(self) -> str:
+        if self._failed: return self._buf
+        return ""
+
+    # Decrypt the final chunk; raises if the payload is incomplete.
+    pub def finish(self) throws str -> str:
+        if self._done or self._failed: raise("age: decryptor is finished")
+        if not self._have_header:
+            mut rh: Result[bool, str] = self._try_header(true)
+            if rh.is_err:
+                self._failed = true
+                self._buf = ""
+                raise(rh.err)
+        self._done = true
+        mut n = self._buf.len()
+        if self._seen_last:
+            if n > 0: raise("age: payload: trailing data after the final chunk")
+            return ""
+        if n == 0:
+            if self._counter == 0: raise("age: payload: no chunks")
+            raise("age: payload: missing final chunk")
+        mut out = _cn_alloc(n)
+        mut bp = self._buf as Pointer[char]
+        mut last = [0]
+        mut lp = last as Pointer[int]
+        mut r = trc_stream_open_chunk(self._key as Pointer[char], self._counter, bp, n, out, lp)
+        self._buf = ""
+        if r < 0:
+            _cn_free(out)
+            raise("age: payload: final chunk is damaged, truncated or empty")
+        return _cn_take(out, r)
+
+# ─── one-shot API ────────────────────────────────────────────────────────────
+pub class Age:
+    _dummy: int
+
+extend Age:
+    # Encrypt to one or more recipients; returns the binary age file.
+    pub def encrypt(data: str, recipients: List[AgeRecipient]) throws str -> str:
+        mut fk = SecureRandom.bytes(16)?
+        mut hdr = _age_build_header(recipients, fk)?
+        mut nonce = SecureRandom.bytes(16)?
+        mut key = _age_payload_key(fk, nonce)?
+        mut n = data.len()
+        mut clen = trc_stream_sealed_len(n)
+        mut out = _cn_alloc(clen)
+        mut kp = key as Pointer[char]
+        mut dp = data as Pointer[char]
+        trc_stream_seal(kp, dp, n, out)
+        mut payload = _cn_take(out, clen)
+        return hdr + nonce + payload
+
+    pub def encrypt_armored(data: str, recipients: List[AgeRecipient]) throws str -> str:
+        mut bin = Age.encrypt(data, recipients)?
+        return Age.armor(bin)
+
+    # Encrypt with a passphrase (scrypt, default work factor 18).
+    pub def encrypt_passphrase(data: str, passphrase: str) throws str -> str:
+        mut rs: List[AgeRecipient] = []
+        rs.append(AgeRecipient.passphrase(passphrase))
+        return Age.encrypt(data, rs)?
+
+    # Decrypt a binary or armored age file.
+    pub def decrypt(data: str, identities: List[AgeIdentity]) throws str -> str:
+        if _age_looks_armored(data):
+            mut bin = Age.dearmor(data)?
+            return Age.decrypt_binary(bin, identities)?
+        return Age.decrypt_binary(data, identities)?
+
+    pub def decrypt_passphrase(data: str, passphrase: str) throws str -> str:
+        mut ids: List[AgeIdentity] = []
+        ids.append(AgeIdentity.passphrase(passphrase))
+        return Age.decrypt(data, ids)?
+
+    pub def decrypt_binary(data: str, identities: List[AgeIdentity]) throws str -> str:
+        mut hend = _age_header_end(data)
+        if hend < 0:
+            if data.len() == 0: raise("age: header: empty input")
+            if not data.starts_with("age-encryption.org/"): raise("age: header: not an age file")
+            raise("age: header: missing MAC line")
+        mut h = _age_parse_header(data, hend)?
+        if data.len() < hend + 16: raise("age: header: missing payload nonce")
+        mut fk = _age_file_key(h, identities)?
+        mut nonce = data.slice(hend, hend + 16)
+        mut key = _age_payload_key(fk, nonce)?
+        mut n = data.len() - hend - 16
+        mut out = _cn_alloc(n)
+        mut rel = [0]
+        mut kp = key as Pointer[char]
+        mut dp = data as Pointer[char]
+        mut rp = rel as Pointer[int]
+        mut r = trc_stream_open(kp, dp.offset(hend + 16), n, out, rp)
+        if r < 0:
+            _cn_free(out)
+            raise("age: payload: damaged, truncated or extended")
+        return _cn_take(out, r)
+
+    # ASCII armor (strict PEM-like encoding with 64-column base64 lines).
+    pub def armor(bin: str) -> str:
+        mut b64 = _cn_b64(0, true, bin)
+        mut sb = StringBuilder.init(b64.len() + b64.len() / 64 + 80)
+        sb.append(_age_armor_begin())
+        sb.append("\n")
+        mut i = 0
+        while i < b64.len():
+            mut e = i + 64
+            if e > b64.len(): e = b64.len()
+            mut line = b64.slice(i, e)
+            sb.append(line)
+            sb.append("\n")
+            i = e
+        sb.append(_age_armor_end())
+        sb.append("\n")
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def is_armored(data: str) -> bool:
+        return _age_looks_armored(data)
+
+    # Strip the armor. Whitespace before and after it is allowed; inside, lines
+    # end in LF or CRLF, are exactly 64 columns except a non-empty last line,
+    # and the base64 must be padded and canonical.
+    pub def dearmor(text: str) throws str -> str:
+        mut n = text.len()
+        mut s = 0
+        while s < n and _age_is_ws(_ab(text, s)): s = s + 1
+        mut e = n
+        while e > s and _age_is_ws(_ab(text, e - 1)): e = e - 1
+        mut body = text.slice(s, e)
+        mut lines = Str.split_keep_empty(body, "\n")
+        if lines.len < 2: raise("age: armor: missing begin or end line")
+        mut b64 = StringBuilder.init(body.len())
+        mut i = 0
+        mut ok = true
+        mut msg = ""
+        while i < lines.len and ok:
+            mut line = lines.get(i)
+            if i < lines.len - 1:
+                if line.ends_with("\r"): line = line.slice(0, line.len() - 1)
+            if i == 0:
+                if line != _age_armor_begin():
+                    ok = false
+                    msg = "age: armor: bad begin line"
+            elif i == lines.len - 1:
+                if line != _age_armor_end():
+                    ok = false
+                    msg = "age: armor: bad end line"
+            else:
+                mut last = i == lines.len - 2
+                if line.len() == 0 or line.len() > 64 or (not last and line.len() != 64):
+                    ok = false
+                    msg = "age: armor: bad line length"
+                mut c = 0
+                while c < line.len() and ok:
+                    mut ch = _ab(line, c)
+                    if not (_age_is_b64(ch) or (ch == 61 and last)):
+                        ok = false
+                        msg = "age: armor: invalid character"
+                    c = c + 1
+                if ok: b64.append(line)
+            i = i + 1
+        mut all = b64.to_owned()
+        b64.free()
+        if not ok: raise(msg)
+        if all.len() % 4 != 0: raise("age: armor: base64 padding missing")
+        mut r: Result[str, str] = _cn_unb64(0, all)
+        if r.is_err: raise("age: armor: non-canonical base64")
+        return r.ok
+
+    # Stream a file through the encryptor in 1 MiB reads.
+    pub def encrypt_file(in_path: str, out_path: str, recipients: List[AgeRecipient]) throws str:
+        mut enc = AgeEncryptor.init(recipients)?
+        mut fin = _tr_c_fopen(in_path, "rb")
+        if (fin as usize) == (0 as usize): raise(f"age: cannot open {in_path}")
+        mut fout = _tr_c_fopen(out_path, "wb")
+        if (fout as usize) == (0 as usize):
+            _tr_c_fclose(fin)
+            raise(f"age: cannot create {out_path}")
+        mut buf = _cn_alloc(1048576)
+        mut failed = ""
+        while true:
+            mut got = _tr_c_fread(buf, 1, 1048576, fin)
+            if got <= 0: break
+            mut chunk = _cn_take(_cn_dup(buf, got), got)
+            mut r: Result[str, str] = enc.update(chunk)
+            if r.is_err:
+                failed = r.err
+                break
+            _age_fwrite(fout, r.ok)
+        if failed.len() == 0:
+            mut t: Result[str, str] = enc.finish()
+            if t.is_err: failed = t.err
+            else: _age_fwrite(fout, t.ok)
+        _cn_free(buf)
+        _tr_c_fclose(fin)
+        _tr_c_fclose(fout)
+        if failed.len() > 0: raise(failed)
+
+    # Stream-decrypt a binary age file. On failure the output file may hold
+    # the plaintext of the chunks that authenticated; delete it.
+    pub def decrypt_file(in_path: str, out_path: str, identities: List[AgeIdentity]) throws str:
+        mut dec = AgeDecryptor.init(identities)
+        mut fin = _tr_c_fopen(in_path, "rb")
+        if (fin as usize) == (0 as usize): raise(f"age: cannot open {in_path}")
+        mut fout = _tr_c_fopen(out_path, "wb")
+        if (fout as usize) == (0 as usize):
+            _tr_c_fclose(fin)
+            raise(f"age: cannot create {out_path}")
+        mut buf = _cn_alloc(1048576)
+        mut failed = ""
+        while true:
+            mut got = _tr_c_fread(buf, 1, 1048576, fin)
+            if got <= 0: break
+            mut chunk = _cn_take(_cn_dup(buf, got), got)
+            mut r: Result[str, str] = dec.update(chunk)
+            if r.is_err:
+                failed = r.err
+                break
+            _age_fwrite(fout, r.ok)
+        if failed.len() == 0:
+            mut t: Result[str, str] = dec.finish()
+            if t.is_err: failed = t.err
+            else: _age_fwrite(fout, t.ok)
+        _cn_free(buf)
+        _tr_c_fclose(fin)
+        _tr_c_fclose(fout)
+        if failed.len() > 0: raise(failed)
+
+def _cn_dup(p: Pointer[char], n: int) -> Pointer[char]:
+    mut q = _cn_alloc(n)
+    _tr_c_memcpy(q, p, n)
+    return q
+
+def _age_fwrite(fp: Pointer[char], s: str):
+    if s.len() == 0: return
+    mut p = s as Pointer[char]
+    _tr_c_fwrite(p, 1, s.len(), fp)
