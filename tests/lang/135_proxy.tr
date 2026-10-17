@@ -1,0 +1,406 @@
+# tests/lang/135_proxy.tr
+# std.net.proxy (SOCKS5 / SOCKS4a / HTTP CONNECT, NO_PROXY, proxy URLs) and
+# HttpSession's proxy support, against a fake origin server, a fake SOCKS
+# proxy and a fake HTTP proxy running in threads on 127.0.0.1.
+
+from std.test import TestRunner
+from std.net.tcp import TcpStream, TcpListener
+from std.net.client import HttpSession, HttpReply
+from std.net.proxy import Proxy, ProxyUrl, Socks5, Socks4, HttpTunnel, NoProxy, ProxyEnv, parse_ipv4, parse_ipv6, basic_credentials
+from std.encoding.hex import Hex
+from std.sys.env import Env
+
+def origin_port() -> int: return 18961
+def socks_port() -> int: return 18962
+def http_proxy_port() -> int: return 18963
+def dead_port() -> int: return 18964
+
+class Fakes implements Sendable:
+    pub origin_served: Atomic[int]
+    pub socks_served:  Atomic[int]
+    pub http_served:   Atomic[int]
+    pub last_atyp:     Atomic[int]   # SOCKS5 address type of the last request (4 = SOCKS4)
+    pub socks_auth_ok: Atomic[int]
+    pub socks_auth_bad: Atomic[int]
+    pub connects:      Atomic[int]   # CONNECT requests seen by the HTTP proxy
+    pub absolute:      Atomic[int]   # absolute-form requests seen by the HTTP proxy
+    pub proxy_auth_seen: Atomic[int]
+
+extend Fakes:
+    pub def init() -> Fakes:
+        mut f = Fakes()
+        f.origin_served = Atomic.new(0)
+        f.socks_served = Atomic.new(0)
+        f.http_served = Atomic.new(0)
+        f.last_atyp = Atomic.new(0)
+        f.socks_auth_ok = Atomic.new(0)
+        f.socks_auth_bad = Atomic.new(0)
+        f.connects = Atomic.new(0)
+        f.absolute = Atomic.new(0)
+        f.proxy_auth_seen = Atomic.new(0)
+        return f
+
+def read_n(c: TcpStream, n: int) -> str:
+    mut buf = ""
+    while buf.len() < n:
+        mut chunk = c.recv(n - buf.len())
+        if chunk.len() == 0: return buf
+        buf = buf + chunk
+    return buf
+
+def byte_at(s: str, i: int) -> int:
+    mut v = 0
+    mut p = s as Pointer[char]
+    unsafe: v = (p.offset(i).read() as int) & 255
+    return v
+
+def bytes_of(v: List[int]) -> str:
+    mut h = ""
+    mut digits = "0123456789abcdef"
+    for b in v:
+        mut hi = digits.slice((b >> 4) & 15, ((b >> 4) & 15) + 1)
+        mut lo = digits.slice(b & 15, (b & 15) + 1)
+        h = h + hi + lo
+    return Hex.decode(h)
+
+def read_head(c: TcpStream) -> str:
+    mut buf = ""
+    while buf.find("\r\n\r\n") < 0:
+        mut chunk = c.recv(1)
+        if chunk.len() == 0: return buf
+        buf = buf + chunk
+    return buf
+
+def header_of(head: str, name: str) -> str:
+    mut lines = head.split_exact("\r\n")
+    for l in lines:
+        mut colon = l.find(":")
+        if colon > 0:
+            mut hn = l.slice(0, colon).to_lower()
+            if hn == name: return l.slice(colon + 1, l.len()).strip()
+    return ""
+
+# ---- origin: answers with what it saw ----
+def serve_origin(f: Shared[Fakes]):
+    mut l = TcpListener.listen("127.0.0.1", origin_port())
+    mut k = 0
+    while k < 10:
+        mut c = l.accept()
+        mut head = read_head(c)
+        mut line = head.slice(0, head.find("\r\n"))
+        mut host = header_of(head, "host")
+        mut pa = header_of(head, "proxy-authorization")
+        mut body = f"line={line};host={host};pa={pa}"
+        mut n = body.len()
+        c.send(f"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {n}\r\nConnection: close\r\n\r\n" + body)
+        c.close()
+        f.origin_served.add(1)
+        k = k + 1
+    l.close()
+
+# Forward one request head from `c` to the origin and the whole response back.
+def relay_one(c: TcpStream, first: str):
+    mut o = TcpStream.connect("127.0.0.1", origin_port())
+    mut head = first
+    if head.len() == 0: head = read_head(c)
+    o.send(head)
+    while true:
+        mut chunk = o.recv(4096)
+        if chunk.len() == 0: break
+        c.send(chunk)
+    o.close()
+
+# ---- SOCKS5 (user ann / s3cret when the client offers auth) + SOCKS4a ----
+def serve_socks(f: Shared[Fakes]):
+    mut l = TcpListener.listen("127.0.0.1", socks_port())
+    mut k = 0
+    while k < 7:
+        mut c = l.accept()
+        mut ver = read_n(c, 1)
+        if byte_at(ver, 0) == 4:
+            mut rest = read_n(c, 7)
+            mut uid = ""
+            mut b = read_n(c, 1)
+            while byte_at(b, 0) != 0:
+                uid = uid + b
+                b = read_n(c, 1)
+            if byte_at(rest, 3) == 0 and byte_at(rest, 4) == 0 and byte_at(rest, 5) == 0:
+                mut nb = read_n(c, 1)
+                while byte_at(nb, 0) != 0:
+                    nb = read_n(c, 1)
+            f.last_atyp.store(4)
+            c.send(bytes_of([0, 0x5A, 0, 0, 0, 0, 0, 0]))
+            relay_one(c, "")
+        else:
+            mut nm = read_n(c, 1)
+            mut methods = read_n(c, byte_at(nm, 0))
+            mut offers_auth = methods.find("\x02") >= 0
+            mut ok = true
+            if offers_auth:
+                c.send(bytes_of([5, 2]))
+                mut av = read_n(c, 2)
+                mut user = read_n(c, byte_at(av, 1))
+                mut pl = read_n(c, 1)
+                mut pw = read_n(c, byte_at(pl, 0))
+                if user == "ann" and pw == "s3cret":
+                    c.send(bytes_of([1, 0]))
+                    f.socks_auth_ok.add(1)
+                else:
+                    c.send(bytes_of([1, 1]))
+                    f.socks_auth_bad.add(1)
+                    ok = false
+            else:
+                c.send(bytes_of([5, 0]))
+            if ok:
+                mut req = read_n(c, 4)
+                mut atyp = byte_at(req, 3)
+                f.last_atyp.store(atyp)
+                if atyp == 1: read_n(c, 4)
+                elif atyp == 4: read_n(c, 16)
+                else:
+                    mut ln = read_n(c, 1)
+                    read_n(c, byte_at(ln, 0))
+                read_n(c, 2)
+                c.send(bytes_of([5, 0, 0, 1, 127, 0, 0, 1, 0, 80]))
+                relay_one(c, "")
+        c.close()
+        f.socks_served.add(1)
+        k = k + 1
+    l.close()
+
+# ---- HTTP proxy: CONNECT (auth "u:p" required when a header is sent) and
+#      absolute-form forwarding ----
+def serve_http_proxy(f: Shared[Fakes]):
+    mut l = TcpListener.listen("127.0.0.1", http_proxy_port())
+    mut want = basic_credentials("u", "p")
+    mut k = 0
+    while k < 5:
+        mut c = l.accept()
+        mut head = read_head(c)
+        mut pa = header_of(head, "proxy-authorization")
+        if pa.len() > 0: f.proxy_auth_seen.add(1)
+        if head.starts_with("CONNECT "):
+            f.connects.add(1)
+            if pa.len() > 0 and pa != want:
+                c.send("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"t\"\r\nContent-Length: 0\r\n\r\n")
+            elif head.starts_with("CONNECT 127.0.0.1:9 "):
+                c.send("HTTP/1.1 200 Connection established\r\n\r\n")
+            else:
+                c.send("HTTP/1.1 200 Connection established\r\n\r\n")
+                relay_one(c, "")
+        else:
+            f.absolute.add(1)
+            relay_one(c, head)
+        c.close()
+        f.http_served.add(1)
+        k = k + 1
+    l.close()
+
+def get_over(s: TcpStream, path: str) -> str:
+    s.send("GET " + path + " HTTP/1.1\r\nHost: target.test\r\nConnection: close\r\n\r\n")
+    mut out = ""
+    while true:
+        mut chunk = s.recv(4096)
+        if chunk.len() == 0: break
+        out = out + chunk
+    s.close()
+    return out
+
+def test_units(t: TestRunner):
+    t.section("addresses, proxy URLs, NO_PROXY")
+    t.assert_eq_str(Hex.encode(parse_ipv4("10.1.2.255")), "0a0102ff", "IPv4 literal")
+    t.assert_eq_int(parse_ipv4("10.1.2").len(), 0, "short IPv4")
+    t.assert_eq_int(parse_ipv4("10.1.2.256").len(), 0, "octet range")
+    t.assert_eq_str(Hex.encode(parse_ipv6("::1")), "00000000000000000000000000000001", "::1")
+    t.assert_eq_str(Hex.encode(parse_ipv6("[2001:db8::8:1]")), "20010db8000000000000000000080001", "bracketed with ::")
+    t.assert_eq_str(Hex.encode(parse_ipv6("::ffff:192.0.2.1")), "00000000000000000000ffffc0000201", "embedded IPv4")
+    t.assert_eq_str(Hex.encode(parse_ipv6("1:2:3:4:5:6:7:8")), "00010002000300040005000600070008", "full form")
+    t.assert_eq_int(parse_ipv6("1:2:3").len(), 0, "too few groups")
+    t.assert_eq_int(parse_ipv6("1::2::3").len(), 0, "two ::")
+    t.assert_eq_int(parse_ipv6("example.com").len(), 0, "not IPv6")
+    mut p: Result[ProxyUrl, str] = ProxyUrl.parse("socks5h://us%40er:p%3Aw@proxy.example:1081")
+    t.assert_true(p.is_ok, "socks5h URL")
+    if p.is_ok:
+        t.assert_eq_str(p.ok.scheme, "socks5h", "scheme")
+        t.assert_eq_str(p.ok.user, "us@er", "percent-decoded user")
+        t.assert_eq_str(p.ok.password, "p:w", "percent-decoded password")
+        t.assert_eq_int(p.ok.port, 1081, "port")
+        t.assert_eq_str(p.ok.display(), "socks5h://proxy.example:1081", "display hides credentials")
+    mut q: Result[ProxyUrl, str] = ProxyUrl.parse("proxy.corp:3128")
+    t.assert_true(q.is_ok and q.ok.scheme == "http" and q.ok.port == 3128, "scheme-less = http")
+    mut r6: Result[ProxyUrl, str] = ProxyUrl.parse("socks5://[::1]")
+    t.assert_true(r6.is_ok and r6.ok.host == "::1" and r6.ok.port == 1080, "IPv6 proxy host, default port")
+    mut bad: Result[ProxyUrl, str] = ProxyUrl.parse("ftp://x")
+    t.assert_true(bad.is_err, "unsupported scheme")
+    mut tls: Result[ProxyUrl, str] = ProxyUrl.parse("https://x")
+    t.assert_true(tls.is_err, "https proxies refused")
+    mut np = NoProxy.parse("localhost, .internal.example,example.org:8080 10.0.0.0/8,192.168.1.7,[::1],fd00::/8")
+    t.assert_true(np.matches("localhost", 80), "exact host")
+    t.assert_true(np.matches("LOCALHOST", 80), "case-insensitive")
+    t.assert_true(np.matches("a.b.internal.example", 443), "suffix")
+    t.assert_true(np.matches("internal.example", 443), "suffix also matches the domain itself")
+    t.assert_false(np.matches("xinternal.example", 443), "label boundary")
+    t.assert_true(np.matches("example.org", 8080), "host:port")
+    t.assert_false(np.matches("example.org", 80), "host:port other port")
+    t.assert_true(np.matches("www.example.org", 8080), "host:port suffix")
+    t.assert_true(np.matches("10.200.3.4", 80), "IPv4 CIDR")
+    t.assert_false(np.matches("11.0.0.1", 80), "outside CIDR")
+    t.assert_true(np.matches("192.168.1.7", 80), "exact IPv4")
+    t.assert_false(np.matches("192.168.1.8", 80), "other IPv4")
+    t.assert_true(np.matches("[::1]", 80), "IPv6 loopback")
+    t.assert_true(np.matches("fd12:3456::1", 80), "IPv6 CIDR")
+    t.assert_false(np.matches("fe80::1", 80), "outside IPv6 CIDR")
+    t.assert_false(np.matches("example.com", 80), "unlisted host")
+    mut star = NoProxy.parse("*")
+    t.assert_true(star.matches("anything.test", 1), "* matches all")
+    mut empty = NoProxy.parse("")
+    t.assert_false(empty.matches("localhost", 80), "empty list")
+    mut e = Env.init()
+    e.set_var("https_proxy", "socks5h://127.0.0.1:1")
+    e.set_var("HTTP_PROXY", "http://127.0.0.1:2")
+    e.set_var("ALL_PROXY", "socks5://127.0.0.1:3")
+    e.set_var("NO_PROXY", ".skip.test")
+    mut pe = ProxyEnv.from_env()
+    t.assert_eq_str(pe.proxy_for("https", "a.test", 443), "socks5h://127.0.0.1:1", "https_proxy")
+    t.assert_eq_str(pe.proxy_for("http", "a.test", 80), "http://127.0.0.1:2", "HTTP_PROXY")
+    t.assert_eq_str(pe.proxy_for("ftp", "a.test", 21), "socks5://127.0.0.1:3", "ALL_PROXY fallback")
+    t.assert_eq_str(pe.proxy_for("https", "x.skip.test", 443), "", "NO_PROXY")
+    mut s = HttpSession.init()
+    t.assert_eq_str(s.proxy_for("https://a.test/"), "", "env proxies are opt-in")
+    s.use_env_proxy()
+    t.assert_eq_str(s.proxy_for("https://a.test/"), "socks5h://127.0.0.1:1", "use_env_proxy")
+    s.set_proxy("http://127.0.0.1:9999")
+    s.set_no_proxy("a.test")
+    t.assert_eq_str(s.proxy_for("https://a.test/"), "", "set_no_proxy")
+    t.assert_eq_str(s.proxy_for("https://b.test/"), "http://127.0.0.1:9999", "explicit proxy wins over env")
+    e.unset_var("https_proxy")
+    e.unset_var("HTTP_PROXY")
+    e.unset_var("ALL_PROXY")
+    e.unset_var("NO_PROXY")
+
+def test_network(t: TestRunner):
+    t.section("fake SOCKS5 / SOCKS4a / HTTP proxies")
+    shared f = Fakes.init()
+    mut t1 = Thread.spawn(serve_origin, f)
+    mut t2 = Thread.spawn(serve_socks, f)
+    mut t3 = Thread.spawn(serve_http_proxy, f)
+    Thread.sleep(200)
+    mut op = origin_port()
+    mut sp = socks_port()
+    mut hp = http_proxy_port()
+    # 1. SOCKS5 to an IPv4 target
+    mut a: Result[TcpStream, str] = Socks5.connect("127.0.0.1", sp, "127.0.0.1", op, "", "", false, 5000)
+    t.assert_true(a.is_ok, "SOCKS5 CONNECT (IPv4)")
+    if a.is_ok:
+        mut body = get_over(a.ok, "/s1")
+        t.assert_contains(body, "line=GET /s1 HTTP/1.1", "request reached the origin")
+        t.assert_eq_int(f.last_atyp.load(), 1, "ATYP 1 (IPv4)")
+    # 2. remote DNS
+    mut b: Result[TcpStream, str] = Socks5.connect("127.0.0.1", sp, "localhost", op, "", "", true, 5000)
+    t.assert_true(b.is_ok, "SOCKS5 CONNECT (domain)")
+    if b.is_ok:
+        mut body2 = get_over(b.ok, "/s2")
+        t.assert_contains(body2, "/s2", "domain target relayed")
+        t.assert_eq_int(f.last_atyp.load(), 3, "ATYP 3 (domain, remote DNS)")
+    # 3. IPv6 literal target
+    mut c: Result[TcpStream, str] = Socks5.connect("127.0.0.1", sp, "[::1]", op, "", "", true, 5000)
+    t.assert_true(c.is_ok, "SOCKS5 CONNECT (IPv6)")
+    if c.is_ok:
+        mut body3 = get_over(c.ok, "/s3")
+        t.assert_contains(body3, "/s3", "IPv6 target relayed")
+        t.assert_eq_int(f.last_atyp.load(), 4, "ATYP 4 (IPv6)")
+    # 4. HttpSession through SOCKS5 with username/password
+    mut s = HttpSession.init()
+    s.set_timeout(5000)
+    s.set_proxy(f"socks5h://ann:s3cret@127.0.0.1:{sp}")
+    mut r4 = s.get(f"http://localhost:{op}/s4")
+    t.assert_true(r4.is_ok(), "HttpSession via socks5h with auth")
+    t.assert_contains(r4.body, "line=GET /s4 HTTP/1.1", "origin-form request through SOCKS")
+    t.assert_contains(r4.body, f"host=localhost:{op}", "Host header names the target")
+    t.assert_eq_int(f.socks_auth_ok.load(), 1, "proxy saw good credentials")
+    # 5. wrong password
+    mut s5 = HttpSession.init()
+    s5.set_timeout(5000)
+    s5.set_proxy(f"socks5h://ann:wrong@127.0.0.1:{sp}")
+    mut r5 = s5.get(f"http://localhost:{op}/s5")
+    t.assert_false(r5.is_ok(), "bad SOCKS5 credentials fail")
+    t.assert_contains(r5.error, "authentication failed", "auth failure message")
+    # 6. SOCKS4a
+    mut s6 = HttpSession.init()
+    s6.set_timeout(5000)
+    s6.set_proxy(f"socks4a://me@127.0.0.1:{sp}")
+    mut r6 = s6.get(f"http://localhost:{op}/s6")
+    t.assert_true(r6.is_ok(), "HttpSession via socks4a")
+    t.assert_eq_int(f.last_atyp.load(), 4, "SOCKS4 request seen")
+    # 7. socks5:// resolves locally
+    mut s7 = HttpSession.init()
+    s7.set_timeout(5000)
+    s7.set_proxy(f"socks5://127.0.0.1:{sp}")
+    mut r7 = s7.get(f"http://localhost:{op}/s7")
+    t.assert_true(r7.is_ok(), "HttpSession via socks5 (local DNS)")
+    t.assert_eq_int(f.last_atyp.load(), 1, "local DNS sends an IPv4 address")
+    # 8. plain http through an HTTP proxy: absolute-form + Proxy-Authorization
+    mut s8 = HttpSession.init()
+    s8.set_timeout(5000)
+    s8.set_proxy(f"http://u:p@127.0.0.1:{hp}")
+    s8.set_header("Proxy-Authorization", "should-be-replaced")
+    mut r8 = s8.get(f"http://127.0.0.1:{op}/abs?q=1")
+    t.assert_true(r8.is_ok(), "HttpSession via HTTP proxy " + r8.error + " " + r8.body)
+    t.assert_contains(r8.body, f"line=GET http://127.0.0.1:{op}/abs?q=1 HTTP/1.1", "absolute-form request target")
+    mut want_pa = basic_credentials("u", "p")
+    t.assert_contains(r8.body, "pa=" + want_pa, "Proxy-Authorization basic")
+    # 9. CONNECT tunnel with credentials (direct API)
+    mut want = basic_credentials("u", "p")
+    mut tun: Result[TcpStream, str] = HttpTunnel.connect("127.0.0.1", hp, "127.0.0.1", op, want, 5000)
+    t.assert_true(tun.is_ok, "CONNECT tunnel")
+    if tun.is_ok:
+        mut body9 = get_over(tun.ok, "/t9")
+        t.assert_contains(body9, "line=GET /t9 HTTP/1.1", "request through the tunnel")
+    # 10. CONNECT with wrong credentials -> 407
+    mut wrong = basic_credentials("u", "nope")
+    mut bad: Result[TcpStream, str] = HttpTunnel.connect("127.0.0.1", hp, "127.0.0.1", op, wrong, 5000)
+    t.assert_true(bad.is_err, "407 is an error")
+    if bad.is_err: t.assert_contains(bad.err, "407", "names the 407")
+    # 11. https through the HTTP proxy uses CONNECT, then TLS end to end (the
+    #     fake proxy has no TLS server behind it, so the handshake fails)
+    mut s11 = HttpSession.init()
+    s11.set_timeout(3000)
+    s11.set_proxy(f"http://127.0.0.1:{hp}")
+    mut r11 = s11.get("https://127.0.0.1:9/")
+    t.assert_true(r11.error.len() > 0, "https via proxy: TLS handshake attempted and failed cleanly")
+    t.assert_eq_int(f.connects.load(), 3, "CONNECT used for https")
+    # 12. NO_PROXY bypass with a dead proxy configured
+    mut s12 = HttpSession.init()
+    s12.set_timeout(5000)
+    s12.set_proxy(f"http://127.0.0.1:{dead_port()}")
+    s12.set_no_proxy("127.0.0.0/8")
+    mut r12 = s12.get(f"http://127.0.0.1:{op}/direct")
+    t.assert_true(r12.is_ok(), "NO_PROXY CIDR connects directly")
+    t.assert_contains(r12.body, "line=GET /direct HTTP/1.1", "origin-form when direct")
+    s12.set_no_proxy("")
+    mut r12b = s12.get(f"http://127.0.0.1:{op}/dead")
+    t.assert_true(r12b.error.len() > 0, "unreachable proxy is an error")
+    # 13. environment proxy
+    mut e = Env.init()
+    e.set_var("http_proxy", f"http://127.0.0.1:{hp}")
+    mut s13 = HttpSession.init()
+    s13.set_timeout(5000)
+    s13.use_env_proxy()
+    mut r13 = s13.get(f"http://127.0.0.1:{op}/env")
+    t.assert_true(r13.is_ok(), "http_proxy from the environment")
+    t.assert_contains(r13.body, f"line=GET http://127.0.0.1:{op}/env HTTP/1.1", "env proxy used")
+    e.unset_var("http_proxy")
+    t1.join()
+    t2.join()
+    t3.join()
+    t.assert_eq_int(f.origin_served.load(), 10, "origin requests")
+    t.assert_eq_int(f.socks_served.load(), 7, "SOCKS sessions")
+    t.assert_eq_int(f.http_served.load(), 5, "HTTP proxy sessions")
+    t.assert_eq_int(f.socks_auth_bad.load(), 1, "one rejected SOCKS login")
+    t.assert_eq_int(f.absolute.load(), 2, "absolute-form requests")
+
+def main():
+    mut t = TestRunner.init("135_proxy")
+    test_units(t)
+    test_network(t)
+    t.summary()

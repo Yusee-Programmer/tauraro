@@ -355,7 +355,7 @@ mut key  = Kdf.pbkdf2_str("correct horse battery staple", salt, 600000, 32)
 
 ## JWT — `std.crypto.jwt`
 
-JSON Web Tokens (RFC 7519), **HS256 only** — HMAC-SHA256 signing, no
+JSON Web Tokens (RFC 7519); `Jwt.encode` / `decode` below are the **HS256-only** shared-secret API (for RS/PS/ES/EdDSA tokens and JWKS see the next section) — HMAC-SHA256 signing, no
 RSA/ECDSA ("RS256"/"ES256") or `"alg":"none"` support (asymmetric
 algorithms are out of scope: this stdlib has no public-key crypto
 primitives yet). Claims are `Dict[str, str]` (string-valued claims only).
@@ -418,6 +418,52 @@ match Jwt.decode(token, "wrong-secret"):
 ```
 
 ---
+
+## JWK, JWKS and JWS - `std.crypto.jwk` (and JWK-based JWTs in `std.crypto.jwt`)
+
+```tauraro
+from std.crypto.jwk import Jwk, JwkSet, Jws
+from std.crypto.jwt import Jwt, JwtOptions
+
+mut set = JwkSet.parse(jwks_json)?                 # {"keys":[...]}
+mut key = set.find("2011-04-29")?                  # by kid
+print(key.thumbprint_b64())                         # RFC 7638, SHA-256
+
+mut signer = Jwk.generate_ec(CURVE_P256)?
+signer.kid = "k1"
+mut token = Jwt.sign_jwk("{\"sub\":\"ann\",\"exp\":4000000000}", signer, "ES256")?
+
+mut opts = JwtOptions.init()
+opts.issuer = "https://issuer.example"
+opts.audience = "my-client"
+opts.algorithms.append("ES256")                     # [] = any alg the key supports
+mut claims = Jwt.verify_jwks(token, set, opts)?     # key chosen by kid + alg
+print(claims.subject(), claims.expires_at())
+```
+
+`Jwk` holds one key as raw bytes: `kty` RSA (`n e` + `d p q dp dq qi`), EC P-256 / P-384 (`x y d`), OKP
+Ed25519 / X25519 (`x d`, RFC 8037) and oct (`k`), plus `kid alg key_use key_ops x5c x5t x5t_s256`.
+
+| API | Description |
+|---|---|
+| `Jwk.parse(json)?`, `Jwk.from_json(ref)?`, `to_json()`, `to_public()?`, `to_public_json()?` | Parse / serialize; the public form drops private members (oct keys have none). |
+| `Jwk.from_pkey(key)?`, `to_pkey()?` | Convert to and from `PKey` (RSA/EC any, Ed25519 public). Private RSA keys are checked by a test private operation, EC private keys against x/y. |
+| `Jwk.oct`, `generate_oct`, `generate_ec`, `generate_ed25519`, `ed25519_from_seed`, `x25519_from_private`, `ed25519_public`, `x25519_public` | Constructors. |
+| `thumbprint_b64()`, `thumbprint(alg)?`, `thumbprint_input()`, `thumbprint_uri()` | RFC 7638 / RFC 9278. |
+| `JwkSet.parse`, `add`, `has`, `find(kid)?`, `candidates(kid, alg)`, `to_json`, `to_public_json` | JWK Sets. `parse` skips keys of unsupported kty/crv and counts them in `skipped`. |
+| `Jws.sign(payload, key, alg, typ)?`, `sign_with_header`, `verify(token, key, allowed)?`, `verify_set(token, set, allowed)?`, `decode_unverified` | JWS compact serialization. |
+| `Jwt.sign_jwk`, `verify_jwk`, `verify_jwks`, `decode_unverified` | JWT on top of JWS; `JwtOptions` (`issuer audience subject algorithms leeway now require_exp typ max_age`) and `JwtClaims` (`get_str get_int get_bool get_json audiences subject issuer expires_at`). |
+
+Algorithms: HS256/384/512, RS256/384/512, PS256/384/512, ES256, ES384, EdDSA. A key is only used with algorithms
+of its own type (an RSA public key is never an HMAC secret), honours its own `alg`, `use` and `key_ops`, HMAC keys
+shorter than the hash and RSA keys under 2048 bits are refused, `"none"` and tokens with a `crit` header are
+rejected, and the signature is checked before any claim is trusted. exp / nbf / iat are checked with `leeway`
+(default 60 s); a token without `exp` is refused unless `require_exp = false`.
+
+Tested by `tests/lang/133_jwk.tr` against the examples of RFC 7515 (A.1-A.3), RFC 7517 (A.1-A.3), RFC 7520
+(4.1, 4.2, 4.4, 3.4), RFC 7638 (3.1) and RFC 8037 (A.1-A.5), including byte-exact RS256, HS256 and EdDSA output.
+Limitations: no P-521 / ES512, no RSA private JWKs without the CRT members, no multi-prime RSA (`oth`), no JWE,
+no `x5c` chain validation, no JSON (general / flattened) JWS serialization.
 
 ## Secure randomness — `std.crypto.random`
 

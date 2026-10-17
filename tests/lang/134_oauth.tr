@@ -1,0 +1,550 @@
+# tests/lang/134_oauth.tr
+# std.net.oauth against a fake OAuth 2.0 / OpenID Connect provider running in
+# a thread on 127.0.0.1 (plain HTTP). The provider signs ID tokens with the
+# RFC 7515 A.3 P-256 key, checks PKCE S256 and every client authentication
+# method, and implements refresh, client credentials, the device grant,
+# revocation, introspection, UserInfo and a protected API.
+
+from std.test import TestRunner
+from std.net.tcp import TcpStream, TcpListener
+from std.net.client import HttpSession, HttpReply, ClientRequest
+from std.net.oauth import OAuthClient, OAuthToken, AuthRequest, DeviceAuth, Introspection, ProviderMetadata, AuthorizedSession, form_get, form_encode, pkce_challenge
+from std.crypto.jwk import Jwk, JwkSet
+from std.crypto.jwt import Jwt, JwtOptions, JwtClaims
+from std.encoding.base64 import Base64
+from std.encoding.json import Json
+from std.sys.time import Clock
+
+def port() -> int: return 18971
+def issuer() -> str: return "http://127.0.0.1:18971"
+
+def server_key_json() -> str: return "{\"kty\":\"EC\",\"kid\":\"srv-1\",\"crv\":\"P-256\",\"x\":\"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU\",\"y\":\"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0\",\"d\":\"jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI\"}"
+def client_key_json() -> str: return "{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"d\":\"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A\",\"x\":\"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo\"}"
+
+class Provider implements Sendable:
+    pub jwks_fetches: Atomic[int]
+    pub requests:     Atomic[int]
+    pub pkce_ok:      Atomic[int]
+    pub pkce_bad:     Atomic[int]
+    pub basic_auths:  Atomic[int]
+    pub post_auths:   Atomic[int]
+    pub jwt_auths:    Atomic[int]
+    pub public_auths: Atomic[int]
+
+extend Provider:
+    pub def init() -> Provider:
+        mut p = Provider()
+        p.jwks_fetches = Atomic.new(0)
+        p.requests = Atomic.new(0)
+        p.pkce_ok = Atomic.new(0)
+        p.pkce_bad = Atomic.new(0)
+        p.basic_auths = Atomic.new(0)
+        p.post_auths = Atomic.new(0)
+        p.jwt_auths = Atomic.new(0)
+        p.public_auths = Atomic.new(0)
+        return p
+
+# One authorization code the provider handed out.
+class Grant:
+    pub code:      str
+    pub client_id: str
+    pub redirect:  str
+    pub challenge: str
+    pub nonce:     str
+    pub scenario:  str
+    pub used:      bool
+
+class Http:
+    pub method: str
+    pub path:   str
+    pub query:  str
+    pub head:   str
+    pub body:   str
+
+def header_of(head: str, name: str) -> str:
+    mut lines = head.split_exact("\r\n")
+    for l in lines:
+        mut colon = l.find(":")
+        if colon > 0:
+            mut hn = l.slice(0, colon).to_lower()
+            if hn == name: return l.slice(colon + 1, l.len()).strip()
+    return ""
+
+def read_http(c: TcpStream) -> Http:
+    mut buf = ""
+    while buf.find("\r\n\r\n") < 0:
+        mut chunk = c.recv(4096)
+        if chunk.len() == 0: break
+        buf = buf + chunk
+    mut h = Http()
+    mut he = buf.find("\r\n\r\n")
+    if he < 0: he = buf.len()
+    h.head = buf.slice(0, he)
+    h.body = ""
+    if he + 4 <= buf.len(): h.body = buf.slice(he + 4, buf.len())
+    mut cl = header_of(h.head, "content-length")
+    mut want = 0
+    if cl.len() > 0: want = int(cl)
+    while h.body.len() < want:
+        mut more = c.recv(want - h.body.len())
+        if more.len() == 0: break
+        h.body = h.body + more
+    mut line = h.head.slice(0, h.head.find("\r\n"))
+    # (slices, not split_exact elements: a List[str] element stored in a
+    # field is not retained -- see the compiler notes in the report)
+    mut sp1 = line.find(" ")
+    h.method = line.slice(0, sp1)
+    mut rest = line.slice(sp1 + 1, line.len())
+    mut target = rest.slice(0, rest.find(" "))
+    mut qi = target.find("?")
+    h.path = target
+    h.query = ""
+    if qi >= 0:
+        h.path = target.slice(0, qi)
+        h.query = target.slice(qi + 1, target.len())
+    return h
+
+def respond(c: TcpStream, status: int, extra: str, body: str):
+    mut reason = "OK"
+    if status == 302: reason = "Found"
+    if status == 400: reason = "Bad Request"
+    if status == 401: reason = "Unauthorized"
+    if status == 404: reason = "Not Found"
+    mut n = body.len()
+    c.send(f"HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {n}\r\nConnection: close\r\n" + extra + "\r\n" + body)
+
+def err_json(code: str, desc: str) -> str:
+    return "{\"error\":\"" + code + "\",\"error_description\":\"" + desc + "\"}"
+
+def contains(l: List[str], s: str) -> bool:
+    for x in l:
+        if x == s: return true
+    return false
+
+# Which client authenticated this request ("" = authentication failed).
+def authenticate(f: Shared[Provider], h: Http, ckey: Jwk) -> str:
+    mut auth = header_of(h.head, "authorization")
+    if auth.starts_with("Basic "):
+        mut dec = Base64.decode(auth.slice(6, auth.len()))
+        if dec == "app:secret":
+            f.basic_auths.add(1)
+            return "app"
+        return ""
+    mut at = form_get(h.body, "client_assertion_type")
+    if at.len() > 0:
+        if at != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer": return ""
+        mut a = form_get(h.body, "client_assertion")
+        mut o = JwtOptions.init()
+        o.issuer = "jwt-app"
+        o.subject = "jwt-app"
+        o.audience = issuer() + "/token"
+        mut r: Result[JwtClaims, str] = Jwt.verify_jwk(a, ckey, o)
+        if r.is_ok and form_get(h.body, "client_id") == "jwt-app":
+            f.jwt_auths.add(1)
+            return "jwt-app"
+        return ""
+    mut cid = form_get(h.body, "client_id")
+    mut sec = form_get(h.body, "client_secret")
+    if cid == "app" and sec == "secret":
+        f.post_auths.add(1)
+        return "app"
+    if cid == "public-app" and sec.len() == 0:
+        f.public_auths.add(1)
+        return "public-app"
+    return ""
+
+def id_token_for(g: Grant, skey: Jwk, access: str) -> str:
+    mut now = Clock.timestamp()
+    mut aud = g.client_id
+    mut exp = now + 600
+    mut iat = now
+    mut nonce = g.nonce
+    mut at_hash = OAuthClient.token_hash(access, "ES256")
+    if g.scenario == "foreign": aud = "someone-else"
+    if g.scenario == "expired":
+        exp = now - 1000
+        iat = now - 2000
+    if g.scenario == "badnonce": nonce = "not-the-nonce"
+    if g.scenario == "badhash": at_hash = "AAAAAAAAAAAAAAAAAAAAAA"
+    mut iss = issuer()
+    mut claims = "{\"iss\":\"" + iss + "\",\"sub\":\"ann\",\"aud\":\"" + aud + "\",\"exp\":" + str(exp) + ",\"iat\":" + str(iat) + ",\"nonce\":\"" + nonce + "\",\"at_hash\":\"" + at_hash + "\"}"
+    mut r: Result[str, str] = Jwt.sign_jwk(claims, skey, "ES256")
+    return r.ok
+
+def serve(f: Shared[Provider]):
+    mut skr: Result[Jwk, str] = Jwk.parse(server_key_json())
+    mut skey = skr.ok
+    mut ckr: Result[Jwk, str] = Jwk.parse(client_key_json())
+    mut cpriv = ckr.ok
+    mut cpr: Result[Jwk, str] = cpriv.to_public()
+    mut ckey = cpr.ok
+    mut grants: List[Grant] = []
+    mut access: List[str] = []
+    mut refresh: List[str] = []
+    mut revoked: List[str] = []
+    mut polls = 0
+    mut counter = 0
+    mut l = TcpListener.listen("127.0.0.1", port())
+    mut running = true
+    while running:
+        mut c = l.accept()
+        mut h = read_http(c)
+        f.requests.add(1)
+        mut iss = issuer()
+        if h.path == "/shutdown":
+            respond(c, 200, "", "{}")
+            running = false
+        elif h.path == "/.well-known/openid-configuration":
+            mut meta = "{\"issuer\":\"" + iss + "\",\"authorization_endpoint\":\"" + iss + "/authorize\",\"token_endpoint\":\"" + iss + "/token\",\"userinfo_endpoint\":\"" + iss + "/userinfo\",\"jwks_uri\":\"" + iss + "/jwks\",\"revocation_endpoint\":\"" + iss + "/revoke\",\"introspection_endpoint\":\"" + iss + "/introspect\",\"device_authorization_endpoint\":\"" + iss + "/device\",\"code_challenge_methods_supported\":[\"S256\"]}"
+            respond(c, 200, "", meta)
+        elif h.path == "/jwks":
+            f.jwks_fetches.add(1)
+            mut set = JwkSet.init()
+            set.add(skey)
+            mut pj = set.to_public_json()
+            respond(c, 200, "", pj)
+        elif h.path == "/authorize":
+            counter = counter + 1
+            mut g = Grant()
+            g.code = "code-" + str(counter)
+            g.client_id = form_get(h.query, "client_id")
+            g.redirect = form_get(h.query, "redirect_uri")
+            g.challenge = form_get(h.query, "code_challenge")
+            g.nonce = form_get(h.query, "nonce")
+            g.scenario = form_get(h.query, "scenario")
+            g.used = false
+            mut st = form_get(h.query, "state")
+            mut ok = form_get(h.query, "response_type") == "code" and form_get(h.query, "code_challenge_method") == "S256"
+            grants.append(g)
+            if ok:
+                mut loc = g.redirect + "?code=" + g.code + "&state=" + form_encode(st) + "&iss=" + form_encode(iss)
+                respond(c, 302, "Location: " + loc + "\r\n", "")
+            else:
+                respond(c, 400, "", err_json("invalid_request", "bad authorization request"))
+        elif h.path == "/token":
+            mut who = authenticate(f, h, ckey)
+            mut gt = form_get(h.body, "grant_type")
+            if who.len() == 0:
+                respond(c, 401, "WWW-Authenticate: Basic\r\n", err_json("invalid_client", "client authentication failed"))
+            elif gt == "authorization_code":
+                mut code = form_get(h.body, "code")
+                mut found = -1
+                mut i = 0
+                while i < grants.len():
+                    if grants[i].code == code: found = i
+                    i = i + 1
+                if found < 0 or grants[found].used or grants[found].client_id != who:
+                    respond(c, 400, "", err_json("invalid_grant", "unknown or used code"))
+                elif form_get(h.body, "redirect_uri") != grants[found].redirect:
+                    respond(c, 400, "", err_json("invalid_grant", "redirect_uri mismatch"))
+                elif pkce_challenge(form_get(h.body, "code_verifier")) != grants[found].challenge:
+                    f.pkce_bad.add(1)
+                    grants[found].used = true
+                    respond(c, 400, "", err_json("invalid_grant", "PKCE verification failed"))
+                else:
+                    f.pkce_ok.add(1)
+                    grants[found].used = true
+                    counter = counter + 1
+                    mut at = "at-" + str(counter)
+                    mut rt = "rt-" + str(counter)
+                    access.append(at)
+                    refresh.append(rt)
+                    mut idt = id_token_for(grants[found], skey, at)
+                    respond(c, 200, "", "{\"access_token\":\"" + at + "\",\"token_type\":\"Bearer\",\"expires_in\":3600,\"refresh_token\":\"" + rt + "\",\"scope\":\"openid profile\",\"id_token\":\"" + idt + "\"}")
+            elif gt == "refresh_token":
+                mut rt0 = form_get(h.body, "refresh_token")
+                if not contains(refresh, rt0) or contains(revoked, rt0):
+                    respond(c, 400, "", err_json("invalid_grant", "refresh token is invalid"))
+                else:
+                    counter = counter + 1
+                    mut at2 = "at-" + str(counter)
+                    access.append(at2)
+                    respond(c, 200, "", "{\"access_token\":\"" + at2 + "\",\"token_type\":\"bearer\",\"expires_in\":\"3600\"}")
+            elif gt == "client_credentials":
+                counter = counter + 1
+                mut at3 = "cc-" + str(counter)
+                access.append(at3)
+                mut sc = form_get(h.body, "scope")
+                respond(c, 200, "", "{\"access_token\":\"" + at3 + "\",\"token_type\":\"Bearer\",\"expires_in\":60,\"scope\":\"" + sc + "\"}")
+            elif gt == "urn:ietf:params:oauth:grant-type:device_code":
+                mut dc = form_get(h.body, "device_code")
+                if dc == "dc-deny":
+                    respond(c, 400, "", err_json("access_denied", "the user said no"))
+                elif dc == "dc-ok" and polls == 0:
+                    polls = 1
+                    respond(c, 400, "", err_json("authorization_pending", ""))
+                elif dc == "dc-ok":
+                    counter = counter + 1
+                    mut at4 = "dv-" + str(counter)
+                    access.append(at4)
+                    respond(c, 200, "", "{\"access_token\":\"" + at4 + "\",\"token_type\":\"Bearer\"}")
+                else:
+                    respond(c, 400, "", err_json("expired_token", ""))
+            else:
+                respond(c, 400, "", err_json("unsupported_grant_type", gt))
+        elif h.path == "/device":
+            mut sc2 = form_get(h.body, "scope")
+            mut dcode = "dc-ok"
+            if sc2 == "deny": dcode = "dc-deny"
+            respond(c, 200, "", "{\"device_code\":\"" + dcode + "\",\"user_code\":\"WDJB-MJHT\",\"verification_uri\":\"" + iss + "/activate\",\"verification_uri_complete\":\"" + iss + "/activate?user_code=WDJB-MJHT\",\"expires_in\":120,\"interval\":1}")
+        elif h.path == "/revoke":
+            mut who2 = authenticate(f, h, ckey)
+            if who2.len() == 0:
+                respond(c, 401, "", err_json("invalid_client", ""))
+            else:
+                mut tk = form_get(h.body, "token")
+                revoked.append(tk)
+                respond(c, 200, "", "")
+        elif h.path == "/introspect":
+            mut who3 = authenticate(f, h, ckey)
+            mut tk2 = form_get(h.body, "token")
+            if who3.len() == 0:
+                respond(c, 401, "", err_json("invalid_client", ""))
+            elif contains(access, tk2) and not contains(revoked, tk2):
+                respond(c, 200, "", "{\"active\":true,\"scope\":\"openid profile\",\"client_id\":\"app\",\"sub\":\"ann\",\"exp\":4000000000,\"token_type\":\"Bearer\"}")
+            else:
+                respond(c, 200, "", "{\"active\":false}")
+        elif h.path == "/userinfo" or h.path == "/api":
+            mut auth = header_of(h.head, "authorization")
+            mut tk3 = ""
+            if auth.starts_with("Bearer "): tk3 = auth.slice(7, auth.len())
+            if contains(access, tk3) and not contains(revoked, tk3):
+                if h.path == "/userinfo":
+                    respond(c, 200, "", "{\"sub\":\"ann\",\"email\":\"ann@example.test\",\"email_verified\":true}")
+                else:
+                    respond(c, 200, "", "{\"token\":\"" + tk3 + "\"}")
+            else:
+                respond(c, 401, "WWW-Authenticate: Bearer error=\"invalid_token\"\r\n", err_json("invalid_token", "bad token"))
+        else:
+            respond(c, 404, "", err_json("not_found", h.path))
+        c.close()
+    l.close()
+
+def redirect_uri() -> str: return "http://127.0.0.1:18979/callback"
+
+# Play the user agent: GET the authorization URL and return the Location.
+def authorize(url: str) -> str:
+    mut s = HttpSession.init()
+    s.set_follow_redirects(false)
+    s.set_timeout(5000)
+    mut r = s.get(url)
+    return r.header("Location")
+
+def new_client(id: str, secret: str) -> OAuthClient:
+    mut c = OAuthClient.init(id, secret, redirect_uri())
+    c.session.set_timeout(5000)
+    return c
+
+def code_flow(c: OAuthClient, scenario: str) -> Result[OAuthToken, str]:
+    c.extra_auth_params = "scenario=" + scenario
+    mut a: Result[AuthRequest, str] = c.begin_authorization("openid profile")
+    mut loc = authorize(a.ok.url)
+    mut r: Result[OAuthToken, str] = c.handle_callback(loc, a.ok)
+    return r
+
+def test_flows(t: TestRunner, f: Shared[Provider]):
+    t.section("discovery + authorization code + PKCE")
+    mut c = new_client("app", "secret")
+    mut m: Result[ProviderMetadata, str] = c.discover(issuer())
+    t.assert_true(m.is_ok, "discovery")
+    if m.is_err: print("  " + m.err)
+    t.assert_eq_str(c.meta.token_endpoint, issuer() + "/token", "token endpoint from metadata")
+    t.assert_eq_str(c.meta.device_authorization_endpoint, issuer() + "/device", "device endpoint")
+    mut bogus = new_client("app", "secret")
+    mut bm: Result[ProviderMetadata, str] = bogus.discover(issuer() + "/nope")
+    t.assert_true(bm.is_err, "discovery of an unknown issuer fails")
+    mut a: Result[AuthRequest, str] = c.begin_authorization("openid profile")
+    t.assert_true(a.is_ok, "begin_authorization")
+    mut req = a.ok
+    t.assert_eq_int(req.code_verifier.len(), 43, "verifier is 43 characters")
+    t.assert_contains(req.url, "code_challenge_method=S256", "S256 challenge")
+    t.assert_contains(req.url, "state=" + form_encode(req.state), "state in URL")
+    t.assert_contains(req.url, "nonce=", "nonce in URL")
+    t.assert_contains(req.url, "scope=openid%20profile", "scope encoded")
+    t.assert_contains(req.url, "redirect_uri=" + form_encode(redirect_uri()), "redirect_uri")
+    mut loc = authorize(req.url)
+    t.assert_starts_with(loc, redirect_uri() + "?code=", "provider redirected with a code")
+    mut tr: Result[OAuthToken, str] = c.handle_callback(loc, req)
+    t.assert_true(tr.is_ok, "code exchange")
+    if tr.is_err: print("  " + tr.err)
+    mut tok = tr.ok
+    t.assert_starts_with(tok.access_token, "at-", "access token")
+    t.assert_true(tok.has_refresh(), "refresh token")
+    t.assert_eq_int(tok.expires_in, 3600, "expires_in")
+    t.assert_false(tok.is_expired(60), "fresh token")
+    t.assert_eq_int(f.basic_auths.load(), 1, "client_secret_basic used")
+    t.assert_eq_int(f.pkce_ok.load(), 1, "provider verified PKCE")
+    mut idt: Result[JwtClaims, str] = c.validate_id_token(tok.id_token, req.nonce, tok.access_token)
+    t.assert_true(idt.is_ok, "ID token valid")
+    if idt.is_err: print("  " + idt.err)
+    if idt.is_ok:
+        t.assert_eq_str(idt.ok.subject(), "ann", "sub")
+        t.assert_eq_str(idt.ok.kid, "srv-1", "signed by the JWKS key")
+    mut again: Result[JwtClaims, str] = c.validate_id_token(tok.id_token, req.nonce, "")
+    t.assert_true(again.is_ok, "second validation")
+    t.assert_eq_int(f.jwks_fetches.load(), 1, "JWKS fetched once and cached")
+    mut wrong_nonce: Result[JwtClaims, str] = c.validate_id_token(tok.id_token, "other", "")
+    t.assert_true(wrong_nonce.is_err, "nonce checked by the client")
+    mut wrong_at: Result[JwtClaims, str] = c.validate_id_token(tok.id_token, req.nonce, "at-999")
+    t.assert_true(wrong_at.is_err, "at_hash checked against the access token")
+    mut reuse: Result[OAuthToken, str] = c.handle_callback(loc, req)
+    t.assert_true(reuse.is_err, "a code works once")
+    if reuse.is_err: t.assert_contains(reuse.err, "invalid_grant", "invalid_grant surfaced")
+    # state mismatch
+    mut b: Result[AuthRequest, str] = c.begin_authorization("openid")
+    mut locb = authorize(b.ok.url)
+    mut breq = b.ok
+    breq.state = "forged"
+    mut sm: Result[OAuthToken, str] = c.handle_callback(locb, breq)
+    t.assert_true(sm.is_err, "state mismatch rejected")
+    if sm.is_err: t.assert_contains(sm.err, "state", "state message")
+    # wrong PKCE verifier
+    mut d: Result[AuthRequest, str] = c.begin_authorization("openid")
+    mut locd = authorize(d.ok.url)
+    mut dcode = form_get(locd.slice(locd.find("?") + 1, locd.len()), "code")
+    mut pk: Result[OAuthToken, str] = c.exchange_code(dcode, "not-the-verifier-not-the-verifier-not-the-v")
+    t.assert_true(pk.is_err, "wrong code_verifier")
+    if pk.is_err: t.assert_contains(pk.err, "PKCE", "server-side PKCE failure surfaced")
+    t.assert_eq_int(f.pkce_bad.load(), 1, "provider rejected the verifier")
+    # error in the callback
+    mut ce: Result[OAuthToken, str] = c.handle_callback(redirect_uri() + "?error=access_denied&error_description=user%20cancelled&state=" + req.state, req)
+    t.assert_true(ce.is_err, "error callback")
+    if ce.is_err: t.assert_contains(ce.err, "access_denied: user cancelled", "error and description")
+
+    t.section("refresh, ensure_fresh, client credentials")
+    mut rf: Result[OAuthToken, str] = c.refresh(tok.refresh_token, "")
+    t.assert_true(rf.is_ok, "refresh grant")
+    if rf.is_ok:
+        t.assert_true(rf.ok.access_token != tok.access_token, "new access token")
+        t.assert_eq_str(rf.ok.refresh_token, tok.refresh_token, "refresh token kept when not rotated")
+        t.assert_eq_int(rf.ok.expires_in, 3600, "string expires_in accepted")
+    mut bad_rt: Result[OAuthToken, str] = c.refresh("rt-bogus", "")
+    t.assert_true(bad_rt.is_err, "bogus refresh token")
+    if bad_rt.is_err: t.assert_contains(bad_rt.err, "oauth: invalid_grant: refresh token is invalid", "invalid_grant text")
+    mut stale = tok
+    stale.obtained_at = 1000
+    t.assert_true(stale.is_expired(0), "old token is expired")
+    mut ef: Result[OAuthToken, str] = c.ensure_fresh(stale, 30)
+    t.assert_true(ef.is_ok and ef.ok.access_token.starts_with("at-") and not ef.ok.is_expired(30), "ensure_fresh refreshed it")
+    mut cc: Result[OAuthToken, str] = c.client_credentials("read write")
+    t.assert_true(cc.is_ok and cc.ok.scope == "read write", "client credentials")
+    mut post = new_client("app", "secret")
+    post.discover(issuer())
+    post.set_auth_method("client_secret_post")
+    mut pc: Result[OAuthToken, str] = post.client_credentials("x")
+    t.assert_true(pc.is_ok, "client_secret_post")
+    t.assert_eq_int(f.post_auths.load(), 1, "provider saw form credentials")
+    mut badc = new_client("app", "wrong")
+    badc.discover(issuer())
+    mut bc: Result[OAuthToken, str] = badc.client_credentials("x")
+    t.assert_true(bc.is_err, "wrong secret")
+    if bc.is_err: t.assert_contains(bc.err, "invalid_client", "invalid_client surfaced")
+
+    t.section("public client, private_key_jwt")
+    mut pub_c = new_client("public-app", "")
+    pub_c.discover(issuer())
+    t.assert_eq_str(pub_c.auth_method, "none", "no secret -> none")
+    mut pt: Result[OAuthToken, str] = code_flow(pub_c, "")
+    t.assert_true(pt.is_ok, "public client code flow with PKCE")
+    t.assert_eq_int(f.public_auths.load(), 1, "client_id only")
+    mut jc = new_client("jwt-app", "")
+    jc.discover(issuer())
+    mut ckr: Result[Jwk, str] = Jwk.parse(client_key_json())
+    mut uj: Result[str, str] = jc.client_assertion("x")
+    t.assert_true(uj.is_err, "no key yet")
+    jc.use_private_key_jwt(ckr.ok, "EdDSA")
+    mut jt: Result[OAuthToken, str] = jc.client_credentials("svc")
+    t.assert_true(jt.is_ok, "private_key_jwt client credentials")
+    if jt.is_err: print("  " + jt.err)
+    t.assert_eq_int(f.jwt_auths.load(), 1, "provider verified the client assertion")
+    mut other: Result[Jwk, str] = Jwk.generate_ed25519()
+    mut jc2 = new_client("jwt-app", "")
+    jc2.discover(issuer())
+    jc2.use_private_key_jwt(other.ok, "EdDSA")
+    mut jt2: Result[OAuthToken, str] = jc2.client_credentials("svc")
+    t.assert_true(jt2.is_err, "assertion signed with an unknown key")
+
+    t.section("device grant")
+    mut dv: Result[DeviceAuth, str] = c.device_authorize("openid")
+    t.assert_true(dv.is_ok, "device authorization")
+    if dv.is_ok:
+        t.assert_eq_str(dv.ok.user_code, "WDJB-MJHT", "user code")
+        t.assert_contains(dv.ok.verification_uri_complete, "user_code=", "complete URI")
+        t.assert_eq_int(dv.ok.interval, 1, "interval")
+        mut start = Clock.now_ms()
+        mut dt: Result[OAuthToken, str] = c.device_poll(dv.ok, 20000)
+        t.assert_true(dt.is_ok and dt.ok.access_token.starts_with("dv-"), "token after authorization_pending")
+        t.assert_true(Clock.now_ms() - start >= 900, "waited one interval")
+    mut dd: Result[DeviceAuth, str] = c.device_authorize("deny")
+    mut dn: Result[OAuthToken, str] = c.device_poll(dd.ok, 20000)
+    t.assert_true(dn.is_err, "denied device grant")
+    if dn.is_err: t.assert_contains(dn.err, "access_denied", "access_denied surfaced")
+
+    t.section("introspection, revocation, userinfo")
+    mut fresh: Result[OAuthToken, str] = c.refresh(tok.refresh_token, "")
+    mut at = fresh.ok.access_token
+    mut ins: Result[Introspection, str] = c.introspect(at, "access_token")
+    t.assert_true(ins.is_ok and ins.ok.active and ins.ok.sub == "ann", "introspection: active")
+    if ins.is_ok: t.assert_eq_str(ins.ok.get_str("token_type"), "Bearer", "raw member access")
+    mut ui: Result[str, str] = c.userinfo(at)
+    t.assert_true(ui.is_ok, "userinfo")
+    if ui.is_ok: t.assert_contains(ui.ok, "ann@example.test", "userinfo body")
+    c.revoke(at, "access_token")
+    mut ins2: Result[Introspection, str] = c.introspect(at, "")
+    t.assert_true(ins2.is_ok and not ins2.ok.active, "revoked token is inactive")
+    mut ui2: Result[str, str] = c.userinfo(at)
+    t.assert_true(ui2.is_err, "userinfo with a revoked token")
+    if ui2.is_err: t.assert_contains(ui2.err, "invalid_token", "invalid_token surfaced")
+
+    t.section("ID token rejection")
+    mut fa: Result[OAuthToken, str] = code_flow(c, "foreign")
+    mut fv: Result[JwtClaims, str] = c.validate_id_token(fa.ok.id_token, "", "")
+    t.assert_true(fv.is_err, "foreign audience rejected")
+    if fv.is_err: t.assert_contains(fv.err, "audience", "audience message")
+    mut ex: Result[OAuthToken, str] = code_flow(c, "expired")
+    mut xv: Result[JwtClaims, str] = c.validate_id_token(ex.ok.id_token, "", "")
+    t.assert_true(xv.is_err, "expired ID token rejected")
+    if xv.is_err: t.assert_contains(xv.err, "expired", "expiry message")
+    mut bn: Result[OAuthToken, str] = code_flow(c, "badhash")
+    mut hv: Result[JwtClaims, str] = c.validate_id_token(bn.ok.id_token, "", bn.ok.access_token)
+    t.assert_true(hv.is_err, "bad at_hash rejected")
+    mut other_iss = new_client("app", "secret")
+    other_iss.discover(issuer())
+    other_iss.meta.issuer = "https://evil.test"
+    mut iv: Result[JwtClaims, str] = other_iss.validate_id_token(tok.id_token, "", "")
+    t.assert_true(iv.is_err, "issuer mismatch rejected")
+
+    t.section("authorized session")
+    mut s1: Result[OAuthToken, str] = c.refresh(tok.refresh_token, "")
+    mut api = c.authorized_session(s1.ok)
+    api.session.set_timeout(5000)
+    mut r1 = api.get(issuer() + "/api")
+    t.assert_true(r1.is_ok(), "Bearer request")
+    t.assert_contains(r1.body, s1.ok.access_token, "the current token was sent")
+    t.assert_eq_int(api.refreshes, 0, "no refresh needed")
+    api.token.obtained_at = 1000
+    mut r2 = api.get(issuer() + "/api")
+    t.assert_true(r2.is_ok() and api.refreshes == 1, "expired token refreshed before the request")
+    mut cur = api.token.access_token
+    c.revoke(cur, "access_token")
+    mut r3 = api.get(issuer() + "/api")
+    t.assert_true(r3.is_ok() and api.refreshes == 2, "401 -> refresh -> retry")
+    t.assert_true(api.token.access_token != cur, "token replaced")
+    c.revoke(api.token.refresh_token, "refresh_token")
+    c.revoke(api.token.access_token, "access_token")
+    mut r4 = api.get(issuer() + "/api")
+    t.assert_eq_int(r4.status, 401, "401 when the refresh token is revoked too")
+    t.assert_contains(api.last_error, "invalid_grant", "refresh failure recorded")
+
+def main():
+    mut t = TestRunner.init("134_oauth")
+    shared f = Provider.init()
+    mut th = Thread.spawn(serve, f)
+    Thread.sleep(200)
+    test_flows(t, f)
+    mut s = HttpSession.init()
+    s.set_timeout(3000)
+    s.get(issuer() + "/shutdown")
+    th.join()
+    t.assert_gt_int(f.requests.load(), 40, "provider handled the requests")
+    t.summary()

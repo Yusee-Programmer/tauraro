@@ -526,13 +526,87 @@ fails to decode sets `reply.error`. `download_to_file` and `stream_get` ask for 
 bytes unchanged. `s.set_decompress(false)` turns it off; an explicit `Accept-Encoding` header is
 sent as given. Decoded bodies are capped by `set_max_body_bytes`.
 
+Proxies: `s.set_proxy("socks5h://user:pw@host:1080")` / `"http://proxy:3128"`, `s.set_no_proxy("localhost,.corp,10.0.0.0/8")`, and the opt-in `s.use_env_proxy()` (see `std.net.proxy` below).
+
 ### Limitations
 
 - `https://` uses `std.net.tls` (TLS 1.3 only, verified against the system roots); servers that only speak TLS 1.2 fail with a handshake error.
-- TCP connect is blocking with no connect timeout; IPv4 only; no proxies, no keep-alive/connection reuse, no `Expect: 100-continue`, no `user:pass@host` or IPv6-literal URLs.
+- TCP connect is blocking with no connect timeout; IPv4 only; no keep-alive/connection reuse, no `Expect: 100-continue`, no `user:pass@host` or IPv6-literal URLs.
 - Bodies are binary-safe everywhere (response bodies, request bodies, `stream_get` chunks and downloads keep NUL bytes).
 - No public-suffix list for cookies (a dot-less `Domain` is rejected as a heuristic); `SameSite` is stored but not enforced; `Secure` cookies set over plain http are accepted but only sent over https.
 - A closure passed as `on_chunk` cannot re-assign a captured `str` local (compiler limitation); accumulate into a class field instead.
+
+
+---
+
+## Proxies - `std.net.proxy`
+
+```tauraro
+from std.net.proxy import Proxy, ProxyUrl, Socks5, HttpTunnel
+from std.net.tls import TlsStream, TlsOptions
+
+mut px = ProxyUrl.parse("socks5h://user:pw@127.0.0.1:1080")?
+mut tcp = Proxy.connect(px, "example.com", 443, 10000)?      # connected TcpStream
+mut tls = TlsStream.wrap_fd(tcp.fd, "example.com", TlsOptions.default())?
+
+mut s = HttpSession.init()
+s.set_proxy("http://u:p@proxy:3128")        # or socks5://, socks5h://, socks4://, socks4a://
+s.set_no_proxy("localhost,.internal,10.0.0.0/8,[::1],example.org:8080")
+s.use_env_proxy()                            # opt in to HTTP_PROXY / HTTPS_PROXY / ALL_PROXY / NO_PROXY
+```
+
+| API | Description |
+|---|---|
+| `ProxyUrl.parse(url)?` | `scheme://[user[:pw]@]host[:port]` (credentials percent-decoded; scheme-less = `http`). `https://` proxies are rejected. |
+| `Socks5.connect(proxy_host, proxy_port, host, port, user, password, remote_dns, timeout_ms)?` | RFC 1928 CONNECT with IPv4 / IPv6 / domain targets; RFC 1929 auth when `user` is non-empty; `remote_dns` sends the name to the proxy (`socks5h://`), otherwise the client resolves it (IPv4). |
+| `Socks4.connect(..., user_id, remote_dns, timeout_ms)?` | SOCKS4 / SOCKS4a (IPv4 targets). |
+| `HttpTunnel.connect(proxy_host, proxy_port, host, port, proxy_auth, timeout_ms)?` | HTTP CONNECT; `proxy_auth` is a full header value, e.g. `basic_credentials(u, p)`. 407 and other refusals are errors. |
+| `Proxy.connect(px, host, port, timeout_ms)?` | Dispatch on the URL scheme; `Proxy.connect_direct(px)?` is a plain connection to the proxy. |
+| `NoProxy.parse(text)`, `matches(host, port)` | Names and `.suffixes` on label boundaries, IPv4 / IPv6 addresses and CIDRs, `host:port`, `*`. |
+| `ProxyEnv.from_env()`, `proxy_for(scheme, host, port)` | Lower-case variables win over upper case. |
+| `HttpSession.set_proxy`, `set_no_proxy`, `use_env_proxy`, `clear_proxy`, `proxy_for(url)` | Explicit proxy beats the environment. Plain http through an HTTP proxy sends absolute-form request targets and `Proxy-Authorization`; https is tunnelled (CONNECT or SOCKS) and TLS runs end to end with the target. |
+
+Connects have a real timeout (a small C shim: non-blocking connect with `poll`) and try every address returned for the proxy.
+Tested by `tests/lang/135_proxy.tr` with fake SOCKS5, SOCKS4a and HTTP proxies in threads.
+Limitations: no TLS to the proxy itself, no proxy chaining, SOCKS5 GSSAPI is not offered, SOCKS4 has no IPv6, a redirect
+that leaves the proxy's NO_PROXY set is re-evaluated per hop but connections are not reused.
+
+---
+
+## OAuth 2.0 and OpenID Connect - `std.net.oauth`
+
+```tauraro
+from std.net.oauth import OAuthClient
+
+mut c = OAuthClient.init("my-app", "secret", "http://127.0.0.1:8765/cb")
+c.discover("https://accounts.example.com")?                 # /.well-known/openid-configuration
+mut req = c.begin_authorization("openid profile email")?    # state, nonce, PKCE S256 verifier
+print(req.url)                                              # send the user here
+mut tok = c.handle_callback(callback_url, req)?             # checks state / error, exchanges the code
+mut id = c.validate_id_token(tok.id_token, req.nonce, tok.access_token)?
+print(id.subject())
+mut api = c.authorized_session(tok)                         # Bearer + auto-refresh
+mut r = api.get("https://api.example.com/me")
+```
+
+| API | Description |
+|---|---|
+| `OAuthClient.init(id, secret, redirect_uri)` | No secret = public client (`none`); else `client_secret_basic`. `set_auth_method("client_secret_post")`, `use_private_key_jwt(jwk, alg)` (RFC 7523), `set_endpoints`, `set_issuer`. |
+| `discover(issuer)?`, `fetch_jwks(force)?` | Discovery (issuer must match) and a JWKS cached for `jwks_ttl` s, refetched once for an unknown `kid`. |
+| `begin_authorization(scope)?`, `authorization_url(...)`, `handle_callback(url, req)?`, `exchange_code(code, verifier)?` | Authorization code + PKCE (S256 only). `extra_auth_params` appends parameters to the URL. |
+| `refresh(rt, scope)?`, `ensure_fresh(tok, skew)?`, `client_credentials(scope)?` | Other token grants; the old refresh token is kept when not rotated. |
+| `device_authorize(scope)?`, `device_poll(dev, max_wait_ms)?` | RFC 8628; honours `authorization_pending` and `slow_down`. |
+| `revoke(token, hint)?`, `introspect(token, hint)?` | RFC 7009 / RFC 7662. |
+| `validate_id_token(id_token, nonce, access_token)?` | Signature through the JWKS (asymmetric algs only unless `id_token_algs` says otherwise), `iss`, `aud` / `azp`, `exp`, `iat`, `sub`, `nonce`, `at_hash`; `leeway` default 60 s. |
+| `userinfo(access_token)?`, `authorized_session(tok)` | UserInfo JSON; `AuthorizedSession.get/post/delete/send` add the Bearer header, refresh `refresh_skew` s before expiry and once after a 401. |
+
+`OAuthToken`: `access_token token_type refresh_token id_token scope expires_in obtained_at`, `expires_at()`,
+`is_expired(skew)`, `authorization()`. Error responses surface as `oauth: <error>: <description>` (e.g.
+`oauth: invalid_grant: ...`). Tested by `tests/lang/134_oauth.tr` against a fake provider in a thread
+(code + PKCE verified server side, refresh, client credentials, device grant, revocation, introspection, discovery,
+JWKS, foreign-audience / expired / bad-nonce / bad-at_hash ID tokens rejected, all client auth methods).
+Limitations: no PAR / JAR / DPoP / mTLS client auth, no `plain` PKCE, no encrypted ID tokens, no form_post response mode,
+and the HTTP layer is `HttpSession` (HTTP/1.1, TLS 1.3 only).
 
 ---
 

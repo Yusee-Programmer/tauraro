@@ -13,6 +13,8 @@
 #   from std.net.cookie      import CookieJar, Cookie
 #   from std.net.multipart   import FormBuilder, MultipartBuilder
 #   from std.net.client      import HttpSession, ClientRequest, HttpReply, HeaderList
+#   from std.net.oauth       import OAuthClient, OAuthToken, AuthorizedSession
+#   from std.net.proxy       import Proxy, ProxyUrl, Socks5, HttpTunnel, NoProxy, ProxyEnv
 
 from std.net.tcp         import TcpStream
 from std.net.tcp         import TcpListener

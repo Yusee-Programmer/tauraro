@@ -42,6 +42,9 @@ extern "C":
     def trc_pk_rsa_from_public(n: Pointer[char], nlen: int, e: Pointer[char], elen: int) -> Pointer[char]
     def trc_pk_ec_private_raw(h: Pointer[char], out: Pointer[char]) -> int
     def trc_pk_ecdh(h: Pointer[char], peer: Pointer[char], plen: int, out: Pointer[char]) -> int
+    def trc_pk_rsa_from_parts(buf: Pointer[char], lens: Pointer[int]) -> Pointer[char]
+    def trc_pk_rsa_part(h: Pointer[char], idx: int, out: Pointer[char], cap: int) -> int
+    def trc_pk_rsa_has_d(h: Pointer[char]) -> int
     def trc_pem_decode(pem: Pointer[char], n: int, index: int, label: Pointer[char], llen: int, out: Pointer[char], cap: int, label_out: Pointer[char]) -> int
 
 pub const KEY_RSA = 1
@@ -189,6 +192,30 @@ extend PKey:
         mut h = trc_pk_rsa_from_public(np, modulus.len(), ep, exponent.len())
         if _pk_null(h): raise("PKey: invalid RSA public key")
         return PKey._wrap(h)
+
+    # RSA key from big-endian parts [n, e, d, p, q, dp, dq, qi] (a public key
+    # when only n and e are given). The private parts are checked by a test
+    # private-key operation, so inconsistent parameters are rejected.
+    pub def rsa_from_parts(n: str, e: str, d: str, p: str, q: str, dp: str, dq: str, qi: str) throws str -> PKey:
+        mut buf = n + e + d + p + q + dp + dq + qi
+        mut lens = [n.len(), e.len(), d.len(), p.len(), q.len(), dp.len(), dq.len(), qi.len()]
+        mut bp = buf as Pointer[char]
+        mut lp = lens as Pointer[int]
+        mut h = trc_pk_rsa_from_parts(bp, lp)
+        if _pk_null(h):
+            if d.len() > 0: raise("PKey: invalid or inconsistent RSA private key (n, e, d, p, q, dp, dq and qi are required)")
+            raise("PKey: invalid RSA public key")
+        return PKey._wrap(h)
+
+    # RSA component as minimal big-endian bytes: 0 n, 1 e, 2 d, 3 p, 4 q,
+    # 5 dp, 6 dq, 7 qi ("" when absent or not an RSA key).
+    pub def rsa_part(self, idx: int) -> str:
+        mut out = _cn_alloc(1100)
+        mut n = trc_pk_rsa_part(self._h, idx, out, 1100)
+        if n < 0:
+            _cn_free(out)
+            return ""
+        return _cn_take(out, n)
 
     # KEY_RSA, KEY_EC_P256, KEY_EC_P384 or KEY_ED25519.
     pub def kind(self) -> int: return trc_pk_kind(self._h)

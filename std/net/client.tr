@@ -55,7 +55,12 @@
 #     and decode the body (reply.content_encoding says which); downloads and
 #     stream_get callbacks send "identity" and get the raw bytes.
 #     set_decompress(false) turns this off.
-#   * No keep-alive / connection reuse, no proxies, no Expect: 100-continue,
+#   * Proxies: set_proxy("socks5h://user:pw@host:1080" | "http://proxy:3128")
+#     or use_env_proxy() (HTTP_PROXY / HTTPS_PROXY / ALL_PROXY / NO_PROXY, see
+#     std.net.proxy). Plain http through an HTTP proxy uses absolute-form
+#     request targets and Proxy-Authorization; https goes through a CONNECT
+#     tunnel (or SOCKS) and TLS is negotiated end to end with the target.
+#   * No keep-alive / connection reuse, no Expect: 100-continue,
 #     no userinfo ("user:pw@host") or IPv6-literal URLs, IPv4 only (the
 #     runtime resolver is AF_INET).
 #   * Bodies are binary-safe in every direction: reply.body, request bodies,
@@ -78,6 +83,8 @@ from std.net.tls import trc_tls_connect, trc_tls_ok, trc_tls_error, trc_tls_set_
 from std.crypto.x509 import TrustStore
 from std.compress.flate import Flate
 from std.compress.brotli import Brotli
+from std.net.proxy import ProxyUrl, Proxy, ProxyEnv, NoProxy
+from std.net.tls import trc_tls_client_fd
 
 extern "C":
     def _tr_c_malloc(size: int) -> Pointer[char]
@@ -634,6 +641,48 @@ extend ClientConn:
         c.open = c.tcp.is_connected()
         return c
 
+    # Wrap an already-connected stream (e.g. a proxy tunnel). With use_tls
+    # the TLS handshake runs over it and the TLS layer takes ownership of
+    # the socket (closing the connection closes it).
+    pub def over_stream(tcp: TcpStream, host: str, use_tls: bool, verify: bool, ca_pem: str, timeout_ms: int) -> ClientConn:
+        mut c = ClientConn()
+        c.is_tls = use_tls
+        c.open   = false
+        c.nb     = false
+        c.error  = ""
+        c.tls    = 0 as Pointer[char]
+        c.tcp    = tcp
+        if not use_tls:
+            c.open = tcp.is_connected()
+            return c
+        mut store = TrustStore.system()
+        mut own = false
+        if ca_pem.len() > 0:
+            store = TrustStore.system_copy()
+            store.add_pem(ca_pem)
+            own = true
+        mut hp = host as Pointer[char]
+        mut empty = ""
+        mut ap = empty as Pointer[char]
+        mut v = 0
+        if verify: v = 1
+        c.tls = trc_tls_client_fd(tcp.fd, hp, host.len(), store._handle(), v, ap, timeout_ms, 1)
+        if (c.tls as usize) != 0 and trc_tls_ok(c.tls) == 1:
+            c.open = true
+        else:
+            if (c.tls as usize) != 0:
+                mut eb = _tr_c_malloc(301)
+                mut en = trc_tls_error(c.tls, eb, 300)
+                unsafe: eb.offset(en).write('\0')
+                c.error = _tr_str_wrap_len(eb, en)
+                trc_tls_close(c.tls)
+                c.tls = 0 as Pointer[char]
+            else:
+                c.error = "TLS: out of memory"
+                tcp.close()
+        if own: store.dispose()
+        return c
+
     # Send the whole string (blocking). False on failure.
     pub def send_all(self, data: str) -> bool:
         mut total = Str.len(data)
@@ -704,6 +753,9 @@ pub class HttpSession:
     pub ca_pem:           str      # extra trusted roots (PEM) for https
     pub max_body_bytes:   int      # cap for in-memory bodies (0 = unlimited)
     pub decompress:       bool     # ask for and decode gzip / deflate / br bodies (in-memory requests)
+    pub proxy:            str      # proxy URL for every request ("" = none)
+    pub no_proxy:         str      # NO_PROXY-style bypass list for `proxy`
+    pub env_proxy:        bool     # take proxies from the environment
 
 extend HttpSession:
     pub def init() -> HttpSession:
@@ -721,6 +773,9 @@ extend HttpSession:
         s.ca_pem           = ""
         s.max_body_bytes   = 67108864
         s.decompress       = true
+        s.proxy            = ""
+        s.no_proxy         = ""
+        s.env_proxy        = false
         return s
 
     # -- configuration --
@@ -776,6 +831,50 @@ extend HttpSession:
     # Trust these PEM roots in addition to the system store (e.g. a private CA).
     pub def set_ca_pem(self, pem: str):
         self.ca_pem = pem
+
+    # Send every request through this proxy: "socks5://", "socks5h://",
+    # "socks4://", "socks4a://" or "http://" with optional "user:pw@"
+    # ("" turns it off). An invalid URL makes requests fail with its error.
+    pub def set_proxy(self, url: str):
+        self.proxy = url
+
+    # Hosts that bypass set_proxy() (NO_PROXY syntax: names, .suffixes,
+    # IPs, CIDRs, host:port, "*").
+    pub def set_no_proxy(self, list_text: str):
+        self.no_proxy = list_text
+
+    # Opt in to http_proxy / https_proxy / all_proxy / no_proxy (either
+    # case) from the environment, read at each request. An explicit
+    # set_proxy() takes precedence.
+    pub def use_env_proxy(self):
+        self.env_proxy = true
+
+    pub def clear_proxy(self):
+        self.proxy = ""
+        self.no_proxy = ""
+        self.env_proxy = false
+
+    # The proxy URL a request to `url` would use ("" = direct).
+    pub def proxy_for(self, url: str) -> str:
+        mut u = Url.parse(url)
+        return self._proxy_for(u)
+
+    def _proxy_for(self, url: Url) -> str:
+        if self.proxy.len() > 0:
+            mut np = NoProxy.parse(self.no_proxy)
+            if np.matches(url.host, url.port): return ""
+            return self.proxy
+        if self.env_proxy:
+            mut env = ProxyEnv.from_env()
+            return env.proxy_for(url.scheme, url.host, url.port)
+        return ""
+
+    def _proxy_stream(self, px: ProxyUrl, url: Url, direct: bool, timeout_ms: int) throws str -> TcpStream:
+        if direct:
+            mut d = Proxy.connect_direct(px, timeout_ms)?
+            return d
+        mut t = Proxy.connect(px, url.host, url.port, timeout_ms)?
+        return t
 
     # Turn the cookie jar on (a fresh one unless you set your own first).
     pub def enable_cookies(self):
@@ -868,8 +967,12 @@ extend HttpSession:
         return r
 
     # Build the request text for one hop.
-    def _build_request(self, method: str, url: Url, req_headers: HeaderList, body: str, ctype: str, strip_auth: bool, accept_enc: str) -> str:
+    def _build_request(self, method: str, url: Url, req_headers: HeaderList, body: str, ctype: str, strip_auth: bool, accept_enc: str, proxy_auth: str, absolute: bool) -> str:
         mut target = url.request_target()
+        if absolute:
+            # absolute-form (RFC 9112 3.2.2) for a request sent to an HTTP proxy
+            mut hh = url.host_header()
+            target = url.scheme + "://" + hh + target
         mut hosth  = url.host_header()
         mut sb = StringBuilder.init(512)
         sb.append(method)
@@ -894,6 +997,9 @@ extend HttpSession:
             eff.remove("Authorization")
             eff.remove("Proxy-Authorization")
             eff.remove("Cookie")
+        if absolute:
+            eff.remove("Proxy-Authorization")
+            if proxy_auth.len() > 0: eff.set("Proxy-Authorization", proxy_auth)
         # Cookies: explicit header first, then the jar's.
         if self.use_cookies:
             mut jar_hdr = self.jar.header_for(url.host, url.path, url.is_https())
@@ -988,10 +1094,29 @@ extend HttpSession:
         mut use_tls = url.is_https()
         mut accept_enc = "identity"
         if self.decompress and mode == 0: accept_enc = "gzip, deflate, br"
-        mut wire = self._build_request(method, url, req_headers, body, ctype, strip_auth, accept_enc)
         mut ctimeout = idle_ms
         if ctimeout <= 0: ctimeout = 30000
-        mut conn = ClientConn.connect_tls(url.host, url.port, use_tls, not self.allow_unverified_tls, self.ca_pem, ctimeout)
+        mut proxy_url = self._proxy_for(url)
+        mut absolute = false
+        mut proxy_auth = ""
+        mut conn = ClientConn()
+        if proxy_url.len() > 0:
+            mut pr: Result[ProxyUrl, str] = ProxyUrl.parse(proxy_url)
+            if pr.is_err:
+                reply.error = pr.err
+                return reply
+            mut px = pr.ok
+            if px.is_http() and not use_tls:
+                absolute = true
+                proxy_auth = px.basic_auth()
+            mut sr: Result[TcpStream, str] = self._proxy_stream(px, url, absolute, ctimeout)
+            if sr.is_err:
+                reply.error = sr.err
+                return reply
+            conn = ClientConn.over_stream(sr.ok, url.host, use_tls, not self.allow_unverified_tls, self.ca_pem, ctimeout)
+        else:
+            conn = ClientConn.connect_tls(url.host, url.port, use_tls, not self.allow_unverified_tls, self.ca_pem, ctimeout)
+        mut wire = self._build_request(method, url, req_headers, body, ctype, strip_auth, accept_enc, proxy_auth, absolute)
         if not conn.open:
             if conn.error.len() > 0:
                 reply.error = conn.error

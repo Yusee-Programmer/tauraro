@@ -125,6 +125,23 @@ extend JsonDoc:
                 elif esc == 47: self.sb.append_char(47)
                 elif esc == 98: self.sb.append_char(8)
                 elif esc == 102: self.sb.append_char(12)
+                elif esc == 117:
+                    # \uXXXX (with UTF-16 surrogate pairs) -> UTF-8
+                    mut cp = self._hex4()
+                    if cp >= 0xD800 and cp <= 0xDBFF and self.cur() == 92:
+                        mut save = self.pos
+                        self.adv()
+                        if self.cur() == 117:
+                            self.adv()
+                            mut lo = self._hex4()
+                            if lo >= 0xDC00 and lo <= 0xDFFF:
+                                cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00)
+                            else:
+                                self.pos = save
+                        else:
+                            self.pos = save
+                    if cp < 0: cp = 0xFFFD
+                    self.soff = self.soff + self._put_utf8(cp) - 1
                 else: self.sb.append_char(esc)
                 self.soff = self.soff + 1
             else:
@@ -132,6 +149,42 @@ extend JsonDoc:
                 self.soff = self.soff + 1
                 self.adv()
         return off
+
+    # Four hex digits at the cursor (consumed), or -1.
+    def _hex4(self) -> int:
+        mut v = 0
+        mut i = 0
+        while i < 4:
+            mut h = self.cur()
+            mut d = -1
+            if h >= 48 and h <= 57: d = h - 48
+            elif h >= 97 and h <= 102: d = h - 87
+            elif h >= 65 and h <= 70: d = h - 55
+            if d < 0: return -1
+            v = v * 16 + d
+            self.adv()
+            i = i + 1
+        return v
+
+    # Append code point `cp` as UTF-8; returns the byte count.
+    def _put_utf8(self, cp: int) -> int:
+        if cp < 0x80:
+            self.sb.append_char(cp)
+            return 1
+        if cp < 0x800:
+            self.sb.append_char(0xC0 | (cp >> 6))
+            self.sb.append_char(0x80 | (cp & 63))
+            return 2
+        if cp < 0x10000:
+            self.sb.append_char(0xE0 | (cp >> 12))
+            self.sb.append_char(0x80 | ((cp >> 6) & 63))
+            self.sb.append_char(0x80 | (cp & 63))
+            return 3
+        self.sb.append_char(0xF0 | (cp >> 18))
+        self.sb.append_char(0x80 | ((cp >> 12) & 63))
+        self.sb.append_char(0x80 | ((cp >> 6) & 63))
+        self.sb.append_char(0x80 | (cp & 63))
+        return 4
 
     def _parse_val(self) -> int:
         self.skip_ws()
@@ -448,6 +501,12 @@ pub def _json_escape(s: str, sb: StringBuilder):
         elif c == 10: sb.append("\\n")
         elif c == 13: sb.append("\\r")
         elif c == 9:  sb.append("\\t")
+        elif c >= 0 and c < 32:
+            sb.append("\\u00")
+            sb.append_char(48 + (c >> 4))
+            mut lo = c & 15
+            if lo < 10: sb.append_char(48 + lo)
+            else: sb.append_char(87 + lo)
         else: sb.append_char(c)
         i = i + 1
 
