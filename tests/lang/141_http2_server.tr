@@ -1,0 +1,584 @@
+# tests/lang/141_http2_server.tr
+# std.net.http2_server: the HTTP/2 server over h2c and TLS (ALPN h2), driven
+# by std.net.http2's Http2Client (requests, large bodies, concurrent streams,
+# streaming both ways, trailers, cancellation, GOAWAY) and by raw frames
+# (preface/SETTINGS errors, protocol violations, flow control against a tiny
+# client window, CONTINUATION, PING, request trailers).
+# curl --http2-prior-knowledge and Python grpcio/h2 were also checked when the
+# server was written (see tests/lang/142_grpc.tr).
+
+from std.test import TestRunner
+from std.net.http2 import Http2Client, Http2Options, Http2Response, H2Headers, Hpack
+from std.net.http2_server import Http2Server, H2ServerRequest
+from std.net.tcp import TcpStream
+from std.net.tls import TlsServerConfig
+from std.core.string import StringBuilder
+
+extern "C":
+    def _tr_tcp_send_raw(fd: int, buf: Pointer[char], len: int) -> int
+
+class Ctl implements Sendable:
+    pub stop:      Atomic[int]
+    pub cancelled: Atomic[int]
+    pub handled:   Atomic[int]
+    pub tls:       int
+    pub port:      int
+
+def byte_at(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+def repeat(piece: str, times_pow2: int) -> str:
+    mut s = piece
+    mut i = 0
+    while i < times_pow2:
+        s = s + s
+        i = i + 1
+    return s
+
+# ── the server under test ────────────────────────────────────────────────────
+
+def handle(ctl: Shared[Ctl], r: H2ServerRequest) throws str:
+    mut h = H2Headers.init()
+    h.add("content-type", "text/plain")
+    if r.path == "/hello":
+        r.reply(200, h, "hello")?
+    elif r.path.starts_with("/info"):
+        mut body = r.read_all()?
+        r.reply(200, h, r.method + "|" + r.path + "|" + r.authority + "|" + r.scheme + "|" + r.headers.get("x-custom") + "|" + str(body.len()))?
+    elif r.path == "/echo":
+        mut body2 = r.read_all()?
+        r.reply(200, h, body2)?
+    elif r.path == "/count":
+        mut body3 = r.read_all()?
+        r.reply(200, h, str(body3.len()))?
+    elif r.path == "/big":
+        r.reply(200, h, repeat("0123456789abcdef", 18))?
+    elif r.path == "/trailers":
+        r.respond(200, h)?
+        r.send("part1,")?
+        r.send("part2")?
+        mut t = H2Headers.init()
+        t.add("x-status", "done")
+        r.send_trailers(t)?
+    elif r.path == "/stream":
+        # bidirectional: echo every chunk as it arrives
+        r.respond(200, h)?
+        while true:
+            mut chunk = r.read(5000)?
+            if chunk.len() == 0: break
+            r.send("<" + chunk + ">")?
+        r.finish("")?
+    elif r.path == "/hold":
+        r.respond(200, h)?
+        r.send("started")?
+        r.wait_event(3, 5000, false)
+        if r.cancelled(): ctl.cancelled.add(1)
+    elif r.path == "/rt":
+        mut b = r.read_all()?
+        r.reply(200, h, b + "|" + r.trailers().get("x-rt"))?
+    elif r.path == "/small":
+        r.reply(200, h, repeat("x", 3))?
+    else:
+        r.reply(404, h, "not found")?
+    ctl.handled.add(1)
+
+def server_loop(ctl: Shared[Ctl]):
+    mut srv: Result[Http2Server, str] = srv_open(ctl)
+    if srv.is_err:
+        print("server: " + srv.err)
+        return
+    mut s = srv.ok
+    while ctl.stop.load() == 0:
+        mut rr: Result[H2ServerRequest, str] = s.next(100)
+        if rr.is_err: break
+        mut req = rr.ok
+        if req.valid():
+            mut hr: Result[bool, str] = handle2(ctl, req)
+            req.release()
+    s.shutdown()
+    s.run(200)
+    s.close()
+
+def handle2(ctl: Shared[Ctl], r: H2ServerRequest) throws str -> bool:
+    handle(ctl, r)?
+    return true
+
+def srv_open(ctl: Shared[Ctl]) throws str -> Http2Server:
+    if ctl.tls == 1:
+        mut cfg = TlsServerConfig.from_pem(cert_pem(), key_pem())?
+        return Http2Server.listen_tls("127.0.0.1", ctl.port, cfg)?
+    return Http2Server.listen("127.0.0.1", ctl.port)?
+
+# ── raw frame helpers ────────────────────────────────────────────────────────
+
+def frame(ftype: int, flags: int, sid: int, payload: str) -> str:
+    mut n = payload.len()
+    mut sb = StringBuilder.init(n + 16)
+    sb.append_char((n >> 16) & 255)
+    sb.append_char((n >> 8) & 255)
+    sb.append_char(n & 255)
+    sb.append_char(ftype)
+    sb.append_char(flags)
+    sb.append_char((sid >> 24) & 127)
+    sb.append_char((sid >> 16) & 255)
+    sb.append_char((sid >> 8) & 255)
+    sb.append_char(sid & 255)
+    sb.append(payload)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def u32(v: int) -> str:
+    mut sb = StringBuilder.init(8)
+    sb.append_char((v >> 24) & 255)
+    sb.append_char((v >> 16) & 255)
+    sb.append_char((v >> 8) & 255)
+    sb.append_char(v & 255)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def setting(id: int, v: int) -> str:
+    mut sb = StringBuilder.init(8)
+    sb.append_char(0)
+    sb.append_char(id)
+    sb.append(u32(v))
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+class Frame:
+    pub ftype: int
+    pub flags: int
+    pub sid: int
+    pub payload: str
+
+class Raw:
+    pub s: TcpStream
+    pub buf: str
+    pub enc: Hpack
+    pub dec: Hpack
+
+extend Raw:
+    pub def send(self, data: str):
+        mut p = data as Pointer[char]
+        mut off = 0
+        while off < data.len():
+            mut r = 0
+            unsafe: r = _tr_tcp_send_raw(self.s.fd, p.offset(off), data.len() - off)
+            if r <= 0: return
+            off = off + r
+
+    def need(self, n: int) -> bool:
+        while self.buf.len() < n:
+            mut chunk = self.s.recv(65536)
+            if chunk.len() == 0: return false
+            self.buf = self.buf + chunk
+        return true
+
+    # ftype -1 at end of stream
+    pub def read_frame(self) -> Frame:
+        mut f = Frame()
+        f.ftype = -1
+        f.flags = 0
+        f.sid = 0
+        f.payload = ""
+        if not self.need(9): return f
+        mut n = (byte_at(self.buf, 0) << 16) | (byte_at(self.buf, 1) << 8) | byte_at(self.buf, 2)
+        if not self.need(9 + n): return f
+        f.ftype = byte_at(self.buf, 3)
+        f.flags = byte_at(self.buf, 4)
+        f.sid = ((byte_at(self.buf, 5) & 127) << 24) | (byte_at(self.buf, 6) << 16) | (byte_at(self.buf, 7) << 8) | byte_at(self.buf, 8)
+        f.payload = self.buf.slice(9, 9 + n)
+        self.buf = self.buf.slice(9 + n, self.buf.len())
+        return f
+
+    # next frame that is not SETTINGS(ACK) / WINDOW_UPDATE / SETTINGS
+    pub def read_app_frame(self) -> Frame:
+        while true:
+            mut f = self.read_frame()
+            if f.ftype == 4:
+                if (f.flags & 1) == 0: self.send(frame(4, 1, 0, ""))
+                continue
+            if f.ftype == 8: continue
+            return f
+        return self.read_frame()
+
+def raw_open(port: int, settings: str) -> Raw:
+    mut r = Raw()
+    r.s = TcpStream.connect("127.0.0.1", port)
+    r.buf = ""
+    r.enc = Hpack.init(4096)
+    r.dec = Hpack.init(4096)
+    r.send("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" + frame(4, 0, 0, settings))
+    return r
+
+def req_block(r: Raw, method: str, path: str, extra_name: str, extra_value: str) -> str:
+    mut h = H2Headers.init()
+    h.add(":method", method)
+    h.add(":scheme", "http")
+    h.add(":authority", "localhost")
+    h.add(":path", path)
+    if extra_name.len() > 0: h.add(extra_name, extra_value)
+    mut b: Result[str, str] = r.enc.encode(h)
+    return b.ok
+
+def goaway_code(f: Frame) -> int:
+    return (byte_at(f.payload, 4) << 24) | (byte_at(f.payload, 5) << 16) | (byte_at(f.payload, 6) << 8) | byte_at(f.payload, 7)
+
+def rst_code(f: Frame) -> int:
+    return (byte_at(f.payload, 0) << 24) | (byte_at(f.payload, 1) << 16) | (byte_at(f.payload, 2) << 8) | byte_at(f.payload, 3)
+
+# Does the server answer the garbage with GOAWAY(code) (or just close)?
+def expect_goaway(t: TestRunner, port: int, bytes_after_preface: str, code: int, label: str):
+    mut r = raw_open(port, "")
+    r.send(bytes_after_preface)
+    mut got = -2
+    mut n = 0
+    while n < 10:
+        mut f = r.read_frame()
+        if f.ftype == -1:
+            break
+        if f.ftype == 7:
+            got = goaway_code(f)
+            break
+        n = n + 1
+    t.assert_eq_int(got, code, label)
+    r.s.close()
+
+# ── tests ────────────────────────────────────────────────────────────────────
+
+def client_for(port: int) throws str -> Http2Client:
+    mut o = Http2Options.cleartext()
+    o.timeout_ms = 10000
+    return Http2Client.connect_with("127.0.0.1", port, o)?
+
+def test_client(t: TestRunner, port: int, ctl: Shared[Ctl]) throws str:
+    t.section("Http2Client against Http2Server (h2c)")
+    mut c = client_for(port)?
+    mut r1 = c.get("/hello")?
+    t.assert_eq_int(r1.status, 200, "GET status")
+    t.assert_eq_str(r1.body, "hello", "GET body")
+    t.assert_eq_str(r1.headers.get("content-type"), "text/plain", "response header")
+    mut h = H2Headers.init()
+    h.add("x-custom", "val")
+    mut r2 = c.request("PUT", "/info?a=1&b=2", h, "12345", true)?
+    t.assert_eq_str(r2.body, "PUT|/info?a=1&b=2|127.0.0.1:" + str(port) + "|http|val|5", "request line, authority and headers reach the handler")
+    mut nf = c.get("/missing")?
+    t.assert_eq_int(nf.status, 404, "handler can choose the status")
+    # 3 MiB upload (larger than the 1 MiB stream window), then 4 MiB download
+    mut up = repeat("0123456789abcdef", 17) + repeat("0123456789abcdef", 16)
+    t.assert_eq_int(up.len(), 3145728, "upload size")
+    mut r3 = c.post("/count", up, "application/octet-stream")?
+    t.assert_eq_str(r3.body, "3145728", "3 MiB request body received in full (flow control)")
+    mut r4 = c.post("/echo", up, "application/octet-stream")?
+    t.assert_true(r4.body == up, "3 MiB echoed back unchanged")
+    mut r5 = c.get("/big")?
+    t.assert_eq_int(r5.body.len(), 4194304, "4 MiB response")
+    t.assert_true(r5.body == repeat("0123456789abcdef", 18), "4 MiB response content")
+    # trailers
+    mut r6 = c.get("/trailers")?
+    t.assert_eq_str(r6.body, "part1,part2", "streamed body")
+    t.assert_eq_str(r6.trailers.get("x-status"), "done", "response trailers")
+    # concurrent streams on one connection
+    mut ids: List[int] = []
+    mut i = 0
+    while i < 12:
+        ids.append(c.submit("POST", "/echo", H2Headers.init(), "msg-" + str(i), true)?)
+        i = i + 1
+    c.wait_all()?
+    mut allok = true
+    i = 0
+    while i < 12:
+        mut rr = c.response(ids[i])
+        if rr.body != "msg-" + str(i): allok = false
+        c.release(ids[i])
+        i = i + 1
+    t.assert_true(allok, "12 concurrent streams answered correctly")
+    # bidirectional streaming
+    mut sid = c.open_stream("POST", "/stream", H2Headers.init())?
+    c.send_data(sid, "one", false)?
+    t.assert_eq_str(c.read_data(sid, 5000)?, "<one>", "stream echo 1")
+    c.send_data(sid, "two", false)?
+    t.assert_eq_str(c.read_data(sid, 5000)?, "<two>", "stream echo 2")
+    c.send_data(sid, "", true)?
+    mut rest = ""
+    mut part = c.read_data(sid, 5000)?
+    while part.len() > 0:
+        rest = rest + part
+        part = c.read_data(sid, 5000)?
+    t.assert_eq_str(rest, "", "stream ends cleanly")
+    mut sr = c.response(sid)
+    t.assert_eq_int(sr.status, 200, "streaming response status")
+    c.release(sid)
+    # cancellation
+    mut hid = c.open_stream("GET", "/hold", H2Headers.init())?
+    t.assert_eq_str(c.read_data(hid, 5000)?, "started", "held response started")
+    c.reset(hid, 8)
+    c.release(hid)
+    mut tries = 0
+    while ctl.cancelled.load() == 0 and tries < 100:
+        Thread.sleep(50)
+        tries = tries + 1
+    t.assert_eq_int(ctl.cancelled.load(), 1, "server sees RST_STREAM(CANCEL)")
+    t.assert_true(c.ping(), "PING")
+    mut r7 = c.get("/hello")?
+    t.assert_eq_str(r7.body, "hello", "connection still works after a cancelled stream")
+    c.close()
+
+def test_raw(t: TestRunner, port: int) throws str:
+    t.section("raw frames")
+    # connection preface / SETTINGS errors
+    mut bad = TcpStream.connect("127.0.0.1", port)
+    mut junk = "GET / HTTP/1.1\r\nHost: x\r\n\r\n"
+    mut jp = junk as Pointer[char]
+    unsafe:
+        _tr_tcp_send_raw(bad.fd, jp, junk.len())
+    mut buf = ""
+    mut chunk = bad.recv(4096)
+    while chunk.len() > 0:
+        buf = buf + chunk
+        chunk = bad.recv(4096)
+    t.assert_true(buf.len() == 0 or byte_at(buf, 3) == 4 or byte_at(buf, 3) == 7, "HTTP/1.1 garbage is not answered as HTTP/1")
+    bad.close()
+    expect_goaway(t, port, frame(0, 0, 0, "x"), 1, "DATA on stream 0 -> GOAWAY(PROTOCOL_ERROR)")
+    expect_goaway(t, port, frame(4, 0, 1, ""), 1, "SETTINGS on a stream -> PROTOCOL_ERROR")
+    expect_goaway(t, port, frame(4, 0, 0, "abc"), 6, "SETTINGS of bad size -> FRAME_SIZE_ERROR")
+    expect_goaway(t, port, frame(6, 0, 0, "short"), 6, "PING of bad size -> FRAME_SIZE_ERROR")
+    expect_goaway(t, port, frame(8, 0, 0, u32(0)), 1, "zero connection WINDOW_UPDATE -> PROTOCOL_ERROR")
+    expect_goaway(t, port, frame(4, 0, 0, setting(4, 2147483648)), 3, "oversized initial window -> FLOW_CONTROL_ERROR")
+    expect_goaway(t, port, frame(4, 0, 0, setting(5, 100)), 1, "max frame size below 16384 -> PROTOCOL_ERROR")
+    expect_goaway(t, port, frame(3, 0, 5, u32(8)), 1, "RST_STREAM on an idle stream -> PROTOCOL_ERROR")
+    expect_goaway(t, port, frame(5, 4, 1, "x"), 1, "PUSH_PROMISE from a client -> PROTOCOL_ERROR")
+    expect_goaway(t, port, frame(1, 5, 2, "x"), 1, "even client stream id -> PROTOCOL_ERROR")
+    expect_goaway(t, port, frame(1, 4, 1, "\xff\xff\xff"), 9, "undecodable header block -> COMPRESSION_ERROR")
+
+    # PING is acknowledged; SETTINGS acknowledged; unknown frames ignored
+    mut r = raw_open(port, "")
+    r.send(frame(6, 0, 0, "12345678") + frame(250, 0, 0, "ignored"))
+    mut ack = false
+    mut sack = false
+    mut n = 0
+    while n < 8 and not (ack and sack):
+        mut f = r.read_frame()
+        if f.ftype == -1: break
+        if f.ftype == 6 and (f.flags & 1) == 1 and f.payload == "12345678": ack = true
+        if f.ftype == 4 and (f.flags & 1) == 1: sack = true
+        n = n + 1
+    t.assert_true(ack, "PING acknowledged with the same payload")
+    t.assert_true(sack, "client SETTINGS acknowledged")
+
+    # request with a CONTINUATION frame and an invalid request (uppercase name)
+    mut blk = req_block(r, "GET", "/hello", "x-custom", "v")
+    mut half = blk.len() / 2
+    r.send(frame(1, 1, 1, blk.slice(0, half)) + frame(9, 4, 1, blk.slice(half, blk.len())))
+    mut status = ""
+    mut body = ""
+    mut done = false
+    n = 0
+    while not done and n < 20:
+        mut f2 = r.read_app_frame()
+        if f2.ftype == -1: break
+        if f2.sid == 1 and f2.ftype == 1:
+            mut dh: Result[H2Headers, str] = r.dec.decode(f2.payload)
+            if dh.is_ok: status = dh.ok.get(":status")
+        if f2.sid == 1 and f2.ftype == 0:
+            body = body + f2.payload
+        if f2.sid == 1 and (f2.flags & 1) == 1 and f2.ftype != 1: done = true
+        n = n + 1
+    t.assert_eq_str(status, "200", "HEADERS + CONTINUATION request answered")
+    t.assert_eq_str(body, "hello", "body of the CONTINUATION request")
+
+    # (the literal is built by hand: Hpack lower-cases header names)
+    mut lit = "\x00\x09Bad-Upper\x01x"
+    mut pseudo = req_block(r, "GET", "/hello", "", "")
+    r.send(frame(1, 5, 3, pseudo + lit))
+    mut rcode = -1
+    n = 0
+    while n < 10:
+        mut f3 = r.read_app_frame()
+        if f3.ftype == -1: break
+        if f3.ftype == 3 and f3.sid == 3:
+            rcode = rst_code(f3)
+            break
+        if f3.ftype == 7: break
+        n = n + 1
+    t.assert_eq_int(rcode, 1, "uppercase header name -> RST_STREAM(PROTOCOL_ERROR)")
+
+    # request trailers
+    mut b5 = req_block(r, "POST", "/rt", "", "")
+    r.send(frame(1, 4, 5, b5) + frame(0, 0, 5, "body"))
+    mut th = H2Headers.init()
+    th.add("x-rt", "trailer-value")
+    mut tb: Result[str, str] = r.enc.encode(th)
+    r.send(frame(1, 5, 5, tb.ok))
+    mut got = ""
+    done = false
+    n = 0
+    while not done and n < 20:
+        mut f5 = r.read_app_frame()
+        if f5.ftype == -1: break
+        if f5.sid == 5 and f5.ftype == 0:
+            got = got + f5.payload
+            if (f5.flags & 1) == 1: done = true
+        n = n + 1
+    t.assert_eq_str(got, "body|trailer-value", "request trailers visible to the handler")
+    r.s.close()
+
+    # flow control: the client announces a 3-byte stream window; the server must obey it
+    mut r2 = raw_open(port, setting(4, 3))
+    mut b7 = req_block(r2, "GET", "/small", "", "")
+    r2.send(frame(1, 5, 1, b7))
+    mut total = 0
+    mut maxframe = 0
+    n = 0
+    while total < 3 and n < 20:
+        mut f7 = r2.read_app_frame()
+        if f7.ftype == -1: break
+        if f7.ftype == 0:
+            total = total + f7.payload.len()
+            if f7.payload.len() > maxframe: maxframe = f7.payload.len()
+        n = n + 1
+    t.assert_eq_int(total, 3, "server sends exactly the 3 bytes the window allows")
+    Thread.sleep(150)
+    r2.send(frame(8, 0, 1, u32(100)))
+    mut rest = 0
+    done = false
+    n = 0
+    while not done and n < 20:
+        mut f8 = r2.read_app_frame()
+        if f8.ftype == -1: break
+        if f8.ftype == 0:
+            rest = rest + f8.payload.len()
+            if (f8.flags & 1) == 1: done = true
+        n = n + 1
+    t.assert_eq_int(rest, 5, "the rest follows WINDOW_UPDATE")
+    t.assert_true(maxframe <= 3, "no DATA frame larger than the window")
+    r2.s.close()
+
+def test_goaway(t: TestRunner, port: int, ctl: Shared[Ctl]) throws str:
+    t.section("graceful shutdown")
+    mut c = client_for(port)?
+    mut r = c.get("/hello")?
+    t.assert_eq_int(r.status, 200, "request before shutdown")
+    t.assert_false(c.is_closing(), "not closing yet")
+    ctl.stop.store(1)
+    Thread.sleep(600)
+    mut after: Result[Http2Response, str] = c.get("/hello")
+    t.assert_true(after.is_err or c.is_closing() or after.ok.error.len() > 0, "client learns about the shutdown (GOAWAY / close)")
+    c.close()
+
+def test_https(t: TestRunner, port: int) throws str:
+    t.section("TLS with ALPN h2")
+    mut o = Http2Options.default()
+    o.ca_pem = cert_pem()
+    o.timeout_ms = 10000
+    mut c = Http2Client.connect_with("localhost", port, o)?
+    mut r = c.get("/hello")?
+    t.assert_eq_str(r.body, "hello", "GET over h2/TLS")
+    mut h = H2Headers.init()
+    mut r2 = c.request("POST", "/info", h, "abc", true)?
+    t.assert_contains(r2.body, "|https|", "scheme is https")
+    mut big = repeat("0123456789abcdef", 17)
+    mut r3 = c.post("/count", big, "x/y")?
+    t.assert_eq_str(r3.body, "2097152", "2 MiB upload over TLS")
+    mut r4 = c.get("/big")?
+    t.assert_eq_int(r4.body.len(), 4194304, "4 MiB download over TLS")
+    c.close()
+    # a client that only offers http/1.1 is not served as h2
+    mut ok2 = Http2Options.default()
+    ok2.timeout_ms = 3000
+    mut bad: Result[Http2Client, str] = Http2Client.connect_with("localhost", port, ok2)
+    t.assert_true(bad.is_err, "untrusted certificate rejected by the client")
+
+def cert_pem() -> str:
+    return """-----BEGIN CERTIFICATE-----
+MIIDPjCCAiagAwIBAgIUeAKs+8YjLl4a7sAlaivhrlUdGMkwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxNDE5NTM0MFoYDzIxMjYw
+OTIwMTk1MzQwWjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwggEiMA0GCSqGSIb3DQEB
+AQUAA4IBDwAwggEKAoIBAQDToWgqUJB5hPuhL0PELeEoyuSctEtQNQEOb5Gk66hK
++pTe/Hi8P8T/9cIKiMMt6RV9KLMqf0Sor+nuDcLuGdpdn6sKNW36p9DatFBbgYE+
++vFc69uL2dh8KosCbABod5jh24MvN7Lbv4riY1TLWmB+7LTQV0Ra0stWjEr3XntY
+Wyi1mzKSRpdMsvMAz+GPtiEwIHSSj99oe/0/sKhMNL4lnasxyjFvT63V+U+ijwYV
+gi6K5TiwYHNav9IlQTIY8VXQRYCg0/oKYD5WSMXHQCHnCTyFXP5W10RoEd1dimFa
+6KRVGomQZoS1x5zqi6oRcboxM0Hu2yCgKM2d1Rbj8BphAgMBAAGjgYUwgYIwHQYD
+VR0OBBYEFOx8kTmRRDx8rx2G1x/xweBjYzTxMB8GA1UdIwQYMBaAFOx8kTmRRDx8
+rx2G1x/xweBjYzTxMA8GA1UdEwEB/wQFMAMBAf8wGgYDVR0RBBMwEYIJbG9jYWxo
+b3N0hwR/AAABMBMGA1UdJQQMMAoGCCsGAQUFBwMBMA0GCSqGSIb3DQEBCwUAA4IB
+AQA9AkN7FszdaN6ZP7JNQ/Xouz0KiR970Z2TsiAXw/zDwICYsSVtWy3tyVgmBT22
+1b08dZqgzGQxC0xr8bH+iG131KnX68O+9v67phHak067FH9+VGInEF/kdl/xPMdV
+uhBCT5VdQQDV0Aa/FmzEeyaFiELaAWkhqr40dbkLlLrBk3NqaOVJwu4LdMmPfDIV
+Bf42N4+yc55HCvaafjb2wjUvTqMJ+uFn+zZBqr2uLtsdTbvUCbzGqNHWsnNOCsRB
+KbWJ/OcI52GoMmrbB5w5KTvMs5sdPP1HETCYDfZ0OZzhPsHtgxPHYC7hZksSrssD
+DGcrGc9RqPZKMiuTju4e/7sE
+-----END CERTIFICATE-----
+"""
+
+def key_pem() -> str:
+    return """-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDToWgqUJB5hPuh
+L0PELeEoyuSctEtQNQEOb5Gk66hK+pTe/Hi8P8T/9cIKiMMt6RV9KLMqf0Sor+nu
+DcLuGdpdn6sKNW36p9DatFBbgYE++vFc69uL2dh8KosCbABod5jh24MvN7Lbv4ri
+Y1TLWmB+7LTQV0Ra0stWjEr3XntYWyi1mzKSRpdMsvMAz+GPtiEwIHSSj99oe/0/
+sKhMNL4lnasxyjFvT63V+U+ijwYVgi6K5TiwYHNav9IlQTIY8VXQRYCg0/oKYD5W
+SMXHQCHnCTyFXP5W10RoEd1dimFa6KRVGomQZoS1x5zqi6oRcboxM0Hu2yCgKM2d
+1Rbj8BphAgMBAAECggEABGBpfRE0IQSPskz97nKxyLGEJNF9tTzuC/8MA13Jmd4G
+HM5v2MTLgtecRFzWXH6zg7vHE3E/ruq5wG3nGBwkw0boDJ//lELK3kWtsRbD4NTj
+ukjjvh1VOCF7xSMNUcZsvPmt2YN3Xsqz8+vwoaakKZEk9CIPNymg1uYJLtsfWzu4
+Y+uGkawsiy9m79HhwxsmXnDfbzSps62nO9o9P5Zo8nDdv00ihp3s+tpEpHnJ4Lgz
+Xh9Ho+bU6W3oAbHDWXZwFxpDPPNkNqn+ZwfHWh0ZL8Kh3s3v0u8lsNqxVr2mwnfB
+gY8nPcJpiQf4Z12V4tS2LFR52ptA/wSrexiR8nxCIQKBgQD93ryj7oO8eJWG7EFK
+NTZF7YL/rGaO84IQXxKuwMvhUgevDWIsr5m/QVL2wvz0Mb7KAtbTYCLKpfzu6Ets
+zrD0J4MH2j7dDF1x5qj5MarHE9ATwMDdb9WBbN48qLxkw9FkLVs4O5dS/f+CwxgF
+imZwmzgHSlOf960BEpRwnA+OlQKBgQDVZ/KcxL0FgufBmkH7x2A5JkzDle42EyFr
+JReo3HEyy/CdCgxA/JJfQpCINJzVGWQt0fnqUOhBhsVi/63seOIGM1Vb1hPy7Hf0
+6l09blYl5saDidcxfEsOaI5BXTo/ju82VjbK7P0pw5X3Re1MjhvYb9SJQ/1QoV59
+oondfLnFnQKBgHb+848nmqo6H2SJ0yS0gocOiGvNZJk2/M0tszUke6xW5fEgpdbq
+THfAZ+Hwjd7sflB0OjwEAOraGQ/m5IvQ6lLXPmzs2LCGPjrIcoWzySfdWpgXro9c
+/0fWPulR8lSNENYTCIH4NLsbAaxKRDU8pT29E+se5MnDr10kV13dWNFtAoGAGDGu
+ucM8QtGygKqCbI8QA6qp7UqkNRE6KrGL2yMS2lVws/0dooh/97jONgLw/N/iEafK
+k5wUmMk0u6KND1AtH9LWDJFataHFf8jKRVqq/aUKQINyGDQlNj74UcTGA8qqqBhi
+IeN4WDHKYLxWyOUblxAmomFI6MlCsy+oPaoUTakCgYAnsV9dYg118kZkE26/Tb0F
+Qow9grFd5fpc3n5nDLmXgVbM16ZEF1+EwtmhtGTM2I6PCNYlNlGFdgKitxTksBzS
+IqFXX136obJf/kH2dz4Zt++AJJx9gr5GgwKqZ3LNGyy1/k6OAED90NvJ0ulyW7ko
+O44fiVPNAQCsdXpcArObGQ==
+-----END PRIVATE KEY-----
+"""
+
+def run_suite(t: TestRunner, port: int, tls: int):
+    shared ctl = Ctl()
+    ctl.stop = Atomic.new(0)
+    ctl.cancelled = Atomic.new(0)
+    ctl.handled = Atomic.new(0)
+    ctl.tls = tls
+    ctl.port = port
+    mut th = Thread.spawn(server_loop, ctl)
+    Thread.sleep(300)
+    if tls == 0:
+        mut r1: Result[bool, str] = suite_h2c(t, port, ctl)
+        t.assert_true(r1.is_ok, "h2c suite completed")
+        if r1.is_err: print(r1.err)
+    else:
+        mut r2: Result[bool, str] = suite_tls(t, port)
+        t.assert_true(r2.is_ok, "TLS suite completed")
+        if r2.is_err: print(r2.err)
+    ctl.stop.store(1)
+    th.join()
+
+def suite_h2c(t: TestRunner, port: int, ctl: Shared[Ctl]) throws str -> bool:
+    test_client(t, port, ctl)?
+    test_raw(t, port)?
+    test_goaway(t, port, ctl)?
+    return true
+
+def suite_tls(t: TestRunner, port: int) throws str -> bool:
+    test_https(t, port)?
+    return true
+
+def main():
+    mut t = TestRunner.init("141_http2_server")
+    run_suite(t, 19141, 0)
+    run_suite(t, 19142, 1)
+    t.summary()

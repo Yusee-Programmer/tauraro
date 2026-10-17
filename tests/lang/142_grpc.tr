@@ -1,0 +1,457 @@
+# tests/lang/142_grpc.tr
+# std.net.grpc: wire helpers (framing, grpc-timeout, percent-encoding, -bin
+# metadata, gzip messages) and client <-> server loopback over h2c and TLS:
+# unary, server/client/bidi streaming, status codes and details, metadata,
+# deadlines, cancellation, nested calls while a stream is open, the built-in
+# grpc.health.v1 service, and the wire format as seen by a plain Http2Client.
+# Interoperability with Python grpcio (both directions, h2c and TLS) was
+# checked when the module was written.
+
+from std.test import TestRunner
+from std.sys.time import Clock
+from std.net.grpc import GrpcServer, GrpcServerCall, GrpcChannel, GrpcCall, GrpcCallOptions, GrpcReply, Grpc, GrpcFramer
+from std.net.grpc import health_request, health_response, health_parse_response
+from std.net.grpc import GRPC_OK, GRPC_CANCELLED, GRPC_INVALID_ARGUMENT, GRPC_DEADLINE_EXCEEDED, GRPC_NOT_FOUND, GRPC_UNIMPLEMENTED, GRPC_INTERNAL, GRPC_UNAVAILABLE, GRPC_RESOURCE_EXHAUSTED
+from std.net.grpc import HEALTH_SERVING, HEALTH_NOT_SERVING
+from std.net.http2 import Http2Client, Http2Options, Http2Response, H2Headers
+from std.net.tls import TlsServerConfig
+from std.encoding.protobuf import ProtoWriter, ProtoReader
+
+class Ctl implements Sendable:
+    pub stop:   Atomic[int]
+    pub port:   int
+    pub tls:    int
+
+def repeat(piece: str, pow2: int) -> str:
+    mut s = piece
+    mut i = 0
+    while i < pow2:
+        s = s + s
+        i = i + 1
+    return s
+
+# helloworld.Greeter: HelloRequest { string name = 1; }  HelloReply { string message = 1; }
+def enc_name(name: str) -> str:
+    mut w = ProtoWriter.init()
+    w.write_string(1, name)
+    mut out = w.to_str()
+    w.free()
+    return out
+
+def dec_name(msg: str) throws str -> str:
+    mut r = ProtoReader.init(msg)
+    mut v = ""
+    while r.next_field()?:
+        if r.field == 1: v = r.read_string()?
+        else: r.skip()?
+    return v
+
+def say_hello(c: GrpcServerCall, req: str) -> str:
+    mut nr: Result[str, str] = dec_name(req)
+    if nr.is_err:
+        c.fail(GRPC_INVALID_ARGUMENT(), "bad request: " + nr.err)
+        return ""
+    if nr.ok == "":
+        c.fail(GRPC_INVALID_ARGUMENT(), "name must not be empty")
+        return ""
+    if nr.ok == "ghost":
+        c.fail(GRPC_NOT_FOUND(), "no such user: 100% ü")
+        return ""
+    if c.metadata.has("x-trace"): c.trailer_metadata.add("x-trace-seen", c.metadata.get("x-trace"))
+    c.header_metadata.add("x-server", "tauraro")
+    c.trailer_metadata.add("x-calls", "1")
+    Grpc.add_bin(c.trailer_metadata, "x-blob-bin", "\x00\x01\x02\xff")
+    c.trailer_metadata.add("x-user", c.metadata.get("x-user"))
+    return enc_name("Hello " + nr.ok)
+
+def slow(c: GrpcServerCall, req: str) -> str:
+    mut early = c.sleep(3000)
+    if early: return "ignored"
+    return "late"
+
+def count_to(c: GrpcServerCall, req: str):
+    mut n = req.len()
+    mut i = 0
+    while i < n:
+        if not c.send("item" + str(i)): return
+        i = i + 1
+
+def forever(c: GrpcServerCall, req: str):
+    mut i = 0
+    while not c.cancelled():
+        if not c.send(repeat("z", 12)): return
+        i = i + 1
+        if i > 100000: return
+
+def sum_lengths(c: GrpcServerCall) -> str:
+    mut n = 0
+    mut k = 0
+    while c.recv():
+        n = n + c.message.len()
+        k = k + 1
+    return str(k) + ":" + str(n)
+
+def chat(c: GrpcServerCall):
+    while c.recv():
+        if c.message == "boom":
+            c.fail(GRPC_INTERNAL(), "boom requested")
+            return
+        if not c.send("re:" + c.message): return
+
+def big_echo(c: GrpcServerCall, req: str) -> str:
+    return req
+
+def server_loop(ctl: Shared[Ctl]):
+    mut sr: Result[GrpcServer, str] = open_server(ctl)
+    if sr.is_err:
+        print("server: " + sr.err)
+        return
+    mut s = sr.ok
+    s.add_unary("/helloworld.Greeter/SayHello", say_hello)
+    s.add_unary("/t.S/Slow", slow)
+    s.add_unary("/t.S/Echo", big_echo)
+    s.add_server_streaming("/t.S/Count", count_to)
+    s.add_server_streaming("/t.S/Forever", forever)
+    s.add_client_streaming("/t.S/Sum", sum_lengths)
+    s.add_bidi("/t.S/Chat", chat)
+    s.enable_health()
+    s.set_health("t.Svc", HEALTH_NOT_SERVING())
+    while ctl.stop.load() == 0:
+        s.serve_one(100)
+    s.shutdown()
+    s.run(200)
+    s.close()
+
+def open_server(ctl: Shared[Ctl]) throws str -> GrpcServer:
+    if ctl.tls == 1:
+        mut cfg = TlsServerConfig.from_pem(cert_pem(), key_pem())?
+        return GrpcServer.listen_tls("127.0.0.1", ctl.port, cfg)?
+    return GrpcServer.listen("127.0.0.1", ctl.port)?
+
+# ── pure helpers ─────────────────────────────────────────────────────────────
+
+def test_helpers(t: TestRunner):
+    t.section("wire helpers")
+    t.assert_eq_str(Grpc.status_name(0), "OK", "status name 0")
+    t.assert_eq_str(Grpc.status_name(16), "UNAUTHENTICATED", "status name 16")
+    t.assert_eq_str(Grpc.status_name(99), "CODE_99", "unknown status")
+    mut fr = Grpc.frame("abc", false)
+    t.assert_eq_int(fr.len(), 8, "frame length")
+    t.assert_eq_str(fr.slice(5, 8), "abc", "frame payload")
+    mut p = fr as Pointer[char]
+    mut b0 = 0
+    mut b4 = 0
+    unsafe:
+        b0 = (p.offset(0).read() as int) & 255
+        b4 = (p.offset(4).read() as int) & 255
+    t.assert_eq_int(b0, 0, "compressed flag 0")
+    t.assert_eq_int(b4, 3, "big-endian length")
+    t.assert_eq_str(Grpc.encode_timeout(250), "250m", "timeout ms")
+    t.assert_eq_str(Grpc.encode_timeout(1000000000), "1000000S", "timeout switches to seconds")
+    t.assert_eq_int(Grpc.parse_timeout("250m"), 250, "parse ms")
+    t.assert_eq_int(Grpc.parse_timeout("2S"), 2000, "parse seconds")
+    t.assert_eq_int(Grpc.parse_timeout("1M"), 60000, "parse minutes")
+    t.assert_eq_int(Grpc.parse_timeout("1H"), 3600000, "parse hours")
+    t.assert_eq_int(Grpc.parse_timeout("1500u"), 2, "parse microseconds (rounded up)")
+    t.assert_eq_int(Grpc.parse_timeout("5000000n"), 5, "parse nanoseconds")
+    t.assert_eq_int(Grpc.parse_timeout("abc"), -1, "malformed timeout")
+    t.assert_eq_int(Grpc.parse_timeout("5x"), -1, "unknown timeout unit")
+    t.assert_eq_int(Grpc.parse_timeout(""), -1, "empty timeout")
+    t.assert_eq_str(Grpc.percent_encode("100% done\n"), "100%25 done%0A", "percent-encode")
+    t.assert_eq_str(Grpc.percent_decode("100%25 done%0A"), "100% done\n", "percent-decode")
+    t.assert_eq_str(Grpc.percent_decode("bad%zz%"), "bad%zz%", "malformed escapes kept")
+    t.assert_eq_str(Grpc.percent_decode(Grpc.percent_encode("café")), "café", "UTF-8 round trip")
+    mut bin = "\x00\x01\xfe\xffab"
+    t.assert_eq_str(Grpc.b64_encode("Man"), "TWFu", "base64")
+    t.assert_eq_str(Grpc.b64_encode("Ma"), "TWE", "base64 without padding")
+    t.assert_eq_str(Grpc.b64_decode("TWE="), "Ma", "decode with padding")
+    t.assert_eq_str(Grpc.b64_decode("TWE"), "Ma", "decode without padding")
+    t.assert_eq_str(Grpc.b64_encode(Grpc.b64_decode(Grpc.b64_encode(bin))), Grpc.b64_encode(bin), "binary round trip")
+    t.assert_true(Grpc.is_reserved("content-type"), "content-type is reserved")
+    t.assert_false(Grpc.is_reserved("x-user"), "x-user is application metadata")
+    # framer: split input, several messages, compression, errors
+    mut f = GrpcFramer.init(1000)
+    mut both = Grpc.frame("one", false) + Grpc.frame("second", false)
+    f.feed(both.slice(0, 3))
+    t.assert_eq_int(f.next(), 0, "framer waits for the header")
+    f.feed(both.slice(3, 10))
+    t.assert_eq_int(f.next(), 1, "first message")
+    t.assert_eq_str(f.last, "one", "first payload")
+    t.assert_eq_int(f.next(), 0, "second message incomplete")
+    f.feed(both.slice(10, both.len()))
+    t.assert_eq_int(f.next(), 1, "second message")
+    t.assert_eq_str(f.last, "second", "second payload")
+    mut z = Grpc.compress(repeat("hello ", 6), "gzip")
+    mut fz = GrpcFramer.init(100000)
+    fz.encoding = "gzip"
+    fz.feed(Grpc.frame(z, true))
+    t.assert_eq_int(fz.next(), 1, "compressed message decoded")
+    t.assert_eq_str(fz.last, repeat("hello ", 6), "gzip payload")
+    mut fn = GrpcFramer.init(100000)
+    fn.feed(Grpc.frame(z, true))
+    t.assert_eq_int(fn.next(), -1, "compressed flag without grpc-encoding is an error")
+    mut fb = GrpcFramer.init(10)
+    fb.feed(Grpc.frame("this is longer than ten bytes", false))
+    t.assert_eq_int(fb.next(), -2, "oversized message rejected")
+    mut fg = GrpcFramer.init(10)
+    fg.feed("\x02\x00\x00\x00\x00")
+    t.assert_eq_int(fg.next(), -1, "bad flag byte")
+    # health messages
+    t.assert_eq_int(health_parse_response(health_response(1)), 1, "health response round trip")
+    t.assert_eq_str(health_request(""), "", "empty health request")
+    mut r: Result[str, str] = dec_name(enc_name("x"))
+    t.assert_eq_str(r.ok, "x", "protobuf helper round trip")
+
+# ── loopback ─────────────────────────────────────────────────────────────────
+
+def opts_ms(ms: int) -> GrpcCallOptions:
+    mut o = GrpcCallOptions.default()
+    o.timeout_ms = ms
+    return o
+
+def test_calls(t: TestRunner, ch: GrpcChannel) throws str:
+    t.section("unary calls")
+    mut o = GrpcCallOptions.default()
+    o.metadata.add("x-user", "ann")
+    o.metadata.add("x-trace", "t-1")
+    mut r = ch.unary("/helloworld.Greeter/SayHello", enc_name("Tauraro"), o)
+    t.assert_true(r.ok(), "unary OK")
+    t.assert_eq_str(dec_name(r.message)?, "Hello Tauraro", "protobuf reply")
+    t.assert_eq_str(r.headers.get("x-server"), "tauraro", "initial metadata")
+    t.assert_eq_str(r.trailers.get("x-calls"), "1", "trailing metadata")
+    t.assert_eq_str(r.trailers.get("x-user"), "ann", "request metadata reaches the handler")
+    t.assert_eq_str(r.trailers.get("x-trace-seen"), "t-1", "second metadata entry")
+    t.assert_eq_str(Grpc.get_bin(r.trailers, "x-blob-bin"), "\x00\x01\x02\xff", "-bin metadata round trip")
+    mut e = ch.unary("/helloworld.Greeter/SayHello", enc_name(""), GrpcCallOptions.default())
+    t.assert_eq_int(e.code, GRPC_INVALID_ARGUMENT(), "INVALID_ARGUMENT")
+    t.assert_eq_str(e.details, "name must not be empty", "status details")
+    mut nf = ch.unary("/helloworld.Greeter/SayHello", enc_name("ghost"), GrpcCallOptions.default())
+    t.assert_eq_int(nf.code, GRPC_NOT_FOUND(), "NOT_FOUND")
+    t.assert_eq_str(nf.details, "no such user: 100% ü", "details with % and UTF-8 survive percent-encoding")
+    t.assert_eq_str(nf.status_name(), "NOT_FOUND", "status name")
+    t.assert_eq_int(len(nf.messages), 0, "no message on error")
+    mut un = ch.unary("/helloworld.Greeter/Nothing", "", GrpcCallOptions.default())
+    t.assert_eq_int(un.code, GRPC_UNIMPLEMENTED(), "unknown method -> UNIMPLEMENTED")
+    mut bad = ch.unary("/helloworld.Greeter/SayHello", "\x0a\xff", GrpcCallOptions.default())
+    t.assert_eq_int(bad.code, GRPC_INVALID_ARGUMENT(), "malformed protobuf handled by the handler")
+    mut big = repeat("0123456789abcdef", 16)
+    mut br = ch.unary("/t.S/Echo", big, GrpcCallOptions.default())
+    t.assert_true(br.ok() and br.message == big, "1 MiB message echoed")
+    mut zo = GrpcCallOptions.default()
+    zo.compress = true
+    mut zr = ch.unary("/t.S/Echo", repeat("compressible ", 12), zo)
+    t.assert_true(zr.ok() and zr.message == repeat("compressible ", 12), "gzip-compressed request and reply")
+    mut small = GrpcCallOptions.default()
+    small.max_message = 100
+    mut tl = ch.unary("/t.S/Echo", repeat("x", 8), small)
+    t.assert_eq_int(tl.code, GRPC_RESOURCE_EXHAUSTED(), "response larger than max_message -> RESOURCE_EXHAUSTED")
+    mut ok2 = ch.unary("/t.S/Echo", "after errors", GrpcCallOptions.default())
+    t.assert_eq_str(ok2.message, "after errors", "channel usable after errors")
+
+    t.section("deadlines and cancellation")
+    mut t0 = Clock.now_ms()
+    mut d = ch.unary("/t.S/Slow", "", opts_ms(300))
+    mut el = Clock.now_ms() - t0
+    t.assert_eq_int(d.code, GRPC_DEADLINE_EXCEEDED(), "client deadline -> DEADLINE_EXCEEDED")
+    t.assert_true(el < 2500, "returned near the deadline, not after the handler")
+    Thread.sleep(300)
+    mut after = ch.unary("/t.S/Echo", "still fine", GrpcCallOptions.default())
+    t.assert_eq_str(after.message, "still fine", "server recovered after the deadline")
+    mut fc = ch.server_streaming("/t.S/Forever", "", GrpcCallOptions.default())?
+    t.assert_true(fc.recv(), "first message of an endless stream")
+    t.assert_true(fc.recv(), "second message")
+    fc.cancel()
+    t.assert_eq_int(fc.code, GRPC_CANCELLED(), "cancel -> CANCELLED")
+    t.assert_false(fc.recv(), "no more messages after cancel")
+    mut after2 = ch.unary("/t.S/Echo", "post-cancel", GrpcCallOptions.default())
+    t.assert_eq_str(after2.message, "post-cancel", "server unaffected by the cancelled stream")
+
+    t.section("streaming calls")
+    mut sc = ch.server_streaming("/t.S/Count", "12345678", GrpcCallOptions.default())?
+    mut got: List[str] = []
+    while sc.recv():
+        got.append(sc.message)
+    t.assert_eq_int(len(got), 8, "server streaming: 8 messages")
+    t.assert_eq_str(got[7], "item7", "last message")
+    t.assert_eq_int(sc.code, GRPC_OK(), "server streaming status")
+    mut cc = ch.client_streaming("/t.S/Sum", GrpcCallOptions.default())?
+    mut i = 0
+    while i < 50:
+        cc.send(repeat("a", 5))
+        i = i + 1
+    mut sum = cc.collect()
+    t.assert_eq_str(sum.message, "50:1600", "client streaming: 50 messages of 32 bytes")
+    mut bc = ch.bidi("/t.S/Chat", GrpcCallOptions.default())?
+    mut okc = 0
+    i = 0
+    while i < 25:
+        bc.send("m" + str(i))
+        if bc.recv() and bc.message == "re:m" + str(i): okc = okc + 1
+        i = i + 1
+    t.assert_eq_int(okc, 25, "bidi: 25 interleaved round trips")
+    bc.send("boom")
+    t.assert_false(bc.recv(), "server ended the stream with an error")
+    t.assert_eq_int(bc.code, GRPC_INTERNAL(), "bidi error status")
+    t.assert_eq_str(bc.details, "boom requested", "bidi error details")
+    mut bd = ch.bidi("/t.S/Chat", GrpcCallOptions.default())?
+    bd.send("x")
+    bd.close_send()
+    mut rep = bd.collect()
+    t.assert_eq_int(len(rep.messages), 1, "bidi half-close: reply then OK")
+    t.assert_eq_int(rep.code, GRPC_OK(), "bidi status after half-close")
+
+    t.section("health checking")
+    mut hc = ch.unary("/grpc.health.v1.Health/Check", health_request(""), GrpcCallOptions.default())
+    t.assert_eq_int(health_parse_response(hc.message), HEALTH_SERVING(), "overall health SERVING")
+    mut hs = ch.unary("/grpc.health.v1.Health/Check", health_request("t.Svc"), GrpcCallOptions.default())
+    t.assert_eq_int(health_parse_response(hs.message), HEALTH_NOT_SERVING(), "named service NOT_SERVING")
+    mut hu = ch.unary("/grpc.health.v1.Health/Check", health_request("nope"), GrpcCallOptions.default())
+    t.assert_eq_int(hu.code, GRPC_NOT_FOUND(), "unknown service -> NOT_FOUND")
+    mut w = ch.server_streaming("/grpc.health.v1.Health/Watch", health_request(""), GrpcCallOptions.default())?
+    t.assert_true(w.recv(), "Watch sends the current status")
+    t.assert_eq_int(health_parse_response(w.message), HEALTH_SERVING(), "Watch status SERVING")
+    # a unary call is served while the Watch stream is open
+    mut during = ch.unary("/t.S/Echo", "during-watch", GrpcCallOptions.default())
+    t.assert_eq_str(during.message, "during-watch", "unary served while a Watch is open")
+    w.cancel()
+
+def test_wire(t: TestRunner, port: int) throws str:
+    t.section("wire format (seen through Http2Client)")
+    mut o = Http2Options.cleartext()
+    o.timeout_ms = 10000
+    mut c = Http2Client.connect_with("127.0.0.1", port, o)?
+    mut h = H2Headers.init()
+    h.add("content-type", "application/grpc")
+    h.add("te", "trailers")
+    mut r = c.request("POST", "/t.S/Echo", h, Grpc.frame("wire", false), true)?
+    t.assert_eq_int(r.status, 200, "HTTP status is 200")
+    t.assert_eq_str(r.headers.get("content-type"), "application/grpc", "response content-type")
+    t.assert_eq_str(r.trailers.get("grpc-status"), "0", "grpc-status trailer")
+    t.assert_eq_str(r.body.slice(5, r.body.len()), "wire", "length-prefixed message")
+    mut h2 = H2Headers.init()
+    h2.add("content-type", "application/grpc")
+    mut r2 = c.request("POST", "/no/Such", h2, Grpc.frame("", false), true)?
+    t.assert_eq_str(r2.headers.get("grpc-status"), "12", "trailers-only response carries grpc-status in the headers")
+    t.assert_eq_int(r2.body.len(), 0, "trailers-only response has no body")
+    mut h3 = H2Headers.init()
+    h3.add("content-type", "text/plain")
+    mut r3 = c.request("POST", "/t.S/Echo", h3, "x", true)?
+    t.assert_eq_int(r3.status, 415, "non-gRPC content-type -> HTTP 415")
+    mut r4 = c.request("GET", "/t.S/Echo", h2, "", false)?
+    t.assert_eq_str(r4.headers.get("grpc-status"), "12", "GET is not a gRPC request")
+    mut h5 = H2Headers.init()
+    h5.add("content-type", "application/grpc")
+    h5.add("grpc-timeout", "1000m")
+    mut r5 = c.request("POST", "/t.S/Echo", h5, Grpc.frame("t", false) + Grpc.frame("u", false), true)?
+    t.assert_eq_str(r5.headers.get("grpc-status"), "13", "two messages for a unary call -> INTERNAL")
+    mut h6 = H2Headers.init()
+    h6.add("content-type", "application/grpc")
+    h6.add("grpc-encoding", "snappy")
+    mut r6 = c.request("POST", "/t.S/Echo", h6, Grpc.frame("t", true), true)?
+    t.assert_eq_str(r6.headers.get("grpc-status"), "12", "unsupported grpc-encoding -> UNIMPLEMENTED")
+    c.close()
+
+def run_all(t: TestRunner, port: int, tls: int, label: str):
+    shared ctl = Ctl()
+    ctl.stop = Atomic.new(0)
+    ctl.port = port
+    ctl.tls = tls
+    mut th = Thread.spawn(server_loop, ctl)
+    Thread.sleep(300)
+    mut r: Result[bool, str] = body(t, port, tls)
+    t.assert_true(r.is_ok, label + ": completed")
+    if r.is_err: print(r.err)
+    ctl.stop.store(1)
+    th.join()
+
+def body(t: TestRunner, port: int, tls: int) throws str -> bool:
+    if tls == 0:
+        mut ch = GrpcChannel.connect("127.0.0.1", port)?
+        test_calls(t, ch)?
+        ch.close()
+        test_wire(t, port)?
+    else:
+        t.section("gRPC over TLS (ALPN h2)")
+        mut ch2 = GrpcChannel.connect_tls("localhost", port, cert_pem())?
+        mut r = ch2.unary("/helloworld.Greeter/SayHello", enc_name("TLS"), GrpcCallOptions.default())
+        t.assert_true(r.ok(), "unary over TLS")
+        t.assert_eq_str(dec_name(r.message)?, "Hello TLS", "reply over TLS")
+        mut bc = ch2.bidi("/t.S/Chat", GrpcCallOptions.default())?
+        bc.send("tls")
+        t.assert_true(bc.recv() and bc.message == "re:tls", "bidi over TLS")
+        bc.close_send()
+        t.assert_false(bc.recv(), "bidi finished")
+        mut big = repeat("0123456789abcdef", 16)
+        mut br = ch2.unary("/t.S/Echo", big, GrpcCallOptions.default())
+        t.assert_true(br.ok() and br.message == big, "1 MiB message over TLS")
+        ch2.close()
+        mut untrusted: Result[GrpcChannel, str] = GrpcChannel.connect_tls("localhost", port, "")
+        t.assert_true(untrusted.is_err, "untrusted server certificate rejected")
+    return true
+
+def test_unavailable(t: TestRunner):
+    t.section("connection failures")
+    mut r: Result[GrpcChannel, str] = GrpcChannel.connect("127.0.0.1", 19199)
+    t.assert_true(r.is_err, "connecting to a closed port fails")
+
+def main():
+    mut t = TestRunner.init("142_grpc")
+    test_helpers(t)
+    test_unavailable(t)
+    run_all(t, 19151, 0, "h2c")
+    run_all(t, 19152, 1, "TLS")
+    t.summary()
+
+def cert_pem() -> str:
+    return """-----BEGIN CERTIFICATE-----
+MIIDPjCCAiagAwIBAgIUeAKs+8YjLl4a7sAlaivhrlUdGMkwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxNDE5NTM0MFoYDzIxMjYw
+OTIwMTk1MzQwWjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwggEiMA0GCSqGSIb3DQEB
+AQUAA4IBDwAwggEKAoIBAQDToWgqUJB5hPuhL0PELeEoyuSctEtQNQEOb5Gk66hK
++pTe/Hi8P8T/9cIKiMMt6RV9KLMqf0Sor+nuDcLuGdpdn6sKNW36p9DatFBbgYE+
++vFc69uL2dh8KosCbABod5jh24MvN7Lbv4riY1TLWmB+7LTQV0Ra0stWjEr3XntY
+Wyi1mzKSRpdMsvMAz+GPtiEwIHSSj99oe/0/sKhMNL4lnasxyjFvT63V+U+ijwYV
+gi6K5TiwYHNav9IlQTIY8VXQRYCg0/oKYD5WSMXHQCHnCTyFXP5W10RoEd1dimFa
+6KRVGomQZoS1x5zqi6oRcboxM0Hu2yCgKM2d1Rbj8BphAgMBAAGjgYUwgYIwHQYD
+VR0OBBYEFOx8kTmRRDx8rx2G1x/xweBjYzTxMB8GA1UdIwQYMBaAFOx8kTmRRDx8
+rx2G1x/xweBjYzTxMA8GA1UdEwEB/wQFMAMBAf8wGgYDVR0RBBMwEYIJbG9jYWxo
+b3N0hwR/AAABMBMGA1UdJQQMMAoGCCsGAQUFBwMBMA0GCSqGSIb3DQEBCwUAA4IB
+AQA9AkN7FszdaN6ZP7JNQ/Xouz0KiR970Z2TsiAXw/zDwICYsSVtWy3tyVgmBT22
+1b08dZqgzGQxC0xr8bH+iG131KnX68O+9v67phHak067FH9+VGInEF/kdl/xPMdV
+uhBCT5VdQQDV0Aa/FmzEeyaFiELaAWkhqr40dbkLlLrBk3NqaOVJwu4LdMmPfDIV
+Bf42N4+yc55HCvaafjb2wjUvTqMJ+uFn+zZBqr2uLtsdTbvUCbzGqNHWsnNOCsRB
+KbWJ/OcI52GoMmrbB5w5KTvMs5sdPP1HETCYDfZ0OZzhPsHtgxPHYC7hZksSrssD
+DGcrGc9RqPZKMiuTju4e/7sE
+-----END CERTIFICATE-----
+"""
+
+def key_pem() -> str:
+    return """-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDToWgqUJB5hPuh
+L0PELeEoyuSctEtQNQEOb5Gk66hK+pTe/Hi8P8T/9cIKiMMt6RV9KLMqf0Sor+nu
+DcLuGdpdn6sKNW36p9DatFBbgYE++vFc69uL2dh8KosCbABod5jh24MvN7Lbv4ri
+Y1TLWmB+7LTQV0Ra0stWjEr3XntYWyi1mzKSRpdMsvMAz+GPtiEwIHSSj99oe/0/
+sKhMNL4lnasxyjFvT63V+U+ijwYVgi6K5TiwYHNav9IlQTIY8VXQRYCg0/oKYD5W
+SMXHQCHnCTyFXP5W10RoEd1dimFa6KRVGomQZoS1x5zqi6oRcboxM0Hu2yCgKM2d
+1Rbj8BphAgMBAAECggEABGBpfRE0IQSPskz97nKxyLGEJNF9tTzuC/8MA13Jmd4G
+HM5v2MTLgtecRFzWXH6zg7vHE3E/ruq5wG3nGBwkw0boDJ//lELK3kWtsRbD4NTj
+ukjjvh1VOCF7xSMNUcZsvPmt2YN3Xsqz8+vwoaakKZEk9CIPNymg1uYJLtsfWzu4
+Y+uGkawsiy9m79HhwxsmXnDfbzSps62nO9o9P5Zo8nDdv00ihp3s+tpEpHnJ4Lgz
+Xh9Ho+bU6W3oAbHDWXZwFxpDPPNkNqn+ZwfHWh0ZL8Kh3s3v0u8lsNqxVr2mwnfB
+gY8nPcJpiQf4Z12V4tS2LFR52ptA/wSrexiR8nxCIQKBgQD93ryj7oO8eJWG7EFK
+NTZF7YL/rGaO84IQXxKuwMvhUgevDWIsr5m/QVL2wvz0Mb7KAtbTYCLKpfzu6Ets
+zrD0J4MH2j7dDF1x5qj5MarHE9ATwMDdb9WBbN48qLxkw9FkLVs4O5dS/f+CwxgF
+imZwmzgHSlOf960BEpRwnA+OlQKBgQDVZ/KcxL0FgufBmkH7x2A5JkzDle42EyFr
+JReo3HEyy/CdCgxA/JJfQpCINJzVGWQt0fnqUOhBhsVi/63seOIGM1Vb1hPy7Hf0
+6l09blYl5saDidcxfEsOaI5BXTo/ju82VjbK7P0pw5X3Re1MjhvYb9SJQ/1QoV59
+oondfLnFnQKBgHb+848nmqo6H2SJ0yS0gocOiGvNZJk2/M0tszUke6xW5fEgpdbq
+THfAZ+Hwjd7sflB0OjwEAOraGQ/m5IvQ6lLXPmzs2LCGPjrIcoWzySfdWpgXro9c
+/0fWPulR8lSNENYTCIH4NLsbAaxKRDU8pT29E+se5MnDr10kV13dWNFtAoGAGDGu
+ucM8QtGygKqCbI8QA6qp7UqkNRE6KrGL2yMS2lVws/0dooh/97jONgLw/N/iEafK
+k5wUmMk0u6KND1AtH9LWDJFataHFf8jKRVqq/aUKQINyGDQlNj74UcTGA8qqqBhi
+IeN4WDHKYLxWyOUblxAmomFI6MlCsy+oPaoUTakCgYAnsV9dYg118kZkE26/Tb0F
+Qow9grFd5fpc3n5nDLmXgVbM16ZEF1+EwtmhtGTM2I6PCNYlNlGFdgKitxTksBzS
+IqFXX136obJf/kH2dz4Zt++AJJx9gr5GgwKqZ3LNGyy1/k6OAED90NvJ0ulyW7ko
+O44fiVPNAQCsdXpcArObGQ==
+-----END PRIVATE KEY-----
+"""
