@@ -1,0 +1,789 @@
+# std.crypto.jwk -- JSON Web Keys and JWK Sets (RFC 7517 / 7518 / 8037),
+# JWK thumbprints (RFC 7638) and JWS compact signatures (RFC 7515).
+#
+# A `Jwk` holds one key with its components decoded to raw bytes:
+#
+#   kty "RSA"  n, e (+ d, p, q, dp, dq, qi for a private key)
+#   kty "EC"   crv "P-256" / "P-384", x, y (+ d)
+#   kty "OKP"  crv "Ed25519" / "X25519", x (+ d)        (RFC 8037)
+#   kty "oct"  k (a symmetric secret)
+#
+# plus the common members kid, alg, use (`key_use`), key_ops, x5c, x5t and
+# x5t#S256. Unknown members are ignored when parsing. A `JwkSet` is a JWK
+# Set; parse() skips keys whose kty/crv this module does not implement (as
+# RFC 7517 section 5 recommends) and counts them in `skipped`.
+#
+# Signing / verification (`Jws`, or Jwk.sign/verify) supports
+#   HS256/384/512   oct keys of at least the hash size (RFC 7518 3.2)
+#   RS256/384/512   RSA PKCS#1 v1.5, keys of 2048 bits or more
+#   PS256/384/512   RSA-PSS, salt = hash length, MGF1 with the same hash
+#   ES256 / ES384   ECDSA P-256 / P-384, raw r||s signatures
+#   EdDSA           Ed25519
+# "none" is never accepted, a key is only used with algorithms of its own
+# type (an RSA public key is never treated as an HMAC secret), a key's own
+# "alg", "use" and "key_ops" are honoured, and tokens with a "crit" header
+# are rejected (no extensions are implemented). ES512 / P-521 and RSA
+# private JWKs without the CRT members (p, q, dp, dq, qi) are not supported.
+#
+# Usage:
+#   from std.crypto.jwk import Jwk, JwkSet, Jws
+#   mut set = JwkSet.parse(jwks_json)?
+#   mut key = set.find("2011-04-29")?
+#   mut tp  = key.thumbprint_b64()                 # RFC 7638, SHA-256
+#   mut tok = Jws.sign("{\"sub\":\"ann\"}", priv, "ES256", "JWT")?
+#   mut jws = Jws.verify_set(tok, set, ["ES256", "RS256"])?
+#   print(jws.payload)
+
+from std.crypto.native import _cn_b64, _cn_unb64, _cn_hex, _cn_unhex, ALG_SHA256, ALG_SHA384, ALG_SHA512, trc_ct_eq
+from std.crypto.pk import PKey, KEY_RSA, KEY_EC_P256, KEY_EC_P384, KEY_ED25519, CURVE_P256, CURVE_P384, SIG_PKCS1, SIG_PSS
+from std.crypto.digest import Digest
+from std.crypto.hmac import Hmac
+from std.crypto.ed25519 import Ed25519
+from std.crypto.x25519 import X25519
+from std.crypto.random import SecureRandom
+from std.encoding.json import Json, JsonDoc, JsonRef, _json_escape
+from std.core.string import StringBuilder
+
+# ─── base64url helpers ───────────────────────────────────────────────────────
+
+# Unpadded base64url (RFC 4648 section 5) of raw bytes.
+pub def b64url_encode(data: str) -> str:
+    return _cn_b64(1, false, data)
+
+# Decode base64url (padding optional); raises on any other character.
+pub def b64url_decode(s: str) throws str -> str:
+    return _cn_unb64(1, s)?
+
+def _jwk_qs(sb: StringBuilder, s: str):
+    sb.append_char(34)
+    _json_escape(s, sb)
+    sb.append_char(34)
+
+def _jwk_member(sb: StringBuilder, first: bool, name: str, value: str) -> bool:
+    if not first: sb.append_char(44)
+    _jwk_qs(sb, name)
+    sb.append_char(58)
+    _jwk_qs(sb, value)
+    return false
+
+def _jwk_b64_member(sb: StringBuilder, first: bool, name: str, raw: str) -> bool:
+    mut enc = b64url_encode(raw)
+    return _jwk_member(sb, first, name, enc)
+
+# An optional base64url member; "" when absent.
+def _jwk_opt_b64(r: JsonRef, name: str) throws str -> str:
+    mut v = r.obj_get(name)
+    if not v.exists(): return ""
+    if not v.is_str(): raise(f"JWK: member '{name}' must be a string")
+    mut txt = v.get_str()
+    mut res: Result[str, str] = b64url_decode(txt)
+    if res.is_err: raise(f"JWK: member '{name}' is not valid base64url")
+    return res.ok
+
+def _jwk_req_b64(r: JsonRef, name: str) throws str -> str:
+    mut v = _jwk_opt_b64(r, name)?
+    if v.len() == 0: raise(f"JWK: required member '{name}' is missing or empty")
+    return v
+
+def _jwk_opt_str(r: JsonRef, name: str) throws str -> str:
+    mut v = r.obj_get(name)
+    if not v.exists(): return ""
+    if not v.is_str(): raise(f"JWK: member '{name}' must be a string")
+    return v.get_str()
+
+def _jwk_strip0(s: str) -> str:
+    mut i = 0
+    mut p = s as Pointer[char]
+    while i + 1 < s.len():
+        mut c = 0
+        unsafe: c = (p.offset(i).read() as int) & 255
+        if c != 0: break
+        i = i + 1
+    if i == 0: return s
+    return s.slice(i, s.len())
+
+# Left-pad with zero bytes to exactly n bytes.
+def _jwk_pad(s: str, n: int) -> str:
+    if s.len() >= n: return s
+    mut sb = StringBuilder.init(n + 1)
+    mut i = s.len()
+    while i < n:
+        sb.append_char(0)
+        i = i + 1
+    mut zeros = sb.to_owned()
+    sb.free()
+    return zeros + s
+
+def _jwk_ct_eq(a: str, b: str) -> bool:
+    if a.len() != b.len(): return false
+    mut ap = a as Pointer[char]
+    mut bp = b as Pointer[char]
+    return trc_ct_eq(ap, a.len(), bp, b.len()) == 1
+
+# Hash id for a JWS alg ("RS256" -> ALG_SHA256), or 0.
+pub def jws_alg_hash(alg: str) -> int:
+    if alg.ends_with("256"): return ALG_SHA256
+    if alg.ends_with("384"): return ALG_SHA384
+    if alg.ends_with("512"): return ALG_SHA512
+    return 0
+
+# True for every alg this module implements.
+pub def jws_alg_supported(alg: str) -> bool:
+    if alg == "HS256" or alg == "HS384" or alg == "HS512": return true
+    if alg == "RS256" or alg == "RS384" or alg == "RS512": return true
+    if alg == "PS256" or alg == "PS384" or alg == "PS512": return true
+    if alg == "ES256" or alg == "ES384" or alg == "EdDSA": return true
+    return false
+
+# ─── Jwk ─────────────────────────────────────────────────────────────────────
+
+pub class Jwk:
+    pub kty:      str
+    pub kid:      str
+    pub alg:      str
+    pub key_use:  str          # the "use" member ("sig", "enc" or "")
+    pub key_ops:  List[str]
+    pub crv:      str
+    pub n:        str          # raw big-endian / octet values below
+    pub e:        str
+    pub d:        str
+    pub p:        str
+    pub q:        str
+    pub dp:       str
+    pub dq:       str
+    pub qi:       str
+    pub x:        str
+    pub y:        str
+    pub k:        str
+    pub x5c:      List[str]    # base64 (standard alphabet) DER certificates, as given
+    pub x5t:      str          # as given (base64url text)
+    pub x5t_s256: str
+
+extend Jwk:
+    def _blank(kty: str) -> Jwk:
+        mut j = Jwk()
+        j.kty = kty
+        j.kid = ""
+        j.alg = ""
+        j.key_use = ""
+        j.key_ops = []
+        j.crv = ""
+        j.n = ""
+        j.e = ""
+        j.d = ""
+        j.p = ""
+        j.q = ""
+        j.dp = ""
+        j.dq = ""
+        j.qi = ""
+        j.x = ""
+        j.y = ""
+        j.k = ""
+        j.x5c = []
+        j.x5t = ""
+        j.x5t_s256 = ""
+        return j
+
+    # ── parsing ──────────────────────────────────────────────────────────
+
+    # Parse one JWK from JSON text.
+    pub def parse(json: str) throws str -> Jwk:
+        mut doc = Json.parse(json)
+        mut root = doc.root()
+        if not root.is_object(): raise("JWK: not a JSON object")
+        # Bound to a local first: `return f(ref)?` would release `doc` (which
+        # `root` borrows) before the call runs.
+        mut j = Jwk.from_json(root)?
+        return j
+
+    # Parse one JWK from a JSON object node (e.g. an element of "keys").
+    pub def from_json(r: JsonRef) throws str -> Jwk:
+        if not r.is_object(): raise("JWK: not a JSON object")
+        mut kty = _jwk_opt_str(r, "kty")?
+        if kty.len() == 0: raise("JWK: missing 'kty'")
+        mut j = Jwk._blank(kty)
+        j.kid = _jwk_opt_str(r, "kid")?
+        j.alg = _jwk_opt_str(r, "alg")?
+        j.key_use = _jwk_opt_str(r, "use")?
+        j.crv = _jwk_opt_str(r, "crv")?
+        j.x5t = _jwk_opt_str(r, "x5t")?
+        j.x5t_s256 = _jwk_opt_str(r, "x5t#S256")?
+        mut ops = r.obj_get("key_ops")
+        if ops.exists():
+            if not ops.is_array(): raise("JWK: 'key_ops' must be an array")
+            mut i = 0
+            while i < ops.array_len():
+                mut op = ops.array_get(i)
+                if not op.is_str(): raise("JWK: 'key_ops' entries must be strings")
+                mut ov = op.get_str()
+                j.key_ops.append(ov)
+                i = i + 1
+        mut chain = r.obj_get("x5c")
+        if chain.exists():
+            if not chain.is_array(): raise("JWK: 'x5c' must be an array")
+            mut ci = 0
+            while ci < chain.array_len():
+                mut cv = chain.array_get(ci)
+                if not cv.is_str(): raise("JWK: 'x5c' entries must be strings")
+                mut cs = cv.get_str()
+                j.x5c.append(cs)
+                ci = ci + 1
+        if kty == "RSA":
+            j.n = _jwk_strip0(_jwk_req_b64(r, "n")?)
+            j.e = _jwk_strip0(_jwk_req_b64(r, "e")?)
+            j.d = _jwk_opt_b64(r, "d")?
+            if j.d.len() > 0:
+                if r.obj_has("oth"): raise("JWK: RSA keys with more than two primes ('oth') are not supported")
+                j.p = _jwk_opt_b64(r, "p")?
+                j.q = _jwk_opt_b64(r, "q")?
+                j.dp = _jwk_opt_b64(r, "dp")?
+                j.dq = _jwk_opt_b64(r, "dq")?
+                j.qi = _jwk_opt_b64(r, "qi")?
+                if j.p.len() == 0 or j.q.len() == 0 or j.dp.len() == 0 or j.dq.len() == 0 or j.qi.len() == 0:
+                    raise("JWK: RSA private keys need p, q, dp, dq and qi (keys with only d are not supported)")
+            if j.n.len() < 64: raise("JWK: RSA modulus is too small")
+        elif kty == "EC":
+            mut sz = 0
+            if j.crv == "P-256": sz = 32
+            elif j.crv == "P-384": sz = 48
+            elif j.crv == "P-521": raise("JWK: curve P-521 is not supported")
+            else: raise(f"JWK: unsupported EC curve '{j.crv}'")
+            j.x = _jwk_req_b64(r, "x")?
+            j.y = _jwk_req_b64(r, "y")?
+            j.d = _jwk_opt_b64(r, "d")?
+            if j.x.len() != sz or j.y.len() != sz: raise("JWK: EC coordinates have the wrong length for the curve")
+            if j.d.len() > 0 and j.d.len() != sz: raise("JWK: EC private key has the wrong length for the curve")
+        elif kty == "OKP":
+            if j.crv != "Ed25519" and j.crv != "X25519": raise(f"JWK: unsupported OKP curve '{j.crv}'")
+            j.x = _jwk_req_b64(r, "x")?
+            j.d = _jwk_opt_b64(r, "d")?
+            if j.x.len() != 32: raise("JWK: OKP public key must be 32 bytes")
+            if j.d.len() > 0 and j.d.len() != 32: raise("JWK: OKP private key must be 32 bytes")
+        elif kty == "oct":
+            j.k = _jwk_req_b64(r, "k")?
+        else:
+            raise(f"JWK: unsupported key type '{kty}'")
+        return j
+
+    # ── constructors ─────────────────────────────────────────────────────
+
+    # A symmetric key (kty "oct") from raw secret bytes.
+    pub def oct(secret: str) -> Jwk:
+        mut j = Jwk._blank("oct")
+        j.k = secret
+        return j
+
+    # A random symmetric key of `nbytes` bytes.
+    pub def generate_oct(nbytes: int) throws str -> Jwk:
+        mut s = SecureRandom.bytes(nbytes)?
+        return Jwk.oct(s)
+
+    # Ed25519 private key from its 32-byte seed (the public key is derived).
+    pub def ed25519_from_seed(seed: str) throws str -> Jwk:
+        if seed.len() != 32: raise("JWK: an Ed25519 seed is 32 bytes")
+        mut sh = _cn_hex(seed)
+        mut ph = Ed25519.pubkey(sh)
+        mut j = Jwk._blank("OKP")
+        j.crv = "Ed25519"
+        j.d = seed
+        j.x = _cn_unhex(ph)?
+        return j
+
+    pub def ed25519_public(x: str) throws str -> Jwk:
+        if x.len() != 32: raise("JWK: an Ed25519 public key is 32 bytes")
+        mut j = Jwk._blank("OKP")
+        j.crv = "Ed25519"
+        j.x = x
+        return j
+
+    pub def generate_ed25519() throws str -> Jwk:
+        mut seed = SecureRandom.bytes(32)?
+        return Jwk.ed25519_from_seed(seed)?
+
+    # X25519 key from its 32-byte private scalar.
+    pub def x25519_from_private(d: str) throws str -> Jwk:
+        mut pubk = X25519.public_key(d)?
+        mut j = Jwk._blank("OKP")
+        j.crv = "X25519"
+        j.d = d
+        j.x = pubk
+        return j
+
+    pub def x25519_public(x: str) throws str -> Jwk:
+        if x.len() != 32: raise("JWK: an X25519 public key is 32 bytes")
+        mut j = Jwk._blank("OKP")
+        j.crv = "X25519"
+        j.x = x
+        return j
+
+    # A fresh EC key on CURVE_P256 or CURVE_P384.
+    pub def generate_ec(curve: int) throws str -> Jwk:
+        mut key = PKey.generate_ec(curve)?
+        mut r: Result[Jwk, str] = Jwk.from_pkey(key)
+        key.dispose()
+        if r.is_err: raise(r.err)
+        return r.ok
+
+    # JWK for an RSA / EC / Ed25519 PKey (private members included when the
+    # PKey holds a private key).
+    pub def from_pkey(key: PKey) throws str -> Jwk:
+        mut kind = key.kind()
+        if kind == KEY_RSA:
+            mut j = Jwk._blank("RSA")
+            j.n = key.rsa_part(0)
+            j.e = key.rsa_part(1)
+            if key.has_private():
+                j.d = key.rsa_part(2)
+                if j.d.len() == 0: raise("JWK: this RSA private key has no private exponent")
+                j.p = key.rsa_part(3)
+                j.q = key.rsa_part(4)
+                j.dp = key.rsa_part(5)
+                j.dq = key.rsa_part(6)
+                j.qi = key.rsa_part(7)
+            return j
+        if kind == KEY_EC_P256 or kind == KEY_EC_P384:
+            mut j2 = Jwk._blank("EC")
+            mut sz = 32
+            j2.crv = "P-256"
+            if kind == KEY_EC_P384:
+                sz = 48
+                j2.crv = "P-384"
+            mut pt = key.public_bytes()
+            j2.x = pt.slice(1, 1 + sz)
+            j2.y = pt.slice(1 + sz, 1 + 2 * sz)
+            if key.has_private():
+                j2.d = key.ec_private_bytes()?
+            return j2
+        if kind == KEY_ED25519:
+            mut pb = key.public_bytes()
+            return Jwk.ed25519_public(pb)?
+        raise("JWK: unsupported key kind")
+
+    # ── conversion ───────────────────────────────────────────────────────
+
+    pub def is_private(self) -> bool:
+        if self.kty == "oct": return true
+        return self.d.len() > 0
+
+    # A copy without the private members. Raises for "oct" keys (a
+    # symmetric key has no public form).
+    pub def to_public(self) throws str -> Jwk:
+        if self.kty == "oct": raise("JWK: a symmetric (oct) key has no public form")
+        mut j = Jwk._blank(self.kty)
+        j.kid = self.kid
+        j.alg = self.alg
+        j.key_use = self.key_use
+        for op in self.key_ops:
+            if op != "sign" and op != "decrypt" and op != "unwrapKey" and op != "deriveKey" and op != "deriveBits":
+                j.key_ops.append(op)
+        j.crv = self.crv
+        j.n = self.n
+        j.e = self.e
+        j.x = self.x
+        j.y = self.y
+        for c in self.x5c:
+            j.x5c.append(c)
+        j.x5t = self.x5t
+        j.x5t_s256 = self.x5t_s256
+        return j
+
+    # The PKey for an RSA / EC key (private when the JWK is), or the public
+    # PKey of an Ed25519 key (PKey cannot hold Ed25519 private keys; use
+    # Jwk.sign for those). X25519 and oct keys raise.
+    pub def to_pkey(self) throws str -> PKey:
+        if self.kty == "RSA":
+            return PKey.rsa_from_parts(self.n, self.e, self.d, self.p, self.q, self.dp, self.dq, self.qi)?
+        if self.kty == "EC":
+            mut curve = CURVE_P256
+            if self.crv == "P-384": curve = CURVE_P384
+            mut pt = "\x04" + self.x + self.y
+            if self.d.len() > 0:
+                mut key = PKey.ec_from_private(curve, self.d)?
+                mut have = key.public_bytes()
+                if not _jwk_ct_eq(have, pt):
+                    key.dispose()
+                    raise("JWK: EC private key does not match its x/y coordinates")
+                return key
+            return PKey.ec_from_public(curve, pt)?
+        if self.kty == "OKP" and self.crv == "Ed25519":
+            mut spki = "\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00" + self.x
+            return PKey.from_der(spki)?
+        raise(f"JWK: no PKey form for kty '{self.kty}' crv '{self.crv}'")
+
+    # ── serialization ────────────────────────────────────────────────────
+
+    # Compact JSON with every member present (private members included).
+    pub def to_json(self) -> str:
+        mut sb = StringBuilder.init(512)
+        sb.append_char(123)
+        mut first = _jwk_member(sb, true, "kty", self.kty)
+        if self.kid.len() > 0: first = _jwk_member(sb, first, "kid", self.kid)
+        if self.key_use.len() > 0: first = _jwk_member(sb, first, "use", self.key_use)
+        if self.key_ops.len() > 0:
+            sb.append(",\"key_ops\":[")
+            mut i = 0
+            while i < self.key_ops.len():
+                if i > 0: sb.append_char(44)
+                mut op = self.key_ops[i]
+                _jwk_qs(sb, op)
+                i = i + 1
+            sb.append_char(93)
+        if self.alg.len() > 0: first = _jwk_member(sb, first, "alg", self.alg)
+        if self.crv.len() > 0: first = _jwk_member(sb, first, "crv", self.crv)
+        if self.kty == "RSA":
+            first = _jwk_b64_member(sb, first, "n", self.n)
+            first = _jwk_b64_member(sb, first, "e", self.e)
+            if self.d.len() > 0:
+                first = _jwk_b64_member(sb, first, "d", self.d)
+                first = _jwk_b64_member(sb, first, "p", self.p)
+                first = _jwk_b64_member(sb, first, "q", self.q)
+                first = _jwk_b64_member(sb, first, "dp", self.dp)
+                first = _jwk_b64_member(sb, first, "dq", self.dq)
+                first = _jwk_b64_member(sb, first, "qi", self.qi)
+        elif self.kty == "EC" or self.kty == "OKP":
+            first = _jwk_b64_member(sb, first, "x", self.x)
+            if self.kty == "EC": first = _jwk_b64_member(sb, first, "y", self.y)
+            if self.d.len() > 0: first = _jwk_b64_member(sb, first, "d", self.d)
+        elif self.kty == "oct":
+            first = _jwk_b64_member(sb, first, "k", self.k)
+        if self.x5c.len() > 0:
+            sb.append(",\"x5c\":[")
+            mut ci = 0
+            while ci < self.x5c.len():
+                if ci > 0: sb.append_char(44)
+                mut cv = self.x5c[ci]
+                _jwk_qs(sb, cv)
+                ci = ci + 1
+            sb.append_char(93)
+        if self.x5t.len() > 0: first = _jwk_member(sb, first, "x5t", self.x5t)
+        if self.x5t_s256.len() > 0: first = _jwk_member(sb, first, "x5t#S256", self.x5t_s256)
+        sb.append_char(125)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # The public JSON (raises for oct keys).
+    pub def to_public_json(self) throws str -> str:
+        mut pubk = self.to_public()?
+        return pubk.to_json()
+
+    # ── thumbprints (RFC 7638) ───────────────────────────────────────────
+
+    # The canonical JSON the thumbprint is computed over: the required
+    # members only, in lexicographic order, no whitespace.
+    pub def thumbprint_input(self) -> str:
+        mut sb = StringBuilder.init(512)
+        sb.append_char(123)
+        mut first = true
+        if self.kty == "RSA":
+            first = _jwk_b64_member(sb, first, "e", self.e)
+            first = _jwk_member(sb, first, "kty", "RSA")
+            first = _jwk_b64_member(sb, first, "n", self.n)
+        elif self.kty == "EC":
+            first = _jwk_member(sb, first, "crv", self.crv)
+            first = _jwk_member(sb, first, "kty", "EC")
+            first = _jwk_b64_member(sb, first, "x", self.x)
+            first = _jwk_b64_member(sb, first, "y", self.y)
+        elif self.kty == "OKP":
+            first = _jwk_member(sb, first, "crv", self.crv)
+            first = _jwk_member(sb, first, "kty", "OKP")
+            first = _jwk_b64_member(sb, first, "x", self.x)
+        else:
+            first = _jwk_b64_member(sb, first, "k", self.k)
+            first = _jwk_member(sb, first, "kty", "oct")
+        sb.append_char(125)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Raw thumbprint with hash ALG_SHA256 / ALG_SHA384 / ALG_SHA512.
+    pub def thumbprint(self, hash_alg: int) throws str -> str:
+        mut canon = self.thumbprint_input()
+        return Digest.compute(hash_alg, canon)?
+
+    # base64url SHA-256 thumbprint (the usual "kid" value).
+    pub def thumbprint_b64(self) -> str:
+        mut canon = self.thumbprint_input()
+        mut h = Digest.sha256(canon)
+        return b64url_encode(h)
+
+    # RFC 9278 thumbprint URI.
+    pub def thumbprint_uri(self) -> str:
+        mut t = self.thumbprint_b64()
+        return "urn:ietf:params:oauth:jwk-thumbprint:sha-256:" + t
+
+    # ── signatures ───────────────────────────────────────────────────────
+
+    # Whether this key may be used with `alg` for operation `op` ("sign" or
+    # "verify"); "" when it may, else the reason.
+    pub def check_alg(self, alg: str, op: str) -> str:
+        if not jws_alg_supported(alg): return f"unsupported algorithm '{alg}'"
+        if self.alg.len() > 0 and self.alg != alg: return f"key is restricted to alg '{self.alg}'"
+        if self.key_use.len() > 0 and self.key_use != "sig": return "key is not a signature key (use != sig)"
+        if self.key_ops.len() > 0:
+            mut found = false
+            for o in self.key_ops:
+                if o == op: found = true
+            if not found: return f"key_ops does not allow '{op}'"
+        if alg.starts_with("HS"):
+            if self.kty != "oct": return "HMAC algorithms need an oct key"
+            mut hl = 32
+            if alg == "HS384": hl = 48
+            if alg == "HS512": hl = 64
+            if self.k.len() < hl: return "HMAC key is shorter than the hash output"
+            return ""
+        if alg.starts_with("RS") or alg.starts_with("PS"):
+            if self.kty != "RSA": return "RSA algorithms need an RSA key"
+            if self.n.len() < 256: return "RSA keys must be at least 2048 bits"
+            if op == "sign" and self.d.len() == 0: return "signing needs a private key"
+            return ""
+        if alg == "ES256" or alg == "ES384":
+            if self.kty != "EC": return "ECDSA algorithms need an EC key"
+            if alg == "ES256" and self.crv != "P-256": return "ES256 needs a P-256 key"
+            if alg == "ES384" and self.crv != "P-384": return "ES384 needs a P-384 key"
+            if op == "sign" and self.d.len() == 0: return "signing needs a private key"
+            return ""
+        if alg == "EdDSA":
+            if self.kty != "OKP" or self.crv != "Ed25519": return "EdDSA needs an Ed25519 key"
+            if op == "sign" and self.d.len() == 0: return "signing needs a private key"
+            return ""
+        return f"unsupported algorithm '{alg}'"
+
+    # Raw JWS signature of `data` with `alg`.
+    pub def sign(self, alg: str, data: str) throws str -> str:
+        mut why = self.check_alg(alg, "sign")
+        if why.len() > 0: raise("JWS: " + why)
+        mut h = jws_alg_hash(alg)
+        if alg.starts_with("HS"):
+            return Hmac.compute(h, self.k, data)?
+        if alg == "EdDSA":
+            mut sh = _cn_hex(self.d)
+            mut sig_hex = Ed25519.sign(data, sh)
+            return _cn_unhex(sig_hex)?
+        mut key = self.to_pkey()?
+        mut scheme = SIG_PKCS1
+        if alg.starts_with("PS"): scheme = SIG_PSS
+        if alg.starts_with("ES"):
+            mut re: Result[str, str] = key.sign_raw(data, h)
+            key.dispose()
+            if re.is_err: raise(re.err)
+            return re.ok
+        mut rr: Result[str, str] = key.sign(data, h, scheme)
+        key.dispose()
+        if rr.is_err: raise(rr.err)
+        return rr.ok
+
+    # Check a raw JWS signature. Never raises: any problem means false.
+    pub def verify(self, alg: str, data: str, sig: str) -> bool:
+        mut why = self.check_alg(alg, "verify")
+        if why.len() > 0: return false
+        mut h = jws_alg_hash(alg)
+        if alg.starts_with("HS"):
+            return Hmac.verify(h, self.k, data, sig) and sig.len() == Digest.size(h)
+        if alg == "EdDSA":
+            if sig.len() != 64: return false
+            mut sh = _cn_hex(sig)
+            mut ph = _cn_hex(self.x)
+            return Ed25519.verify(data, sh, ph)
+        mut kr: Result[PKey, str] = self.to_pkey()
+        if kr.is_err: return false
+        mut key = kr.ok
+        mut ok = false
+        if alg.starts_with("RS"): ok = key.verify(data, sig, h, SIG_PKCS1)
+        elif alg.starts_with("PS"): ok = key.verify(data, sig, h, SIG_PSS)
+        else:
+            mut want = 64
+            if alg == "ES384": want = 96
+            if sig.len() == want: ok = key.verify_raw(data, sig, h)
+        key.dispose()
+        return ok
+
+# ─── JwkSet ──────────────────────────────────────────────────────────────────
+
+pub class JwkSet:
+    pub keys:    List[Jwk]
+    pub skipped: int           # keys parse() ignored (unsupported kty/crv or malformed)
+
+extend JwkSet:
+    pub def init() -> JwkSet:
+        mut s = JwkSet()
+        s.keys = []
+        s.skipped = 0
+        return s
+
+    # Parse {"keys":[...]}.
+    pub def parse(json: str) throws str -> JwkSet:
+        mut doc = Json.parse(json)
+        mut root = doc.root()
+        if not root.is_object(): raise("JWKS: not a JSON object")
+        mut arr = root.obj_get("keys")
+        if not arr.exists() or not arr.is_array(): raise("JWKS: missing 'keys' array")
+        mut s = JwkSet.init()
+        mut i = 0
+        while i < arr.array_len():
+            mut el = arr.array_get(i)
+            mut r: Result[Jwk, str] = Jwk.from_json(el)
+            if r.is_ok: s.keys.append(r.ok)
+            else: s.skipped = s.skipped + 1
+            i = i + 1
+        return s
+
+    pub def add(self, key: Jwk):
+        self.keys.append(key)
+
+    pub def len(self) -> int:
+        return self.keys.len()
+
+    pub def has(self, kid: str) -> bool:
+        for k in self.keys:
+            if k.kid == kid: return true
+        return false
+
+    # The key whose "kid" is `kid`.
+    pub def find(self, kid: str) throws str -> Jwk:
+        for k in self.keys:
+            if k.kid == kid: return k
+        raise(f"JWKS: no key with kid '{kid}'")
+
+    # Keys usable to verify `alg` (and matching `kid` unless it is "").
+    pub def candidates(self, kid: str, alg: str) -> List[Jwk]:
+        mut out: List[Jwk] = []
+        for k in self.keys:
+            if kid.len() > 0 and k.kid != kid: continue
+            mut why = k.check_alg(alg, "verify")
+            if why.len() == 0: out.append(k)
+        return out
+
+    # {"keys":[...]} with every member of every key.
+    pub def to_json(self) -> str:
+        mut sb = StringBuilder.init(1024)
+        sb.append("{\"keys\":[")
+        mut i = 0
+        while i < self.keys.len():
+            if i > 0: sb.append_char(44)
+            mut kj = self.keys[i].to_json()
+            sb.append(kj)
+            i = i + 1
+        sb.append("]}")
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # The publishable set: public halves only, oct keys left out.
+    pub def to_public_json(self) -> str:
+        mut pubset = JwkSet.init()
+        for k in self.keys:
+            if k.kty == "oct": continue
+            mut r: Result[Jwk, str] = k.to_public()
+            if r.is_ok: pubset.keys.append(r.ok)
+        return pubset.to_json()
+
+# ─── JWS compact serialization ───────────────────────────────────────────────
+
+pub class JwsParts:
+    pub header_json:   str
+    pub payload:       str     # decoded payload bytes
+    pub signing_input: str     # "<b64 header>.<b64 payload>"
+    pub signature:     str     # raw
+    pub alg:           str
+    pub kid:           str
+    pub typ:           str
+
+pub class Jws:
+    _dummy: int
+
+extend Jws:
+    # Split and decode a compact JWS WITHOUT verifying it.
+    pub def decode_unverified(token: str) throws str -> JwsParts:
+        mut segs = token.split_exact(".")
+        if segs.len() != 3: raise("JWS: malformed token (expected header.payload.signature)")
+        mut h64 = segs[0]
+        mut p64 = segs[1]
+        mut s64 = segs[2]
+        if h64.len() == 0: raise("JWS: empty header")
+        mut hr: Result[str, str] = b64url_decode(h64)
+        if hr.is_err: raise("JWS: header is not base64url")
+        mut pr: Result[str, str] = b64url_decode(p64)
+        if pr.is_err: raise("JWS: payload is not base64url")
+        mut sr: Result[str, str] = b64url_decode(s64)
+        if sr.is_err: raise("JWS: signature is not base64url")
+        mut parts = JwsParts()
+        parts.header_json = hr.ok
+        parts.payload = pr.ok
+        parts.signing_input = h64 + "." + p64
+        parts.signature = sr.ok
+        mut doc = Json.parse(parts.header_json)
+        mut root = doc.root()
+        if not root.is_object(): raise("JWS: header is not a JSON object")
+        mut a = root.obj_get("alg")
+        if not a.exists() or not a.is_str(): raise("JWS: header has no 'alg'")
+        parts.alg = a.get_str()
+        parts.kid = ""
+        mut kv = root.obj_get("kid")
+        if kv.exists() and kv.is_str(): parts.kid = kv.get_str()
+        parts.typ = ""
+        mut tv = root.obj_get("typ")
+        if tv.exists() and tv.is_str(): parts.typ = tv.get_str()
+        if root.obj_has("crit"): raise("JWS: unsupported critical header extension ('crit')")
+        return parts
+
+    # Sign `payload` with a header {"alg", "typ" (if non-empty), "kid" (the
+    # key's, if any)}.
+    pub def sign(payload: str, key: Jwk, alg: str, typ: str) throws str -> str:
+        mut sb = StringBuilder.init(128)
+        sb.append("{\"alg\":")
+        _jwk_qs(sb, alg)
+        if typ.len() > 0:
+            sb.append(",\"typ\":")
+            _jwk_qs(sb, typ)
+        if key.kid.len() > 0:
+            sb.append(",\"kid\":")
+            _jwk_qs(sb, key.kid)
+        sb.append_char(125)
+        mut header = sb.to_owned()
+        sb.free()
+        return Jws.sign_with_header(header, payload, key)?
+
+    # Sign with an explicit protected header (JSON text containing "alg").
+    pub def sign_with_header(header_json: str, payload: str, key: Jwk) throws str -> str:
+        mut doc = Json.parse(header_json)
+        mut a = doc.root().obj_get("alg")
+        if not a.exists() or not a.is_str(): raise("JWS: header has no 'alg'")
+        mut alg = a.get_str()
+        mut h64 = b64url_encode(header_json)
+        mut p64 = b64url_encode(payload)
+        mut input = h64 + "." + p64
+        mut sig = key.sign(alg, input)?
+        mut s64 = b64url_encode(sig)
+        return input + "." + s64
+
+    def _alg_allowed(alg: str, allowed: List[str]) -> bool:
+        if alg == "none" or not jws_alg_supported(alg): return false
+        if allowed.len() == 0: return true
+        for a in allowed:
+            if a == alg: return true
+        return false
+
+    # Verify with one key. `allowed` lists acceptable algs ([] = any alg the
+    # key supports). Returns the decoded parts only when the signature holds.
+    pub def verify(token: str, key: Jwk, allowed: List[str]) throws str -> JwsParts:
+        mut parts = Jws.decode_unverified(token)?
+        if not Jws._alg_allowed(parts.alg, allowed): raise(f"JWS: algorithm '{parts.alg}' is not allowed")
+        mut why = key.check_alg(parts.alg, "verify")
+        if why.len() > 0: raise("JWS: " + why)
+        if not key.verify(parts.alg, parts.signing_input, parts.signature): raise("JWS: signature verification failed")
+        return parts
+
+    # Verify against a JWK Set: the key is chosen by the header's "kid" (all
+    # compatible keys are tried when the token has none) and must suit "alg".
+    pub def verify_set(token: str, keys: JwkSet, allowed: List[str]) throws str -> JwsParts:
+        mut parts = Jws.decode_unverified(token)?
+        if not Jws._alg_allowed(parts.alg, allowed): raise(f"JWS: algorithm '{parts.alg}' is not allowed")
+        mut cands = keys.candidates(parts.kid, parts.alg)
+        if cands.len() == 0:
+            if parts.kid.len() > 0 and keys.has(parts.kid): raise(f"JWS: key '{parts.kid}' cannot verify alg '{parts.alg}'")
+            if parts.kid.len() > 0: raise(f"JWS: no key with kid '{parts.kid}'")
+            raise(f"JWS: no key for alg '{parts.alg}'")
+        for k in cands:
+            if k.verify(parts.alg, parts.signing_input, parts.signature): return parts
+        raise("JWS: signature verification failed")

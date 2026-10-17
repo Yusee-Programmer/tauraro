@@ -1,0 +1,770 @@
+# std.net.oauth -- OAuth 2.0 and OpenID Connect client.
+#
+#   from std.net.oauth import OAuthClient, OAuthToken, AuthRequest
+#
+#   mut c = OAuthClient.init("my-app", "secret", "http://127.0.0.1:8765/cb")
+#   c.discover("https://accounts.example.com")?      # OIDC discovery
+#   mut req = c.begin_authorization("openid profile email")?
+#   # ... send the user to req.url; the redirect comes back to redirect_uri ...
+#   mut tok = c.handle_callback(callback_url, req)?   # state check + code exchange
+#   mut idt = c.validate_id_token(tok.id_token, req.nonce, tok.access_token)?
+#   print(idt.subject())
+#   mut api = c.authorized_session(tok)
+#   mut r = api.get("https://api.example.com/me")    # Bearer, auto-refresh
+#
+# Grants
+#   * Authorization Code with PKCE (S256 only, RFC 7636): begin_authorization
+#     makes state, nonce and code_verifier with std.crypto.random;
+#     authorization_url / exchange_code are the lower-level pieces.
+#   * Refresh (refresh), Client Credentials (client_credentials), Device
+#     Authorization Grant (device_authorize + device_poll, RFC 8628, honouring
+#     authorization_pending / slow_down), token revocation (revoke, RFC 7009)
+#     and introspection (introspect, RFC 7662).
+# Client authentication: "client_secret_basic" (default when a secret is
+# set), "client_secret_post", "none" (public clients) and "private_key_jwt"
+# (RFC 7523; use_private_key_jwt(jwk, alg) with any std.crypto.jwk signing key).
+#
+# OpenID Connect: discover() reads /.well-known/openid-configuration (the
+# returned issuer must equal the one asked for); fetch_jwks() caches the
+# provider's JWK Set (jwks_ttl seconds, refetched once when an ID token names
+# an unknown kid); validate_id_token() checks the signature through the JWKS,
+# iss, aud (and azp with several audiences), exp / iat with leeway, nonce
+# and -- when an access token is given and the token has one -- at_hash;
+# userinfo() calls the UserInfo endpoint.
+#
+# Errors are raised as text. An OAuth error response becomes
+# "oauth: <error>: <error_description>" (e.g. "oauth: invalid_grant: ...").
+#
+# Limitations: no PAR / JAR / DPoP / mTLS client auth, no "plain" PKCE, no
+# encrypted ID tokens, no form_post response mode; HTTP goes through
+# std.net.client.HttpSession (so its limits apply: HTTP/1.1, one request per
+# connection, TLS 1.3 only for https).
+
+from std.net.client import HttpSession, ClientRequest, HttpReply
+from std.net.url import Url
+from std.crypto.jwk import Jwk, JwkSet, Jws, JwsParts, b64url_encode
+from std.crypto.jwt import Jwt, JwtOptions, JwtClaims
+from std.crypto.random import SecureRandom
+from std.crypto.digest import Digest
+from std.crypto.native import ALG_SHA256, ALG_SHA384, ALG_SHA512
+from std.encoding.json import Json, JsonDoc, JsonRef, _json_escape
+from std.encoding.base64 import Base64
+from std.sys.time import Clock
+from std.core.string import StringBuilder
+
+# ─── helpers ─────────────────────────────────────────────────────────────────
+
+# application/x-www-form-urlencoded value (RFC 6749 appendix B).
+pub def form_encode(s: str) -> str:
+    return Url.encode_component(s)
+
+pub def form_decode(s: str) -> str:
+    mut t = s.replace("+", " ")
+    return Url.decode_component(t)
+
+# Value of `name` in a query string or form body ("" when absent).
+pub def form_get(body: str, name: str) -> str:
+    mut parts = body.split_exact("&")
+    for p in parts:
+        mut eq = p.find("=")
+        mut k = p
+        mut v = ""
+        if eq >= 0:
+            k = p.slice(0, eq)
+            v = p.slice(eq + 1, p.len())
+        mut kd = form_decode(k)
+        if kd == name: return form_decode(v)
+    return ""
+
+pub def form_has(body: str, name: str) -> bool:
+    mut parts = body.split_exact("&")
+    for p in parts:
+        mut eq = p.find("=")
+        mut k = p
+        if eq >= 0: k = p.slice(0, eq)
+        mut kd = form_decode(k)
+        if kd == name: return true
+    return false
+
+# PKCE S256 challenge for a verifier.
+pub def pkce_challenge(verifier: str) -> str:
+    mut h = Digest.sha256(verifier)
+    return b64url_encode(h)
+
+def _oa_json_str(r: JsonRef, name: str) -> str:
+    mut v = r.obj_get(name)
+    if v.exists() and v.is_str(): return v.get_str()
+    return ""
+
+def _oa_json_int(r: JsonRef, name: str, dflt: int) -> int:
+    mut v = r.obj_get(name)
+    if not v.exists(): return dflt
+    if v.is_int(): return v.get_int()
+    if v.is_float(): return v.get_float() as int
+    if v.is_str():
+        mut s = v.get_str()
+        mut n = 0
+        mut i = 0
+        while i < s.len():
+            mut c = s.slice(i, i + 1)
+            mut d = "0123456789".find(c)
+            if d < 0: return dflt
+            n = n * 10 + d
+            i = i + 1
+        if s.len() == 0: return dflt
+        return n
+    return dflt
+
+# A form body builder.
+pub class FormBody:
+    pub sb: StringBuilder
+    pub n:  int
+
+extend FormBody:
+    pub def init() -> FormBody:
+        mut f = FormBody()
+        f.sb = StringBuilder.init(256)
+        f.n = 0
+        return f
+
+    pub def add(self, name: str, value: str):
+        if self.n > 0: self.sb.append_char(38)
+        mut kn = form_encode(name)
+        mut kv = form_encode(value)
+        self.sb.append(kn)
+        self.sb.append_char(61)
+        self.sb.append(kv)
+        self.n = self.n + 1
+
+    pub def add_opt(self, name: str, value: str):
+        if value.len() > 0: self.add(name, value)
+
+    pub def build(self) -> str:
+        mut out = self.sb.to_owned()
+        self.sb.free()
+        return out
+
+# ─── tokens ──────────────────────────────────────────────────────────────────
+
+pub class OAuthToken:
+    pub access_token:  str
+    pub token_type:    str
+    pub refresh_token: str
+    pub id_token:      str
+    pub scope:         str
+    pub expires_in:    int      # seconds, 0 = unknown
+    pub obtained_at:   int      # Unix time the response arrived
+    pub raw_json:      str
+
+extend OAuthToken:
+    # Parse a token endpoint success response.
+    pub def parse(json: str, now: int) throws str -> OAuthToken:
+        mut doc = Json.parse(json)
+        mut root = doc.root()
+        if not root.is_object(): raise("oauth: token response is not a JSON object")
+        mut t = OAuthToken()
+        t.access_token = _oa_json_str(root, "access_token")
+        if t.access_token.len() == 0: raise("oauth: token response has no access_token")
+        t.token_type = _oa_json_str(root, "token_type")
+        t.refresh_token = _oa_json_str(root, "refresh_token")
+        t.id_token = _oa_json_str(root, "id_token")
+        t.scope = _oa_json_str(root, "scope")
+        t.expires_in = _oa_json_int(root, "expires_in", 0)
+        t.obtained_at = now
+        t.raw_json = json
+        return t
+
+    # Unix expiry time (0 when the server gave no expires_in).
+    pub def expires_at(self) -> int:
+        if self.expires_in <= 0: return 0
+        return self.obtained_at + self.expires_in
+
+    # True when the token expires within `skew` seconds (never for unknown).
+    pub def is_expired(self, skew: int) -> bool:
+        mut e = self.expires_at()
+        if e == 0: return false
+        return Clock.timestamp() + skew >= e
+
+    pub def has_refresh(self) -> bool: return self.refresh_token.len() > 0
+
+    pub def is_bearer(self) -> bool:
+        return self.token_type.len() == 0 or self.token_type.to_lower() == "bearer"
+
+    # "Bearer <access_token>"
+    pub def authorization(self) -> str:
+        return "Bearer " + self.access_token
+
+# Authorization request state kept by the client between redirect and callback.
+pub class AuthRequest:
+    pub url:           str
+    pub state:         str
+    pub nonce:         str
+    pub code_verifier: str
+    pub scope:         str
+
+# RFC 8628 device authorization response.
+pub class DeviceAuth:
+    pub device_code:               str
+    pub user_code:                 str
+    pub verification_uri:          str
+    pub verification_uri_complete: str
+    pub expires_in:                int
+    pub interval:                  int
+    pub started_at:                int
+
+# RFC 7662 introspection response.
+pub class Introspection:
+    pub active:    bool
+    pub scope:     str
+    pub client_id: str
+    pub sub:       str
+    pub exp:       int
+    pub raw_json:  str
+
+extend Introspection:
+    # Any string member of the response.
+    pub def get_str(self, name: str) -> str:
+        mut doc = Json.parse(self.raw_json)
+        mut v = _oa_json_str(doc.root(), name)
+        return v
+
+# Provider metadata (OIDC discovery / RFC 8414).
+pub class ProviderMetadata:
+    pub issuer:                        str
+    pub authorization_endpoint:        str
+    pub token_endpoint:                str
+    pub userinfo_endpoint:             str
+    pub jwks_uri:                      str
+    pub revocation_endpoint:           str
+    pub introspection_endpoint:        str
+    pub device_authorization_endpoint: str
+    pub end_session_endpoint:          str
+    pub raw_json:                      str
+
+extend ProviderMetadata:
+    pub def empty() -> ProviderMetadata:
+        mut m = ProviderMetadata()
+        m.issuer = ""
+        m.authorization_endpoint = ""
+        m.token_endpoint = ""
+        m.userinfo_endpoint = ""
+        m.jwks_uri = ""
+        m.revocation_endpoint = ""
+        m.introspection_endpoint = ""
+        m.device_authorization_endpoint = ""
+        m.end_session_endpoint = ""
+        m.raw_json = ""
+        return m
+
+    pub def parse(json: str) throws str -> ProviderMetadata:
+        mut doc = Json.parse(json)
+        mut root = doc.root()
+        if not root.is_object(): raise("oauth: provider metadata is not a JSON object")
+        mut m = ProviderMetadata.empty()
+        m.issuer = _oa_json_str(root, "issuer")
+        m.authorization_endpoint = _oa_json_str(root, "authorization_endpoint")
+        m.token_endpoint = _oa_json_str(root, "token_endpoint")
+        m.userinfo_endpoint = _oa_json_str(root, "userinfo_endpoint")
+        m.jwks_uri = _oa_json_str(root, "jwks_uri")
+        m.revocation_endpoint = _oa_json_str(root, "revocation_endpoint")
+        m.introspection_endpoint = _oa_json_str(root, "introspection_endpoint")
+        m.device_authorization_endpoint = _oa_json_str(root, "device_authorization_endpoint")
+        m.end_session_endpoint = _oa_json_str(root, "end_session_endpoint")
+        m.raw_json = json
+        if m.issuer.len() == 0: raise("oauth: provider metadata has no issuer")
+        return m
+
+# ─── client ──────────────────────────────────────────────────────────────────
+
+pub class OAuthClient:
+    pub client_id:     str
+    pub client_secret: str
+    pub redirect_uri:  str
+    pub auth_method:   str        # client_secret_basic / client_secret_post / none / private_key_jwt
+    pub signing_key:   Jwk        # private_key_jwt key
+    pub signing_alg:   str
+    pub has_signing_key: bool
+    pub meta:          ProviderMetadata
+    pub session:       HttpSession
+    pub jwks:          JwkSet
+    pub jwks_fetched_at: int
+    pub jwks_ttl:      int        # seconds (default 3600)
+    pub leeway:        int        # clock skew for ID tokens (default 60)
+    pub id_token_algs: List[str]  # accepted ID token algs ([] = every asymmetric alg)
+    pub extra_auth_params: str    # appended to authorization URLs ("a=b&c=d")
+
+extend OAuthClient:
+    pub def init(client_id: str, client_secret: str, redirect_uri: str) -> OAuthClient:
+        mut c = OAuthClient()
+        c.client_id = client_id
+        c.client_secret = client_secret
+        c.redirect_uri = redirect_uri
+        c.auth_method = "none"
+        if client_secret.len() > 0: c.auth_method = "client_secret_basic"
+        c.signing_key = Jwk.oct("")
+        c.signing_alg = ""
+        c.has_signing_key = false
+        c.meta = ProviderMetadata.empty()
+        c.session = HttpSession.init()
+        c.session.set_header("Accept", "application/json")
+        c.jwks = JwkSet.init()
+        c.jwks_fetched_at = 0
+        c.jwks_ttl = 3600
+        c.leeway = 60
+        c.id_token_algs = []
+        c.extra_auth_params = ""
+        return c
+
+    # Configure endpoints by hand (no discovery).
+    pub def set_endpoints(self, authorization: str, token: str):
+        self.meta.authorization_endpoint = authorization
+        self.meta.token_endpoint = token
+
+    pub def set_issuer(self, issuer: str, jwks_uri: str):
+        self.meta.issuer = issuer
+        self.meta.jwks_uri = jwks_uri
+
+    # "client_secret_basic", "client_secret_post" or "none".
+    pub def set_auth_method(self, method: str) throws str:
+        if method != "client_secret_basic" and method != "client_secret_post" and method != "none" and method != "private_key_jwt":
+            raise(f"oauth: unknown client authentication method '{method}'")
+        if method == "private_key_jwt" and not self.has_signing_key: raise("oauth: private_key_jwt needs use_private_key_jwt(key, alg)")
+        self.auth_method = method
+
+    # RFC 7523 client authentication with a signing JWK.
+    pub def use_private_key_jwt(self, key: Jwk, alg: str) throws str:
+        mut why = key.check_alg(alg, "sign")
+        if why.len() > 0: raise("oauth: " + why)
+        self.signing_key = key
+        self.signing_alg = alg
+        self.has_signing_key = true
+        self.auth_method = "private_key_jwt"
+
+    # OIDC discovery: GET <issuer>/.well-known/openid-configuration.
+    pub def discover(self, issuer: str) throws str -> ProviderMetadata:
+        mut base = issuer
+        if base.ends_with("/"): base = base.slice(0, base.len() - 1)
+        mut url = base + "/.well-known/openid-configuration"
+        mut r = self.session.get(url)
+        if r.error.len() > 0: raise("oauth: discovery failed: " + r.error)
+        if r.status != 200: raise(f"oauth: discovery failed: HTTP {r.status}")
+        mut m = ProviderMetadata.parse(r.body)?
+        mut want = issuer
+        mut got = m.issuer
+        if got != want and got != base and got + "/" != want:
+            raise(f"oauth: discovery issuer mismatch ('{got}' instead of '{issuer}')")
+        self.meta = m
+        self.jwks_fetched_at = 0
+        return m
+
+    # ── authorization code + PKCE ────────────────────────────────────────
+
+    # Fresh state / nonce / code_verifier and the URL to send the user to.
+    pub def begin_authorization(self, scope: str) throws str -> AuthRequest:
+        mut a = AuthRequest()
+        a.state = SecureRandom.token_urlsafe(24)?
+        a.nonce = SecureRandom.token_urlsafe(24)?
+        a.code_verifier = SecureRandom.token_urlsafe(32)?
+        a.scope = scope
+        mut ch = pkce_challenge(a.code_verifier)
+        a.url = self.authorization_url(scope, a.state, a.nonce, ch)?
+        return a
+
+    pub def authorization_url(self, scope: str, state: str, nonce: str, code_challenge: str) throws str -> str:
+        mut ep = self.meta.authorization_endpoint
+        if ep.len() == 0: raise("oauth: no authorization endpoint configured")
+        mut f = FormBody.init()
+        f.add("response_type", "code")
+        f.add("client_id", self.client_id)
+        f.add_opt("redirect_uri", self.redirect_uri)
+        f.add_opt("scope", scope)
+        f.add_opt("state", state)
+        f.add_opt("nonce", nonce)
+        if code_challenge.len() > 0:
+            f.add("code_challenge", code_challenge)
+            f.add("code_challenge_method", "S256")
+        mut q = f.build()
+        if self.extra_auth_params.len() > 0: q = q + "&" + self.extra_auth_params
+        mut sep = "?"
+        if ep.find("?") >= 0: sep = "&"
+        return ep + sep + q
+
+    # Process the redirect back to redirect_uri (a full URL or just its query
+    # string): checks state, surfaces an "error" parameter, exchanges the code.
+    pub def handle_callback(self, callback: str, req: AuthRequest) throws str -> OAuthToken:
+        mut q = callback
+        mut qi = callback.find("?")
+        if qi >= 0: q = callback.slice(qi + 1, callback.len())
+        mut hi = q.find("#")
+        if hi >= 0: q = q.slice(0, hi)
+        mut err = form_get(q, "error")
+        if err.len() > 0:
+            mut desc = form_get(q, "error_description")
+            raise(f"oauth: {err}: {desc}")
+        mut st = form_get(q, "state")
+        if req.state.len() > 0 and st != req.state: raise("oauth: state mismatch in the authorization response")
+        mut iss = form_get(q, "iss")
+        if iss.len() > 0 and self.meta.issuer.len() > 0 and iss != self.meta.issuer: raise("oauth: issuer mismatch in the authorization response (RFC 9207)")
+        mut code = form_get(q, "code")
+        if code.len() == 0: raise("oauth: the authorization response has no code")
+        mut tok = self.exchange_code(code, req.code_verifier)?
+        return tok
+
+    pub def exchange_code(self, code: str, code_verifier: str) throws str -> OAuthToken:
+        mut f = FormBody.init()
+        f.add("grant_type", "authorization_code")
+        f.add("code", code)
+        f.add_opt("redirect_uri", self.redirect_uri)
+        f.add_opt("code_verifier", code_verifier)
+        mut t = self._token_request(f)?
+        return t
+
+    # ── other grants ─────────────────────────────────────────────────────
+
+    # New tokens from a refresh token. The old refresh token is kept when the
+    # server does not rotate it.
+    pub def refresh(self, refresh_token: str, scope: str) throws str -> OAuthToken:
+        if refresh_token.len() == 0: raise("oauth: no refresh token")
+        mut f = FormBody.init()
+        f.add("grant_type", "refresh_token")
+        f.add("refresh_token", refresh_token)
+        f.add_opt("scope", scope)
+        mut t = self._token_request(f)?
+        if t.refresh_token.len() == 0: t.refresh_token = refresh_token
+        return t
+
+    # `tok` if it is still valid for `skew` seconds, else a refreshed token.
+    pub def ensure_fresh(self, tok: OAuthToken, skew: int) throws str -> OAuthToken:
+        if not tok.is_expired(skew): return tok
+        if not tok.has_refresh(): raise("oauth: the access token expired and there is no refresh token")
+        mut nt = self.refresh(tok.refresh_token, "")?
+        if nt.id_token.len() == 0: nt.id_token = tok.id_token
+        return nt
+
+    pub def client_credentials(self, scope: str) throws str -> OAuthToken:
+        mut f = FormBody.init()
+        f.add("grant_type", "client_credentials")
+        f.add_opt("scope", scope)
+        mut t = self._token_request(f)?
+        return t
+
+    # RFC 8628 step 1.
+    pub def device_authorize(self, scope: str) throws str -> DeviceAuth:
+        mut ep = self.meta.device_authorization_endpoint
+        if ep.len() == 0: raise("oauth: no device authorization endpoint configured")
+        mut f = FormBody.init()
+        f.add_opt("scope", scope)
+        mut r = self._post_authenticated(ep, f)?
+        mut doc = Json.parse(r.body)
+        mut root = doc.root()
+        if r.status != 200:
+            mut e = OAuthClient._error_text(r)
+            raise(e)
+        mut d = DeviceAuth()
+        d.device_code = _oa_json_str(root, "device_code")
+        d.user_code = _oa_json_str(root, "user_code")
+        d.verification_uri = _oa_json_str(root, "verification_uri")
+        if d.verification_uri.len() == 0: d.verification_uri = _oa_json_str(root, "verification_url")
+        d.verification_uri_complete = _oa_json_str(root, "verification_uri_complete")
+        d.expires_in = _oa_json_int(root, "expires_in", 600)
+        d.interval = _oa_json_int(root, "interval", 5)
+        d.started_at = Clock.timestamp()
+        if d.device_code.len() == 0 or d.user_code.len() == 0: raise("oauth: malformed device authorization response")
+        return d
+
+    # RFC 8628 step 2: poll the token endpoint until the user approves (or
+    # denies, or the code expires, or max_wait_ms passes; 0 = until expiry).
+    pub def device_poll(self, dev: DeviceAuth, max_wait_ms: int) throws str -> OAuthToken:
+        mut interval = dev.interval
+        if interval < 1: interval = 1
+        mut start = Clock.now_ms()
+        while true:
+            mut f = FormBody.init()
+            f.add("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
+            f.add("device_code", dev.device_code)
+            mut r = self._post_authenticated(self.meta.token_endpoint, f)?
+            if r.status == 200:
+                mut now = Clock.timestamp()
+                mut t = OAuthToken.parse(r.body, now)?
+                return t
+            mut doc = Json.parse(r.body)
+            mut code = _oa_json_str(doc.root(), "error")
+            if code == "slow_down":
+                interval = interval + 5
+            elif code != "authorization_pending":
+                mut e = OAuthClient._error_text(r)
+                raise(e)
+            if Clock.timestamp() >= dev.started_at + dev.expires_in: raise("oauth: expired_token: the device code expired")
+            if max_wait_ms > 0 and Clock.now_ms() - start + interval * 1000 > max_wait_ms: raise("oauth: device authorization still pending (gave up waiting)")
+            Clock.sleep_ms(interval * 1000)
+        raise("oauth: unreachable")
+
+    # RFC 7009. token_type_hint: "access_token", "refresh_token" or "".
+    pub def revoke(self, token: str, token_type_hint: str) throws str:
+        mut ep = self.meta.revocation_endpoint
+        if ep.len() == 0: raise("oauth: no revocation endpoint configured")
+        mut f = FormBody.init()
+        f.add("token", token)
+        f.add_opt("token_type_hint", token_type_hint)
+        mut r = self._post_authenticated(ep, f)?
+        if r.status != 200:
+            mut e = OAuthClient._error_text(r)
+            raise(e)
+
+    # RFC 7662.
+    pub def introspect(self, token: str, token_type_hint: str) throws str -> Introspection:
+        mut ep = self.meta.introspection_endpoint
+        if ep.len() == 0: raise("oauth: no introspection endpoint configured")
+        mut f = FormBody.init()
+        f.add("token", token)
+        f.add_opt("token_type_hint", token_type_hint)
+        mut r = self._post_authenticated(ep, f)?
+        if r.status != 200:
+            mut e = OAuthClient._error_text(r)
+            raise(e)
+        mut doc = Json.parse(r.body)
+        mut root = doc.root()
+        if not root.is_object(): raise("oauth: introspection response is not a JSON object")
+        mut a = root.obj_get("active")
+        mut out = Introspection()
+        out.active = a.exists() and a.is_bool() and a.get_bool()
+        out.scope = _oa_json_str(root, "scope")
+        out.client_id = _oa_json_str(root, "client_id")
+        out.sub = _oa_json_str(root, "sub")
+        out.exp = _oa_json_int(root, "exp", 0)
+        out.raw_json = r.body
+        return out
+
+    # ── OpenID Connect ───────────────────────────────────────────────────
+
+    # The provider's JWK Set (cached for jwks_ttl seconds; force refetches).
+    pub def fetch_jwks(self, force: bool) throws str -> JwkSet:
+        mut now = Clock.timestamp()
+        if not force and self.jwks_fetched_at > 0 and now - self.jwks_fetched_at < self.jwks_ttl: return self.jwks
+        if self.meta.jwks_uri.len() == 0: raise("oauth: no jwks_uri configured")
+        mut r = self.session.get(self.meta.jwks_uri)
+        if r.error.len() > 0: raise("oauth: JWKS fetch failed: " + r.error)
+        if r.status != 200: raise(f"oauth: JWKS fetch failed: HTTP {r.status}")
+        mut set = JwkSet.parse(r.body)?
+        self.jwks = set
+        self.jwks_fetched_at = now
+        return set
+
+    def _id_algs(self) -> List[str]:
+        if self.id_token_algs.len() > 0: return self.id_token_algs
+        mut l: List[str] = []
+        l.append("RS256")
+        l.append("RS384")
+        l.append("RS512")
+        l.append("PS256")
+        l.append("PS384")
+        l.append("PS512")
+        l.append("ES256")
+        l.append("ES384")
+        l.append("EdDSA")
+        return l
+
+    # Validate an ID token (OIDC Core 3.1.3.7). `nonce` and `access_token`
+    # may be "" to skip those checks.
+    pub def validate_id_token(self, id_token: str, nonce: str, access_token: str) throws str -> JwtClaims:
+        if id_token.len() == 0: raise("oauth: no ID token")
+        if self.meta.issuer.len() == 0: raise("oauth: no issuer configured")
+        mut opts = JwtOptions.init()
+        opts.issuer = self.meta.issuer
+        opts.audience = self.client_id
+        opts.leeway = self.leeway
+        opts.algorithms = self._id_algs()
+        mut set = self.fetch_jwks(false)?
+        mut parts = Jws.decode_unverified(id_token)?
+        if parts.kid.len() > 0 and not set.has(parts.kid):
+            set = self.fetch_jwks(true)?
+        mut r: Result[JwtClaims, str] = Jwt.verify_jwks(id_token, set, opts)
+        if r.is_err: raise("oauth: invalid ID token: " + r.err)
+        mut c = r.ok
+        if c.get_str("sub").len() == 0: raise("oauth: invalid ID token: no sub claim")
+        if not c.has("iat"): raise("oauth: invalid ID token: no iat claim")
+        mut auds = c.audiences()
+        if auds.len() > 1 or c.has("azp"):
+            mut azp = c.get_str("azp")
+            if azp.len() > 0 and azp != self.client_id: raise("oauth: invalid ID token: azp is not this client")
+            if auds.len() > 1 and azp.len() == 0: raise("oauth: invalid ID token: several audiences but no azp")
+        if nonce.len() > 0:
+            mut n = c.get_str("nonce")
+            if n != nonce: raise("oauth: invalid ID token: nonce mismatch")
+        if access_token.len() > 0 and c.has("at_hash"):
+            mut want = OAuthClient.token_hash(access_token, c.alg)
+            if c.get_str("at_hash") != want: raise("oauth: invalid ID token: at_hash does not match the access token")
+        return c
+
+    # at_hash / c_hash: base64url of the left half of the alg's hash.
+    pub def token_hash(value: str, alg: str) -> str:
+        mut h = ""
+        if alg.ends_with("384"): h = Digest.sha384(value)
+        elif alg.ends_with("512") or alg == "EdDSA": h = Digest.sha512(value)
+        else: h = Digest.sha256(value)
+        mut half = h.slice(0, h.len() / 2)
+        return b64url_encode(half)
+
+    # UserInfo endpoint: the response JSON text.
+    pub def userinfo(self, access_token: str) throws str -> str:
+        mut ep = self.meta.userinfo_endpoint
+        if ep.len() == 0: raise("oauth: no userinfo endpoint configured")
+        mut req = ClientRequest.init("GET", ep)
+        mut bearer = "Bearer " + access_token
+        req.header("Authorization", bearer)
+        mut r = self.session.send(req)
+        if r.error.len() > 0: raise("oauth: userinfo request failed: " + r.error)
+        if r.status == 401: raise("oauth: invalid_token: the userinfo endpoint rejected the access token")
+        if r.status != 200:
+            mut e = OAuthClient._error_text(r)
+            raise(e)
+        return r.body
+
+    # An HttpSession wrapper that sends `tok` as a Bearer token.
+    pub def authorized_session(self, tok: OAuthToken) -> AuthorizedSession:
+        return AuthorizedSession.init(self, tok)
+
+    # ── transport ────────────────────────────────────────────────────────
+
+    def _error_text(r: HttpReply) -> str:
+        mut doc = Json.parse(r.body)
+        mut root = doc.root()
+        mut code = ""
+        mut desc = ""
+        if root.is_object():
+            code = _oa_json_str(root, "error")
+            desc = _oa_json_str(root, "error_description")
+        if code.len() == 0: return f"oauth: HTTP {r.status} from the authorization server"
+        if desc.len() == 0: return f"oauth: {code}"
+        return f"oauth: {code}: {desc}"
+
+    # A signed client assertion (RFC 7523 section 3) for `audience`.
+    pub def client_assertion(self, audience: str) throws str -> str:
+        if not self.has_signing_key: raise("oauth: no private_key_jwt signing key")
+        mut now = Clock.timestamp()
+        mut jti = SecureRandom.token_urlsafe(16)?
+        mut sb = StringBuilder.init(256)
+        sb.append("{\"iss\":\"")
+        _json_escape(self.client_id, sb)
+        sb.append("\",\"sub\":\"")
+        _json_escape(self.client_id, sb)
+        sb.append("\",\"aud\":\"")
+        _json_escape(audience, sb)
+        sb.append("\",\"jti\":\"")
+        sb.append(jti)
+        sb.append("\",\"iat\":")
+        sb.append_int(now)
+        sb.append(",\"exp\":")
+        sb.append_int(now + 300)
+        sb.append("}")
+        mut claims = sb.to_owned()
+        sb.free()
+        mut tok = Jwt.sign_jwk(claims, self.signing_key, self.signing_alg)?
+        return tok
+
+    def _post_authenticated(self, endpoint: str, f: FormBody) throws str -> HttpReply:
+        if endpoint.len() == 0: raise("oauth: endpoint not configured")
+        mut req = ClientRequest.init("POST", endpoint)
+        if self.auth_method == "client_secret_basic":
+            mut idenc = form_encode(self.client_id)
+            mut secenc = form_encode(self.client_secret)
+            mut cred = idenc + ":" + secenc
+            mut b64 = Base64.encode(cred)
+            mut hv = "Basic " + b64
+            req.header("Authorization", hv)
+        elif self.auth_method == "client_secret_post":
+            f.add("client_id", self.client_id)
+            f.add("client_secret", self.client_secret)
+        elif self.auth_method == "private_key_jwt":
+            mut aud = self.meta.token_endpoint
+            if aud.len() == 0: aud = endpoint
+            mut assertion = self.client_assertion(aud)?
+            f.add("client_id", self.client_id)
+            f.add("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+            f.add("client_assertion", assertion)
+        else:
+            f.add("client_id", self.client_id)
+        mut body = f.build()
+        req.with_body(body, "application/x-www-form-urlencoded")
+        req.header("Cache-Control", "no-store")
+        req.with_follow(false)
+        mut r = self.session.send(req)
+        if r.error.len() > 0: raise("oauth: request to " + endpoint + " failed: " + r.error)
+        return r
+
+    def _token_request(self, f: FormBody) throws str -> OAuthToken:
+        mut ep = self.meta.token_endpoint
+        if ep.len() == 0: raise("oauth: no token endpoint configured")
+        mut r = self._post_authenticated(ep, f)?
+        if r.status != 200:
+            mut e = OAuthClient._error_text(r)
+            raise(e)
+        mut now = Clock.timestamp()
+        mut t = OAuthToken.parse(r.body, now)?
+        if not t.is_bearer(): raise(f"oauth: unsupported token_type '{t.token_type}'")
+        return t
+
+# ─── authorized session ──────────────────────────────────────────────────────
+
+# Adds "Authorization: Bearer <token>" to every request, refreshes the token
+# shortly before it expires (refresh_skew seconds, default 30) and retries a
+# request once after refreshing when the resource server answers 401.
+pub class AuthorizedSession:
+    pub client:        OAuthClient
+    pub session:       HttpSession
+    pub token:         OAuthToken
+    pub refresh_skew:  int
+    pub refreshes:     int        # how many times the token was refreshed
+    pub last_error:    str        # refresh failure text ("" = none)
+
+extend AuthorizedSession:
+    pub def init(client: OAuthClient, tok: OAuthToken) -> AuthorizedSession:
+        mut a = AuthorizedSession()
+        a.client = client
+        a.session = HttpSession.init()
+        a.token = tok
+        a.refresh_skew = 30
+        a.refreshes = 0
+        a.last_error = ""
+        return a
+
+    def _refresh(self) -> bool:
+        if not self.token.has_refresh():
+            self.last_error = "no refresh token"
+            return false
+        mut r: Result[OAuthToken, str] = self.client.refresh(self.token.refresh_token, "")
+        if r.is_err:
+            self.last_error = r.err
+            return false
+        mut nt = r.ok
+        if nt.id_token.len() == 0: nt.id_token = self.token.id_token
+        self.token = nt
+        self.refreshes = self.refreshes + 1
+        self.last_error = ""
+        return true
+
+    pub def send(self, req: ClientRequest) -> HttpReply:
+        if self.token.is_expired(self.refresh_skew) and self.token.has_refresh():
+            self._refresh()
+        mut bearer = "Bearer " + self.token.access_token
+        req.header("Authorization", bearer)
+        mut r = self.session.send(req)
+        if r.status == 401 and self.token.has_refresh():
+            if self._refresh():
+                mut b2 = "Bearer " + self.token.access_token
+                req.header("Authorization", b2)
+                r = self.session.send(req)
+        return r
+
+    pub def get(self, url: str) -> HttpReply:
+        mut req = ClientRequest.init("GET", url)
+        return self.send(req)
+
+    pub def post(self, url: str, body: str, content_type: str) -> HttpReply:
+        mut req = ClientRequest.init("POST", url)
+        req.with_body(body, content_type)
+        return self.send(req)
+
+    pub def delete(self, url: str) -> HttpReply:
+        mut req = ClientRequest.init("DELETE", url)
+        return self.send(req)

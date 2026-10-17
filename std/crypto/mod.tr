@@ -8,7 +8,8 @@
 #   from std.crypto.sha512 import Sha512
 #   from std.crypto.chacha20 import ChaCha20, Poly1305
 #   from std.crypto.kdf import Kdf
-#   from std.crypto.jwt import Jwt, JwtResult
+#   from std.crypto.jwt import Jwt, JwtResult, JwtOptions, JwtClaims
+#   from std.crypto.jwk import Jwk, JwkSet, Jws
 #   from std.crypto.random import SecureRandom
 #   from std.crypto.ct import ConstantTime
 #   from std.crypto.digest import Digest, Hasher

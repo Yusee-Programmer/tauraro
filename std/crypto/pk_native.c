@@ -247,6 +247,7 @@ typedef struct {
     int has_priv;
     u32 p[MAXL], q[MAXL], dp[MAXL], dq[MAXL], qinv[MAXL];
     int half_limbs;
+    u32 d[MAXL]; int has_d;     /* private exponent (kept for JWK export) */
 } rsa_key;
 
 static int rsa_set_public(rsa_key* k, const u8* n, size_t nlen, const u8* e, size_t elen) {
@@ -285,6 +286,9 @@ static int rsa_parse_pkcs1_priv(rsa_key* k, const u8* p, size_t n) {
     bn_from_be(k->dp, hl, mdp.p, mdp.n); bn_from_be(k->dq, hl, mdq.p, mdq.n);
     bn_from_be(k->qinv, hl, mqi.p, mqi.n);
     if (!(k->p[0] & 1) || !(k->q[0] & 1)) return -1;
+    { const u8* dd = md.p; size_t dn = md.n;
+      while (dn > 0 && dd[0] == 0) { dd++; dn--; }
+      if (dn > 0 && dn <= 4 * (size_t)k->n_limbs) { bn_from_be(k->d, k->n_limbs, dd, dn); k->has_d = 1; } }
     k->has_priv = 1;
     return 0;
 }
@@ -965,6 +969,68 @@ int64_t trc_pk_ecdh(void* h, const char* peer, int64_t plen, char* out) {
     if (pt_to_affine(c, &S, (u8*)out, NULL) < 0) return -1;
     return c->bytes;
 }
+
+/* ── JWK support ──────────────────────────────────────────────────────────
+ * RSA key from raw big-endian parts: lens[0..7] = n, e, d, p, q, dp, dq, qi,
+ * concatenated in buf. With only n and e (the rest 0-length) the key is
+ * public. A private key is checked by a private operation that re-applies the
+ * public exponent (rsa_private_op verifies its own result). */
+void* trc_pk_rsa_from_parts(const char* buf, const int64_t* lens) {
+    const u8* part[8]; size_t ln[8]; size_t off = 0; int i, hl; pk_key* k; rsa_key* r;
+    for (i = 0; i < 8; i++) {
+        part[i] = (const u8*)buf + off; ln[i] = lens[i] < 0 ? 0 : (size_t)lens[i]; off += ln[i];
+        while (ln[i] > 0 && part[i][0] == 0) { part[i]++; ln[i]--; }
+    }
+    k = (pk_key*)calloc(1, sizeof(pk_key));
+    if (!k) return NULL;
+    r = &k->rsa;
+    if (rsa_set_public(r, part[0], ln[0], part[1], ln[1]) < 0) { free(k); return NULL; }
+    k->kind = 1;
+    if (ln[2] == 0) return k;
+    for (i = 3; i < 8; i++) if (ln[i] == 0) { pk_wipe(k, sizeof *k); free(k); return NULL; }
+    if (ln[2] > 4 * (size_t)r->n_limbs) { pk_wipe(k, sizeof *k); free(k); return NULL; }
+    bn_from_be(r->d, r->n_limbs, part[2], ln[2]); r->has_d = 1;
+    hl = (int)(((ln[3] > ln[4] ? ln[3] : ln[4]) + 3) / 4);
+    if (hl > MAXL - 2 || ln[5] > 4 * (size_t)hl || ln[6] > 4 * (size_t)hl || ln[7] > 4 * (size_t)hl) { pk_wipe(k, sizeof *k); free(k); return NULL; }
+    r->half_limbs = hl;
+    bn_from_be(r->p, hl, part[3], ln[3]); bn_from_be(r->q, hl, part[4], ln[4]);
+    bn_from_be(r->dp, hl, part[5], ln[5]); bn_from_be(r->dq, hl, part[6], ln[6]);
+    bn_from_be(r->qinv, hl, part[7], ln[7]);
+    if (!(r->p[0] & 1) || !(r->q[0] & 1)) { pk_wipe(k, sizeof *k); free(k); return NULL; }
+    r->has_priv = 1; k->has_priv = 1;
+    {
+        u8 in[4 * MAXL], out[4 * MAXL]; size_t klen = (size_t)(r->bits + 7) / 8;
+        memset(in, 0, klen); in[klen - 1] = 2; in[klen / 2] = 0x5a;
+        if (rsa_private_op(r, in, out) < 0) { pk_wipe(k, sizeof *k); free(k); return NULL; }
+    }
+    return k;
+}
+/* One RSA component as minimal big-endian bytes: 0 n, 1 e, 2 d, 3 p, 4 q,
+ * 5 dp, 6 dq, 7 qi. Returns the length, or -1 if absent / not RSA. */
+int64_t trc_pk_rsa_part(void* h, int64_t idx, char* out, int64_t cap) {
+    pk_key* k = (pk_key*)h; rsa_key* r; const u32* src; int limbs; u8 tmp[4 * MAXL]; size_t n, s0 = 0;
+    if (!k || k->kind != 1) return -1;
+    r = &k->rsa;
+    switch (idx) {
+        case 0: src = r->n; limbs = r->n_limbs; break;
+        case 1: src = r->e; limbs = r->n_limbs; break;
+        case 2: if (!r->has_d) return -1; src = r->d; limbs = r->n_limbs; break;
+        case 3: case 4: case 5: case 6: case 7:
+            if (!r->has_priv) return -1;
+            src = idx == 3 ? r->p : idx == 4 ? r->q : idx == 5 ? r->dp : idx == 6 ? r->dq : r->qinv;
+            limbs = r->half_limbs; break;
+        default: return -1;
+    }
+    n = (size_t)limbs * 4;
+    bn_to_be(tmp, n, src, limbs);
+    while (s0 + 1 < n && tmp[s0] == 0) s0++;
+    if ((int64_t)(n - s0) > cap) return -1;
+    memcpy(out, tmp + s0, n - s0);
+    pk_wipe(tmp, sizeof tmp);
+    return (int64_t)(n - s0);
+}
+/* Whether an RSA private key also carries d (needed for JWK export). */
+int64_t trc_pk_rsa_has_d(void* h) { pk_key* k = (pk_key*)h; return (k && k->kind == 1 && k->rsa.has_d) ? 1 : 0; }
 
 /* PEM: find the n-th block whose label equals `label` (or any label when
  * label is empty) and base64-decode it into out. Returns the DER length,

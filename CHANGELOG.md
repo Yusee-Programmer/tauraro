@@ -184,6 +184,31 @@ added here as each phase lands.
 - `std.encoding.bech32`: Bech32 / Bech32m. `PKey.rsa_exponent()`. C kernels for bcrypt_pbkdf,
   AES-CTR and age STREAM chunks in `std/crypto/crypto_native.c`.
 - `std.html`: forgiving HTML5 parser and toolkit. WHATWG tokenizer (all 2231 named character references via a C table plus numeric forms and legacy no-semicolon names, raw-text/RCDATA/script-data states, CDATA in foreign content), a tree builder with the insertion modes, adoption agency algorithm, foster parenting and SVG/MathML foreign content (identical to html5lib on 5000 fuzzed and hand-made inputs apart from a few documented quirks), `HtmlDocument`/`HtmlNode` DOM with serialization, CSS selectors (`select`, `select_one`, combinators, attribute operators, `:nth-child(an+b)`, `:not`, `:is`, `:has`, ...), `html_escape`/`html_unescape`, `html_to_text`/`html_strip_tags`, `html_links` (via `std.net.url`) and an allow-list sanitizer (`HtmlPolicy`, `html_sanitize`).
+- **`std.crypto.jwk`** - JSON Web Keys (RFC 7517/7518/8037): parse / serialize RSA, EC
+  (P-256, P-384), OKP (Ed25519, X25519) and oct keys with kid / alg / use / key_ops / x5c;
+  `JwkSet` (`parse`, `find(kid)`, `candidates(kid, alg)`, public-only export, unsupported keys
+  skipped); JWK <-> `PKey` conversion; RFC 7638 thumbprints (+ RFC 9278 URI); JWS compact
+  sign / verify (`Jws`) for HS256/384/512, RS256/384/512, PS256/384/512, ES256/384 and EdDSA with
+  key-type / alg / use / key_ops enforcement, "none" and `crit` rejected. `std.crypto.jwt` gains
+  `Jwt.sign_jwk`, `verify_jwk`, `verify_jwks` (key chosen by kid/alg) and `JwtOptions` / `JwtClaims`
+  (exp / nbf / iat / aud / iss / sub / typ / max_age checks with leeway). Tested against the RFC
+  7515, 7517, 7520, 7638 and 8037 vectors. `PKey.rsa_from_parts` / `rsa_part` added.
+- **`std.net.oauth`** - OAuth 2.0 / OpenID Connect client: authorization code + PKCE (S256) with
+  state / nonce, refresh, client credentials, device authorization grant (RFC 8628), revocation
+  (RFC 7009), introspection (RFC 7662); client_secret_basic / client_secret_post / none /
+  private_key_jwt (RFC 7523) client authentication; OIDC discovery, cached JWKS, ID token
+  validation (signature, iss, aud / azp, exp, nonce, at_hash), UserInfo; `OAuthToken` expiry
+  tracking, `ensure_fresh`, and `AuthorizedSession` (Bearer header, refresh before expiry and
+  once after a 401).
+- **`std.net.proxy`** - SOCKS5 (RFC 1928/1929: IPv4 / IPv6 / domain targets, username/password,
+  remote DNS via `socks5h://`), SOCKS4 / SOCKS4a and HTTP CONNECT (with Proxy-Authorization basic)
+  clients returning a `TcpStream` usable with `TlsStream.wrap_fd`; proxy URLs; `NoProxy` (names,
+  suffixes, IPv4 / IPv6 addresses and CIDRs, host:port, `*`) and `ProxyEnv` (http_proxy /
+  https_proxy / all_proxy / no_proxy). `HttpSession.set_proxy(url)`, `set_no_proxy`,
+  opt-in `use_env_proxy()`, `proxy_for(url)`: plain http through an HTTP proxy uses
+  absolute-form targets, https is tunnelled with TLS end to end.
+- `std.encoding.json` decodes `\uXXXX` escapes (including surrogate pairs) to UTF-8 and escapes
+  other control characters when writing.
 - String escapes `\xHH` (a byte), `\uXXXX` and `\UXXXXXXXX` (a code point as UTF-8); `str.rfind`
   (alias of `last_index_of`); `str.split_exact(sep)`, Python-style splitting on a whole substring
   that keeps empty parts (`split` splits on any byte of `sep` and drops empty parts).
