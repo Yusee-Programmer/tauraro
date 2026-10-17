@@ -1,0 +1,345 @@
+# std.crypto.der -- ASN.1 DER encoding and decoding (X.690).
+#
+# Encoders return the complete TLV as a binary str, so structures are built by
+# nesting calls; DerReader walks a buffer TLV by TLV and DerNode gives the tag,
+# the value bytes and the raw TLV. Only definite lengths (DER) are accepted;
+# tags are single-byte (tag numbers 0..30), which covers X.509 / PKCS.
+#
+# Usage:
+#   from std.crypto.der import Der, DerReader, DerNode
+#   mut name = Der.seq(Der.set_of(Der.seq(Der.oid("2.5.4.3") + Der.utf8("example.com"))))
+#   mut n = Der.parse(name)?              # DerNode, tag 0x30
+#   mut kids = Der.children(n)?           # List[DerNode]
+#   Der.oid_text(kids[0].content)         # for an OID node: "2.5.4.3"
+
+from std.core.string import StringBuilder
+
+pub const DER_BOOLEAN = 1
+pub const DER_INTEGER = 2
+pub const DER_BIT_STRING = 3
+pub const DER_OCTET_STRING = 4
+pub const DER_NULL = 5
+pub const DER_OID = 6
+pub const DER_UTF8 = 12
+pub const DER_PRINTABLE = 19
+pub const DER_IA5 = 22
+pub const DER_UTC_TIME = 23
+pub const DER_GEN_TIME = 24
+pub const DER_SEQUENCE = 48
+pub const DER_SET = 49
+
+# Byte at index i (0..255).
+pub def der_byte(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+# A one-byte string.
+pub def der_chr(b: int) -> str:
+    mut sb = StringBuilder.init(2)
+    sb.append_char(b & 255)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Big-endian unsigned bytes of n (n >= 0), minimal length (at least 1 byte).
+pub def der_be_bytes(n: int) -> str:
+    mut digits: List[int] = []
+    mut x = n
+    if x == 0: digits.append(0)
+    while x > 0:
+        digits.append(x & 255)
+        x = x >> 8
+    mut sb = StringBuilder.init(len(digits) + 1)
+    mut i = len(digits) - 1
+    while i >= 0:
+        sb.append_char(digits[i])
+        i = i - 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _d2(n: int) -> str:
+    if n < 10: return f"0{n}"
+    return f"{n}"
+
+# (year, month, day) for days since 1970-01-01 (proleptic Gregorian).
+def _civil(days: int) -> (int, int, int):
+    mut z = days + 719468
+    mut era = z / 146097
+    if z < 0: era = (z - 146096) / 146097
+    mut doe = z - era * 146097
+    mut yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    mut y = yoe + era * 400
+    mut doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    mut mp = (5 * doy + 2) / 153
+    mut d = doy - (153 * mp + 2) / 5 + 1
+    mut m = mp + 3
+    if mp >= 10: m = mp - 9
+    if m <= 2: y = y + 1
+    return (y, m, d)
+
+# Days since 1970-01-01 for a civil date.
+pub def der_days_from_civil(y_in: int, m: int, d: int) -> int:
+    mut y = y_in
+    if m <= 2: y = y - 1
+    mut era = y / 400
+    if y < 0: era = (y - 399) / 400
+    mut yoe = y - era * 400
+    mut mm = m - 3
+    if m <= 2: mm = m + 9
+    mut doy = (153 * mm + 2) / 5 + d - 1
+    mut doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    return era * 146097 + doe - 719468
+
+# "YYYYMMDDHHMMSS" for a Unix time (UTC).
+pub def der_time_digits(unix: int) -> str:
+    mut days = unix / 86400
+    mut secs = unix - days * 86400
+    if secs < 0:
+        secs = secs + 86400
+        days = days - 1
+    mut y, mo, d = _civil(days)
+    mut hh = secs / 3600
+    mut mi = (secs - hh * 3600) / 60
+    mut ss = secs - hh * 3600 - mi * 60
+    return f"{y}" + _d2(mo) + _d2(d) + _d2(hh) + _d2(mi) + _d2(ss)
+
+pub class DerNode:
+    pub tag: int          # identifier byte, e.g. 0x30 SEQUENCE, 0xa0 [0] constructed
+    pub content: str      # value bytes
+    pub raw: str          # the whole TLV
+
+extend DerNode:
+    pub def is_seq(self) -> bool: return self.tag == DER_SEQUENCE
+    # Context-specific tag number (0..30) or -1.
+    pub def context_tag(self) -> int:
+        if (self.tag & 0xc0) == 0x80: return self.tag & 0x1f
+        return -1
+
+pub class DerReader:
+    pub data: str
+    pub pos: int
+
+extend DerReader:
+    pub def init(data: str) -> DerReader:
+        mut r = DerReader()
+        r.data = data
+        r.pos = 0
+        return r
+
+    pub def has_more(self) -> bool: return self.pos < self.data.len()
+
+    # Tag byte of the next element, or -1 at the end.
+    pub def peek_tag(self) -> int:
+        if self.pos >= self.data.len(): return -1
+        return der_byte(self.data, self.pos)
+
+    pub def next(self) throws str -> DerNode:
+        mut n = self.data.len()
+        mut start = self.pos
+        if start + 2 > n: raise("DER: truncated element")
+        mut tag = der_byte(self.data, start)
+        if (tag & 0x1f) == 0x1f: raise("DER: multi-byte tags are not supported")
+        mut k = start + 1
+        mut l = der_byte(self.data, k)
+        k = k + 1
+        if l == 0x80: raise("DER: indefinite length")
+        if l > 0x80:
+            mut nb = l - 0x80
+            if nb > 4 or k + nb > n: raise("DER: bad length")
+            l = 0
+            mut j = 0
+            while j < nb:
+                l = (l << 8) | der_byte(self.data, k + j)
+                j = j + 1
+            k = k + nb
+        if k + l > n: raise("DER: element overruns its container")
+        mut node = DerNode()
+        node.tag = tag
+        node.content = self.data.slice(k, k + l)
+        node.raw = self.data.slice(start, k + l)
+        self.pos = k + l
+        return node
+
+    # The next element, which must have tag `tag`.
+    pub def expect(self, tag: int) throws str -> DerNode:
+        mut node = self.next()?
+        if node.tag != tag: raise(f"DER: expected tag {tag}, got {node.tag}")
+        return node
+
+pub class Der:
+    _dummy: int
+
+extend Der:
+    # Length octets.
+    pub def length(n: int) -> str:
+        if n < 128: return der_chr(n)
+        mut b = der_be_bytes(n)
+        return der_chr(0x80 + b.len()) + b
+
+    # A TLV with identifier byte `tag`.
+    pub def tlv(tag: int, content: str) -> str:
+        mut sb = StringBuilder.init(content.len() + 8)
+        sb.append_char(tag)
+        sb.append(Der.length(content.len()))
+        sb.append(content)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def seq(content: str) -> str: return Der.tlv(DER_SEQUENCE, content)
+    pub def set_of(content: str) -> str: return Der.tlv(DER_SET, content)
+    pub def null_value() -> str: return Der.tlv(DER_NULL, "")
+    pub def octets(b: str) -> str: return Der.tlv(DER_OCTET_STRING, b)
+    pub def utf8(s: str) -> str: return Der.tlv(DER_UTF8, s)
+    pub def printable(s: str) -> str: return Der.tlv(DER_PRINTABLE, s)
+    pub def ia5(s: str) -> str: return Der.tlv(DER_IA5, s)
+
+    pub def boolean(b: bool) -> str:
+        if b: return Der.tlv(DER_BOOLEAN, der_chr(255))
+        return Der.tlv(DER_BOOLEAN, der_chr(0))
+
+    # BIT STRING with no unused bits.
+    pub def bits(b: str) -> str: return Der.tlv(DER_BIT_STRING, der_chr(0) + b)
+
+    # Constructed context-specific [n] (explicit tagging / constructed implicit).
+    pub def ctx(n: int, content: str) -> str: return Der.tlv(0xa0 + n, content)
+    # Primitive context-specific [n] (implicit tagging of a primitive type).
+    pub def ctx_prim(n: int, content: str) -> str: return Der.tlv(0x80 + n, content)
+
+    # INTEGER from unsigned big-endian magnitude bytes.
+    pub def uint(mag: str) -> str:
+        mut i = 0
+        while i < mag.len() - 1 and der_byte(mag, i) == 0:
+            i = i + 1
+        mut m = mag.slice(i, mag.len())
+        if m.len() == 0: m = der_chr(0)
+        if (der_byte(m, 0) & 0x80) != 0: m = der_chr(0) + m
+        return Der.tlv(DER_INTEGER, m)
+
+    # INTEGER from a non-negative int.
+    pub def integer(n: int) -> str:
+        return Der.uint(der_be_bytes(n))
+
+    # OBJECT IDENTIFIER from dotted text ("1.2.840.10045.2.1").
+    pub def oid(dotted: str) -> str:
+        mut parts = dotted.split_exact(".")
+        mut sb = StringBuilder.init(16)
+        if len(parts) < 2: return Der.tlv(DER_OID, "")
+        mut first = int(parts[0]) * 40 + int(parts[1])
+        mut vals: List[int] = [first]
+        mut i = 2
+        while i < len(parts):
+            vals.append(int(parts[i]))
+            i = i + 1
+        mut j = 0
+        while j < len(vals):
+            mut v = vals[j]
+            mut groups: List[int] = []
+            groups.append(v & 127)
+            v = v >> 7
+            while v > 0:
+                groups.append((v & 127) | 128)
+                v = v >> 7
+            mut g = len(groups) - 1
+            while g >= 0:
+                sb.append_char(groups[g])
+                g = g - 1
+            j = j + 1
+        mut body = sb.to_owned()
+        sb.free()
+        return Der.tlv(DER_OID, body)
+
+    # UTCTime for years 1950..2049, GeneralizedTime otherwise (RFC 5280 rule).
+    pub def time(unix: int) -> str:
+        mut digits = der_time_digits(unix)
+        mut year = int(digits.slice(0, 4))
+        if year >= 1950 and year < 2050: return Der.tlv(DER_UTC_TIME, digits.slice(2, digits.len()) + "Z")
+        return Der.tlv(DER_GEN_TIME, digits + "Z")
+
+    # Parse exactly one element (raises on trailing bytes).
+    pub def parse(data: str) throws str -> DerNode:
+        mut r = DerReader.init(data)
+        mut node = r.next()?
+        if r.has_more(): raise("DER: trailing bytes after the element")
+        return node
+
+    # The elements inside a constructed node.
+    pub def children(node: DerNode) throws str -> List[DerNode]:
+        mut out: List[DerNode] = []
+        mut r = DerReader.init(node.content)
+        while r.has_more():
+            mut c = r.next()?
+            out.append(c)
+        return out
+
+    # Dotted text of OID content bytes.
+    pub def oid_text(content: str) -> str:
+        if content.len() == 0: return ""
+        mut sb = StringBuilder.init(32)
+        mut i = 0
+        mut v = 0
+        mut first = true
+        while i < content.len():
+            mut b = der_byte(content, i)
+            v = (v << 7) | (b & 127)
+            if (b & 128) == 0:
+                if first:
+                    mut a = 2
+                    if v < 80: a = v / 40
+                    sb.append_int(a)
+                    sb.append(".")
+                    sb.append_int(v - a * 40)
+                    first = false
+                else:
+                    sb.append(".")
+                    sb.append_int(v)
+                v = 0
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # INTEGER content -> unsigned magnitude without leading zero bytes.
+    pub def uint_bytes(content: str) -> str:
+        mut i = 0
+        while i < content.len() - 1 and der_byte(content, i) == 0:
+            i = i + 1
+        return content.slice(i, content.len())
+
+    # INTEGER content -> int (small non-negative values only).
+    pub def to_int(content: str) -> int:
+        mut v = 0
+        mut i = 0
+        while i < content.len():
+            v = (v << 8) | der_byte(content, i)
+            i = i + 1
+        return v
+
+    # BIT STRING content -> the bits as bytes (unused-bits octet dropped).
+    pub def bit_bytes(content: str) -> str:
+        if content.len() == 0: return ""
+        return content.slice(1, content.len())
+
+    # UTCTime / GeneralizedTime node -> Unix time; raises on other forms.
+    pub def time_value(node: DerNode) throws str -> int:
+        mut t = node.content
+        mut digits = ""
+        if node.tag == DER_UTC_TIME:
+            if t.len() != 13: raise("DER: bad UTCTime")
+            mut yy = int(t.slice(0, 2))
+            if yy < 50: digits = "20" + t.slice(0, 12)
+            else: digits = "19" + t.slice(0, 12)
+        elif node.tag == DER_GEN_TIME:
+            if t.len() != 15: raise("DER: bad GeneralizedTime")
+            digits = t.slice(0, 14)
+        else:
+            raise("DER: not a time value")
+        mut y = int(digits.slice(0, 4))
+        mut mo = int(digits.slice(4, 6))
+        mut d = int(digits.slice(6, 8))
+        mut hh = int(digits.slice(8, 10))
+        mut mi = int(digits.slice(10, 12))
+        mut ss = int(digits.slice(12, 14))
+        return der_days_from_civil(y, mo, d) * 86400 + hh * 3600 + mi * 60 + ss

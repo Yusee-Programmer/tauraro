@@ -356,12 +356,83 @@ while true:
 | `TlsListener.listen(host, port, cfg)?`, `accept()?`, `close()`, `timeout_ms` | Accept loop. A client failing the handshake raises from `accept`; the listener keeps working. |
 | `TlsStream.accept_fd(fd, cfg, timeout_ms, owns_fd)?` | Server handshake on an already-accepted socket. |
 | `stream.server_name()` | The SNI host name the client sent. |
+| `cfg.add_route(server_name, alpn, other)?`, `cfg.clear_routes()` | Serve a ClientHello whose SNI is `server_name` (case-insensitive, `""` = any) and that offers ALPN `alpn` (`""` = any) with the config `other`: one certificate per host name, or the `acme-tls/1` challenge certificate next to the normal one. Up to 16 routes, first match wins; `other` must stay alive; `set_alpn` drops the routes. |
 
 Client certificates, session resumption and 0-RTT are not supported on either side.
 
 `std.net.http_server` serves HTTPS with `srv.enable_tls(cfg)`. Each connection is decrypted by a
 background thread that feeds a local socket, so handlers, keep-alive, chunked responses and SSE
 work unchanged.
+
+---
+
+## Automatic certificates (ACME) — `std.net.acme`
+
+An ACME client (RFC 8555) for Let's Encrypt and other CAs. `obtain()` does the whole flow: account,
+order, challenges, CSR, finalize, polling, download. The result loads straight into a TLS server.
+
+```tauraro
+from std.net.acme import AcmeClient, LETSENCRYPT_STAGING, CHALLENGE_HTTP01
+from std.net.tls import TlsServerConfig
+from std.crypto.csr import KeyPair
+
+mut acme = AcmeClient.init(LETSENCRYPT_STAGING)        # LETSENCRYPT_PRODUCTION when it works
+acme.set_contacts(["admin@example.com"])
+acme.agree_to_terms(true)
+# acme.set_account_key(KeyPair.from_pem(read_file("account.pem"))?)   # reuse an account
+mut cert = acme.obtain(["example.com", "www.example.com"], CHALLENGE_HTTP01)?
+write_file("account.pem", acme.account_key.private_pem())
+mut cfg = TlsServerConfig.from_pem(cert.cert_pem, cert.key_pem)?
+if AcmeClient.needs_renewal(cert.cert_pem, 30): ...           # renew 30 days before expiry
+```
+
+**Challenges.** `http-01` is served by a built-in responder on port `http_port` (80) and
+`tls-alpn-01` (RFC 8737) by a built-in TLS responder on `tls_port` (443): it presents a self-signed
+certificate with the critical `acmeIdentifier` extension for ALPN `acme-tls/1`, routed by SNI. Both
+run on a background thread only while the CA validates. To answer from your own server instead, set
+a hook. `dns-01` always needs a hook. Wildcard names (`*.example.com`) can only be validated with
+`dns-01`. IP addresses (RFC 8738) work with `http-01` and `tls-alpn-01`.
+
+```tauraro
+def put_txt(name: str, value: str, present: bool) -> bool:
+    # create (present) or delete the TXT record `name` = `value` at your DNS provider
+    return true
+acme.set_dns01_hook(put_txt)
+acme.dns_wait_ms = 30000                       # time for the record to propagate
+mut wild = acme.obtain(["*.example.com", "example.com"], CHALLENGE_DNS01)?
+```
+
+| `AcmeClient` member | Description |
+|---|---|
+| `init(directory_url)` | `LETSENCRYPT_PRODUCTION`, `LETSENCRYPT_STAGING` or any ACME directory. |
+| `set_account_key(KeyPair)`, `set_account(key, url)` | ES256 (P-256), ES384 (P-384) or RS256 (RSA from PEM) key. Without one, a P-256 key is generated. |
+| `set_contacts(emails)`, `agree_to_terms(b)`, `set_external_account_binding(kid, hmac_b64url)` | Account details; EAB (HS256) for CAs that require it (`directory()?.eab_required`). |
+| `register()?`, `find_account()?`, `account()?`, `update_contacts(list)?`, `deactivate_account()?` | Account URL is kept in `kid`. |
+| `change_key(new_key)?` | Key rollover (RFC 8555 section 7.3.5). |
+| `obtain(names, type)?`, `obtain_with_key(names, type, key)?` | Returns `AcmeCertificate`: `cert_pem` (leaf + chain), `key_pem` (PKCS#8), `url`, `alternates`, `not_after`. |
+| `set_http01_hook(f)`, `set_dns01_hook(f)`, `set_tls_alpn01_hook(f)` | `f(token, key_auth, present)`, `f(record_name, txt_value, present)`, `f(identifier, cert_pem, key_pem, present)`; return true on success. |
+| `new_order(names)?`, `get_order(url)?`, `get_authorization(url)?`, `respond(challenge)?`, `wait_authorization(url)?`, `wait_order(url, until)?`, `finalize(order, csr_der)?`, `download(url)?` | The steps of `obtain`, for custom flows. Polling honours `Retry-After` (capped by `max_retry_after_ms`, default `poll_interval_ms`, overall `poll_timeout_ms`). |
+| `preferred_chain` | Issuer name substring: pick the matching chain among the `Link: rel="alternate"` chains. |
+| `revoke(cert_pem, reason)?`, `revoke_with_key(cert_pem, cert_key, reason)?` | Revoke with the account key, or by proving possession of the certificate key. `REVOKE_*` reasons. |
+| `post(url, payload, use_jwk)?`, `fetch(url)?`, `new_nonce()?` | Signed requests; a `badNonce` error is retried (`nonce_retries`, 3) with the fresh nonce. |
+| `set_ca_pem(pem)`, `set_insecure(b)` | Trust roots for the ACME server's own HTTPS (e.g. Pebble). |
+
+`AcmeJws` holds the JOSE parts: `b64url`, `jwk(key)` (RFC 7638 canonical form), `thumbprint(key)`,
+`thumbprint_of(json)?`, `key_authorization(token, key)`, `dns01_value(key_auth)`,
+`protected_header(...)`, `sign(key, protected, payload)?` (flattened JSON), `eab(...)?`,
+`key_from_jwk(json)?` (import certbot/lego JWK account keys), `public_key_from_jwk(json)?`,
+`verify(...)`, `tls_alpn01_cert(identifier, key_auth)?`, `reverse_name(ip)`.
+
+The keys, CSRs and certificates come from `std.crypto.csr` (`KeyPair`, `Csr`, `CertBuilder`) on top
+of `std.crypto.der`; see [crypto](crypto.md).
+
+Not implemented: RSA key generation (load RSA keys from PEM), pre-authorization (`newAuthz`), ACME
+Renewal Information. The built-in responders bind `0.0.0.0` and handle one connection at a time.
+
+Tested by `tests/lang/144_acme.tr` against a fake CA in a thread that checks every JWS signature,
+nonce and URL, EAB, key rollover and the CSR, and validates http-01 / dns-01 / tls-alpn-01 against
+the client's responders. The client was also run against Pebble (http-01, tls-alpn-01 for a DNS
+name and an IP, RS256 + EAB, key rollover, revocation, deactivation, Pebble's random `badNonce`s).
 
 ---
 

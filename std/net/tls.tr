@@ -53,6 +53,8 @@ extern "C":
     def trc_tls_server_config_free(h: Pointer[char])
     def trc_tls_server_fd(fd: int, cfg: Pointer[char], timeout_ms: int, owns_fd: int) -> Pointer[char]
     def trc_tls_server_name(h: Pointer[char], out: Pointer[char], cap: int) -> int
+    def trc_tls_server_config_route(h: Pointer[char], sni: Pointer[char], slen: int, alpn: Pointer[char], alen: int, alt: Pointer[char]) -> int
+    def trc_tls_server_config_clear_routes(h: Pointer[char])
 
 def _tls_null(p: Pointer[char]) -> bool:
     return (p as usize) == (0 as usize)
@@ -65,6 +67,7 @@ pub class TlsServerConfig:
     pub alpn: str
     _chain: str
     _key: str
+    _routes: List[TlsServerConfig]
 
 extend TlsServerConfig:
     # `cert_pem`: the certificate chain, leaf first (any number of
@@ -96,6 +99,7 @@ extend TlsServerConfig:
         c.alpn = ""
         c._chain = cert_pem
         c._key = key_pem
+        c._routes = []
         c._build(ders, i, key_der)?
         return c
 
@@ -136,6 +140,25 @@ extend TlsServerConfig:
                 break
             k = k + 1
         self._build(ders, i, key_der)?
+
+    # Serve connections whose ClientHello names `server_name` (SNI, compared
+    # case-insensitively; "" = any) and offers the ALPN protocol `alpn`
+    # ("" = any) with `other` instead of this configuration -- for example the
+    # RFC 8737 tls-alpn-01 challenge certificate for "acme-tls/1" next to the
+    # normal certificate, or one certificate per host name. Routes are checked
+    # in the order added; at most 16 (re-adding the same pair replaces it).
+    # `other` must stay alive (not disposed) while this configuration is used.
+    # Calling set_alpn() afterwards drops the routes.
+    pub def add_route(self, server_name: str, alpn: str, other: TlsServerConfig) throws str:
+        if server_name.len() > 255 or alpn.len() > 63: raise("TLS server: route name too long")
+        if trc_tls_server_config_route(self._h, server_name as Pointer[char], server_name.len(), alpn as Pointer[char], alpn.len(), other.handle()) != 0:
+            raise("TLS server: too many routes (max 16)")
+        self._routes.append(other)
+
+    # Remove every route added with add_route.
+    pub def clear_routes(self):
+        trc_tls_server_config_clear_routes(self._h)
+        self._routes = []
 
     pub def handle(self) -> Pointer[char]: return self._h
 
