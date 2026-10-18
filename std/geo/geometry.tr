@@ -1,0 +1,989 @@
+# std.geo.geometry -- simple-features geometry, GeoJSON and WKT.
+#
+# A `Geometry` stores coordinates as parallel x (longitude) / y (latitude)
+# lists plus ring and polygon boundaries:
+#
+#   Point / LineString           one ring of 1 / n coordinates
+#   Polygon                      rings[0] = exterior, rings[1..] = holes
+#   MultiPoint                   one 1-coordinate ring per point
+#   MultiLineString              one ring per line
+#   MultiPolygon                 rings grouped into polygons by poly_ends
+#
+# Build:   Geometry.point(x, y) / Geometry.line_string(xs, ys) /
+#          Geometry.polygon(xs, ys)  (exterior only) / Geometry.empty(kind)
+#          then add(x, y), end_ring(), end_polygon() for anything else.
+# Query:   contains(x, y) (even-odd, holes excluded), bbox(), area_sphere(r),
+#          area_geodesic(ellipsoid), length_geodesic(ellipsoid),
+#          simplify(tolerance) (Douglas-Peucker, planar in degrees)
+# Text:    Wkt.parse(s)? / g.to_wkt();  GeoJson.parse_geometry(s)? /
+#          GeoJson.parse(s)? -> FeatureCollection / g.to_geojson() /
+#          Feature.to_geojson() / FeatureCollection.to_geojson()
+#
+# Coordinates are (x, y) = (longitude, latitude) as in GeoJSON and WKT.
+# GeometryCollection is not supported.
+
+from std.geo.native import sin, cos, tan, atan2, sqrt, fabs, GEO_DEG, GEO_PI, geo_fmt, trc_geo_parse_num, geo_zeros
+from std.geo.geodesy import Ellipsoid, BBox, EARTH_MEAN_RADIUS
+from std.encoding.json import Json, JsonDoc, JsonRef, _json_escape
+from std.core.string import StringBuilder
+
+pub const GEOM_POINT = 1
+pub const GEOM_LINESTRING = 2
+pub const GEOM_POLYGON = 3
+pub const GEOM_MULTIPOINT = 4
+pub const GEOM_MULTILINESTRING = 5
+pub const GEOM_MULTIPOLYGON = 6
+
+pub def geom_kind_name(kind: int) -> str:
+    if kind == 1: return "Point"
+    if kind == 2: return "LineString"
+    if kind == 3: return "Polygon"
+    if kind == 4: return "MultiPoint"
+    if kind == 5: return "MultiLineString"
+    if kind == 6: return "MultiPolygon"
+    return ""
+
+def _kind_from_name(name: str) -> int:
+    mut n = name.lower()
+    if n == "point": return 1
+    if n == "linestring": return 2
+    if n == "polygon": return 3
+    if n == "multipoint": return 4
+    if n == "multilinestring": return 5
+    if n == "multipolygon": return 6
+    return 0
+
+pub class Geometry:
+    pub kind: int
+    pub xs: List[float]
+    pub ys: List[float]
+    pub zs: List[float]
+    pub has_z: bool
+    pub ring_ends: List[int]    # exclusive coordinate end of each ring
+    pub poly_ends: List[int]    # exclusive ring end of each polygon
+
+extend Geometry:
+    pub def empty(kind: int) -> Geometry:
+        mut g = Geometry()
+        g.kind = kind
+        g.xs = []
+        g.ys = []
+        g.zs = []
+        g.has_z = false
+        g.ring_ends = []
+        g.poly_ends = []
+        return g
+
+    pub def point(x: float, y: float) -> Geometry:
+        mut g = Geometry.empty(GEOM_POINT)
+        g.add(x, y)
+        g.end_ring()
+        return g
+
+    pub def line_string(xs: List[float], ys: List[float]) -> Geometry:
+        mut g = Geometry.empty(GEOM_LINESTRING)
+        mut i = 0
+        while i < xs.len() and i < ys.len():
+            g.add(xs[i], ys[i])
+            i = i + 1
+        g.end_ring()
+        return g
+
+    # Polygon with just an exterior ring (closed automatically).
+    pub def polygon(xs: List[float], ys: List[float]) -> Geometry:
+        mut g = Geometry.empty(GEOM_POLYGON)
+        mut i = 0
+        while i < xs.len() and i < ys.len():
+            g.add(xs[i], ys[i])
+            i = i + 1
+        g.end_ring()
+        g.end_polygon()
+        return g
+
+    pub def add(self, x: float, y: float):
+        self.xs.append(x)
+        self.ys.append(y)
+        self.zs.append(0.0)
+
+    pub def add_z(self, x: float, y: float, z: float):
+        self.xs.append(x)
+        self.ys.append(y)
+        self.zs.append(z)
+        self.has_z = true
+
+    # Finish the current ring; polygon rings are closed if they are not.
+    pub def end_ring(self):
+        mut start = 0
+        if self.ring_ends.len() > 0: start = self.ring_ends[self.ring_ends.len() - 1]
+        mut n = self.xs.len()
+        if (self.kind == GEOM_POLYGON or self.kind == GEOM_MULTIPOLYGON) and n - start >= 1:
+            if self.xs[start] != self.xs[n - 1] or self.ys[start] != self.ys[n - 1]:
+                self.xs.append(self.xs[start])
+                self.ys.append(self.ys[start])
+                self.zs.append(self.zs[start])
+        self.ring_ends.append(self.xs.len())
+
+    # Finish the current polygon (Polygon / MultiPolygon).
+    pub def end_polygon(self):
+        self.poly_ends.append(self.ring_ends.len())
+
+    pub def num_coords(self) -> int:
+        return self.xs.len()
+
+    pub def num_rings(self) -> int:
+        return self.ring_ends.len()
+
+    pub def ring_start(self, i: int) -> int:
+        if i == 0: return 0
+        return self.ring_ends[i - 1]
+
+    pub def ring_end(self, i: int) -> int:
+        return self.ring_ends[i]
+
+    pub def num_polygons(self) -> int:
+        return self.poly_ends.len()
+
+    pub def poly_ring_start(self, p: int) -> int:
+        if p == 0: return 0
+        return self.poly_ends[p - 1]
+
+    pub def poly_ring_end(self, p: int) -> int:
+        return self.poly_ends[p]
+
+    pub def is_empty(self) -> bool:
+        return self.xs.len() == 0
+
+    pub def kind_name(self) -> str:
+        return geom_kind_name(self.kind)
+
+    pub def bbox(self) -> BBox:
+        if self.xs.len() == 0: return BBox.init(0.0, 0.0, 0.0, 0.0)
+        mut b = BBox.init(self.ys[0], self.xs[0], self.ys[0], self.xs[0])
+        mut i = 1
+        while i < self.xs.len():
+            if self.ys[i] < b.min_lat: b.min_lat = self.ys[i]
+            if self.ys[i] > b.max_lat: b.max_lat = self.ys[i]
+            if self.xs[i] < b.min_lon: b.min_lon = self.xs[i]
+            if self.xs[i] > b.max_lon: b.max_lon = self.xs[i]
+            i = i + 1
+        return b
+
+    def _ring_contains(self, r: int, x: float, y: float) -> bool:
+        mut s = self.ring_start(r)
+        mut e = self.ring_end(r)
+        mut n = e - s
+        if n < 3: return false
+        mut inside = false
+        mut j = e - 1
+        mut i = s
+        while i < e:
+            mut xi = self.xs[i]
+            mut yi = self.ys[i]
+            mut xj = self.xs[j]
+            mut yj = self.ys[j]
+            if (yi > y) != (yj > y):
+                mut xc = (xj - xi) * (y - yi) / (yj - yi) + xi
+                if x < xc: inside = not inside
+            j = i
+            i = i + 1
+        return inside
+
+    # Point-in-polygon test (planar, even-odd per ring): inside the exterior
+    # ring and outside every hole. Points exactly on an edge may go either
+    # way. False for non-areal geometries.
+    pub def contains(self, x: float, y: float) -> bool:
+        if self.kind != GEOM_POLYGON and self.kind != GEOM_MULTIPOLYGON: return false
+        mut p = 0
+        while p < self.num_polygons():
+            mut rs = self.poly_ring_start(p)
+            mut re = self.poly_ring_end(p)
+            if re > rs and self._ring_contains(rs, x, y):
+                mut in_hole = false
+                mut h = rs + 1
+                while h < re:
+                    if self._ring_contains(h, x, y):
+                        in_hole = true
+                        break
+                    h = h + 1
+                if not in_hole: return true
+            p = p + 1
+        return false
+
+    # Signed spherical excess of ring r (steradians, counter-clockwise > 0).
+    def _ring_excess(self, r: int) -> float:
+        mut s = self.ring_start(r)
+        mut e = self.ring_end(r)
+        if e - s < 3: return 0.0
+        mut total = 0.0
+        mut i = s
+        while i < e:
+            mut j = i + 1
+            if j == e: j = s
+            mut l1 = self.xs[i] * GEO_DEG
+            mut l2 = self.xs[j] * GEO_DEG
+            mut t1 = tan(self.ys[i] * GEO_DEG / 2.0)
+            mut t2 = tan(self.ys[j] * GEO_DEG / 2.0)
+            mut dl = l2 - l1
+            while dl > GEO_PI: dl = dl - 2.0 * GEO_PI
+            while dl < 0.0 - GEO_PI: dl = dl + 2.0 * GEO_PI
+            total = total + 2.0 * atan2(tan(dl / 2.0) * (t1 + t2), 1.0 + t1 * t2)
+            i = i + 1
+        return total
+
+    # Area on a sphere of the given radius (m^2): exteriors minus holes.
+    # Exact spherical excess; rings must not enclose a pole.
+    pub def area_sphere(self, radius: float) -> float:
+        if self.kind != GEOM_POLYGON and self.kind != GEOM_MULTIPOLYGON: return 0.0
+        mut total = 0.0
+        mut p = 0
+        while p < self.num_polygons():
+            mut rs = self.poly_ring_start(p)
+            mut re = self.poly_ring_end(p)
+            mut r = rs
+            while r < re:
+                mut a = fabs(self._ring_excess(r)) * radius * radius
+                if r == rs: total = total + a
+                else: total = total - a
+                r = r + 1
+            p = p + 1
+        return total
+
+    pub def area_mean_sphere(self) -> float:
+        return self.area_sphere(EARTH_MEAN_RADIUS)
+
+    # One axis of ring r as a list (axis 0 = x/lon, 1 = y/lat); the closing
+    # duplicate vertex is dropped when drop_closing.
+    def _ring_axis(self, r: int, axis: int, drop_closing: bool) -> List[float]:
+        mut s = self.ring_start(r)
+        mut e = self.ring_end(r)
+        if drop_closing and e - s > 1 and self.xs[s] == self.xs[e - 1] and self.ys[s] == self.ys[e - 1]:
+            e = e - 1
+        mut out: List[float] = []
+        mut i = s
+        while i < e:
+            if axis == 0: out.append(self.xs[i])
+            else: out.append(self.ys[i])
+            i = i + 1
+        return out
+
+    # Area on the ellipsoid (m^2, Karney's algorithm): exteriors minus holes.
+    # Works for rings around a pole and for huge polygons.
+    pub def area_geodesic(self, e: Ellipsoid) -> float:
+        if self.kind != GEOM_POLYGON and self.kind != GEOM_MULTIPOLYGON: return 0.0
+        mut total = 0.0
+        mut p = 0
+        while p < self.num_polygons():
+            mut rs = self.poly_ring_start(p)
+            mut re = self.poly_ring_end(p)
+            mut r = rs
+            while r < re:
+                mut la = self._ring_axis(r, 1, true)
+                mut lo = self._ring_axis(r, 0, true)
+                mut a = e.polygon_area(la, lo)
+                if r == rs: total = total + a
+                else: total = total - a
+                r = r + 1
+            p = p + 1
+        return total
+
+    # Geodesic length (m) of all lines / ring perimeters.
+    pub def length_geodesic(self, e: Ellipsoid) -> float:
+        mut total = 0.0
+        if self.kind == GEOM_POINT or self.kind == GEOM_MULTIPOINT: return 0.0
+        mut r = 0
+        while r < self.num_rings():
+            mut la = self._ring_axis(r, 1, false)
+            mut lo = self._ring_axis(r, 0, false)
+            total = total + e.path_length(la, lo)
+            r = r + 1
+        return total
+
+    # Douglas-Peucker simplification of every line / ring with a planar
+    # tolerance in coordinate units. Rings keep at least 4 points (closed);
+    # a ring that would collapse is kept unchanged.
+    pub def simplify(self, tolerance: float) -> Geometry:
+        mut g = Geometry.empty(self.kind)
+        g.has_z = self.has_z
+        mut r = 0
+        while r < self.num_rings():
+            mut s = self.ring_start(r)
+            mut e = self.ring_end(r)
+            mut keep = Simplify.douglas_peucker_range(self.xs, self.ys, s, e, tolerance)
+            mut cnt = 0
+            mut i = 0
+            while i < keep.len():
+                if keep[i]: cnt = cnt + 1
+                i = i + 1
+            mut areal = self.kind == GEOM_POLYGON or self.kind == GEOM_MULTIPOLYGON
+            i = 0
+            while i < e - s:
+                if keep[i] or (areal and cnt < 4):
+                    g.xs.append(self.xs[s + i])
+                    g.ys.append(self.ys[s + i])
+                    g.zs.append(self.zs[s + i])
+                i = i + 1
+            g.ring_ends.append(g.xs.len())
+            r = r + 1
+        mut p = 0
+        while p < self.poly_ends.len():
+            g.poly_ends.append(self.poly_ends[p])
+            p = p + 1
+        return g
+
+    pub def to_wkt(self) -> str:
+        return Wkt.format(self)
+
+    pub def to_geojson(self) -> str:
+        mut sb = StringBuilder.init(256)
+        _gj_geometry(self, sb)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+# ─── Douglas-Peucker ─────────────────────────────────────────────────────────
+
+def _seg_dist(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
+    mut dx = bx - ax
+    mut dy = by - ay
+    mut l2 = dx * dx + dy * dy
+    if l2 == 0.0: return sqrt((px - ax) * (px - ax) + (py - ay) * (py - ay))
+    mut t = ((px - ax) * dx + (py - ay) * dy) / l2
+    if t < 0.0: t = 0.0
+    if t > 1.0: t = 1.0
+    mut qx = ax + t * dx
+    mut qy = ay + t * dy
+    return sqrt((px - qx) * (px - qx) + (py - qy) * (py - qy))
+
+pub class Simplify:
+    _dummy: int
+
+extend Simplify:
+    # Keep-mask for points xs/ys[start, end): true = keep. The end points are
+    # always kept. Iterative (no recursion depth limit).
+    pub def douglas_peucker_range(xs: List[float], ys: List[float], start: int, end_: int, tolerance: float) -> List[bool]:
+        mut n = end_ - start
+        mut keep: List[bool] = []
+        mut i = 0
+        while i < n:
+            keep.append(false)
+            i = i + 1
+        if n <= 2:
+            i = 0
+            while i < n:
+                keep[i] = true
+                i = i + 1
+            return keep
+        keep[0] = true
+        keep[n - 1] = true
+        mut stack: List[int] = []
+        stack.append(0)
+        stack.append(n - 1)
+        while stack.len() > 0:
+            mut b = stack.pop()
+            mut a = stack.pop()
+            mut best = -1.0
+            mut bi = -1
+            mut k = a + 1
+            while k < b:
+                mut d = _seg_dist(xs[start + k], ys[start + k], xs[start + a], ys[start + a], xs[start + b], ys[start + b])
+                if d > best:
+                    best = d
+                    bi = k
+                k = k + 1
+            if bi >= 0 and best > tolerance:
+                keep[bi] = true
+                stack.append(a)
+                stack.append(bi)
+                stack.append(bi)
+                stack.append(b)
+        return keep
+
+    # Indices kept from the whole polyline.
+    pub def douglas_peucker(xs: List[float], ys: List[float], tolerance: float) -> List[int]:
+        mut keep = Simplify.douglas_peucker_range(xs, ys, 0, xs.len(), tolerance)
+        mut out: List[int] = []
+        mut i = 0
+        while i < keep.len():
+            if keep[i]: out.append(i)
+            i = i + 1
+        return out
+
+# ─── WKT ─────────────────────────────────────────────────────────────────────
+
+class _WktLexer:
+    s: str
+    pos: int
+
+extend _WktLexer:
+    def skip_ws(self):
+        while self.pos < self.s.len():
+            mut c = self.s.char_at(self.pos)
+            if c == 32 or c == 9 or c == 10 or c == 13: self.pos = self.pos + 1
+            else: break
+
+    def peek(self) -> int:
+        self.skip_ws()
+        if self.pos >= self.s.len(): return 0
+        return self.s.char_at(self.pos)
+
+    def expect(self, c: int) throws str:
+        if self.peek() != c:
+            raise(f"wkt: expected '{_chr(c)}' at offset {self.pos}")
+        self.pos = self.pos + 1
+
+    def word(self) -> str:
+        self.skip_ws()
+        mut st = self.pos
+        while self.pos < self.s.len():
+            mut c = self.s.char_at(self.pos)
+            if (c >= 65 and c <= 90) or (c >= 97 and c <= 122): self.pos = self.pos + 1
+            else: break
+        return self.s.slice(st, self.pos).upper()
+
+    def number(self) throws str -> float:
+        self.skip_ws()
+        mut out = geo_zeros(1)
+        mut base = self.s as Pointer[char]
+        mut n = 0
+        unsafe:
+            n = trc_geo_parse_num(base.offset(self.pos), self.s.len() - self.pos, out as Pointer[float])
+        if n <= 0: raise(f"wkt: expected a number at offset {self.pos}")
+        self.pos = self.pos + n
+        return out[0]
+
+def _chr(c: int) -> str:
+    if c == 40: return "("
+    if c == 41: return ")"
+    if c == 44: return ","
+    return "?"
+
+def _wkt_coord(lx: _WktLexer, g: Geometry, dims: int) throws str:
+    mut x = lx.number()?
+    mut y = lx.number()?
+    if dims >= 3:
+        mut z = lx.number()?
+        if dims == 4: lx.number()?
+        g.add_z(x, y, z)
+    else:
+        mut c = lx.peek()
+        if (c >= 48 and c <= 57) or c == 45 or c == 43 or c == 46:
+            mut z2 = lx.number()?
+            g.add_z(x, y, z2)
+            c = lx.peek()
+            if (c >= 48 and c <= 57) or c == 45 or c == 43 or c == 46: lx.number()?
+        else:
+            g.add(x, y)
+
+# "(x y, x y, ...)" as one ring
+def _wkt_ring(lx: _WktLexer, g: Geometry, dims: int) throws str:
+    lx.expect(40)?
+    _wkt_coord(lx, g, dims)?
+    while lx.peek() == 44:
+        lx.pos = lx.pos + 1
+        _wkt_coord(lx, g, dims)?
+    lx.expect(41)?
+    g.end_ring()
+
+# "((ring), (ring))" as one polygon
+def _wkt_poly(lx: _WktLexer, g: Geometry, dims: int) throws str:
+    lx.expect(40)?
+    _wkt_ring(lx, g, dims)?
+    while lx.peek() == 44:
+        lx.pos = lx.pos + 1
+        _wkt_ring(lx, g, dims)?
+    lx.expect(41)?
+    g.end_polygon()
+
+def _wkt_fmt_coord(g: Geometry, i: int, sb: StringBuilder):
+    sb.append(geo_fmt(g.xs[i]))
+    sb.append(" ")
+    sb.append(geo_fmt(g.ys[i]))
+    if g.has_z:
+        sb.append(" ")
+        sb.append(geo_fmt(g.zs[i]))
+
+def _wkt_fmt_ring(g: Geometry, r: int, sb: StringBuilder):
+    sb.append("(")
+    mut i = g.ring_start(r)
+    while i < g.ring_end(r):
+        if i > g.ring_start(r): sb.append(", ")
+        _wkt_fmt_coord(g, i, sb)
+        i = i + 1
+    sb.append(")")
+
+def _wkt_fmt_poly(g: Geometry, p: int, sb: StringBuilder):
+    sb.append("(")
+    mut r = g.poly_ring_start(p)
+    while r < g.poly_ring_end(p):
+        if r > g.poly_ring_start(p): sb.append(", ")
+        _wkt_fmt_ring(g, r, sb)
+        r = r + 1
+    sb.append(")")
+
+pub class Wkt:
+    _dummy: int
+
+extend Wkt:
+    pub def parse(s: str) throws str -> Geometry:
+        mut lx = _WktLexer()
+        lx.s = s
+        lx.pos = 0
+        mut name = lx.word()
+        mut kind = _kind_from_name(name)
+        if kind == 0:
+            if name == "GEOMETRYCOLLECTION": raise("wkt: GEOMETRYCOLLECTION is not supported")
+            raise(f"wkt: unknown geometry type '{name}'")
+        mut g = Geometry.empty(kind)
+        mut dims = 2
+        mut save = lx.pos
+        mut modw = lx.word()
+        if modw == "Z":
+            dims = 3
+            g.has_z = true
+        elif modw == "M":
+            dims = 2
+        elif modw == "ZM":
+            dims = 4
+            g.has_z = true
+        elif modw == "EMPTY":
+            lx.pos = save
+        else:
+            lx.pos = save
+        save = lx.pos
+        if lx.word() == "EMPTY":
+            if lx.peek() != 0: raise("wkt: trailing characters")
+            return g
+        lx.pos = save
+        if modw == "M":
+            # x y m: read the measure as a third value and drop it
+            dims = 3
+        if kind == GEOM_POINT or kind == GEOM_LINESTRING:
+            _wkt_ring(lx, g, dims)?
+        elif kind == GEOM_POLYGON:
+            _wkt_poly(lx, g, dims)?
+        elif kind == GEOM_MULTIPOINT:
+            lx.expect(40)?
+            mut more = true
+            while more:
+                if lx.peek() == 40:
+                    _wkt_ring(lx, g, dims)?
+                else:
+                    _wkt_coord(lx, g, dims)?
+                    g.end_ring()
+                if lx.peek() == 44: lx.pos = lx.pos + 1
+                else: more = false
+            lx.expect(41)?
+        elif kind == GEOM_MULTILINESTRING:
+            lx.expect(40)?
+            _wkt_ring(lx, g, dims)?
+            while lx.peek() == 44:
+                lx.pos = lx.pos + 1
+                _wkt_ring(lx, g, dims)?
+            lx.expect(41)?
+        else:
+            lx.expect(40)?
+            _wkt_poly(lx, g, dims)?
+            while lx.peek() == 44:
+                lx.pos = lx.pos + 1
+                _wkt_poly(lx, g, dims)?
+            lx.expect(41)?
+        if modw == "M":
+            # measures were stored as z: drop them
+            g.has_z = false
+        if kind == GEOM_POINT and g.xs.len() != 1: raise("wkt: POINT needs exactly one coordinate")
+        if lx.peek() != 0: raise(f"wkt: trailing characters at offset {lx.pos}")
+        return g
+
+    pub def format(g: Geometry) -> str:
+        mut sb = StringBuilder.init(128)
+        sb.append(geom_kind_name(g.kind).upper())
+        if g.has_z: sb.append(" Z")
+        if g.xs.len() == 0:
+            sb.append(" EMPTY")
+        else:
+            sb.append(" ")
+            if g.kind == GEOM_POINT or g.kind == GEOM_LINESTRING:
+                _wkt_fmt_ring(g, 0, sb)
+            elif g.kind == GEOM_POLYGON:
+                _wkt_fmt_poly(g, 0, sb)
+            elif g.kind == GEOM_MULTIPOINT or g.kind == GEOM_MULTILINESTRING:
+                sb.append("(")
+                mut r = 0
+                while r < g.num_rings():
+                    if r > 0: sb.append(", ")
+                    _wkt_fmt_ring(g, r, sb)
+                    r = r + 1
+                sb.append(")")
+            else:
+                sb.append("(")
+                mut p = 0
+                while p < g.num_polygons():
+                    if p > 0: sb.append(", ")
+                    _wkt_fmt_poly(g, p, sb)
+                    p = p + 1
+                sb.append(")")
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+# ─── GeoJSON ─────────────────────────────────────────────────────────────────
+
+pub class Feature:
+    pub geometry: Geometry
+    pub has_geometry: bool      # false for "geometry": null
+    pub properties: str         # compact JSON text of the properties ("null" if absent)
+    pub id: str                 # compact JSON text of the id ("" if absent)
+
+extend Feature:
+    pub def init(g: Geometry, properties_json: str) -> Feature:
+        mut f = Feature()
+        f.geometry = g
+        f.has_geometry = true
+        f.properties = properties_json
+        f.id = ""
+        return f
+
+    pub def to_geojson(self) -> str:
+        mut sb = StringBuilder.init(256)
+        _gj_feature(self, sb)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+pub class FeatureCollection:
+    pub features: List[Feature]
+
+extend FeatureCollection:
+    pub def init() -> FeatureCollection:
+        mut c = FeatureCollection()
+        c.features = []
+        return c
+
+    pub def len(self) -> int:
+        return self.features.len()
+
+    pub def to_geojson(self) -> str:
+        mut sb = StringBuilder.init(1024)
+        sb.append("{\"type\":\"FeatureCollection\",\"features\":[")
+        mut i = 0
+        while i < self.features.len():
+            if i > 0: sb.append(",")
+            _gj_feature(self.features[i], sb)
+            i = i + 1
+        sb.append("]}")
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+def _gj_coord(g: Geometry, i: int, sb: StringBuilder):
+    sb.append("[")
+    sb.append(geo_fmt(g.xs[i]))
+    sb.append(",")
+    sb.append(geo_fmt(g.ys[i]))
+    if g.has_z:
+        sb.append(",")
+        sb.append(geo_fmt(g.zs[i]))
+    sb.append("]")
+
+def _gj_ring(g: Geometry, r: int, sb: StringBuilder):
+    sb.append("[")
+    mut i = g.ring_start(r)
+    while i < g.ring_end(r):
+        if i > g.ring_start(r): sb.append(",")
+        _gj_coord(g, i, sb)
+        i = i + 1
+    sb.append("]")
+
+def _gj_poly(g: Geometry, p: int, sb: StringBuilder):
+    sb.append("[")
+    mut r = g.poly_ring_start(p)
+    while r < g.poly_ring_end(p):
+        if r > g.poly_ring_start(p): sb.append(",")
+        _gj_ring(g, r, sb)
+        r = r + 1
+    sb.append("]")
+
+def _gj_geometry(g: Geometry, sb: StringBuilder):
+    sb.append("{\"type\":\"")
+    sb.append(geom_kind_name(g.kind))
+    sb.append("\",\"coordinates\":")
+    if g.kind == GEOM_POINT:
+        if g.xs.len() == 0: sb.append("[]")
+        else: _gj_coord(g, 0, sb)
+    elif g.kind == GEOM_LINESTRING:
+        if g.num_rings() == 0: sb.append("[]")
+        else: _gj_ring(g, 0, sb)
+    elif g.kind == GEOM_POLYGON:
+        if g.num_polygons() == 0: sb.append("[]")
+        else: _gj_poly(g, 0, sb)
+    elif g.kind == GEOM_MULTIPOINT:
+        sb.append("[")
+        mut i = 0
+        while i < g.xs.len():
+            if i > 0: sb.append(",")
+            _gj_coord(g, i, sb)
+            i = i + 1
+        sb.append("]")
+    elif g.kind == GEOM_MULTILINESTRING:
+        sb.append("[")
+        mut r = 0
+        while r < g.num_rings():
+            if r > 0: sb.append(",")
+            _gj_ring(g, r, sb)
+            r = r + 1
+        sb.append("]")
+    else:
+        sb.append("[")
+        mut p = 0
+        while p < g.num_polygons():
+            if p > 0: sb.append(",")
+            _gj_poly(g, p, sb)
+            p = p + 1
+        sb.append("]")
+    sb.append("}")
+
+def _gj_feature(f: Feature, sb: StringBuilder):
+    sb.append("{\"type\":\"Feature\"")
+    if f.id != "":
+        sb.append(",\"id\":")
+        sb.append(f.id)
+    sb.append(",\"geometry\":")
+    if f.has_geometry: _gj_geometry(f.geometry, sb)
+    else: sb.append("null")
+    sb.append(",\"properties\":")
+    if f.properties == "": sb.append("null")
+    else: sb.append(f.properties)
+    sb.append("}")
+
+# Strict JSON syntax check (the std.encoding.json parser is lenient and
+# assumes well-formed input). Returns "" or an error message.
+class _JsonCheck:
+    s: str
+    pos: int
+    depth: int
+
+extend _JsonCheck:
+    def ws(self):
+        while self.pos < self.s.len():
+            mut c = self.s.char_at(self.pos)
+            if c == 32 or c == 9 or c == 10 or c == 13: self.pos = self.pos + 1
+            else: break
+
+    def lit(self, w: str) -> bool:
+        if self.s.slice(self.pos, self.pos + w.len()) == w:
+            self.pos = self.pos + w.len()
+            return true
+        return false
+
+    def digits(self) -> int:
+        mut n = 0
+        while self.pos < self.s.len() and self.s.char_at(self.pos) >= 48 and self.s.char_at(self.pos) <= 57:
+            self.pos = self.pos + 1
+            n = n + 1
+        return n
+
+    def string(self) -> bool:
+        self.pos = self.pos + 1
+        while self.pos < self.s.len():
+            mut c = self.s.char_at(self.pos)
+            if c == 34:
+                self.pos = self.pos + 1
+                return true
+            if c == 92:
+                self.pos = self.pos + 2
+            elif c >= 0 and c < 32:
+                return false
+            else:
+                self.pos = self.pos + 1
+        return false
+
+    def value(self) -> bool:
+        self.ws()
+        if self.pos >= self.s.len(): return false
+        mut c = self.s.char_at(self.pos)
+        if c == 34: return self.string()
+        if c == 116: return self.lit("true")
+        if c == 102: return self.lit("false")
+        if c == 110: return self.lit("null")
+        if c == 91 or c == 123:
+            self.depth = self.depth + 1
+            if self.depth > 256: return false
+            mut close = 93
+            if c == 123: close = 125
+            self.pos = self.pos + 1
+            self.ws()
+            if self.pos < self.s.len() and self.s.char_at(self.pos) == close:
+                self.pos = self.pos + 1
+                self.depth = self.depth - 1
+                return true
+            while true:
+                if c == 123:
+                    self.ws()
+                    if self.pos >= self.s.len() or self.s.char_at(self.pos) != 34: return false
+                    if not self.string(): return false
+                    self.ws()
+                    if self.pos >= self.s.len() or self.s.char_at(self.pos) != 58: return false
+                    self.pos = self.pos + 1
+                if not self.value(): return false
+                self.ws()
+                if self.pos >= self.s.len(): return false
+                mut d = self.s.char_at(self.pos)
+                self.pos = self.pos + 1
+                if d == close:
+                    self.depth = self.depth - 1
+                    return true
+                if d != 44: return false
+        if c == 45 or (c >= 48 and c <= 57):
+            if c == 45: self.pos = self.pos + 1
+            if self.digits() == 0: return false
+            if self.pos < self.s.len() and self.s.char_at(self.pos) == 46:
+                self.pos = self.pos + 1
+                if self.digits() == 0: return false
+            if self.pos < self.s.len() and (self.s.char_at(self.pos) == 101 or self.s.char_at(self.pos) == 69):
+                self.pos = self.pos + 1
+                if self.pos < self.s.len() and (self.s.char_at(self.pos) == 43 or self.s.char_at(self.pos) == 45): self.pos = self.pos + 1
+                if self.digits() == 0: return false
+            return true
+        return false
+
+def _json_check(s: str) -> str:
+    mut c = _JsonCheck()
+    c.s = s
+    c.pos = 0
+    c.depth = 0
+    if not c.value(): return f"geojson: invalid JSON near offset {c.pos}"
+    c.ws()
+    if c.pos != s.len(): return f"geojson: trailing characters at offset {c.pos}"
+    return ""
+
+def _gj_num(v: JsonRef) throws str -> float:
+    if not v.is_int() and not v.is_float(): raise("geojson: coordinate is not a number")
+    return v.as_float()
+
+def _gj_read_coord(c: JsonRef, g: Geometry) throws str:
+    if not c.is_array() or c.array_len() < 2: raise("geojson: a position needs at least two numbers")
+    mut x = _gj_num(c.array_get(0))?
+    mut y = _gj_num(c.array_get(1))?
+    if c.array_len() >= 3:
+        mut z = _gj_num(c.array_get(2))?
+        g.add_z(x, y, z)
+    else:
+        g.add(x, y)
+
+def _gj_read_ring(c: JsonRef, g: Geometry) throws str:
+    if not c.is_array(): raise("geojson: expected an array of positions")
+    mut n = c.array_len()
+    mut i = 0
+    while i < n:
+        _gj_read_coord(c.array_get(i), g)?
+        i = i + 1
+    g.end_ring()
+
+def _gj_read_poly(c: JsonRef, g: Geometry) throws str:
+    if not c.is_array(): raise("geojson: expected an array of rings")
+    mut n = c.array_len()
+    mut i = 0
+    while i < n:
+        _gj_read_ring(c.array_get(i), g)?
+        i = i + 1
+    g.end_polygon()
+
+def _gj_geom_from(o: JsonRef) throws str -> Geometry:
+    if not o.is_object(): raise("geojson: geometry is not an object")
+    mut t = o.obj_get("type")
+    if not t.is_str(): raise("geojson: geometry without a type")
+    mut tn = t.get_str()
+    if tn == "GeometryCollection": raise("geojson: GeometryCollection is not supported")
+    mut kind = _kind_from_name(tn)
+    if kind == 0 or tn != geom_kind_name(kind): raise(f"geojson: unknown geometry type '{tn}'")
+    mut c = o.obj_get("coordinates")
+    if not c.is_array(): raise("geojson: geometry without coordinates")
+    mut g = Geometry.empty(kind)
+    if kind == GEOM_POINT:
+        if c.array_len() > 0:
+            _gj_read_coord(c, g)?
+            g.end_ring()
+    elif kind == GEOM_LINESTRING:
+        if c.array_len() > 0: _gj_read_ring(c, g)?
+    elif kind == GEOM_POLYGON:
+        if c.array_len() > 0: _gj_read_poly(c, g)?
+    elif kind == GEOM_MULTIPOINT:
+        mut i = 0
+        while i < c.array_len():
+            _gj_read_coord(c.array_get(i), g)?
+            g.end_ring()
+            i = i + 1
+    elif kind == GEOM_MULTILINESTRING:
+        mut i = 0
+        while i < c.array_len():
+            _gj_read_ring(c.array_get(i), g)?
+            i = i + 1
+    else:
+        mut i = 0
+        while i < c.array_len():
+            _gj_read_poly(c.array_get(i), g)?
+            i = i + 1
+    return g
+
+def _gj_feature_from(o: JsonRef) throws str -> Feature:
+    mut f = Feature()
+    f.has_geometry = false
+    f.geometry = Geometry.empty(GEOM_POINT)
+    f.properties = "null"
+    f.id = ""
+    mut gref = o.obj_get("geometry")
+    if gref.exists() and not gref.is_null():
+        f.geometry = _gj_geom_from(gref)?
+        f.has_geometry = true
+    mut p = o.obj_get("properties")
+    if p.exists(): f.properties = p.to_str()
+    mut idr = o.obj_get("id")
+    if idr.exists(): f.id = idr.to_str()
+    return f
+
+pub class GeoJson:
+    _dummy: int
+
+extend GeoJson:
+    # A bare geometry object (also accepts a Feature and returns its geometry).
+    pub def parse_geometry(text: str) throws str -> Geometry:
+        mut chk = _json_check(text)
+        if chk != "": raise(chk)
+        mut doc = Json.parse(text)
+        mut root = doc.root()
+        mut t = root.obj_get("type")
+        if t.is_str() and t.get_str() == "Feature":
+            mut f = _gj_feature_from(root)?
+            if not f.has_geometry: raise("geojson: feature has no geometry")
+            return f.geometry
+        # (bind first: `return f(borrow_of_doc)?` released `doc` before the call)
+        mut g = _gj_geom_from(root)?
+        return g
+
+    # Any GeoJSON object as a FeatureCollection: a FeatureCollection as is, a
+    # Feature or a bare geometry as a one-feature collection.
+    pub def parse(text: str) throws str -> FeatureCollection:
+        mut chk = _json_check(text)
+        if chk != "": raise(chk)
+        mut doc = Json.parse(text)
+        mut root = doc.root()
+        if not root.is_object(): raise("geojson: top level is not an object")
+        mut t = root.obj_get("type")
+        if not t.is_str(): raise("geojson: object without a type")
+        mut tn = t.get_str()
+        mut fc = FeatureCollection.init()
+        if tn == "FeatureCollection":
+            mut fs = root.obj_get("features")
+            if not fs.is_array(): raise("geojson: FeatureCollection without features")
+            mut i = 0
+            while i < fs.array_len():
+                mut fo = fs.array_get(i)
+                if not fo.is_object() or not fo.obj_get("type").str_eq("Feature"): raise("geojson: features[] entry is not a Feature")
+                fc.features.append(_gj_feature_from(fo)?)
+                i = i + 1
+        elif tn == "Feature":
+            fc.features.append(_gj_feature_from(root)?)
+        else:
+            mut g = _gj_geom_from(root)?
+            fc.features.append(Feature.init(g, "null"))
+        return fc

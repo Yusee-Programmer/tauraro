@@ -1,0 +1,462 @@
+# std.geo.geodesy -- distances, bearings and positions on the sphere and the
+# ellipsoid.
+#
+# Angles are degrees, distances metres. Longitudes in results are in
+# [-180, 180], bearings/azimuths are clockwise from north.
+#
+#   Sphere (mean Earth radius 6371008.8 m unless an `_r` variant is used):
+#     Geo.haversine / initial_bearing / final_bearing / destination /
+#     midpoint / intermediate / cross_track / along_track / bounding_box
+#   Ellipsoid (Ellipsoid.wgs84(), .grs80(), .sphere(r), .init(a, f)):
+#     e.inverse / e.direct            Karney's algorithm (GeographicLib C,
+#                                     vendored, MIT): accurate to ~15 nm for
+#                                     every pair of points, antipodes included
+#     e.vincenty_inverse / _direct    Vincenty (1975) in pure Tauraro; the
+#                                     inverse raises when it does not converge
+#                                     (nearly antipodal points)
+#     e.polygon_area / e.path_length / e.geodesic_points
+#
+#   mut wgs = Ellipsoid.wgs84()
+#   mut r = wgs.inverse(52.2, 0.12, 40.7, -74.0)
+#   print(r.distance)        # metres
+#   print(r.azi1)            # initial azimuth
+
+from std.geo.native import trc_geo_inverse, trc_geo_direct, trc_geo_polygon_area, trc_geo_polyline_length, trc_geo_line_points
+from std.geo.native import sin, cos, tan, asin, acos, atan, atan2, sqrt, fabs, fmod
+from std.geo.native import GEO_PI, GEO_DEG, GEO_RAD, geo_zeros, geo_wrap_lon, geo_clamp
+
+pub const EARTH_MEAN_RADIUS = 6371008.8
+
+pub class LatLon:
+    pub lat: float
+    pub lon: float
+
+extend LatLon:
+    pub def init(lat: float, lon: float) -> LatLon:
+        mut p = LatLon()
+        p.lat = lat
+        p.lon = lon
+        return p
+
+    pub def to_str(self) -> str:
+        return f"({self.lat}, {self.lon})"
+
+# Result of an inverse problem: distance and azimuths between two points.
+pub class GeoInverse:
+    pub distance: float     # metres
+    pub azi1: float         # azimuth at point 1, degrees
+    pub azi2: float         # forward azimuth at point 2, degrees
+    pub arc: float          # spherical arc length on the auxiliary sphere, degrees
+    pub reduced_length: float   # m12, metres (Karney only, else 0)
+    pub area: float         # S12, area between the geodesic and the equator, m^2 (Karney only)
+    pub iterations: int     # Vincenty iterations (0 for Karney)
+
+# Result of a direct problem: where you end up.
+pub class GeoDirect:
+    pub lat: float
+    pub lon: float
+    pub azi2: float         # forward azimuth at the destination
+    pub arc: float
+
+# Axis-aligned latitude/longitude box. When the box crosses the antimeridian
+# min_lon > max_lon (e.g. 170 .. -170).
+pub class BBox:
+    pub min_lat: float
+    pub min_lon: float
+    pub max_lat: float
+    pub max_lon: float
+
+extend BBox:
+    pub def init(min_lat: float, min_lon: float, max_lat: float, max_lon: float) -> BBox:
+        mut b = BBox()
+        b.min_lat = min_lat
+        b.min_lon = min_lon
+        b.max_lat = max_lat
+        b.max_lon = max_lon
+        return b
+
+    pub def crosses_antimeridian(self) -> bool:
+        return self.min_lon > self.max_lon
+
+    pub def contains(self, lat: float, lon: float) -> bool:
+        if lat < self.min_lat or lat > self.max_lat: return false
+        mut x = lon
+        if x >= 180.0 or x < -180.0: x = geo_wrap_lon(x)
+        if self.min_lon <= self.max_lon:
+            return x >= self.min_lon and x <= self.max_lon
+        return x >= self.min_lon or x <= self.max_lon
+
+    pub def to_str(self) -> str:
+        return f"[{self.min_lat}, {self.min_lon}, {self.max_lat}, {self.max_lon}]"
+
+def _norm360(x: float) -> float:
+    mut y = fmod(x, 360.0)
+    if y < 0.0: y = y + 360.0
+    if y >= 360.0: y = y - 360.0
+    return y
+
+def _norm180(x: float) -> float:
+    mut y = fmod(x, 360.0)
+    if y > 180.0: y = y - 360.0
+    if y < -180.0: y = y + 360.0
+    return y
+
+# ─── Sphere ──────────────────────────────────────────────────────────────────
+
+pub class Geo:
+    _dummy: int
+
+extend Geo:
+    pub def mean_radius() -> float:
+        return EARTH_MEAN_RADIUS
+
+    # Great-circle distance by the haversine formula.
+    pub def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        return Geo.haversine_r(lat1, lon1, lat2, lon2, EARTH_MEAN_RADIUS)
+
+    pub def haversine_r(lat1: float, lon1: float, lat2: float, lon2: float, radius: float) -> float:
+        mut p1 = lat1 * GEO_DEG
+        mut p2 = lat2 * GEO_DEG
+        mut dp = (lat2 - lat1) * GEO_DEG
+        mut dl = (lon2 - lon1) * GEO_DEG
+        mut s1 = sin(dp / 2.0)
+        mut s2 = sin(dl / 2.0)
+        mut h = s1 * s1 + cos(p1) * cos(p2) * s2 * s2
+        if h > 1.0: h = 1.0
+        return 2.0 * radius * atan2(sqrt(h), sqrt(1.0 - h))
+
+    # Central angle in radians (haversine).
+    pub def central_angle(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        return Geo.haversine_r(lat1, lon1, lat2, lon2, 1.0)
+
+    # Initial great-circle bearing from point 1 to point 2, [0, 360).
+    pub def initial_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        mut p1 = lat1 * GEO_DEG
+        mut p2 = lat2 * GEO_DEG
+        mut dl = (lon2 - lon1) * GEO_DEG
+        mut y = sin(dl) * cos(p2)
+        mut x = cos(p1) * sin(p2) - sin(p1) * cos(p2) * cos(dl)
+        return _norm360(atan2(y, x) * GEO_RAD)
+
+    # Bearing on arrival at point 2, [0, 360).
+    pub def final_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        return _norm360(Geo.initial_bearing(lat2, lon2, lat1, lon1) + 180.0)
+
+    # Point reached travelling `dist` metres from (lat, lon) on `bearing`.
+    pub def destination(lat: float, lon: float, bearing: float, dist: float) -> LatLon:
+        return Geo.destination_r(lat, lon, bearing, dist, EARTH_MEAN_RADIUS)
+
+    pub def destination_r(lat: float, lon: float, bearing: float, dist: float, radius: float) -> LatLon:
+        mut d = dist / radius
+        mut t = bearing * GEO_DEG
+        mut p1 = lat * GEO_DEG
+        mut l1 = lon * GEO_DEG
+        mut sp = sin(p1) * cos(d) + cos(p1) * sin(d) * cos(t)
+        mut p2 = asin(geo_clamp(sp, -1.0, 1.0))
+        mut l2 = l1 + atan2(sin(t) * sin(d) * cos(p1), cos(d) - sin(p1) * sp)
+        return LatLon.init(p2 * GEO_RAD, _norm180(l2 * GEO_RAD))
+
+    # Great-circle midpoint.
+    pub def midpoint(lat1: float, lon1: float, lat2: float, lon2: float) -> LatLon:
+        mut p1 = lat1 * GEO_DEG
+        mut p2 = lat2 * GEO_DEG
+        mut l1 = lon1 * GEO_DEG
+        mut dl = (lon2 - lon1) * GEO_DEG
+        mut bx = cos(p2) * cos(dl)
+        mut by = cos(p2) * sin(dl)
+        mut p3 = atan2(sin(p1) + sin(p2), sqrt((cos(p1) + bx) * (cos(p1) + bx) + by * by))
+        mut l3 = l1 + atan2(by, cos(p1) + bx)
+        return LatLon.init(p3 * GEO_RAD, _norm180(l3 * GEO_RAD))
+
+    # Point at `fraction` (0..1) of the way along the great circle.
+    pub def intermediate(lat1: float, lon1: float, lat2: float, lon2: float, fraction: float) -> LatLon:
+        mut d = Geo.central_angle(lat1, lon1, lat2, lon2)
+        if d == 0.0: return LatLon.init(lat1, lon1)
+        mut p1 = lat1 * GEO_DEG
+        mut p2 = lat2 * GEO_DEG
+        mut l1 = lon1 * GEO_DEG
+        mut l2 = lon2 * GEO_DEG
+        mut a = sin((1.0 - fraction) * d) / sin(d)
+        mut b = sin(fraction * d) / sin(d)
+        mut x = a * cos(p1) * cos(l1) + b * cos(p2) * cos(l2)
+        mut y = a * cos(p1) * sin(l1) + b * cos(p2) * sin(l2)
+        mut z = a * sin(p1) + b * sin(p2)
+        return LatLon.init(atan2(z, sqrt(x * x + y * y)) * GEO_RAD, atan2(y, x) * GEO_RAD)
+
+    # Signed distance from (lat, lon) to the great circle through points 1 and
+    # 2 (negative = left of the path, positive = right).
+    pub def cross_track(lat: float, lon: float, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        mut d13 = Geo.central_angle(lat1, lon1, lat, lon)
+        mut t13 = Geo.initial_bearing(lat1, lon1, lat, lon) * GEO_DEG
+        mut t12 = Geo.initial_bearing(lat1, lon1, lat2, lon2) * GEO_DEG
+        return asin(geo_clamp(sin(d13) * sin(t13 - t12), -1.0, 1.0)) * EARTH_MEAN_RADIUS
+
+    # Distance from point 1 along the path to the point closest to (lat, lon).
+    pub def along_track(lat: float, lon: float, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        mut d13 = Geo.central_angle(lat1, lon1, lat, lon)
+        mut t13 = Geo.initial_bearing(lat1, lon1, lat, lon) * GEO_DEG
+        mut t12 = Geo.initial_bearing(lat1, lon1, lat2, lon2) * GEO_DEG
+        mut dxt = asin(geo_clamp(sin(d13) * sin(t13 - t12), -1.0, 1.0))
+        mut c = cos(dxt)
+        if c == 0.0: return 0.0
+        mut dat = acos(geo_clamp(cos(d13) / c, -1.0, 1.0))
+        if cos(t12 - t13) < 0.0: dat = 0.0 - dat
+        return dat * EARTH_MEAN_RADIUS
+
+    # Smallest lat/lon box containing every point within `radius_m` of
+    # (lat, lon) on the sphere. Near a pole the box spans all longitudes and
+    # reaches the pole; across the antimeridian min_lon > max_lon.
+    pub def bounding_box(lat: float, lon: float, radius_m: float) -> BBox:
+        mut d = radius_m / EARTH_MEAN_RADIUS * GEO_RAD
+        mut lo = lat - d
+        mut hi = lat + d
+        if hi >= 90.0 or lo <= -90.0 or d >= 90.0:
+            return BBox.init(geo_clamp(lo, -90.0, 90.0), -180.0, geo_clamp(hi, -90.0, 90.0), 180.0)
+        mut dl = asin(geo_clamp(sin(d * GEO_DEG) / cos(lat * GEO_DEG), -1.0, 1.0)) * GEO_RAD
+        if dl >= 180.0:
+            return BBox.init(lo, -180.0, hi, 180.0)
+        mut w = _norm180(lon - dl)
+        mut e = _norm180(lon + dl)
+        if w == 180.0: w = -180.0
+        if e == -180.0: e = 180.0
+        return BBox.init(lo, w, hi, e)
+
+    # Longitude into [-180, 180).
+    pub def wrap_lon(lon: float) -> float:
+        return geo_wrap_lon(lon)
+
+# ─── Ellipsoid ───────────────────────────────────────────────────────────────
+
+pub class Ellipsoid:
+    pub a: float     # equatorial radius, metres
+    pub f: float     # flattening
+
+extend Ellipsoid:
+    pub def init(a: float, f: float) -> Ellipsoid:
+        mut e = Ellipsoid()
+        e.a = a
+        e.f = f
+        return e
+
+    pub def wgs84() -> Ellipsoid:
+        return Ellipsoid.init(6378137.0, 1.0 / 298.257223563)
+
+    pub def grs80() -> Ellipsoid:
+        return Ellipsoid.init(6378137.0, 1.0 / 298.257222101)
+
+    pub def sphere(radius: float) -> Ellipsoid:
+        return Ellipsoid.init(radius, 0.0)
+
+    pub def b(self) -> float:
+        return self.a * (1.0 - self.f)
+
+    # First eccentricity squared.
+    pub def e2(self) -> float:
+        return self.f * (2.0 - self.f)
+
+    # ── Karney (GeographicLib) ──────────────────────────────────────────────
+
+    pub def inverse(self, lat1: float, lon1: float, lat2: float, lon2: float) -> GeoInverse:
+        mut out = geo_zeros(8)
+        trc_geo_inverse(self.a, self.f, lat1, lon1, lat2, lon2, out as Pointer[float])
+        mut r = GeoInverse()
+        r.distance = out[0]
+        r.azi1 = out[1]
+        r.azi2 = out[2]
+        r.arc = out[3]
+        r.reduced_length = out[4]
+        r.area = out[7]
+        r.iterations = 0
+        return r
+
+    pub def distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        return self.inverse(lat1, lon1, lat2, lon2).distance
+
+    pub def direct(self, lat1: float, lon1: float, azi1: float, dist: float) -> GeoDirect:
+        mut out = geo_zeros(8)
+        trc_geo_direct(self.a, self.f, lat1, lon1, azi1, dist, out as Pointer[float])
+        mut r = GeoDirect()
+        r.lat = out[0]
+        r.lon = out[1]
+        r.azi2 = out[2]
+        r.arc = out[3]
+        return r
+
+    # Geodesic midpoint (half the distance along the geodesic).
+    pub def midpoint(self, lat1: float, lon1: float, lat2: float, lon2: float) -> LatLon:
+        mut r = self.inverse(lat1, lon1, lat2, lon2)
+        mut d = self.direct(lat1, lon1, r.azi1, r.distance / 2.0)
+        return LatLon.init(d.lat, d.lon)
+
+    # n+1 equally spaced points along the geodesic, endpoints included.
+    pub def geodesic_points(self, lat1: float, lon1: float, lat2: float, lon2: float, n: int) -> List[LatLon]:
+        mut m = n
+        if m < 1: m = 1
+        mut la = geo_zeros(m + 1)
+        mut lo = geo_zeros(m + 1)
+        trc_geo_line_points(self.a, self.f, lat1, lon1, lat2, lon2, m, la as Pointer[float], lo as Pointer[float])
+        mut out: List[LatLon] = []
+        mut i = 0
+        while i <= m:
+            out.append(LatLon.init(la[i], lo[i]))
+            i = i + 1
+        return out
+
+    # Signed area (m^2, counter-clockwise positive) of the geodesic polygon
+    # with the given vertices (do not repeat the first vertex).
+    pub def polygon_area_signed(self, lats: List[float], lons: List[float]) -> float:
+        mut out = geo_zeros(2)
+        mut n = lats.len()
+        if lons.len() < n: n = lons.len()
+        if n < 3: return 0.0
+        trc_geo_polygon_area(self.a, self.f, lats as Pointer[float], lons as Pointer[float], n, out as Pointer[float])
+        return out[0]
+
+    pub def polygon_area(self, lats: List[float], lons: List[float]) -> float:
+        return fabs(self.polygon_area_signed(lats, lons))
+
+    pub def polygon_perimeter(self, lats: List[float], lons: List[float]) -> float:
+        mut out = geo_zeros(2)
+        mut n = lats.len()
+        if lons.len() < n: n = lons.len()
+        if n < 2: return 0.0
+        trc_geo_polygon_area(self.a, self.f, lats as Pointer[float], lons as Pointer[float], n, out as Pointer[float])
+        return out[1]
+
+    # Length of the open geodesic path through the points.
+    pub def path_length(self, lats: List[float], lons: List[float]) -> float:
+        mut n = lats.len()
+        if lons.len() < n: n = lons.len()
+        if n < 2: return 0.0
+        return trc_geo_polyline_length(self.a, self.f, lats as Pointer[float], lons as Pointer[float], n)
+
+    # ── Vincenty (1975) ─────────────────────────────────────────────────────
+
+    # Inverse problem by Vincenty's iteration (converges to 1e-12 rad). Raises
+    # for nearly antipodal points where the iteration fails; use inverse()
+    # (Karney) there.
+    pub def vincenty_inverse(self, lat1: float, lon1: float, lat2: float, lon2: float) throws str -> GeoInverse:
+        mut f = self.f
+        mut b = self.b()
+        mut el = _norm180(lon2 - lon1) * GEO_DEG
+        mut tu1 = (1.0 - f) * tan(lat1 * GEO_DEG)
+        mut tu2 = (1.0 - f) * tan(lat2 * GEO_DEG)
+        mut cu1 = 1.0 / sqrt(1.0 + tu1 * tu1)
+        mut su1 = tu1 * cu1
+        mut cu2 = 1.0 / sqrt(1.0 + tu2 * tu2)
+        mut su2 = tu2 * cu2
+        # (at a pole tan() is huge but finite, so cos U stays a tiny non-zero
+        # number and pole-to-pole pairs need no special case)
+        mut lam = el
+        mut antipodal = fabs(el) > GEO_PI * 0.5 or fabs(lat2 - lat1) > 90.0
+        mut sin_s = 0.0
+        mut cos_s = 0.0
+        mut sig = 0.0
+        mut cos2a = 0.0
+        mut cos2sm = 0.0
+        mut sin_a = 0.0
+        mut sl = 0.0
+        mut cl = 0.0
+        mut it = 0
+        mut done = false
+        mut r = GeoInverse()
+        while not done:
+            sl = sin(lam)
+            cl = cos(lam)
+            mut t1 = cu2 * sl
+            mut t2 = cu1 * su2 - su1 * cu2 * cl
+            sin_s = sqrt(t1 * t1 + t2 * t2)
+            if sin_s == 0.0:
+                if su1 * su2 + cu1 * cu2 * cl < 0.0:
+                    raise("vincenty: exactly antipodal points; use Ellipsoid.inverse")
+                # coincident (or both at the same pole)
+                r.distance = 0.0
+                r.azi1 = 0.0
+                r.azi2 = 0.0
+                r.arc = 0.0
+                r.reduced_length = 0.0
+                r.area = 0.0
+                r.iterations = it
+                return r
+            cos_s = su1 * su2 + cu1 * cu2 * cl
+            sig = atan2(sin_s, cos_s)
+            sin_a = cu1 * cu2 * sl / sin_s
+            cos2a = 1.0 - sin_a * sin_a
+            if cos2a != 0.0:
+                cos2sm = cos_s - 2.0 * su1 * su2 / cos2a
+            else:
+                cos2sm = 0.0
+            mut c = f / 16.0 * cos2a * (4.0 + f * (4.0 - 3.0 * cos2a))
+            mut prev = lam
+            lam = el + (1.0 - c) * f * sin_a * (sig + c * sin_s * (cos2sm + c * cos_s * (-1.0 + 2.0 * cos2sm * cos2sm)))
+            it = it + 1
+            mut chk = fabs(lam)
+            if antipodal: chk = chk - GEO_PI
+            if chk > GEO_PI:
+                raise("vincenty: no convergence (nearly antipodal points); use Ellipsoid.inverse")
+            if fabs(lam - prev) <= 1e-12:
+                done = true
+            elif it >= 200:
+                raise("vincenty: no convergence after 200 iterations (nearly antipodal points); use Ellipsoid.inverse")
+        mut a = self.a
+        mut u2 = cos2a * (a * a - b * b) / (b * b)
+        mut ca = 1.0 + u2 / 16384.0 * (4096.0 + u2 * (-768.0 + u2 * (320.0 - 175.0 * u2)))
+        mut cb = u2 / 1024.0 * (256.0 + u2 * (-128.0 + u2 * (74.0 - 47.0 * u2)))
+        mut ds = cb * sin_s * (cos2sm + cb / 4.0 * (cos_s * (-1.0 + 2.0 * cos2sm * cos2sm) - cb / 6.0 * cos2sm * (-3.0 + 4.0 * sin_s * sin_s) * (-3.0 + 4.0 * cos2sm * cos2sm)))
+        r.distance = b * ca * (sig - ds)
+        r.azi1 = atan2(cu2 * sl, cu1 * su2 - su1 * cu2 * cl) * GEO_RAD
+        r.azi2 = atan2(cu1 * sl, 0.0 - su1 * cu2 + cu1 * su2 * cl) * GEO_RAD
+        r.arc = sig * GEO_RAD
+        r.reduced_length = 0.0
+        r.area = 0.0
+        r.iterations = it
+        return r
+
+    # Direct problem by Vincenty's iteration (always converges).
+    pub def vincenty_direct(self, lat1: float, lon1: float, azi1: float, dist: float) -> GeoDirect:
+        mut f = self.f
+        mut a = self.a
+        mut b = self.b()
+        mut s1 = sin(azi1 * GEO_DEG)
+        mut c1 = cos(azi1 * GEO_DEG)
+        mut tu1 = (1.0 - f) * tan(lat1 * GEO_DEG)
+        mut cu1 = 1.0 / sqrt(1.0 + tu1 * tu1)
+        mut su1 = tu1 * cu1
+        if lat1 == 90.0 or lat1 == -90.0:
+            cu1 = 0.0
+            su1 = 1.0
+            if lat1 < 0.0: su1 = -1.0
+        mut sig1 = atan2(su1, cu1 * c1)
+        mut sin_a = cu1 * s1
+        mut cos2a = 1.0 - sin_a * sin_a
+        mut u2 = cos2a * (a * a - b * b) / (b * b)
+        mut ca = 1.0 + u2 / 16384.0 * (4096.0 + u2 * (-768.0 + u2 * (320.0 - 175.0 * u2)))
+        mut cb = u2 / 1024.0 * (256.0 + u2 * (-128.0 + u2 * (74.0 - 47.0 * u2)))
+        mut sig = dist / (b * ca)
+        mut cos2sm = 0.0
+        mut sin_s = 0.0
+        mut cos_s = 0.0
+        mut it = 0
+        while it < 200:
+            cos2sm = cos(2.0 * sig1 + sig)
+            sin_s = sin(sig)
+            cos_s = cos(sig)
+            mut ds = cb * sin_s * (cos2sm + cb / 4.0 * (cos_s * (-1.0 + 2.0 * cos2sm * cos2sm) - cb / 6.0 * cos2sm * (-3.0 + 4.0 * sin_s * sin_s) * (-3.0 + 4.0 * cos2sm * cos2sm)))
+            mut prev = sig
+            sig = dist / (b * ca) + ds
+            it = it + 1
+            if fabs(sig - prev) <= 1e-12: break
+        cos2sm = cos(2.0 * sig1 + sig)
+        sin_s = sin(sig)
+        cos_s = cos(sig)
+        mut x = su1 * sin_s - cu1 * cos_s * c1
+        mut lat2 = atan2(su1 * cos_s + cu1 * sin_s * c1, (1.0 - f) * sqrt(sin_a * sin_a + x * x))
+        mut lam = atan2(sin_s * s1, cu1 * cos_s - su1 * sin_s * c1)
+        mut c = f / 16.0 * cos2a * (4.0 + f * (4.0 - 3.0 * cos2a))
+        mut el = lam - (1.0 - c) * f * sin_a * (sig + c * sin_s * (cos2sm + c * cos_s * (-1.0 + 2.0 * cos2sm * cos2sm)))
+        mut r = GeoDirect()
+        r.lat = lat2 * GEO_RAD
+        r.lon = _norm180(lon1 + el * GEO_RAD)
+        r.azi2 = atan2(sin_a, 0.0 - x) * GEO_RAD
+        r.arc = sig * GEO_RAD
+        return r

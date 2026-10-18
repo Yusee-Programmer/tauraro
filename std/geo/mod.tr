@@ -1,0 +1,33 @@
+# std.geo -- geodesy, location encodings, projections and geometry.
+#
+# Sub-modules (the main types are re-exported here):
+#   from std.geo.geodesy  import Geo, Ellipsoid, LatLon, GeoInverse, GeoDirect, BBox
+#   from std.geo.encode   import Geohash, GeohashCell, PlusCode, CodeArea, Utm, UtmCoord, Mgrs
+#   from std.geo.proj     import WebMercator, Tiles, Tile, Ecef, Enu, Xy, Vec3, Geodetic
+#   from std.geo.geometry import Geometry, Wkt, GeoJson, Feature, FeatureCollection, Simplify
+#
+#   mut wgs = Ellipsoid.wgs84()
+#   mut r = wgs.inverse(52.2, 0.12, 40.7, -74.0)      # Karney: r.distance, r.azi1
+#   mut code = PlusCode.encode(47.0000625, 8.0000625, 10)?   # "8FVC2222+22"
+#   mut g = Wkt.parse("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))")?
+#   print(g.area_geodesic(wgs))
+#
+# See docs/std/geo.md.
+
+from std.geo.geodesy import Geo
+from std.geo.geodesy import Ellipsoid
+from std.geo.geodesy import LatLon
+from std.geo.geodesy import GeoInverse
+from std.geo.geodesy import GeoDirect
+from std.geo.geodesy import BBox
+from std.geo.encode import Geohash
+from std.geo.encode import PlusCode
+from std.geo.encode import Utm
+from std.geo.encode import Mgrs
+from std.geo.proj import WebMercator
+from std.geo.proj import Tiles
+from std.geo.proj import Ecef
+from std.geo.proj import Enu
+from std.geo.geometry import Geometry
+from std.geo.geometry import Wkt
+from std.geo.geometry import GeoJson

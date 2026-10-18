@@ -1,0 +1,289 @@
+# std.geo.proj -- projections and local frames.
+#
+#   WebMercator.forward(lat, lon) -> Xy        EPSG:3857 metres
+#   WebMercator.inverse(x, y) -> LatLon
+#   Tiles.from_latlon(lat, lon, zoom) -> Tile  slippy-map (XYZ) tile
+#   Tiles.bounds(x, y, zoom) -> BBox           (Tile.bounds() too)
+#   Tiles.quadkey(x, y, zoom) -> str / Tiles.from_quadkey(qk)? -> Tile
+#   Tiles.pixel(lat, lon, zoom, tile_size) -> Xy   global pixel coordinates
+#   Ecef.from_geodetic(e, lat, lon, h) -> Vec3
+#   Ecef.to_geodetic(e, x, y, z) -> Geodetic   (exact to < 1e-9 m)
+#   Enu.from_geodetic(e, lat0, lon0, h0, lat, lon, h) -> Vec3 (east, north, up)
+#   Enu.to_geodetic(e, lat0, lon0, h0, east, north, up) -> Geodetic
+#   Enu.from_ecef / Enu.to_ecef, Enu.aer(...) -> Vec3 (azimuth, elevation, range)
+
+from std.geo.native import sin, cos, tan, atan, atan2, sqrt, hypot, sinh, atanh, log, exp, floor, fabs, pow
+from std.geo.native import GEO_PI, GEO_DEG, GEO_RAD, geo_clamp, geo_wrap_lon
+from std.geo.geodesy import LatLon, BBox, Ellipsoid
+
+pub const WEB_MERCATOR_R = 6378137.0
+pub const WEB_MERCATOR_MAX_LAT = 85.0511287798066
+
+pub class Xy:
+    pub x: float
+    pub y: float
+
+extend Xy:
+    pub def init(x: float, y: float) -> Xy:
+        mut p = Xy()
+        p.x = x
+        p.y = y
+        return p
+
+pub class Vec3:
+    pub x: float
+    pub y: float
+    pub z: float
+
+extend Vec3:
+    pub def init(x: float, y: float, z: float) -> Vec3:
+        mut v = Vec3()
+        v.x = x
+        v.y = y
+        v.z = z
+        return v
+
+pub class Geodetic:
+    pub lat: float
+    pub lon: float
+    pub h: float            # height above the ellipsoid, metres
+
+extend Geodetic:
+    pub def init(lat: float, lon: float, h: float) -> Geodetic:
+        mut g = Geodetic()
+        g.lat = lat
+        g.lon = lon
+        g.h = h
+        return g
+
+# ─── Web Mercator ────────────────────────────────────────────────────────────
+
+pub class WebMercator:
+    _dummy: int
+
+extend WebMercator:
+    # Latitudes are clamped to +-85.0511287798066 (the square world).
+    pub def forward(lat: float, lon: float) -> Xy:
+        mut la = geo_clamp(lat, 0.0 - WEB_MERCATOR_MAX_LAT, WEB_MERCATOR_MAX_LAT) * GEO_DEG
+        mut x = WEB_MERCATOR_R * lon * GEO_DEG
+        mut y = WEB_MERCATOR_R * log(tan(GEO_PI / 4.0 + la / 2.0))
+        return Xy.init(x, y)
+
+    pub def inverse(x: float, y: float) -> LatLon:
+        mut lon = x / WEB_MERCATOR_R * GEO_RAD
+        mut lat = (2.0 * atan(exp(y / WEB_MERCATOR_R)) - GEO_PI / 2.0) * GEO_RAD
+        return LatLon.init(lat, lon)
+
+# ─── Tiles ───────────────────────────────────────────────────────────────────
+
+pub class Tile:
+    pub x: int
+    pub y: int
+    pub z: int
+
+extend Tile:
+    pub def init(x: int, y: int, z: int) -> Tile:
+        mut t = Tile()
+        t.x = x
+        t.y = y
+        t.z = z
+        return t
+
+    pub def bounds(self) -> BBox:
+        return Tiles.bounds(self.x, self.y, self.z)
+
+    pub def quadkey(self) -> str:
+        return Tiles.quadkey(self.x, self.y, self.z)
+
+    pub def to_str(self) -> str:
+        return f"{self.z}/{self.x}/{self.y}"
+
+pub class Tiles:
+    _dummy: int
+
+extend Tiles:
+    pub def count(zoom: int) -> int:
+        return 1 << zoom
+
+    pub def from_latlon(lat: float, lon: float, zoom: int) -> Tile:
+        mut n = (1 << zoom) as float
+        mut la = geo_clamp(lat, 0.0 - WEB_MERCATOR_MAX_LAT, WEB_MERCATOR_MAX_LAT) * GEO_DEG
+        mut lo = lon
+        if lo < -180.0 or lo >= 180.0: lo = geo_wrap_lon(lo)
+        mut x = floor((lo + 180.0) / 360.0 * n) as int
+        mut y = floor((1.0 - log(tan(la) + 1.0 / cos(la)) / GEO_PI) / 2.0 * n) as int
+        mut m = (1 << zoom) - 1
+        if x > m: x = m
+        if x < 0: x = 0
+        if y > m: y = m
+        if y < 0: y = 0
+        return Tile.init(x, y, zoom)
+
+    # North-west corner of tile (x, y).
+    pub def tile_nw(x: int, y: int, zoom: int) -> LatLon:
+        mut n = (1 << zoom) as float
+        mut lon = (x as float) / n * 360.0 - 180.0
+        mut lat = atan(sinh(GEO_PI * (1.0 - 2.0 * (y as float) / n))) * GEO_RAD
+        return LatLon.init(lat, lon)
+
+    pub def bounds(x: int, y: int, zoom: int) -> BBox:
+        mut nw = Tiles.tile_nw(x, y, zoom)
+        mut se = Tiles.tile_nw(x + 1, y + 1, zoom)
+        return BBox.init(se.lat, nw.lon, nw.lat, se.lon)
+
+    # Global pixel coordinates at `zoom` for tiles of `tile_size` pixels.
+    pub def pixel(lat: float, lon: float, zoom: int, tile_size: int) -> Xy:
+        mut n = ((1 << zoom) * tile_size) as float
+        mut la = geo_clamp(lat, 0.0 - WEB_MERCATOR_MAX_LAT, WEB_MERCATOR_MAX_LAT) * GEO_DEG
+        mut x = (lon + 180.0) / 360.0 * n
+        mut y = (1.0 - log(tan(la) + 1.0 / cos(la)) / GEO_PI) / 2.0 * n
+        return Xy.init(x, y)
+
+    # Bing Maps quadkey.
+    pub def quadkey(x: int, y: int, zoom: int) -> str:
+        mut out = ""
+        mut i = zoom
+        while i > 0:
+            mut d = 0
+            mut mask = 1 << (i - 1)
+            if (x & mask) != 0: d = d + 1
+            if (y & mask) != 0: d = d + 2
+            out = out + f"{d}"
+            i = i - 1
+        return out
+
+    pub def from_quadkey(qk: str) throws str -> Tile:
+        mut x = 0
+        mut y = 0
+        mut z = qk.len()
+        if z > 30: raise("quadkey: too long")
+        mut i = 0
+        while i < z:
+            mut mask = 1 << (z - i - 1)
+            mut c = qk.char_at(i)
+            if c == 49: x = x | mask
+            elif c == 50: y = y | mask
+            elif c == 51:
+                x = x | mask
+                y = y | mask
+            elif c != 48: raise(f"quadkey: invalid digit in '{qk}'")
+            i = i + 1
+        return Tile.init(x, y, z)
+
+    # Parent tile at zoom - 1 and the four children at zoom + 1.
+    pub def parent(t: Tile) -> Tile:
+        if t.z == 0: return Tile.init(0, 0, 0)
+        return Tile.init(t.x >> 1, t.y >> 1, t.z - 1)
+
+    pub def children(t: Tile) -> List[Tile]:
+        mut out: List[Tile] = []
+        out.append(Tile.init(t.x * 2, t.y * 2, t.z + 1))
+        out.append(Tile.init(t.x * 2 + 1, t.y * 2, t.z + 1))
+        out.append(Tile.init(t.x * 2, t.y * 2 + 1, t.z + 1))
+        out.append(Tile.init(t.x * 2 + 1, t.y * 2 + 1, t.z + 1))
+        return out
+
+# ─── ECEF ────────────────────────────────────────────────────────────────────
+
+pub class Ecef:
+    _dummy: int
+
+extend Ecef:
+    pub def from_geodetic(e: Ellipsoid, lat: float, lon: float, h: float) -> Vec3:
+        mut e2 = e.e2()
+        mut p = lat * GEO_DEG
+        mut l = lon * GEO_DEG
+        mut sp = sin(p)
+        mut cp = cos(p)
+        if lat == 90.0 or lat == -90.0: cp = 0.0
+        mut n = e.a / sqrt(1.0 - e2 * sp * sp)
+        return Vec3.init((n + h) * cp * cos(l), (n + h) * cp * sin(l), (n * (1.0 - e2) + h) * sp)
+
+    # Geodetic coordinates by Newton iteration on the parametric form
+    # (Bowring start); converges to machine precision in 2-3 steps for any
+    # point outside a small sphere around the centre.
+    pub def to_geodetic(e: Ellipsoid, x: float, y: float, z: float) -> Geodetic:
+        mut a = e.a
+        mut b = e.b()
+        mut e2 = e.e2()
+        mut ep2 = (a * a - b * b) / (b * b)
+        mut p = hypot(x, y)
+        mut lon = atan2(y, x) * GEO_RAD
+        if p < 1e-9:
+            # on the polar axis
+            mut lat = 90.0
+            if z < 0.0: lat = -90.0
+            return Geodetic.init(lat, lon, fabs(z) - b)
+        # Bowring's initial guess, then fixed-point refinement of latitude.
+        mut th = atan2(z * a, p * b)
+        mut st = sin(th)
+        mut ct = cos(th)
+        mut phi = atan2(z + ep2 * b * st * st * st, p - e2 * a * ct * ct * ct)
+        mut it = 0
+        mut h = 0.0
+        while it < 10:
+            mut sp = sin(phi)
+            mut n = a / sqrt(1.0 - e2 * sp * sp)
+            h = p / cos(phi) - n
+            if fabs(phi) > 1.4: h = z / sp - n * (1.0 - e2)
+            mut np = atan2(z, p * (1.0 - e2 * n / (n + h)))
+            mut d = fabs(np - phi)
+            phi = np
+            it = it + 1
+            if d < 1e-15: break
+        mut sp2 = sin(phi)
+        mut n2 = a / sqrt(1.0 - e2 * sp2 * sp2)
+        if fabs(phi) > 1.4:
+            h = z / sp2 - n2 * (1.0 - e2)
+        else:
+            h = p / cos(phi) - n2
+        return Geodetic.init(phi * GEO_RAD, lon, h)
+
+# ─── ENU local tangent frame ────────────────────────────────────────────────
+
+pub class Enu:
+    _dummy: int
+
+extend Enu:
+    pub def from_ecef(e: Ellipsoid, lat0: float, lon0: float, h0: float, x: float, y: float, z: float) -> Vec3:
+        mut o = Ecef.from_geodetic(e, lat0, lon0, h0)
+        mut dx = x - o.x
+        mut dy = y - o.y
+        mut dz = z - o.z
+        mut sp = sin(lat0 * GEO_DEG)
+        mut cp = cos(lat0 * GEO_DEG)
+        mut sl = sin(lon0 * GEO_DEG)
+        mut cl = cos(lon0 * GEO_DEG)
+        mut east = 0.0 - sl * dx + cl * dy
+        mut north = 0.0 - sp * cl * dx - sp * sl * dy + cp * dz
+        mut up = cp * cl * dx + cp * sl * dy + sp * dz
+        return Vec3.init(east, north, up)
+
+    pub def to_ecef(e: Ellipsoid, lat0: float, lon0: float, h0: float, east: float, north: float, up: float) -> Vec3:
+        mut o = Ecef.from_geodetic(e, lat0, lon0, h0)
+        mut sp = sin(lat0 * GEO_DEG)
+        mut cp = cos(lat0 * GEO_DEG)
+        mut sl = sin(lon0 * GEO_DEG)
+        mut cl = cos(lon0 * GEO_DEG)
+        mut dx = 0.0 - sl * east - sp * cl * north + cp * cl * up
+        mut dy = cl * east - sp * sl * north + cp * sl * up
+        mut dz = cp * north + sp * up
+        return Vec3.init(o.x + dx, o.y + dy, o.z + dz)
+
+    pub def from_geodetic(e: Ellipsoid, lat0: float, lon0: float, h0: float, lat: float, lon: float, h: float) -> Vec3:
+        mut p = Ecef.from_geodetic(e, lat, lon, h)
+        return Enu.from_ecef(e, lat0, lon0, h0, p.x, p.y, p.z)
+
+    pub def to_geodetic(e: Ellipsoid, lat0: float, lon0: float, h0: float, east: float, north: float, up: float) -> Geodetic:
+        mut p = Enu.to_ecef(e, lat0, lon0, h0, east, north, up)
+        return Ecef.to_geodetic(e, p.x, p.y, p.z)
+
+    # Azimuth (deg from north), elevation (deg) and slant range (m) of a
+    # target seen from the origin; returned as Vec3(x=az, y=el, z=range).
+    pub def aer(e: Ellipsoid, lat0: float, lon0: float, h0: float, lat: float, lon: float, h: float) -> Vec3:
+        mut v = Enu.from_geodetic(e, lat0, lon0, h0, lat, lon, h)
+        mut horiz = hypot(v.x, v.y)
+        mut az = atan2(v.x, v.y) * GEO_RAD
+        if az < 0.0: az = az + 360.0
+        mut el = atan2(v.z, horiz) * GEO_RAD
+        return Vec3.init(az, el, sqrt(horiz * horiz + v.z * v.z))
