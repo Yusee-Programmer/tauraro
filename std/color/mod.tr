@@ -405,11 +405,11 @@ extend Color:
 
     # "#rrggbb" (alpha ignored)
     pub def to_hex(self) -> str:
-        return "#" + _hex2(_to_byte(self.r)) + _hex2(_to_byte(self.g)) + _hex2(_to_byte(self.b))
+        return "#" + _color_hex2(_to_byte(self.r)) + _color_hex2(_to_byte(self.g)) + _color_hex2(_to_byte(self.b))
 
     # "#rrggbbaa"
     pub def to_hex_alpha(self) -> str:
-        return self.to_hex() + _hex2(_to_byte(self.a))
+        return self.to_hex() + _color_hex2(_to_byte(self.a))
 
     # "#rgb" when every channel is a repeated nibble, else "#rrggbb".
     pub def to_hex_short(self) -> str:
@@ -822,7 +822,7 @@ def _hex1(n: int) -> str:
     if n < 10: return Fmt.int_to_str(n)
     return Str.slice("abcdef", n - 10, n - 9)
 
-def _hex2(n: int) -> str:
+def _color_hex2(n: int) -> str:
     return _hex1(n / 16) + _hex1(n % 16)
 
 def _hexval(c: int) -> int:
