@@ -1,4 +1,4 @@
-# std.image — Raster image decode/encode: BMP, QOI, PNG, JPEG, GIF.
+# std.image — Raster image decode/encode: BMP, QOI, PNG, JPEG, GIF, WebP, TIFF.
 #
 # One shared in-memory representation (Image, RGBA8 — 4 bytes/pixel,
 # row-major, top-to-bottom, no padding) that every codec below decodes
@@ -13,6 +13,9 @@ from std.image.jpeg import decode_jpeg
 from std.image.gif import decode_gif
 #   from std.image.jpeg import decode_jpeg, encode_jpeg, jpeg_orientation
 #   from std.image.gif import decode_gif, decode_gif_animation, encode_gif, GifEncoder
+#   from std.image.webp import decode_webp, decode_webp_animation, encode_webp, WebpEncoder
+#   from std.image.tiff import decode_tiff, decode_tiff_page, tiff_page_count, encode_tiff, TiffEncoder
+#   from std.image.qr import QrCode, QR_ECC_M
 #   from std.image.ops import resize_image, thumbnail, gaussian_blur, grayscale, crop, ...
 #
 # Or just:
@@ -29,6 +32,7 @@ from std.image.gif import decode_gif
 # std.compress/std.io.archive.
 
 from std.core.vec import Vec
+from std.color import Color
 
 # Canonical in-memory image: RGBA8, row-major, top row first, 4 bytes/pixel,
 # no row padding (pixels.len == width * height * 4 always).
@@ -68,6 +72,36 @@ extend Image:
         self.pixels.set(off + 2, (b & 0xFF) as u8)
         self.pixels.set(off + 3, (a & 0xFF) as u8)
 
+    # The pixel at (x, y) as a std.color Color.
+    pub def get_color(self, x: int, y: int) -> Color:
+        mut off = (y * self.width + x) * 4
+        return Color.rgba8(self.pixels.get(off) as int & 0xFF, self.pixels.get(off + 1) as int & 0xFF, self.pixels.get(off + 2) as int & 0xFF, self.pixels.get(off + 3) as int & 0xFF)
+
+    # Write a Color at (x, y) (channels are clamped and rounded to bytes).
+    pub def set_color(self, x: int, y: int, c: Color):
+        self.set_pixel(x, y, c.r8(), c.g8(), c.b8(), c.a8())
+
+    # A new w x h image filled with one Color.
+    pub def filled(w: int, h: int, c: Color) -> Image:
+        mut img = Image.init(w, h)
+        img.fill_color(c)
+        return img
+
+    # Paint every pixel with one Color (in place).
+    pub def fill_color(self, c: Color):
+        mut r = c.r8()
+        mut g = c.g8()
+        mut b = c.b8()
+        mut a = c.a8()
+        mut n = self.width * self.height
+        mut i = 0
+        while i < n:
+            self.pixels.set(i * 4, r as u8)
+            self.pixels.set(i * 4 + 1, g as u8)
+            self.pixels.set(i * 4 + 2, b as u8)
+            self.pixels.set(i * 4 + 3, a as u8)
+            i = i + 1
+
     pub def free(self):
         self.pixels.free()
 
@@ -76,6 +110,8 @@ from std.image.qoi import decode_qoi, encode_qoi
 from std.image.png import decode_png, encode_png
 from std.image.jpeg import decode_jpeg
 from std.image.gif import decode_gif
+from std.image.webp import decode_webp
+from std.image.tiff import decode_tiff
 
 # Sniff the magic bytes of `data` (first `len_` bytes) and dispatch to the
 # matching decoder. Returns an Image with width == -1 on an unrecognized
@@ -103,6 +139,20 @@ pub def decode(data: str, len_: int) -> Image:
                 b3 = p.offset(3).read() as int & 0xFF
             if b0 == 0x71 and b1 == 0x6F and b2 == 0x69 and b3 == 0x66:   # "qoif"
                 return decode_qoi(data, len_)
+            if (b0 == 0x49 and b1 == 0x49 and b2 == 0x2A and b3 == 0) or (b0 == 0x4D and b1 == 0x4D and b2 == 0 and b3 == 0x2A):   # "II*\0" / "MM\0*"
+                return decode_tiff(data, len_)
+            if len_ >= 12 and b0 == 0x52 and b1 == 0x49 and b2 == 0x46 and b3 == 0x46:   # "RIFF....WEBP"
+                mut w8 = 0
+                mut w9 = 0
+                mut w10 = 0
+                mut w11 = 0
+                unsafe:
+                    w8 = p.offset(8).read() as int & 0xFF
+                    w9 = p.offset(9).read() as int & 0xFF
+                    w10 = p.offset(10).read() as int & 0xFF
+                    w11 = p.offset(11).read() as int & 0xFF
+                if w8 == 0x57 and w9 == 0x45 and w10 == 0x42 and w11 == 0x50:
+                    return decode_webp(data, len_)
             if len_ >= 8:
                 mut b4 = 0
                 mut b5 = 0
