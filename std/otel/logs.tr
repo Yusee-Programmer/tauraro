@@ -3,7 +3,7 @@
 #   mut lp = LoggerProvider.init(Resource.default_for("api"))
 #   lp.add_batch_processor(Exporter.otlp_from_env(SIGNAL_LOGS), BatchConfig.from_env("OTEL_BLRP"))
 #   mut ol = lp.get_logger("api.payments", "1.0")
-#   ol.emit(SEVERITY_WARN, "card declined", Attributes.new().str("card.brand", "visa"))
+#   ol.emit(OTEL_SEV_WARN, "card declined", Attributes.new().str("card.brand", "visa"))
 #
 #   # Bridge std.log: every record of `log` (after its level filter) also
 #   # becomes an OTLP LogRecord, correlated with the current span.
@@ -29,12 +29,12 @@ from std.log.level import LogLevel
 from std.log.field import Field, Fields, FIELD_STR, FIELD_INT, FIELD_FLOAT, FIELD_BOOL
 from std.log.logger import Logger
 
-pub const SEVERITY_TRACE = 1
-pub const SEVERITY_DEBUG = 5
-pub const SEVERITY_INFO  = 9
-pub const SEVERITY_WARN  = 13
-pub const SEVERITY_ERROR = 17
-pub const SEVERITY_FATAL = 21
+pub const OTEL_SEV_TRACE = 1
+pub const OTEL_SEV_DEBUG = 5
+pub const OTEL_SEV_INFO  = 9
+pub const OTEL_SEV_WARN  = 13
+pub const OTEL_SEV_ERROR = 17
+pub const OTEL_SEV_FATAL = 21
 
 pub def severity_text(n: int) -> str:
     if n >= 21: return "FATAL"
@@ -47,12 +47,12 @@ pub def severity_text(n: int) -> str:
 
 pub def severity_of_level(level: LogLevel) -> int:
     match level:
-        case LogLevel.Trace: return SEVERITY_TRACE
-        case LogLevel.Debug: return SEVERITY_DEBUG
-        case LogLevel.Info:  return SEVERITY_INFO
-        case LogLevel.Warn:  return SEVERITY_WARN
-        case LogLevel.Error: return SEVERITY_ERROR
-        case _:              return SEVERITY_INFO
+        case LogLevel.Trace: return OTEL_SEV_TRACE
+        case LogLevel.Debug: return OTEL_SEV_DEBUG
+        case LogLevel.Info:  return OTEL_SEV_INFO
+        case LogLevel.Warn:  return OTEL_SEV_WARN
+        case LogLevel.Error: return OTEL_SEV_ERROR
+        case _:              return OTEL_SEV_INFO
 
 # std.log Fields -> Attributes.
 pub def attributes_from_fields(fields: Fields) -> Attributes:
@@ -139,19 +139,19 @@ extend OtelLogger:
             i = i + 1
 
     pub def trace(self, body: str, attrs: Attributes):
-        self.emit(SEVERITY_TRACE, body, attrs)
+        self.emit(OTEL_SEV_TRACE, body, attrs)
 
     pub def debug(self, body: str, attrs: Attributes):
-        self.emit(SEVERITY_DEBUG, body, attrs)
+        self.emit(OTEL_SEV_DEBUG, body, attrs)
 
     pub def info(self, body: str, attrs: Attributes):
-        self.emit(SEVERITY_INFO, body, attrs)
+        self.emit(OTEL_SEV_INFO, body, attrs)
 
     pub def warn(self, body: str, attrs: Attributes):
-        self.emit(SEVERITY_WARN, body, attrs)
+        self.emit(OTEL_SEV_WARN, body, attrs)
 
     pub def error(self, body: str, attrs: Attributes):
-        self.emit(SEVERITY_ERROR, body, attrs)
+        self.emit(OTEL_SEV_ERROR, body, attrs)
 
 pub class LoggerProvider:
     pub resource: Resource

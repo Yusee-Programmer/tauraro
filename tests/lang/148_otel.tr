@@ -18,7 +18,7 @@ from std.otel.native import _q_push, _q_pop, trc_otel_q_new, trc_otel_q_free
 from std.net.client import HttpSession, ClientRequest, HeaderList
 from std.log import Logger, Fields, LogLevel
 from std.otel import Otel, Attributes, Exporter, BatchConfig, Resource, Sampler, SpanContext, TraceContext, TraceState, Baggage, Context, IdGenerator, Propagator, TracerProvider, MeterProvider, LoggerProvider, LogBridge, Observer, TracedHttpClient, ServerInstrumentation
-from std.otel import SPAN_KIND_INTERNAL, SPAN_KIND_SERVER, SPAN_KIND_CLIENT, STATUS_ERROR, STATUS_OK, TEMPORALITY_CUMULATIVE, TEMPORALITY_DELTA, SIGNAL_TRACES, SIGNAL_METRICS, SIGNAL_LOGS, SAMPLE_DROP, SAMPLE_RECORD_AND_SAMPLE, SEVERITY_WARN, SEVERITY_INFO
+from std.otel import SPAN_KIND_INTERNAL, SPAN_KIND_SERVER, SPAN_KIND_CLIENT, STATUS_ERROR, STATUS_OK, TEMPORALITY_CUMULATIVE, TEMPORALITY_DELTA, SIGNAL_TRACES, SIGNAL_METRICS, SIGNAL_LOGS, SAMPLE_DROP, SAMPLE_RECORD_AND_SAMPLE, OTEL_SEV_WARN, OTEL_SEV_INFO
 
 # ── fake OTLP collector ─────────────────────────────────────────────────────
 
@@ -468,7 +468,7 @@ def main():
     mut lrecs = lmem.take_payloads()
     t.assert_eq_int(lrecs.len, 2, "two log exports")
     mut lr = Json.parse(lrecs.get(0)).root().obj_get("resourceLogs").array_get(0).obj_get("scopeLogs").array_get(0).obj_get("logRecords").array_get(0)
-    t.assert_eq_int(lr.obj_get("severityNumber").get_int(), SEVERITY_WARN, "severityNumber")
+    t.assert_eq_int(lr.obj_get("severityNumber").get_int(), OTEL_SEV_WARN, "severityNumber")
     t.assert_eq_str(lr.obj_get("severityText").get_str(), "WARN", "severityText")
     t.assert_eq_str(lr.obj_get("body").obj_get("stringValue").get_str(), "disk almost full", "body")
     t.assert_eq_str(lr.obj_get("spanId").get_str(), span_id_seen, "log carries the current span id")
@@ -643,7 +643,7 @@ def main():
         mut blr = Json.parse(rec_body(lrecs2.get(0))).root().obj_get("resourceLogs").array_get(0).obj_get("scopeLogs").array_get(0)
         t.assert_eq_str(blr.obj_get("scope").obj_get("name").get_str(), "billing", "logger target is the scope")
         t.assert_eq_str(blr.obj_get("logRecords").array_get(0).obj_get("body").obj_get("stringValue").get_str(), "charged", "bridged body")
-        t.assert_eq_int(blr.obj_get("logRecords").array_get(0).obj_get("severityNumber").get_int(), SEVERITY_INFO, "bridged severity")
+        t.assert_eq_int(blr.obj_get("logRecords").array_get(0).obj_get("severityNumber").get_int(), OTEL_SEV_INFO, "bridged severity")
         t.assert_eq_int(blr.obj_get("logRecords").array_get(0).obj_get("attributes").array_len(), 2, "fields became attributes")
 
         # unreachable endpoint -> failure counted, no crash

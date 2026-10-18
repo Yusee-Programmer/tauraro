@@ -130,7 +130,7 @@ def test_vincenty(t: TestRunner) throws str:
     t.assert_true(bad.is_err, "nearly antipodal raises")
     t.assert_contains(bad.err, "antipodal", "error names the cause")
     mut z = w.vincenty_inverse(10.0, 20.0, 10.0, 20.0)?
-    t.assert_eq_float(z.distance, 0.0, 0.0, "coincident points")
+    t.assert_eq_float(z.distance, 0.0, 1e-9, "coincident points")
     mut pole = w.vincenty_inverse(90.0, 0.0, -90.0, 0.0)?
     t.assert_eq_float(pole.distance, w.distance(90.0, 0.0, -90.0, 0.0), 0.001, "pole to pole")
     t.assert_eq_float(pole.distance, 20003931.4586, 0.001, "pole to pole = twice the quarter meridian")

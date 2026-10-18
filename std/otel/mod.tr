@@ -17,7 +17,7 @@ from std.otel.sampler import Sampler, SAMPLE_DROP, SAMPLE_RECORD_ONLY, SAMPLE_RE
 from std.otel.exporter import Exporter, Pipeline, BatchConfig, SIGNAL_TRACES, SIGNAL_METRICS, SIGNAL_LOGS, build_payload
 from std.otel.trace import TracerProvider, Tracer, Span, SpanScope, SpanEvent, SpanLink, SpanLimits, SPAN_KIND_UNSPECIFIED, SPAN_KIND_INTERNAL, SPAN_KIND_SERVER, SPAN_KIND_CLIENT, SPAN_KIND_PRODUCER, SPAN_KIND_CONSUMER, STATUS_UNSET, STATUS_OK, STATUS_ERROR
 from std.otel.metrics import MeterProvider, Meter, Counter, UpDownCounter, Histogram, Gauge, Observer, Instrument, TEMPORALITY_CUMULATIVE, TEMPORALITY_DELTA, TEMPORALITY_LOWMEMORY, temporality_from_env
-from std.otel.logs import LoggerProvider, OtelLogger, LogBridge, SEVERITY_TRACE, SEVERITY_DEBUG, SEVERITY_INFO, SEVERITY_WARN, SEVERITY_ERROR, SEVERITY_FATAL
+from std.otel.logs import LoggerProvider, OtelLogger, LogBridge, OTEL_SEV_TRACE, OTEL_SEV_DEBUG, OTEL_SEV_INFO, OTEL_SEV_WARN, OTEL_SEV_ERROR, OTEL_SEV_FATAL
 from std.otel.propagate import Propagator
 from std.otel.instrument import TracedHttpClient, ServerInstrumentation
 
