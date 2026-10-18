@@ -1,0 +1,340 @@
+# std.otel.attr -- Attributes: an ordered, typed key/value set shared by
+# resources, spans, events, links, metric data points and log records.
+#
+#   mut a = Attributes.new()
+#       .str("http.request.method", "GET")
+#       .int("http.response.status_code", 200)
+#       .float("ratio", 0.5)
+#       .bool("cache.hit", true)
+#       .str_list("tags", ["a", "b"])
+#
+# Setting an existing key replaces its value in place (first-insertion order
+# is kept). Empty keys are ignored. A limit (default unlimited, -1) bounds the
+# number of distinct keys: further new keys are dropped and counted in
+# `dropped`, which is what the OTLP `droppedAttributesCount` fields report.
+# `value_len_limit` (default -1 = unlimited) truncates string values.
+#
+# Every value is kept both as plain text (`get`) and as its OTLP/JSON AnyValue
+# encoding ({"stringValue":"x"}, {"intValue":"5"}, {"doubleValue":0.5},
+# {"boolValue":true}, {"arrayValue":{"values":[...]}}).
+
+from std.core.vec import Vec
+from std.core.string import StringBuilder
+from std.string.str import Str
+from std.string.fmt import Fmt
+from std.otel.native import json_str, json_double, double_text, json_i64
+
+pub const ATTR_STR    = 0
+pub const ATTR_INT    = 1
+pub const ATTR_DOUBLE = 2
+pub const ATTR_BOOL   = 3
+pub const ATTR_ARRAY  = 4
+
+def _any_str(s: str) -> str:
+    mut sb = StringBuilder.init(s.len() + 20)
+    sb.append("{\"stringValue\":")
+    json_str(sb, s)
+    sb.append_char(125)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _any_int(v: int) -> str:
+    mut sb = StringBuilder.init(32)
+    sb.append("{\"intValue\":")
+    json_i64(sb, v)
+    sb.append_char(125)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _any_double(v: float) -> str:
+    mut sb = StringBuilder.init(40)
+    sb.append("{\"doubleValue\":")
+    json_double(sb, v)
+    sb.append_char(125)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _any_bool(v: bool) -> str:
+    if v: return "{\"boolValue\":true}"
+    return "{\"boolValue\":false}"
+
+# Truncate s to at most n bytes without splitting a UTF-8 sequence.
+pub def _utf8_truncate(s: str, n: int) -> str:
+    if n < 0 or s.len() <= n: return s
+    mut cut = n
+    mut p = s as Pointer[char]
+    while cut > 0:
+        mut c = 0
+        unsafe: c = (p.offset(cut).read() as int) & 255
+        if (c & 192) != 128: break
+        cut = cut - 1
+    return Str.slice(s, 0, cut)
+
+# Byte-wise a < b.
+pub def _str_lt(a: str, b: str) -> bool:
+    mut pa = a as Pointer[char]
+    mut pb = b as Pointer[char]
+    mut na = a.len()
+    mut nb = b.len()
+    mut i = 0
+    while i < na and i < nb:
+        mut ca = 0
+        mut cb = 0
+        unsafe:
+            ca = (pa.offset(i).read() as int) & 255
+            cb = (pb.offset(i).read() as int) & 255
+        if ca != cb: return ca < cb
+        i = i + 1
+    return na < nb
+
+pub class Attributes:
+    pub keys:    Vec[str]
+    pub tags:    Vec[int]
+    pub texts:   Vec[str]     # plain-text form of each value
+    pub values:  Vec[str]     # OTLP/JSON AnyValue form of each value
+    pub limit:   int          # max distinct keys (-1 = unlimited)
+    pub value_len_limit: int  # max string value bytes (-1 = unlimited)
+    pub dropped: int          # keys rejected by `limit`
+
+extend Attributes:
+    pub def new() -> Attributes:
+        mut a = Attributes()
+        a.keys   = Vec[str].init(4)
+        a.tags   = Vec[int].init(4)
+        a.texts  = Vec[str].init(4)
+        a.values = Vec[str].init(4)
+        a.limit  = -1
+        a.value_len_limit = -1
+        a.dropped = 0
+        return a
+
+    pub def empty() -> Attributes:
+        return Attributes.new()
+
+    pub def with_limits(count: int, value_len: int) -> Attributes:
+        mut a = Attributes.new()
+        a.limit = count
+        a.value_len_limit = value_len
+        return a
+
+    pub def len(self) -> int:
+        return self.keys.len
+
+    pub def is_empty(self) -> bool:
+        return self.keys.len == 0
+
+    pub def index_of(self, key: str) -> int:
+        mut i = 0
+        while i < self.keys.len:
+            if self.keys.get(i) == key: return i
+            i = i + 1
+        return -1
+
+    pub def has(self, key: str) -> bool:
+        return self.index_of(key) >= 0
+
+    # Plain-text value for key ("" when absent).
+    pub def get(self, key: str) -> str:
+        mut i = self.index_of(key)
+        if i < 0: return ""
+        return self.texts.get(i)
+
+    # ATTR_* tag for key, or -1 when absent.
+    pub def tag_of(self, key: str) -> int:
+        mut i = self.index_of(key)
+        if i < 0: return -1
+        return self.tags.get(i)
+
+    pub def key_at(self, i: int) -> str:
+        return self.keys.get(i)
+
+    pub def text_at(self, i: int) -> str:
+        return self.texts.get(i)
+
+    pub def value_json_at(self, i: int) -> str:
+        return self.values.get(i)
+
+    pub def tag_at(self, i: int) -> int:
+        return self.tags.get(i)
+
+    # Low-level setter: key, tag, text form, AnyValue JSON.
+    pub def put_raw(self, key: str, tag: int, text: str, vjson: str):
+        if key.len() == 0: return
+        mut i = self.index_of(key)
+        if i >= 0:
+            self.tags.set(i, tag)
+            self.texts.set(i, text)
+            self.values.set(i, vjson)
+            return
+        if self.limit >= 0 and self.keys.len >= self.limit:
+            self.dropped = self.dropped + 1
+            return
+        self.keys.push(key)
+        self.tags.push(tag)
+        self.texts.push(text)
+        self.values.push(vjson)
+
+    pub def str(self, key: str, v: str) -> Attributes:
+        mut val = _utf8_truncate(v, self.value_len_limit)
+        self.put_raw(key, ATTR_STR, val, _any_str(val))
+        return self
+
+    pub def int(self, key: str, v: int) -> Attributes:
+        self.put_raw(key, ATTR_INT, Fmt.int_to_str(v), _any_int(v))
+        return self
+
+    pub def float(self, key: str, v: float) -> Attributes:
+        self.put_raw(key, ATTR_DOUBLE, double_text(v), _any_double(v))
+        return self
+
+    pub def bool(self, key: str, v: bool) -> Attributes:
+        mut t = "false"
+        if v: t = "true"
+        self.put_raw(key, ATTR_BOOL, t, _any_bool(v))
+        return self
+
+    # Homogeneous string array (OTLP arrayValue of stringValues).
+    pub def str_list(self, key: str, vs: List[str]) -> Attributes:
+        mut sb = StringBuilder.init(64)
+        mut tb = StringBuilder.init(32)
+        sb.append("{\"arrayValue\":{\"values\":[")
+        tb.append_char(91)
+        mut i = 0
+        while i < len(vs):
+            mut v = _utf8_truncate(vs[i], self.value_len_limit)
+            if i > 0:
+                sb.append_char(44)
+                tb.append_char(44)
+            sb.append(_any_str(v))
+            tb.append(v)
+            i = i + 1
+        sb.append("]}}")
+        tb.append_char(93)
+        mut vj = sb.to_owned()
+        mut tx = tb.to_owned()
+        sb.free()
+        tb.free()
+        self.put_raw(key, ATTR_ARRAY, tx, vj)
+        return self
+
+    # Homogeneous int array (OTLP arrayValue of intValues).
+    pub def int_list(self, key: str, vs: List[int]) -> Attributes:
+        mut sb = StringBuilder.init(64)
+        mut tb = StringBuilder.init(32)
+        sb.append("{\"arrayValue\":{\"values\":[")
+        tb.append_char(91)
+        mut i = 0
+        while i < len(vs):
+            if i > 0:
+                sb.append_char(44)
+                tb.append_char(44)
+            sb.append(_any_int(vs[i]))
+            tb.append_int(vs[i])
+            i = i + 1
+        sb.append("]}}")
+        tb.append_char(93)
+        mut vj = sb.to_owned()
+        mut tx = tb.to_owned()
+        sb.free()
+        tb.free()
+        self.put_raw(key, ATTR_ARRAY, tx, vj)
+        return self
+
+    pub def remove(self, key: str):
+        mut i = self.index_of(key)
+        if i < 0: return
+        self.keys.remove(i)
+        self.tags.remove(i)
+        self.texts.remove(i)
+        self.values.remove(i)
+
+    # Copy every entry of `other` into self (other's values win).
+    pub def merge(self, other: Attributes) -> Attributes:
+        mut i = 0
+        while i < other.keys.len:
+            self.put_raw(other.keys.get(i), other.tags.get(i), other.texts.get(i), other.values.get(i))
+            i = i + 1
+        return self
+
+    pub def clone(self) -> Attributes:
+        mut a = Attributes.new()
+        a.limit = self.limit
+        a.value_len_limit = self.value_len_limit
+        a.dropped = self.dropped
+        mut i = 0
+        while i < self.keys.len:
+            a.keys.push(self.keys.get(i))
+            a.tags.push(self.tags.get(i))
+            a.texts.push(self.texts.get(i))
+            a.values.push(self.values.get(i))
+            i = i + 1
+        return a
+
+    # OTLP/JSON `attributes` array: [{"key":"k","value":{...}}, ...]
+    pub def write_json(self, sb: StringBuilder):
+        sb.append_char(91)
+        mut i = 0
+        while i < self.keys.len:
+            if i > 0: sb.append_char(44)
+            sb.append("{\"key\":")
+            json_str(sb, self.keys.get(i))
+            sb.append(",\"value\":")
+            sb.append(self.values.get(i))
+            sb.append_char(125)
+            i = i + 1
+        sb.append_char(93)
+
+    pub def to_json(self) -> str:
+        mut sb = StringBuilder.init(64)
+        self.write_json(sb)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Order-independent identity of the attribute set (keys sorted), used to
+    # find a metric data point's series.
+    pub def canonical(self) -> str:
+        mut n = self.keys.len
+        if n == 0: return ""
+        mut order = Vec[int].init(n)
+        mut i = 0
+        while i < n:
+            order.push(i)
+            i = i + 1
+        # insertion sort by key (attribute sets are small)
+        mut a = 1
+        while a < n:
+            mut b = a
+            while b > 0 and _str_lt(self.keys.get(order.get(b)), self.keys.get(order.get(b - 1))):
+                order.swap(b, b - 1)
+                b = b - 1
+            a = a + 1
+        mut sb = StringBuilder.init(64)
+        i = 0
+        while i < n:
+            mut k = order.get(i)
+            sb.append(self.keys.get(k))
+            sb.append_char(61)
+            sb.append(self.values.get(k))
+            sb.append_char(10)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # "k=v k2=v2" text (console output, debugging).
+    pub def to_text(self) -> str:
+        mut sb = StringBuilder.init(64)
+        mut i = 0
+        while i < self.keys.len:
+            if i > 0: sb.append_char(32)
+            sb.append(self.keys.get(i))
+            sb.append_char(61)
+            sb.append(self.texts.get(i))
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out

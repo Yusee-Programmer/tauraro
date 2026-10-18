@@ -1,0 +1,129 @@
+# std.otel.instrument -- opt-in instrumentation for std.net.client and
+# std.net.http_server. Neither module is modified; you wrap your calls.
+#
+# HTTP client (client span + traceparent injection):
+#
+#   mut tc = TracedHttpClient.init(HttpSession.init(), tracer)
+#   mut r = tc.get("http://svc/cart")      # also: post, put, delete, post_json, request, send
+#
+# Each call starts a CLIENT span named "<METHOD>" as a child of the current
+# span, sets http.request.method / url.full / server.address / server.port,
+# adds traceparent (and tracestate / baggage) to the request, then records
+# http.response.status_code and marks the span ERROR for transport failures
+# and for 4xx / 5xx responses (client-span convention).
+#
+# HTTP server (server span from the incoming traceparent):
+#
+#   mut srv = ServerInstrumentation.init(tracer)
+#   mut sc = srv.begin_route(req, "/users/:id")   # span is CURRENT until finish()
+#   ... handle, conn.send_*(...) ...
+#   srv.finish(sc, 200)       # sets http.response.status_code, ends the span
+#
+# The server span is named "<METHOD> <route>", has kind SERVER, parent = the
+# remote context extracted from the request headers, and carries
+# http.request.method / url.path / url.query / http.route /
+# network.protocol.version. Status >= 500 marks it ERROR.
+
+from std.net.client import HttpSession, ClientRequest, HttpReply
+from std.net.http_server import HttpRequest
+from std.net.url import Url
+from std.otel.attr import Attributes
+from std.otel.context import Context
+from std.otel.propagate import Propagator
+from std.otel.trace import Tracer, Span, SpanScope, SPAN_KIND_CLIENT, SPAN_KIND_SERVER, STATUS_ERROR
+from std.string.str import Str
+from std.string.fmt import Fmt
+
+pub class TracedHttpClient:
+    pub session: HttpSession
+    pub tracer:  Tracer
+    pub last_span: Span
+
+extend TracedHttpClient:
+    pub def init(session: HttpSession, tracer: Tracer) -> TracedHttpClient:
+        mut t = TracedHttpClient()
+        t.session = session
+        t.tracer = tracer
+        t.last_span = Span.non_recording(Context.empty().span)
+        return t
+
+    pub def send(self, req: ClientRequest) -> HttpReply:
+        mut method = Str.to_upper(req.method)
+        mut span = self.tracer.start_span_kind(method, SPAN_KIND_CLIENT)
+        mut u = Url.parse(req.url)
+        span.set_str("http.request.method", method)
+        span.set_str("url.full", req.url)
+        if u.is_valid():
+            span.set_str("server.address", u.host)
+            span.set_int("server.port", u.port)
+        # inject the client span's context (plus current baggage)
+        mut ctx = span.as_context()
+        Propagator.inject_into(ctx, req.headers)
+        mut reply = self.session.send(req)
+        if reply.error != "":
+            span.set_str("error.type", reply.error)
+            span.set_status(STATUS_ERROR, reply.error)
+        else:
+            span.set_int("http.response.status_code", reply.status)
+            if reply.status >= 400:
+                span.set_str("error.type", Fmt.int_to_str(reply.status))
+                span.set_status(STATUS_ERROR, "")
+        span.set_int("http.request.resend_count", reply.redirects)
+        span.end()
+        self.last_span = span
+        return reply
+
+    pub def request(self, method: str, url: str, body: str, content_type: str) -> HttpReply:
+        mut req = ClientRequest.init(method, url)
+        req.body = body
+        req.content_type = content_type
+        return self.send(req)
+
+    pub def get(self, url: str) -> HttpReply:
+        return self.send(ClientRequest.init("GET", url))
+
+    pub def delete(self, url: str) -> HttpReply:
+        return self.send(ClientRequest.init("DELETE", url))
+
+    pub def post(self, url: str, body: str, content_type: str) -> HttpReply:
+        return self.request("POST", url, body, content_type)
+
+    pub def put(self, url: str, body: str, content_type: str) -> HttpReply:
+        return self.request("PUT", url, body, content_type)
+
+    pub def post_json(self, url: str, json: str) -> HttpReply:
+        return self.request("POST", url, json, "application/json")
+
+pub class ServerInstrumentation:
+    pub tracer: Tracer
+
+extend ServerInstrumentation:
+    pub def init(tracer: Tracer) -> ServerInstrumentation:
+        mut s = ServerInstrumentation()
+        s.tracer = tracer
+        return s
+
+    pub def begin(self, req: HttpRequest) -> SpanScope:
+        return self.begin_route(req, req.path)
+
+    # `route` is the low-cardinality route pattern (e.g. "/users/:id").
+    pub def begin_route(self, req: HttpRequest, route: str) -> SpanScope:
+        mut parent = Propagator.extract_values(req.header("traceparent"), req.header("tracestate"), req.header("baggage"))
+        mut attrs = Attributes.new()
+        attrs.str("http.request.method", req.method)
+        attrs.str("url.path", req.path)
+        if req.query.len() > 0: attrs.str("url.query", req.query)
+        attrs.str("http.route", route)
+        if Str.starts_with(req.version, "HTTP/"):
+            attrs.str("network.protocol.version", Str.slice(req.version, 5, req.version.len()))
+        mut span = self.tracer.start_span_with(req.method + " " + route, SPAN_KIND_SERVER, parent, attrs, 0)
+        mut sc = SpanScope.init(span, false)
+        sc.token = parent.set_span(span.ctx).attach()
+        return sc
+
+    # Record the response status, end the span and restore the context.
+    pub def finish(self, sc: SpanScope, status: int):
+        sc.span.set_int("http.response.status_code", status)
+        if status >= 500: sc.span.set_status(STATUS_ERROR, "")
+        sc.span.end()
+        sc.close()

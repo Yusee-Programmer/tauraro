@@ -1,0 +1,56 @@
+# std.otel.propagate -- inject / extract of the W3C `traceparent`,
+# `tracestate` and `baggage` headers.
+#
+#   # client side: write the current context into outgoing headers
+#   Propagator.inject(Context.current(), set_header_fn)      # def(str, str)
+#   mut hl = Propagator.inject_into(Context.current(), HeaderList.init())
+#
+#   # server side: read an incoming context
+#   mut ctx = Propagator.extract(get_header_fn)              # def(str) -> str
+#   mut ctx2 = Propagator.extract_values(traceparent, tracestate, baggage)
+#
+# Extracted span contexts are marked remote. Invalid or missing headers give
+# an empty context; baggage is extracted independently of the traceparent.
+
+from std.net.client import HeaderList
+from std.otel.context import Context, SpanContext, TraceContext, Baggage
+
+pub class Propagator:
+    _dummy: int
+
+extend Propagator:
+    # Write traceparent (+ tracestate, baggage) of `ctx` through `setter`.
+    # Nothing is written for an invalid span context / empty baggage.
+    pub def inject(ctx: Context, setter: def(str, str)):
+        if ctx.span.is_valid():
+            setter("traceparent", TraceContext.format_traceparent(ctx.span))
+            if ctx.span.trace_state.len() > 0:
+                setter("tracestate", ctx.span.trace_state)
+        if not ctx.baggage.is_empty():
+            mut h = ctx.baggage.to_header()
+            if h.len() > 0: setter("baggage", h)
+
+    # inject() into a std.net.client HeaderList (existing entries replaced).
+    pub def inject_into(ctx: Context, headers: HeaderList) -> HeaderList:
+        if ctx.span.is_valid():
+            headers.set("traceparent", TraceContext.format_traceparent(ctx.span))
+            if ctx.span.trace_state.len() > 0:
+                headers.set("tracestate", ctx.span.trace_state)
+            else:
+                headers.remove("tracestate")
+        if not ctx.baggage.is_empty():
+            mut h = ctx.baggage.to_header()
+            if h.len() > 0: headers.set("baggage", h)
+        return headers
+
+    pub def extract_values(traceparent: str, tracestate: str, baggage: str) -> Context:
+        mut sc = TraceContext.extract(traceparent, tracestate)
+        mut bg = Baggage.parse(baggage)
+        return Context.of(sc, bg)
+
+    pub def extract(getter: def(str) -> str) -> Context:
+        return Propagator.extract_values(getter("traceparent"), getter("tracestate"), getter("baggage"))
+
+    # extract() from a std.net.client HeaderList.
+    pub def extract_from(headers: HeaderList) -> Context:
+        return Propagator.extract_values(headers.get("traceparent"), headers.get("tracestate"), headers.get("baggage"))

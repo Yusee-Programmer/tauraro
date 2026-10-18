@@ -1,0 +1,156 @@
+# std.otel.sampler -- head sampling decisions.
+#
+#   Sampler.always_on()             every span recorded + sampled
+#   Sampler.always_off()            nothing recorded
+#   Sampler.trace_id_ratio(0.25)    deterministic on the trace id
+#   Sampler.parent_based(root)      follow the parent's sampled flag; `root`
+#                                   decides for root spans
+#   Sampler.from_env()              OTEL_TRACES_SAMPLER / _ARG
+#
+# Decisions: SAMPLE_DROP (not recorded), SAMPLE_RECORD_ONLY (recorded, not
+# exported -- sampled flag clear), SAMPLE_RECORD_AND_SAMPLE.
+#
+# TraceIdRatioBased: the low 8 bytes of the trace id, read as an unsigned
+# 64-bit number and shifted right by one, are compared against
+# ratio * 2^63, so all SDKs using this rule agree on the decision for a trace
+# and a lower ratio always samples a subset of a higher one.
+
+from std.string.str import Str
+from std.otel.context import SpanContext
+from std.otel.native import hex_value, double_text, trim_ows
+from std.otel.resource import otel_env
+
+pub const SAMPLE_DROP              = 0
+pub const SAMPLE_RECORD_ONLY       = 1
+pub const SAMPLE_RECORD_AND_SAMPLE = 2
+
+pub const SAMPLER_ALWAYS_ON  = 0
+pub const SAMPLER_ALWAYS_OFF = 1
+pub const SAMPLER_RATIO      = 2
+pub const SAMPLER_PARENT     = 3
+
+pub class Sampler:
+    pub kind:  int
+    pub ratio: float
+    # parent-based delegates (indices into the kinds above; never PARENT)
+    pub root_kind:  int
+    pub root_ratio: float
+    pub remote_sampled:     int   # decision kind for a sampled remote parent
+    pub remote_not_sampled: int
+    pub local_sampled:      int
+    pub local_not_sampled:  int
+
+extend Sampler:
+    def _mk(kind: int, ratio: float) -> Sampler:
+        mut s = Sampler()
+        s.kind = kind
+        s.ratio = ratio
+        s.root_kind = SAMPLER_ALWAYS_ON
+        s.root_ratio = 1.0
+        s.remote_sampled = SAMPLER_ALWAYS_ON
+        s.remote_not_sampled = SAMPLER_ALWAYS_OFF
+        s.local_sampled = SAMPLER_ALWAYS_ON
+        s.local_not_sampled = SAMPLER_ALWAYS_OFF
+        return s
+
+    pub def always_on() -> Sampler:
+        return Sampler._mk(SAMPLER_ALWAYS_ON, 1.0)
+
+    pub def always_off() -> Sampler:
+        return Sampler._mk(SAMPLER_ALWAYS_OFF, 0.0)
+
+    # ratio is clamped to [0, 1].
+    pub def trace_id_ratio(ratio: float) -> Sampler:
+        mut r = ratio
+        if r < 0.0 or r != r: r = 0.0
+        if r > 1.0: r = 1.0
+        return Sampler._mk(SAMPLER_RATIO, r)
+
+    # ParentBased(root): spans with a valid parent copy its sampled flag
+    # (remote and local parents alike); root spans ask `root`.
+    pub def parent_based(root: Sampler) -> Sampler:
+        mut s = Sampler._mk(SAMPLER_PARENT, root.ratio)
+        if root.kind == SAMPLER_PARENT:
+            s.root_kind = root.root_kind
+            s.root_ratio = root.root_ratio
+        else:
+            s.root_kind = root.kind
+            s.root_ratio = root.ratio
+        return s
+
+    # Override what a parent-based sampler does for each parent category
+    # (pass SAMPLER_ALWAYS_ON / SAMPLER_ALWAYS_OFF).
+    pub def with_parent_rules(self, remote_sampled: int, remote_not_sampled: int, local_sampled: int, local_not_sampled: int) -> Sampler:
+        self.remote_sampled = remote_sampled
+        self.remote_not_sampled = remote_not_sampled
+        self.local_sampled = local_sampled
+        self.local_not_sampled = local_not_sampled
+        return self
+
+    # OTEL_TRACES_SAMPLER: always_on, always_off, traceidratio,
+    # parentbased_always_on (default), parentbased_always_off,
+    # parentbased_traceidratio; OTEL_TRACES_SAMPLER_ARG is the ratio
+    # (default 1.0). Unknown values fall back to the default.
+    pub def from_env() -> Sampler:
+        return Sampler.from_name(otel_env("OTEL_TRACES_SAMPLER"), otel_env("OTEL_TRACES_SAMPLER_ARG"))
+
+    pub def from_name(name: str, arg: str) -> Sampler:
+        mut n = Str.to_lower(trim_ows(name))
+        mut ratio = 1.0
+        mut a = trim_ows(arg)
+        if a.len() > 0:
+            ratio = Str.parse_float(a)
+            if ratio < 0.0 or ratio > 1.0 or ratio != ratio: ratio = 1.0
+        if n == "always_on": return Sampler.always_on()
+        if n == "always_off": return Sampler.always_off()
+        if n == "traceidratio": return Sampler.trace_id_ratio(ratio)
+        if n == "parentbased_always_off": return Sampler.parent_based(Sampler.always_off())
+        if n == "parentbased_traceidratio": return Sampler.parent_based(Sampler.trace_id_ratio(ratio))
+        return Sampler.parent_based(Sampler.always_on())
+
+    # Spec-style description, e.g. "ParentBased{root=TraceIdRatioBased{0.25}}".
+    pub def description(self) -> str:
+        if self.kind == SAMPLER_PARENT:
+            return "ParentBased{root=" + _desc(self.root_kind, self.root_ratio) + "}"
+        return _desc(self.kind, self.ratio)
+
+    # Decide for a new span. `parent` is the parent span context (invalid for
+    # a root span); `trace_id` is the new span's trace id.
+    pub def should_sample(self, parent: SpanContext, trace_id: str) -> int:
+        if self.kind != SAMPLER_PARENT:
+            return _decide(self.kind, self.ratio, trace_id)
+        if not parent.is_valid():
+            return _decide(self.root_kind, self.root_ratio, trace_id)
+        mut k = SAMPLER_ALWAYS_ON
+        if parent.remote:
+            if parent.is_sampled(): k = self.remote_sampled
+            else: k = self.remote_not_sampled
+        else:
+            if parent.is_sampled(): k = self.local_sampled
+            else: k = self.local_not_sampled
+        return _decide(k, self.root_ratio, trace_id)
+
+def _desc(kind: int, ratio: float) -> str:
+    if kind == SAMPLER_ALWAYS_ON: return "AlwaysOnSampler"
+    if kind == SAMPLER_ALWAYS_OFF: return "AlwaysOffSampler"
+    return "TraceIdRatioBased{" + double_text(ratio) + "}"
+
+# Low 63 bits of the trace id's last 8 bytes (as an unsigned value >> 1).
+pub def trace_id_ratio_value(trace_id: str) -> int:
+    if trace_id.len() != 32: return 0
+    # 16 hex digits = 64 bits; drop the lowest bit to stay in a signed int.
+    mut hi = hex_value(Str.slice(trace_id, 16, 24))     # upper 32 bits
+    mut lo = hex_value(Str.slice(trace_id, 24, 32))     # lower 32 bits
+    if hi < 0 or lo < 0: return 0
+    return (hi << 31) | (lo >> 1)
+
+def _decide(kind: int, ratio: float, trace_id: str) -> int:
+    if kind == SAMPLER_ALWAYS_ON: return SAMPLE_RECORD_AND_SAMPLE
+    if kind == SAMPLER_ALWAYS_OFF: return SAMPLE_DROP
+    if ratio >= 1.0: return SAMPLE_RECORD_AND_SAMPLE
+    if ratio <= 0.0: return SAMPLE_DROP
+    # bound = ratio * 2^63, computed in floating point
+    mut bound = ratio * 9223372036854775807.0
+    mut v = trace_id_ratio_value(trace_id) as float
+    if v < bound: return SAMPLE_RECORD_AND_SAMPLE
+    return SAMPLE_DROP

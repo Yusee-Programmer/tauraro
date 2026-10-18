@@ -1,0 +1,662 @@
+# tests/lang/148_otel.tr
+# std.otel: W3C traceparent / tracestate / baggage vectors, ids, sampling,
+# attributes, spans, thread-local context, metrics (cumulative + delta),
+# logs + std.log bridge, OTLP/JSON shape (proto3 JSON mapping), the batch
+# pipeline, and a real OTLP/HTTP export to a fake collector (std.net.http_server
+# in a thread) including HTTP client / server instrumentation.
+#
+# The collector binds a loopback port from a small range and every wait is
+# bounded, so no external network is needed.
+
+from std.test import TestRunner
+from std.core.vec import Vec
+from std.string.str import Str
+from std.sys.time import Clock
+from std.encoding.json import Json, JsonDoc, JsonRef
+from std.net.http_server import HttpServer, HttpConn, HttpParser
+from std.otel.native import _q_push, _q_pop, trc_otel_q_new, trc_otel_q_free
+from std.net.client import HttpSession, ClientRequest, HeaderList
+from std.log import Logger, Fields, LogLevel
+from std.otel import Otel, Attributes, Exporter, BatchConfig, Resource, Sampler, SpanContext, TraceContext, TraceState, Baggage, Context, IdGenerator, Propagator, TracerProvider, MeterProvider, LoggerProvider, LogBridge, Observer, TracedHttpClient, ServerInstrumentation
+from std.otel import SPAN_KIND_INTERNAL, SPAN_KIND_SERVER, SPAN_KIND_CLIENT, STATUS_ERROR, STATUS_OK, TEMPORALITY_CUMULATIVE, TEMPORALITY_DELTA, SIGNAL_TRACES, SIGNAL_METRICS, SIGNAL_LOGS, SAMPLE_DROP, SAMPLE_RECORD_AND_SAMPLE, SEVERITY_WARN, SEVERITY_INFO
+
+# ── fake OTLP collector ─────────────────────────────────────────────────────
+
+class Collector implements Sendable, UnsafeSendable:
+    pub base_port: int
+    pub port:      Atomic[int]
+    pub hits:      Atomic[int]
+    pub fail_next: Atomic[int]      # answer this many requests with 503 first
+    pub store:     Pointer[void]
+
+def collector_run(c: Shared[Collector]):
+    mut srv = HttpServer.init("127.0.0.1", c.base_port)
+    mut tries = 0
+    while not srv.start() and tries < 30:
+        tries = tries + 1
+        srv = HttpServer.init("127.0.0.1", c.base_port + tries)
+    if tries >= 30:
+        c.port.store(-1)
+        return
+    c.port.store(c.base_port + tries)
+    mut go = true
+    while go:
+        mut conn = srv.accept()
+        mut req = conn.request
+        if req.path == "/stop":
+            conn.send_text(200, "bye")
+            go = false
+        elif c.fail_next.load() > 0:
+            c.fail_next.add(-1)
+            conn.send_status(503)
+        else:
+            c.hits.add(1)
+            mut rec = req.method + "\n" + req.path + "\n" + req.header("content-type") + "\n" + req.header("traceparent") + "\n" + req.header("x-api-key") + "\n" + req.body
+            _collector_push(c.store, rec)
+            conn.send_json(200, "{}")
+        conn.close()
+    srv.stop()
+
+def _collector_push(q: Pointer[void], rec: str):
+    _q_push(q, rec, 0)
+
+def _collector_take(q: Pointer[void]) -> Vec[str]:
+    mut out = Vec[str].init(4)
+    mut p = _q_pop(q)
+    while p.len() > 0:
+        out.push(p)
+        p = _q_pop(q)
+    return out
+
+# ── helpers ─────────────────────────────────────────────────────────────────
+
+def header_cb(name: str, value: str):
+    pass
+
+mut g_seen = 0
+
+def obs_depth(o: Observer):
+    g_seen = g_seen + 1
+    o.observe(7, Attributes.new().str("q", "main"))
+
+def obs_total(o: Observer):
+    o.observe(10 * g_seen, Attributes.new())
+
+def count_cb(p: str) -> bool:
+    g_seen = g_seen + 1
+    return true
+
+def hook_noop(level: LogLevel, target: str, msg: str, fields: Fields):
+    pass
+
+# Last body segment of a collector record (after the 5 header lines).
+def rec_body(rec: str) -> str:
+    mut parts = rec.split_exact("\n")
+    mut out = ""
+    mut i = 5
+    while i < len(parts):
+        if i > 5: out = out + "\n"
+        out = out + parts[i]
+        i = i + 1
+    return out
+
+def rec_field(rec: str, n: int) -> str:
+    mut parts = rec.split_exact("\n")
+    return parts[n]
+
+def is_hex(s: str, n: int) -> bool:
+    if s.len() != n: return false
+    mut i = 0
+    while i < n:
+        mut c = Str.char_at(s, i)
+        if not ((c >= 48 and c <= 57) or (c >= 97 and c <= 102)): return false
+        i = i + 1
+    return true
+
+def main():
+    mut t = TestRunner.init("148_otel")
+
+    # ================= traceparent (W3C Trace Context spec vectors) ==========
+    t.section("traceparent parsing")
+    mut tp = TraceContext.parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+    t.assert_true(tp.is_valid(), "spec example is valid")
+    t.assert_eq_str(tp.trace_id, "4bf92f3577b34da6a3ce929d0e0e4736", "trace id")
+    t.assert_eq_str(tp.span_id, "00f067aa0ba902b7", "parent id")
+    t.assert_true(tp.is_sampled(), "sampled flag")
+    t.assert_true(tp.is_remote(), "parsed contexts are remote")
+    t.assert_eq_str(tp.traceparent(), "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "round trip")
+    mut tp0 = TraceContext.parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00")
+    t.assert_true(tp0.is_valid() and not tp0.is_sampled(), "flags 00 = not sampled")
+    t.assert_false(TraceContext.parse_traceparent("").is_valid(), "empty")
+    t.assert_false(TraceContext.parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7").is_valid(), "missing flags")
+    t.assert_false(TraceContext.parse_traceparent("00-00000000000000000000000000000000-00f067aa0ba902b7-01").is_valid(), "all-zero trace id")
+    t.assert_false(TraceContext.parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01").is_valid(), "all-zero parent id")
+    t.assert_false(TraceContext.parse_traceparent("ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01").is_valid(), "version ff")
+    t.assert_false(TraceContext.parse_traceparent("00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01").is_valid(), "upper-case hex")
+    t.assert_false(TraceContext.parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra").is_valid(), "v00 with trailing data")
+    t.assert_false(TraceContext.parse_traceparent("00_4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01").is_valid(), "bad separator")
+    t.assert_false(TraceContext.parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e473-00f067aa0ba902b7-01").is_valid(), "short trace id")
+    t.assert_false(TraceContext.parse_traceparent("0g-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01").is_valid(), "non-hex version")
+    mut fut = TraceContext.parse_traceparent("01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-future")
+    t.assert_true(fut.is_valid(), "future version with extra fields parses as v00")
+    t.assert_false(TraceContext.parse_traceparent("01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01future").is_valid(), "future version: extra data must start with -")
+    t.assert_eq_str(SpanContext.invalid().traceparent(), "", "invalid context has no traceparent")
+
+    t.section("tracestate")
+    mut ts = TraceState.parse("congo=t61rcWkgMzE,rojo=00f067aa0ba902b7")
+    t.assert_true(ts.valid, "spec example")
+    t.assert_eq_str(ts.get("rojo"), "00f067aa0ba902b7", "get")
+    t.assert_eq_str(ts.to_header(), "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7", "round trip")
+    ts.set("rojo", "x")
+    t.assert_eq_str(ts.to_header(), "rojo=x,congo=t61rcWkgMzE", "update moves the key to the front")
+    t.assert_true(TraceState.parse("a=1,,b=2").valid, "empty members skipped")
+    t.assert_false(TraceState.parse("a=1,a=2").valid, "duplicate key rejects the header")
+    t.assert_false(TraceState.parse("A=1").valid, "upper-case key rejected")
+    t.assert_false(TraceState.parse("a=1=2").valid, "'=' in value rejected")
+    t.assert_true(TraceState.parse("tenant@vendor=v").valid, "multi-tenant key")
+    t.assert_false(TraceState.parse("noequals").valid, "member without '='")
+    mut ex = TraceContext.extract("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "a=1,b=2")
+    t.assert_eq_str(ex.trace_state, "a=1,b=2", "tracestate kept with a valid traceparent")
+    t.assert_eq_str(TraceContext.extract("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "A=1").trace_state, "", "invalid tracestate dropped")
+
+    t.section("baggage")
+    mut bg = Baggage.parse("userId=alice, serverNode = DF%2028 ;prop=1,isProduction=false,bad key=x")
+    t.assert_eq_str(bg.get("userId"), "alice", "plain member")
+    t.assert_eq_str(bg.get("serverNode"), "DF 28", "percent-decoded, OWS trimmed")
+    t.assert_eq_str(bg.metadata("serverNode"), "prop=1", "properties kept")
+    t.assert_false(bg.has("bad key"), "invalid key skipped")
+    t.assert_eq_int(bg.len(), 3, "three valid members")
+    t.assert_eq_str(Baggage.empty().set("k", "a b,c").to_header(), "k=a%20b%2Cc", "encode")
+
+    # ================= ids ===================================================
+    t.section("id generation")
+    mut tid = IdGenerator.trace_id()
+    mut sid = IdGenerator.span_id()
+    t.assert_true(is_hex(tid, 32), "trace id is 32 hex chars")
+    t.assert_true(is_hex(sid, 16), "span id is 16 hex chars")
+    t.assert_ne_str(IdGenerator.trace_id(), IdGenerator.trace_id(), "trace ids differ")
+    t.assert_ne_str(tid, "00000000000000000000000000000000", "not all-zero")
+
+    # ================= sampling =============================================
+    t.section("samplers")
+    mut root = SpanContext.invalid()
+    mut psamp = SpanContext.init("4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7", 1, "", true)
+    mut punsamp = SpanContext.init("4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7", 0, "", false)
+    t.assert_eq_int(Sampler.always_on().should_sample(root, tid), SAMPLE_RECORD_AND_SAMPLE, "always_on")
+    t.assert_eq_int(Sampler.always_off().should_sample(root, tid), SAMPLE_DROP, "always_off")
+    mut pb = Sampler.parent_based(Sampler.always_on())
+    t.assert_eq_int(pb.should_sample(root, tid), SAMPLE_RECORD_AND_SAMPLE, "parent_based: root uses root sampler")
+    t.assert_eq_int(pb.should_sample(psamp, tid), SAMPLE_RECORD_AND_SAMPLE, "parent_based: sampled parent")
+    t.assert_eq_int(pb.should_sample(punsamp, tid), SAMPLE_DROP, "parent_based: unsampled parent")
+    mut pboff = Sampler.parent_based(Sampler.always_off())
+    t.assert_eq_int(pboff.should_sample(root, tid), SAMPLE_DROP, "parent_based(always_off) root")
+    t.assert_eq_int(pboff.should_sample(psamp, tid), SAMPLE_RECORD_AND_SAMPLE, "parent_based(always_off) follows sampled parent")
+    mut r0 = Sampler.trace_id_ratio(0.0)
+    mut r1 = Sampler.trace_id_ratio(1.0)
+    t.assert_eq_int(r0.should_sample(root, tid), SAMPLE_DROP, "ratio 0 drops")
+    t.assert_eq_int(r1.should_sample(root, tid), SAMPLE_RECORD_AND_SAMPLE, "ratio 1 keeps")
+    mut half = Sampler.trace_id_ratio(0.5)
+    t.assert_eq_int(half.should_sample(root, "00000000000000000000000000000001"), SAMPLE_RECORD_AND_SAMPLE, "ratio .5 keeps a tiny trace id value")
+    t.assert_eq_int(half.should_sample(root, "0000000000000000ffffffffffffffff"), SAMPLE_DROP, "ratio .5 drops a huge trace id value")
+    mut kept = 0
+    mut n = 0
+    mut q = Sampler.trace_id_ratio(0.25)
+    while n < 400:
+        if q.should_sample(root, IdGenerator.trace_id()) == SAMPLE_RECORD_AND_SAMPLE: kept = kept + 1
+        n = n + 1
+    t.assert_in_range(kept, 50, 150, "ratio .25 over 400 random ids keeps roughly 100")
+    t.assert_eq_str(Sampler.from_name("parentbased_traceidratio", "0.25").description(), "ParentBased{root=TraceIdRatioBased{0.25}}", "env name -> description")
+    t.assert_eq_str(Sampler.from_name("always_off", "").description(), "AlwaysOffSampler", "always_off name")
+    t.assert_eq_str(Sampler.from_name("bogus", "").description(), "ParentBased{root=AlwaysOnSampler}", "unknown -> default")
+
+    # ================= attributes + OTLP JSON shapes =========================
+    t.section("attributes")
+    mut at = Attributes.new().str("s", "a\"b\n").int("i", 9007199254740993).float("f", 0.5).bool("b", true).str_list("l", ["x", "y"])
+    mut doc = Json.parse(at.to_json())
+    mut ar = doc.root()
+    t.assert_true(ar.is_array(), "attributes is a JSON array")
+    t.assert_eq_str(ar.array_get(0).obj_get("key").get_str(), "s", "key field")
+    t.assert_eq_str(ar.array_get(0).obj_get("value").obj_get("stringValue").get_str(), "a\"b\n", "stringValue escapes round trip")
+    t.assert_true(ar.array_get(1).obj_get("value").obj_get("intValue").is_str(), "intValue is a JSON string (int64)")
+    t.assert_eq_str(ar.array_get(1).obj_get("value").obj_get("intValue").get_str(), "9007199254740993", "int64 exact")
+    t.assert_true(ar.array_get(2).obj_get("value").obj_get("doubleValue").is_float(), "doubleValue is a number")
+    t.assert_true(ar.array_get(3).obj_get("value").obj_get("boolValue").is_bool(), "boolValue is a bool")
+    t.assert_eq_int(ar.array_get(4).obj_get("value").obj_get("arrayValue").obj_get("values").array_len(), 2, "arrayValue.values")
+    mut lim = Attributes.with_limits(2, 3)
+    lim.str("a", "abcdef").str("b", "x").str("c", "y")
+    t.assert_eq_int(lim.len(), 2, "count limit")
+    t.assert_eq_int(lim.dropped, 1, "dropped counted")
+    t.assert_eq_str(lim.get("a"), "abc", "value length limit")
+    t.assert_eq_str(Attributes.new().str("é", "ééé").get("é"), "ééé", "UTF-8 untouched")
+    mut lim2 = Attributes.with_limits(5, 3)
+    lim2.str("u", "éé")
+    t.assert_eq_str(lim2.get("u"), "é", "truncation never splits a UTF-8 sequence")
+    t.assert_eq_str(Attributes.new().str("a", "1").str("b", "2").canonical(), Attributes.new().str("b", "2").str("a", "1").canonical(), "canonical form ignores order")
+
+    t.section("resource + env config")
+    mut res = Resource.default_for("checkout")
+    t.assert_eq_str(res.service_name(), "checkout", "service.name")
+    t.assert_eq_str(res.get("telemetry.sdk.language"), "tauraro", "sdk attrs")
+    t.assert_eq_str(Resource.sdk_default().service_name(), "unknown_service", "default service name")
+    mut ra = Resource.create(Attributes.new().str("service.name", "a")).merge(Resource.create(Attributes.new().str("service.name", "b").str("env", "x")))
+    t.assert_eq_str(ra.service_name(), "b", "merge: other wins")
+    t.assert_eq_str(ra.get("env"), "x", "merge keeps new keys")
+    t.assert_contains(res.to_json(), "\"service.name\"", "resource json")
+
+    # ================= spans ================================================
+    t.section("spans, parent/child, events, links, status")
+    mut mem = Exporter.memory()
+    mut ptp = TracerProvider.init(Resource.default_for("svc"), Sampler.always_on())
+    ptp.add_simple_processor(mem)
+    mut tracer = ptp.get_tracer("lib", "1.2.3")
+    t.assert_eq_int(Context.depth(), 0, "no context attached initially")
+    mut parent_id = ""
+    mut parent_trace = ""
+    with tracer.start_as_current("parent", SPAN_KIND_SERVER) as sc:
+        parent_id = sc.span.span_id()
+        parent_trace = sc.span.trace_id()
+        t.assert_eq_str(Context.current_span().span_id, parent_id, "current span is the parent")
+        sc.span.set_str("http.request.method", "GET")
+        mut child = tracer.start_span("child")
+        t.assert_eq_str(child.parent.span_id, parent_id, "child's parent is the current span")
+        t.assert_eq_str(child.trace_id(), parent_trace, "child shares the trace id")
+        child.set_int("n", 3)
+        child.add_event("retry", Attributes.new().int("attempt", 2))
+        child.add_link(psamp, Attributes.new().str("why", "batch"))
+        child.record_exception("IoError", "disk full")
+        child.set_status(STATUS_ERROR, "boom")
+        child.set_status(0, "ignored")
+        t.assert_true(child.is_recording(), "recording before end")
+        child.end()
+        t.assert_false(child.is_recording(), "not recording after end")
+        child.set_int("late", 1)
+        t.assert_false(child.attrs.has("late"), "attributes ignored after end")
+        with tracer.start_as_current("inner", SPAN_KIND_INTERNAL) as sc2:
+            t.assert_eq_int(Context.depth(), 2, "nested scopes stack")
+        t.assert_eq_str(Context.current_span().span_id, parent_id, "inner scope restored the parent")
+    t.assert_eq_int(Context.depth(), 0, "scope detached")
+    t.assert_eq_int(ptp.spans_ended(), 3, "three spans ended")
+    mut spans = mem.take_payloads()
+    t.assert_eq_int(spans.len, 3, "simple processor exported one payload per span")
+    mut sd = Json.parse(spans.get(0))
+    mut sroot = sd.root()
+    mut rs = sroot.obj_get("resourceSpans").array_get(0)
+    t.assert_true(rs.obj_get("resource").obj_get("attributes").is_array(), "resourceSpans[0].resource.attributes")
+    mut ss = rs.obj_get("scopeSpans").array_get(0)
+    t.assert_eq_str(ss.obj_get("scope").obj_get("name").get_str(), "lib", "scope name")
+    t.assert_eq_str(ss.obj_get("scope").obj_get("version").get_str(), "1.2.3", "scope version")
+    mut sp = ss.obj_get("spans").array_get(0)
+    t.assert_eq_str(sp.obj_get("name").get_str(), "child", "first ended span is the child")
+    t.assert_true(is_hex(sp.obj_get("traceId").get_str(), 32), "traceId hex")
+    t.assert_true(is_hex(sp.obj_get("spanId").get_str(), 16), "spanId hex")
+    t.assert_eq_str(sp.obj_get("parentSpanId").get_str(), parent_id, "parentSpanId")
+    t.assert_true(sp.obj_get("startTimeUnixNano").is_str(), "start time is an int64 string")
+    t.assert_true(sp.obj_get("endTimeUnixNano").is_str(), "end time is an int64 string")
+    t.assert_ge_int(Str.parse_int(sp.obj_get("endTimeUnixNano").get_str()), Str.parse_int(sp.obj_get("startTimeUnixNano").get_str()), "end >= start")
+    t.assert_gt_int(Str.parse_int(sp.obj_get("startTimeUnixNano").get_str()), 1600000000000000000, "wall-clock ns since epoch")
+    t.assert_eq_int(sp.obj_get("kind").get_int(), 1, "kind enum is a number")
+    t.assert_eq_int(sp.obj_get("status").obj_get("code").get_int(), 2, "status code ERROR")
+    t.assert_eq_str(sp.obj_get("status").obj_get("message").get_str(), "boom", "status message")
+    t.assert_eq_int(sp.obj_get("events").array_len(), 2, "two events (retry + exception)")
+    t.assert_eq_str(sp.obj_get("events").array_get(0).obj_get("name").get_str(), "retry", "event name")
+    t.assert_true(sp.obj_get("events").array_get(0).obj_get("timeUnixNano").is_str(), "event time int64 string")
+    t.assert_eq_str(sp.obj_get("events").array_get(1).obj_get("name").get_str(), "exception", "record_exception event")
+    t.assert_eq_str(sp.obj_get("links").array_get(0).obj_get("spanId").get_str(), "00f067aa0ba902b7", "link span id")
+    t.assert_eq_int(sp.obj_get("flags").get_int() & 255, 1, "sampled flag in span flags")
+    mut parent_span_json = Json.parse(spans.get(2)).root().obj_get("resourceSpans").array_get(0).obj_get("scopeSpans").array_get(0).obj_get("spans").array_get(0)
+    t.assert_eq_str(parent_span_json.obj_get("name").get_str(), "parent", "parent ended last")
+    t.assert_false(parent_span_json.obj_get("parentSpanId").exists(), "root span has no parentSpanId")
+    t.assert_eq_int(parent_span_json.obj_get("kind").get_int(), 2, "SERVER = 2")
+    ptp.shutdown()
+    mem.close()
+
+    t.section("explicit parent + sampling off")
+    mut mem2 = Exporter.memory()
+    mut tp2 = TracerProvider.init(Resource.empty(), Sampler.parent_based(Sampler.always_on()))
+    tp2.add_simple_processor(mem2)
+    mut tr2 = tp2.get_tracer("x", "")
+    mut remote_ctx = Propagator.extract_values("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "v=1", "")
+    mut rspan = tr2.start_span_with("from-remote", SPAN_KIND_SERVER, remote_ctx, Attributes.new().str("a", "b"), 0)
+    t.assert_eq_str(rspan.trace_id(), "4bf92f3577b34da6a3ce929d0e0e4736", "continues the remote trace")
+    t.assert_eq_str(rspan.parent.span_id, "00f067aa0ba902b7", "remote parent id")
+    t.assert_eq_str(rspan.ctx.trace_state, "v=1", "tracestate inherited")
+    rspan.end()
+    mut ru = Propagator.extract_values("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00", "", "")
+    mut dropped = tr2.start_span_with("unsampled", SPAN_KIND_INTERNAL, ru, Attributes.new(), 0)
+    t.assert_false(dropped.is_recording(), "unsampled parent -> non-recording span")
+    dropped.set_int("x", 1)
+    dropped.end()
+    mut got2 = mem2.take_payloads()
+    t.assert_eq_int(got2.len, 1, "only the sampled span was exported")
+    t.assert_contains(got2.get(0), "\"parentSpanId\":\"00f067aa0ba902b7\"", "remote parent exported")
+    t.assert_contains(got2.get(0), "\"flags\":769", "flags carry sampled + has-is-remote + is-remote")
+    tp2.shutdown()
+    mem2.close()
+
+    t.section("limits")
+    mut tp3 = TracerProvider.init(Resource.empty(), Sampler.always_on())
+    mut lm = tp3.get_tracer("l", "")
+    mut ls = lm.start_span("s")
+    mut k = 0
+    while k < 130:
+        ls.add_event("e", Attributes.new())
+        k = k + 1
+    t.assert_eq_int(ls.events.len, 128, "event count limit (128)")
+    t.assert_eq_int(ls.dropped_events, 2, "dropped events counted")
+    ls.set_status(STATUS_OK, "")
+    ls.set_status(STATUS_ERROR, "late")
+    t.assert_eq_int(ls.status_code, STATUS_OK, "OK status is final")
+    ls.end()
+    tp3.shutdown()
+
+    # ================= context propagation ==================================
+    t.section("inject / extract")
+    mut hl = HeaderList.init()
+    mut ctx_in = Context.of(tp, Baggage.empty().set("user", "bob"))
+    Propagator.inject_into(ctx_in, hl)
+    t.assert_eq_str(hl.get("traceparent"), "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "traceparent injected")
+    t.assert_eq_str(hl.get("baggage"), "user=bob", "baggage injected")
+    mut ctx_out = Propagator.extract_from(hl)
+    t.assert_eq_str(ctx_out.span.span_id, "00f067aa0ba902b7", "extracted span id")
+    t.assert_eq_str(ctx_out.baggage.get("user"), "bob", "extracted baggage")
+    mut hl2 = HeaderList.init()
+    Propagator.inject_into(Context.empty(), hl2)
+    t.assert_eq_int(hl2.len(), 0, "empty context injects nothing")
+    Propagator.inject(ctx_in, header_cb)
+    t.assert_true(true, "inject with a setter callback")
+
+    t.section("thread-local current context")
+    mut tk = Context.of(tp, Baggage.empty()).attach()
+    t.assert_eq_str(Context.current_span().span_id, "00f067aa0ba902b7", "attached")
+    mut tk2 = Context.of(psamp, Baggage.empty()).attach()
+    t.assert_eq_int(Context.depth(), 2, "depth 2")
+    t.assert_true(Context.detach(tk2), "detach innermost")
+    t.assert_false(Context.detach(tk2), "stale token rejected")
+    t.assert_true(Context.detach(tk), "detach outer")
+    t.assert_false(Context.current().has_span(), "empty after detach")
+
+    # ================= metrics ==============================================
+    t.section("metrics: cumulative and delta temporality")
+    mut cum = Exporter.memory()
+    mut del = Exporter.memory()
+    mut mp = MeterProvider.init(Resource.empty())
+    mp.add_sync_reader(cum, 1000, TEMPORALITY_CUMULATIVE)
+    mp.add_sync_reader(del, 1000, TEMPORALITY_DELTA)
+    mut meter = mp.get_meter("m", "1")
+    mut reqs = meter.create_counter("http.requests", "{request}", "Requests")
+    mut ud = meter.create_up_down_counter("queue.size", "1", "")
+    mut hist = meter.create_histogram("latency", "ms", "", [1.0, 10.0])
+    meter.create_observable_gauge("depth", "1", "", obs_depth)
+    reqs.add(2, Attributes.new().str("route", "/a"))
+    reqs.add(3, Attributes.new().str("route", "/a"))
+    reqs.add(1, Attributes.new().str("route", "/b"))
+    reqs.add(-5, Attributes.new().str("route", "/a"))
+    ud.add(4, Attributes.new())
+    ud.add(-1, Attributes.new())
+    hist.record(0.5, Attributes.new())
+    hist.record(5.0, Attributes.new())
+    hist.record(20.0, Attributes.new())
+    t.assert_true(mp.force_flush(1000), "first collection")
+    reqs.add(4, Attributes.new().str("route", "/a"))
+    t.assert_true(mp.force_flush(1000), "second collection")
+    mut cp = cum.take_payloads()
+    mut dp = del.take_payloads()
+    t.assert_eq_int(cp.len, 2, "cumulative: one payload per collection")
+    mut c1 = Json.parse(cp.get(0)).root().obj_get("resourceMetrics").array_get(0).obj_get("scopeMetrics").array_get(0)
+    t.assert_eq_str(c1.obj_get("scope").obj_get("name").get_str(), "m", "metrics scope")
+    mut m0 = c1.obj_get("metrics").array_get(0)
+    t.assert_eq_str(m0.obj_get("name").get_str(), "http.requests", "counter name")
+    t.assert_true(m0.obj_get("sum").obj_get("isMonotonic").get_bool(), "counter is monotonic")
+    t.assert_eq_int(m0.obj_get("sum").obj_get("aggregationTemporality").get_int(), 2, "cumulative = 2")
+    t.assert_eq_int(m0.obj_get("sum").obj_get("dataPoints").array_len(), 2, "two series")
+    t.assert_eq_str(m0.obj_get("sum").obj_get("dataPoints").array_get(0).obj_get("asInt").get_str(), "5", "series /a = 2+3, negative add dropped")
+    mut c2 = Json.parse(cp.get(1)).root().obj_get("resourceMetrics").array_get(0).obj_get("scopeMetrics").array_get(0)
+    t.assert_eq_str(c2.obj_get("metrics").array_get(0).obj_get("sum").obj_get("dataPoints").array_get(0).obj_get("asInt").get_str(), "9", "cumulative keeps growing")
+    mut m1 = c1.obj_get("metrics").array_get(1)
+    t.assert_false(m1.obj_get("sum").obj_get("isMonotonic").get_bool(), "up-down counter not monotonic")
+    t.assert_eq_str(m1.obj_get("sum").obj_get("dataPoints").array_get(0).obj_get("asInt").get_str(), "3", "up-down sum")
+    mut m2 = c1.obj_get("metrics").array_get(2)
+    mut hp = m2.obj_get("histogram").obj_get("dataPoints").array_get(0)
+    t.assert_eq_str(hp.obj_get("count").get_str(), "3", "histogram count is an int64 string")
+    t.assert_eq_int(hp.obj_get("bucketCounts").array_len(), 3, "bounds+1 buckets")
+    t.assert_eq_str(hp.obj_get("bucketCounts").array_get(0).get_str(), "1", "<=1")
+    t.assert_eq_str(hp.obj_get("bucketCounts").array_get(1).get_str(), "1", "<=10")
+    t.assert_eq_str(hp.obj_get("bucketCounts").array_get(2).get_str(), "1", "overflow")
+    t.assert_eq_int(hp.obj_get("explicitBounds").array_len(), 2, "explicitBounds")
+    t.assert_eq_int(m2.obj_get("histogram").obj_get("aggregationTemporality").get_int(), 2, "histogram cumulative")
+    mut m3 = c1.obj_get("metrics").array_get(3)
+    t.assert_eq_str(m3.obj_get("name").get_str(), "depth", "observable gauge present")
+    t.assert_true(m3.obj_get("gauge").obj_get("dataPoints").array_get(0).obj_get("asDouble").exists(), "gauge data point")
+    # delta reader
+    mut d2 = Json.parse(dp.get(1)).root().obj_get("resourceMetrics").array_get(0).obj_get("scopeMetrics").array_get(0)
+    mut dm0 = d2.obj_get("metrics").array_get(0)
+    t.assert_eq_int(dm0.obj_get("sum").obj_get("aggregationTemporality").get_int(), 1, "delta = 1")
+    t.assert_eq_int(dm0.obj_get("sum").obj_get("dataPoints").array_len(), 1, "only the series with new data")
+    t.assert_eq_str(dm0.obj_get("sum").obj_get("dataPoints").array_get(0).obj_get("asInt").get_str(), "4", "delta only counts the second interval")
+    t.assert_eq_str(d2.obj_get("metrics").array_get(1).obj_get("sum").obj_get("dataPoints").array_get(0).obj_get("asInt").get_str(), "3", "up-down stays cumulative under delta")
+    t.assert_gt_int(g_seen, 1, "observable callback ran at each collection")
+    mp.shutdown()
+    cum.close()
+    del.close()
+
+    t.section("metrics: periodic reader")
+    mut pmem = Exporter.memory()
+    mut mp2 = MeterProvider.init(Resource.empty())
+    mp2.add_sync_reader(pmem, 30, TEMPORALITY_CUMULATIVE)
+    mut pc = mp2.get_meter("p", "").create_counter("c", "", "")
+    pc.add(1, Attributes.new())
+    t.assert_eq_int(mp2.tick(), 0, "tick before the interval does nothing")
+    Clock.sleep_ms(50)
+    t.assert_eq_int(mp2.tick(), 1, "tick after the interval collects")
+    t.assert_eq_int(pmem.take_payloads().len, 1, "one export from the tick")
+    mp2.shutdown()
+    pmem.close()
+
+    # ================= logs =================================================
+    t.section("logs: OTLP records + trace correlation")
+    mut lmem = Exporter.memory()
+    mut lp = LoggerProvider.init(Resource.empty())
+    lp.add_simple_processor(lmem)
+    mut ol = lp.get_logger("app", "")
+    mut ltp = TracerProvider.init(Resource.empty(), Sampler.always_on())
+    mut ltr = ltp.get_tracer("t", "")
+    mut span_id_seen = ""
+    with ltr.start_as_current("op", SPAN_KIND_INTERNAL) as lsc:
+        span_id_seen = lsc.span.span_id()
+        ol.warn("disk almost full", Attributes.new().int("pct", 93))
+    ol.info("outside any span", Attributes.new())
+    mut lrecs = lmem.take_payloads()
+    t.assert_eq_int(lrecs.len, 2, "two log exports")
+    mut lr = Json.parse(lrecs.get(0)).root().obj_get("resourceLogs").array_get(0).obj_get("scopeLogs").array_get(0).obj_get("logRecords").array_get(0)
+    t.assert_eq_int(lr.obj_get("severityNumber").get_int(), SEVERITY_WARN, "severityNumber")
+    t.assert_eq_str(lr.obj_get("severityText").get_str(), "WARN", "severityText")
+    t.assert_eq_str(lr.obj_get("body").obj_get("stringValue").get_str(), "disk almost full", "body")
+    t.assert_eq_str(lr.obj_get("spanId").get_str(), span_id_seen, "log carries the current span id")
+    t.assert_true(is_hex(lr.obj_get("traceId").get_str(), 32), "log carries the trace id")
+    t.assert_true(lr.obj_get("timeUnixNano").is_str(), "timeUnixNano is a string")
+    mut lr2 = Json.parse(lrecs.get(1)).root().obj_get("resourceLogs").array_get(0).obj_get("scopeLogs").array_get(0).obj_get("logRecords").array_get(0)
+    t.assert_false(lr2.obj_get("traceId").exists(), "no span -> no trace correlation")
+    lmem.close()
+
+    # ================= batch pipeline =======================================
+    t.section("batch processor")
+    mut bmem = Exporter.memory()
+    mut btp = TracerProvider.init(Resource.empty(), Sampler.always_on())
+    btp.add_batch_processor(bmem, BatchConfig.init(8, 3, 40, 1000))
+    mut btr = btp.get_tracer("b", "")
+    mut bi = 0
+    while bi < 7:
+        mut bs = btr.start_span("s")
+        bs.end()
+        bi = bi + 1
+    t.assert_true(btp.force_flush(3000), "force_flush completes")
+    mut bp = bmem.take_payloads()
+    mut total = 0
+    mut bj = 0
+    while bj < bp.len:
+        total = total + Json.parse(bp.get(bj)).root().obj_get("resourceSpans").array_get(0).obj_get("scopeSpans").array_get(0).obj_get("spans").array_len()
+        bj = bj + 1
+    t.assert_eq_int(total, 7, "all 7 spans exported")
+    t.assert_ge_int(bp.len, 3, "batches of at most 3 -> at least 3 exports")
+    mut bd = 0
+    while bd < 40:
+        mut bs2 = btr.start_span("flood")
+        bs2.end()
+        bd = bd + 1
+    t.assert_true(btp.shutdown(), "shutdown flushes")
+    mut tail = bmem.take_payloads()
+    t.assert_gt_int(tail.len, 0, "shutdown delivered what was queued")
+    bmem.close()
+
+    t.section("scheduled flush (no explicit flush)")
+    mut smem = Exporter.memory()
+    mut stp = TracerProvider.init(Resource.empty(), Sampler.always_on())
+    stp.add_batch_processor(smem, BatchConfig.init(100, 50, 30, 1000))
+    mut ss1 = stp.get_tracer("s", "").start_span("tick")
+    ss1.end()
+    Clock.sleep_ms(300)
+    t.assert_eq_int(smem.take_payloads().len, 1, "schedule delay exported the span by itself")
+    stp.shutdown()
+    smem.close()
+
+    # ================= real OTLP/HTTP export ================================
+    t.section("OTLP/HTTP export to a fake collector")
+    shared col = Collector()
+    col.base_port = 19950
+    col.port = Atomic.new(0)
+    col.hits = Atomic.new(0)
+    col.fail_next = Atomic.new(0)
+    col.store = trc_otel_q_new(1000)
+    mut th: Thread = Thread.spawn(collector_run, col)
+    mut waited = 0
+    while col.port.load() == 0 and waited < 3000:
+        Clock.sleep_ms(10)
+        waited = waited + 10
+    mut port = col.port.load()
+    t.assert_gt_int(port, 0, "collector bound a loopback port")
+    if port > 0:
+        mut base = "http://127.0.0.1:" + port.to_string()
+        mut ox = Exporter.otlp_http(base + "/v1/traces").with_header("X-Api-Key", "k123").with_retries(3, 20)
+        mut otp = TracerProvider.init(Resource.default_for("e2e"), Sampler.always_on())
+        otp.add_simple_processor(ox)
+        mut otr = otp.get_tracer("e2e", "0.1")
+        mut es = otr.start_span("exported")
+        es.set_str("k", "v")
+        es.end()
+        t.assert_eq_int(col.hits.load(), 1, "collector received one POST")
+        mut recs = _collector_take(col.store)
+        t.assert_eq_int(recs.len, 1, "one stored request")
+        t.assert_eq_str(rec_field(recs.get(0), 0), "POST", "method")
+        t.assert_eq_str(rec_field(recs.get(0), 1), "/v1/traces", "path")
+        t.assert_eq_str(rec_field(recs.get(0), 2), "application/json", "content type")
+        t.assert_eq_str(rec_field(recs.get(0), 4), "k123", "custom header sent")
+        mut jb = Json.parse(rec_body(recs.get(0)))
+        t.assert_eq_str(jb.root().obj_get("resourceSpans").array_get(0).obj_get("scopeSpans").array_get(0).obj_get("spans").array_get(0).obj_get("name").get_str(), "exported", "span name arrived intact")
+        # retries on 503
+        col.fail_next.store(2)
+        mut es2 = otr.start_span("retried")
+        es2.end()
+        t.assert_eq_int(col.hits.load(), 2, "export succeeded after two 503s (retry with backoff)")
+        t.assert_eq_int(ox.failed.load(), 0, "no failed export counted")
+        _collector_take(col.store)
+
+        # client instrumentation
+        mut ctp = TracerProvider.init(Resource.empty(), Sampler.always_on())
+        mut cmem = Exporter.memory()
+        ctp.add_simple_processor(cmem)
+        mut ctr = ctp.get_tracer("client", "")
+        mut tc = TracedHttpClient.init(HttpSession.init(), ctr)
+        mut rr = tc.post_json(base + "/v1/logs", "{}")
+        t.assert_eq_int(rr.status, 200, "client call succeeded")
+        mut crecs = _collector_take(col.store)
+        t.assert_eq_int(crecs.len, 1, "collector saw the call")
+        mut tpv = rec_field(crecs.get(0), 3)
+        t.assert_true(TraceContext.parse_traceparent(tpv).is_valid(), "traceparent header injected")
+        t.assert_eq_str(TraceContext.parse_traceparent(tpv).span_id, tc.last_span.span_id(), "header carries the client span id")
+        t.assert_eq_int(tc.last_span.kind, SPAN_KIND_CLIENT, "client span kind")
+        t.assert_eq_str(tc.last_span.attrs.get("http.response.status_code"), "200", "status attribute")
+        t.assert_eq_str(tc.last_span.attrs.get("http.request.method"), "POST", "method attribute")
+        mut cspans = cmem.take_payloads()
+        t.assert_eq_int(cspans.len, 1, "client span exported")
+        # failure -> error status
+        mut bad = tc.get("http://127.0.0.1:1/x")
+        t.assert_true(bad.error != "", "connection refused")
+        t.assert_eq_int(tc.last_span.status_code, STATUS_ERROR, "transport failure marks the span ERROR")
+        ctp.shutdown()
+        cmem.close()
+
+        # server instrumentation: build the request the server would parse
+        mut stp2 = TracerProvider.init(Resource.empty(), Sampler.always_on())
+        mut smem2 = Exporter.memory()
+        stp2.add_simple_processor(smem2)
+        mut sins = ServerInstrumentation.init(stp2.get_tracer("srv", ""))
+        mut hreq = HttpParser.parse("GET /users/42?x=1 HTTP/1.1\r\nHost: h\r\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\r\nbaggage: user=zed\r\n\r\n")
+        mut ssc = sins.begin_route(hreq, "/users/:id")
+        t.assert_eq_str(Context.current_span().trace_id, "4bf92f3577b34da6a3ce929d0e0e4736", "handler runs inside the continued trace")
+        t.assert_eq_str(Context.current_baggage().get("user"), "zed", "baggage visible to the handler")
+        sins.finish(ssc, 200)
+        t.assert_eq_int(Context.depth(), 0, "server scope detached")
+        mut sp3 = smem2.take_payloads()
+        t.assert_eq_int(sp3.len, 1, "server span exported")
+        mut srvspan = Json.parse(sp3.get(0)).root().obj_get("resourceSpans").array_get(0).obj_get("scopeSpans").array_get(0).obj_get("spans").array_get(0)
+        t.assert_eq_str(srvspan.obj_get("name").get_str(), "GET /users/:id", "server span name")
+        t.assert_eq_str(srvspan.obj_get("parentSpanId").get_str(), "00f067aa0ba902b7", "parent from the incoming traceparent")
+        t.assert_eq_int(srvspan.obj_get("kind").get_int(), 2, "SERVER kind")
+        stp2.shutdown()
+        smem2.close()
+
+        # batch -> real HTTP
+        mut hx = Exporter.otlp_http(base + "/v1/traces")
+        mut htp = TracerProvider.init(Resource.empty(), Sampler.always_on())
+        htp.add_batch_processor(hx, BatchConfig.init(100, 10, 5000, 5000))
+        mut htr = htp.get_tracer("h", "")
+        mut hi = 0
+        while hi < 4:
+            mut hs = htr.start_span("b")
+            hs.end()
+            hi = hi + 1
+        t.assert_true(htp.shutdown(), "batch shutdown over HTTP")
+        mut hrecs = _collector_take(col.store)
+        t.assert_ge_int(hrecs.len, 1, "batched export reached the collector")
+        mut hn = 0
+        mut hk = 0
+        while hk < hrecs.len:
+            hn = hn + Json.parse(rec_body(hrecs.get(hk))).root().obj_get("resourceSpans").array_get(0).obj_get("scopeSpans").array_get(0).obj_get("spans").array_len()
+            hk = hk + 1
+        t.assert_eq_int(hn, 4, "all 4 batched spans delivered")
+
+        # std.log bridge
+        mut lx = Exporter.otlp_http(base + "/v1/logs")
+        mut lp2 = LoggerProvider.init(Resource.empty())
+        lp2.add_batch_processor(lx, BatchConfig.init(100, 10, 5000, 5000))
+        mut inst: Result[bool, str] = LogBridge.install(lp2)
+        t.assert_true(inst.is_ok, "bridge installed")
+        mut slog = Logger.init("billing")
+        slog.set_stdout(false)
+        LogBridge.attach(slog)
+        slog.info_f("charged", Fields.new().int("cents", 250).str("cur", "EUR"))
+        slog.debug("below the level filter")
+        t.assert_true(lp2.shutdown(), "log provider shutdown flushes the bridge")
+        t.assert_false(LogBridge.is_installed(), "shutdown uninstalls the bridge")
+        mut lrecs2 = _collector_take(col.store)
+        t.assert_eq_int(lrecs2.len, 1, "one log export")
+        mut blr = Json.parse(rec_body(lrecs2.get(0))).root().obj_get("resourceLogs").array_get(0).obj_get("scopeLogs").array_get(0)
+        t.assert_eq_str(blr.obj_get("scope").obj_get("name").get_str(), "billing", "logger target is the scope")
+        t.assert_eq_str(blr.obj_get("logRecords").array_get(0).obj_get("body").obj_get("stringValue").get_str(), "charged", "bridged body")
+        t.assert_eq_int(blr.obj_get("logRecords").array_get(0).obj_get("severityNumber").get_int(), SEVERITY_INFO, "bridged severity")
+        t.assert_eq_int(blr.obj_get("logRecords").array_get(0).obj_get("attributes").array_len(), 2, "fields became attributes")
+
+        # unreachable endpoint -> failure counted, no crash
+        mut dead = Exporter.otlp_http("http://127.0.0.1:1/v1/traces").with_retries(0, 1).with_timeout(500)
+        t.assert_false(dead.export(SIGNAL_TRACES, "{}"), "export to a closed port fails")
+        t.assert_eq_int(dead.failed.load(), 1, "failure counted")
+        t.assert_true(dead.last_error != "", "last_error set")
+
+        # stop the collector
+        mut stop_s = HttpSession.init()
+        stop_s.set_timeout(2000)
+        stop_s.get(base + "/stop")
+    th.join()
+    trc_otel_q_free(col.store)
+
+    t.summary()

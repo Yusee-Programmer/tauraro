@@ -1,0 +1,78 @@
+# std.otel -- OpenTelemetry for Tauraro: traces, metrics, logs, W3C context
+# propagation and OTLP/HTTP (JSON) export. See docs/std/otel.md.
+#
+#   from std.otel import Otel, Attributes, SPAN_KIND_INTERNAL
+#
+#   mut o = Otel.init_from_env("my-service")?   # OTEL_* variables honoured
+#   mut tracer = o.tracer("my.lib", "1.0")
+#   with tracer.start_as_current("work", SPAN_KIND_INTERNAL) as s:
+#       s.span.set_int("items", 3)
+#   o.shutdown()
+
+from std.otel.native import now_unix_nano
+from std.otel.attr import Attributes, ATTR_STR, ATTR_INT, ATTR_DOUBLE, ATTR_BOOL, ATTR_ARRAY
+from std.otel.context import SpanContext, TraceState, TraceContext, Baggage, Context, ContextScope, IdGenerator, TRACE_FLAG_SAMPLED, INVALID_TRACE_ID, INVALID_SPAN_ID
+from std.otel.resource import Resource, otel_env, otel_env_int, parse_resource_attributes
+from std.otel.sampler import Sampler, SAMPLE_DROP, SAMPLE_RECORD_ONLY, SAMPLE_RECORD_AND_SAMPLE
+from std.otel.exporter import Exporter, Pipeline, BatchConfig, SIGNAL_TRACES, SIGNAL_METRICS, SIGNAL_LOGS, build_payload
+from std.otel.trace import TracerProvider, Tracer, Span, SpanScope, SpanEvent, SpanLink, SpanLimits, SPAN_KIND_UNSPECIFIED, SPAN_KIND_INTERNAL, SPAN_KIND_SERVER, SPAN_KIND_CLIENT, SPAN_KIND_PRODUCER, SPAN_KIND_CONSUMER, STATUS_UNSET, STATUS_OK, STATUS_ERROR
+from std.otel.metrics import MeterProvider, Meter, Counter, UpDownCounter, Histogram, Gauge, Observer, Instrument, TEMPORALITY_CUMULATIVE, TEMPORALITY_DELTA, TEMPORALITY_LOWMEMORY, temporality_from_env
+from std.otel.logs import LoggerProvider, OtelLogger, LogBridge, SEVERITY_TRACE, SEVERITY_DEBUG, SEVERITY_INFO, SEVERITY_WARN, SEVERITY_ERROR, SEVERITY_FATAL
+from std.otel.propagate import Propagator
+from std.otel.instrument import TracedHttpClient, ServerInstrumentation
+
+# One-stop setup: a resource, tracer / meter / logger providers and OTLP (or
+# console) exporters configured from the environment.
+pub class Otel:
+    pub resource: Resource
+    pub traces:   TracerProvider
+    pub metrics:  MeterProvider
+    pub logs:     LoggerProvider
+
+extend Otel:
+    # OTEL_SDK_DISABLED=true -> no exporters. OTEL_TRACES_EXPORTER /
+    # OTEL_METRICS_EXPORTER / OTEL_LOGS_EXPORTER: "otlp" (default), "console"
+    # or "none". Batch settings from OTEL_BSP_* / OTEL_BLRP_*; sampler from
+    # OTEL_TRACES_SAMPLER(_ARG); resource from OTEL_SERVICE_NAME and
+    # OTEL_RESOURCE_ATTRIBUTES; endpoint/headers from OTEL_EXPORTER_OTLP_*.
+    pub def init_from_env(service_name: str) throws str -> Otel:
+        mut o = Otel()
+        o.resource = Resource.default_for(service_name)
+        o.traces = TracerProvider.init(o.resource, Sampler.from_env())
+        o.metrics = MeterProvider.init(o.resource)
+        o.logs = LoggerProvider.init(o.resource)
+        if otel_env("OTEL_SDK_DISABLED") == "true": return o
+        mut te = Otel._pick("OTEL_TRACES_EXPORTER", SIGNAL_TRACES)
+        if te.kind != 0: o.traces.add_batch_processor(te, BatchConfig.from_env("OTEL_BSP"))
+        mut me = Otel._pick("OTEL_METRICS_EXPORTER", SIGNAL_METRICS)
+        if me.kind != 0: o.metrics.add_periodic_reader(me, 0, temporality_from_env())
+        mut le = Otel._pick("OTEL_LOGS_EXPORTER", SIGNAL_LOGS)
+        if le.kind != 0: o.logs.add_batch_processor(le, BatchConfig.from_env("OTEL_BLRP"))
+        return o
+
+    def _pick(var: str, signal: int) -> Exporter:
+        mut v = otel_env(var)
+        if v == "none": return Exporter.noop()
+        if v == "console": return Exporter.console()
+        return Exporter.otlp_from_env(signal)
+
+    pub def tracer(self, name: str, version: str) -> Tracer:
+        return self.traces.get_tracer(name, version)
+
+    pub def meter(self, name: str, version: str) -> Meter:
+        return self.metrics.get_meter(name, version)
+
+    pub def logger(self, name: str, version: str) -> OtelLogger:
+        return self.logs.get_logger(name, version)
+
+    pub def force_flush(self, timeout_ms: int) -> bool:
+        mut a = self.traces.force_flush(timeout_ms)
+        mut b = self.metrics.force_flush(timeout_ms)
+        mut c = self.logs.force_flush(timeout_ms)
+        return a and b and c
+
+    pub def shutdown(self) -> bool:
+        mut a = self.traces.shutdown()
+        mut b = self.metrics.shutdown()
+        mut c = self.logs.shutdown()
+        return a and b and c

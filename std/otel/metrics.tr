@@ -1,0 +1,673 @@
+# std.otel.metrics -- MeterProvider / Meter and the synchronous and
+# observable instruments, aggregated in-process and exported as OTLP metrics.
+#
+#   mut mp = MeterProvider.init(Resource.default_for("api"))
+#   mut rd = mp.add_periodic_reader(Exporter.otlp_from_env(SIGNAL_METRICS), 60000, TEMPORALITY_CUMULATIVE)
+#   mut m  = mp.get_meter("api.http", "1.0")
+#   mut reqs = m.create_counter("http.server.requests", "{request}", "Requests served")
+#   reqs.add(1, Attributes.new().str("http.route", "/cart"))
+#   mut lat = m.create_histogram("http.server.duration", "ms", "Latency", [5.0, 10.0, 50.0])
+#   lat.record(12.5, Attributes.new())
+#   m.create_observable_gauge("queue.depth", "1", "Queue depth", read_queue)   # def(Observer)
+#   ... call mp.tick() regularly (e.g. once per loop iteration / request) ...
+#   mp.shutdown()                                    # final collection + flush
+#
+# Aggregations: Counter / UpDownCounter -> Sum (monotonic / not), Histogram
+# -> explicit-bucket Histogram (count, sum, min, max, bucket counts),
+# Gauge / ObservableGauge -> Gauge (last value), ObservableCounter /
+# ObservableUpDownCounter -> Sum from the callback's cumulative observations.
+#
+# Temporality (per reader): TEMPORALITY_CUMULATIVE (everything cumulative),
+# TEMPORALITY_DELTA (Counter, ObservableCounter, Histogram delta; up-down
+# counters cumulative), TEMPORALITY_LOWMEMORY (Counter and Histogram delta,
+# the rest cumulative) -- the three OTLP exporter temporality preferences.
+#
+# Periodic reading: a reader collects when `tick()` finds its interval has
+# elapsed, on force_flush() and on shutdown(). Collection runs the
+# observable callbacks on the calling thread (instruments are single-thread
+# objects); the export itself goes through the reader's pipeline, which by
+# default is a batch pipeline exporting on a background thread.
+
+from std.core.vec import Vec
+from std.core.map import Map
+from std.core.string import StringBuilder
+from std.otel.native import now_unix_nano, mono_ms, json_str, json_i64, json_double
+from std.otel.attr import Attributes
+from std.otel.resource import Resource, otel_env, otel_env_int
+from std.otel.exporter import Exporter, Pipeline, BatchConfig, SIGNAL_METRICS
+from std.otel.native import trim_ows
+from std.string.str import Str
+
+pub const INST_COUNTER      = 0
+pub const INST_UPDOWN       = 1
+pub const INST_HISTOGRAM    = 2
+pub const INST_GAUGE        = 3
+pub const INST_OBS_COUNTER  = 4
+pub const INST_OBS_UPDOWN   = 5
+pub const INST_OBS_GAUGE    = 6
+
+pub const TEMPORALITY_CUMULATIVE = 0
+pub const TEMPORALITY_DELTA      = 1
+pub const TEMPORALITY_LOWMEMORY  = 2
+
+# OTLP AggregationTemporality enum values.
+pub const AGG_DELTA      = 1
+pub const AGG_CUMULATIVE = 2
+
+# Effective OTLP temporality of an instrument kind under a preference.
+pub def aggregation_temporality(pref: int, kind: int) -> int:
+    if pref == TEMPORALITY_DELTA:
+        if kind == INST_COUNTER or kind == INST_OBS_COUNTER or kind == INST_HISTOGRAM: return AGG_DELTA
+        return AGG_CUMULATIVE
+    if pref == TEMPORALITY_LOWMEMORY:
+        if kind == INST_COUNTER or kind == INST_HISTOGRAM: return AGG_DELTA
+        return AGG_CUMULATIVE
+    return AGG_CUMULATIVE
+
+# OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: cumulative (default),
+# delta, lowmemory.
+pub def temporality_from_env() -> int:
+    mut v = Str.to_lower(trim_ows(otel_env("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE")))
+    if v == "delta": return TEMPORALITY_DELTA
+    if v == "lowmemory": return TEMPORALITY_LOWMEMORY
+    return TEMPORALITY_CUMULATIVE
+
+# Spec default histogram boundaries.
+pub def default_bounds() -> Vec[float]:
+    mut b = Vec[float].init(15)
+    b.push(0.0)
+    b.push(5.0)
+    b.push(10.0)
+    b.push(25.0)
+    b.push(50.0)
+    b.push(75.0)
+    b.push(100.0)
+    b.push(250.0)
+    b.push(500.0)
+    b.push(750.0)
+    b.push(1000.0)
+    b.push(2500.0)
+    b.push(5000.0)
+    b.push(7500.0)
+    b.push(10000.0)
+    return b
+
+# Instrument name syntax: ^[A-Za-z][A-Za-z0-9_.\-/]{0,254}$
+pub def instrument_name_valid(n: str) -> bool:
+    mut len_n = n.len()
+    if len_n == 0 or len_n > 255: return false
+    mut i = 0
+    while i < len_n:
+        mut c = Str.char_at(n, i)
+        mut alpha = (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+        if i == 0:
+            if not alpha: return false
+        elif not (alpha or (c >= 48 and c <= 57) or c == 95 or c == 46 or c == 45 or c == 47):
+            return false
+        i = i + 1
+    return true
+
+pub class DataPoint:
+    pub attrs:    Attributes
+    pub isum:     int
+    pub fsum:     float
+    pub count:    int
+    pub buckets:  Vec[int]
+    pub minv:     float
+    pub maxv:     float
+    pub start_ns: int
+    pub time_ns:  int
+    pub prev_i:   int        # observable sums: last cumulative value seen (delta)
+    pub prev_f:   float
+    pub has_prev: bool
+
+def _new_point(attrs: Attributes, nb: int, start_ns: int) -> DataPoint:
+    mut p = DataPoint()
+    p.attrs = attrs.clone()
+    p.isum = 0
+    p.fsum = 0.0
+    p.count = 0
+    p.buckets = Vec[int].init(nb)
+    mut i = 0
+    while i < nb:
+        p.buckets.push(0)
+        i = i + 1
+    p.minv = 0.0
+    p.maxv = 0.0
+    p.start_ns = start_ns
+    p.time_ns = start_ns
+    p.prev_i = 0
+    p.prev_f = 0.0
+    p.has_prev = false
+    return p
+
+# Per-reader aggregation state of one instrument.
+pub class PointStore:
+    pub points: Vec[DataPoint]
+    pub index:  Map[str, int]
+    pub last_collect_ns: int
+
+def _new_store(start_ns: int) -> PointStore:
+    mut s = PointStore()
+    s.points = Vec[DataPoint].init(4)
+    s.index = Map[str, int].init(8)
+    s.last_collect_ns = start_ns
+    return s
+
+# Collected by an observable instrument's callback.
+pub class Observer:
+    pub attrs:  Vec[Attributes]
+    pub ivals:  Vec[int]
+    pub fvals:  Vec[float]
+    pub is_int: bool
+
+extend Observer:
+    pub def init(is_int: bool) -> Observer:
+        mut o = Observer()
+        o.attrs = Vec[Attributes].init(4)
+        o.ivals = Vec[int].init(4)
+        o.fvals = Vec[float].init(4)
+        o.is_int = is_int
+        return o
+
+    pub def observe(self, v: int, attrs: Attributes):
+        self.attrs.push(attrs)
+        self.ivals.push(v)
+        self.fvals.push(v as float)
+
+    pub def observe_f(self, v: float, attrs: Attributes):
+        self.attrs.push(attrs)
+        self.ivals.push(v as int)
+        self.fvals.push(v)
+
+    pub def len(self) -> int:
+        return self.attrs.len
+
+def _noop_observe(o: Observer):
+    pass
+
+pub class MeterShared:
+    pub prefs:    Vec[int]        # temporality preference per reader
+    pub start_ns: int
+    pub shutdown: bool
+
+pub class Instrument:
+    pub name:   str
+    pub unit:   str
+    pub desc:   str
+    pub kind:   int
+    pub is_int: bool
+    pub bounds: Vec[float]
+    pub stores: Vec[PointStore]
+    pub cb:     def(Observer)
+    pub _shared: MeterShared
+    pub dropped_negative: int
+
+extend Instrument:
+    def _store(self, r: int) -> PointStore:
+        while self.stores.len <= r:
+            self.stores.push(_new_store(now_unix_nano()))
+        return self.stores.get(r)
+
+    def _point(self, pstore: PointStore, attrs: Attributes, now: int) -> DataPoint:
+        mut key = attrs.canonical()
+        if pstore.index.contains(key):
+            return pstore.points.get(pstore.index.get(key))
+        mut start = now
+        if pstore.last_collect_ns > 0 and pstore.last_collect_ns < now: start = pstore.last_collect_ns
+        mut p = _new_point(attrs, self.bounds.len + 1, start)
+        pstore.index.insert(key, pstore.points.len)
+        pstore.points.push(p)
+        return p
+
+    # Record one measurement in every reader's store.
+    pub def _record(self, iv: int, fv: float, attrs: Attributes):
+        if self._shared.shutdown: return
+        mut now = now_unix_nano()
+        mut n = self._shared.prefs.len
+        mut r = 0
+        while r < n:
+            mut pstore = self._store(r)
+            mut p = self._point(pstore, attrs, now)
+            p.time_ns = now
+            if self.kind == INST_GAUGE:
+                p.isum = iv
+                p.fsum = fv
+                p.count = 1
+            elif self.kind == INST_HISTOGRAM:
+                if p.count == 0 or fv < p.minv: p.minv = fv
+                if p.count == 0 or fv > p.maxv: p.maxv = fv
+                p.count = p.count + 1
+                p.fsum = p.fsum + fv
+                mut b = 0
+                while b < self.bounds.len and fv > self.bounds.get(b): b = b + 1
+                p.buckets.set(b, p.buckets.get(b) + 1)
+            else:
+                p.isum = p.isum + iv
+                p.fsum = p.fsum + fv
+                p.count = p.count + 1
+            r = r + 1
+
+    # Apply a callback's observations to reader r's store (observables).
+    def _observe(self, r: int, now: int):
+        mut ob = Observer.init(self.is_int)
+        self.cb(ob)
+        mut pstore = self._store(r)
+        mut agg = aggregation_temporality(self._shared.prefs.get(r), self.kind)
+        # observations replace the previous values; series not observed again
+        # are not reported.
+        mut seen = Map[str, int].init(8)
+        mut i = 0
+        while i < ob.attrs.len:
+            mut a = ob.attrs.get(i)
+            mut p = self._point(pstore, a, now)
+            seen.insert(a.canonical(), 1)
+            mut iv = ob.ivals.get(i)
+            mut fv = ob.fvals.get(i)
+            if self.kind == INST_OBS_GAUGE or agg == AGG_CUMULATIVE:
+                p.isum = iv
+                p.fsum = fv
+            else:
+                if p.has_prev:
+                    p.isum = iv - p.prev_i
+                    p.fsum = fv - p.prev_f
+                else:
+                    p.isum = iv
+                    p.fsum = fv
+            p.prev_i = iv
+            p.prev_f = fv
+            p.has_prev = true
+            p.count = 1
+            p.time_ns = now
+            i = i + 1
+        # mark unobserved points as empty
+        mut j = 0
+        while j < pstore.points.len:
+            mut q = pstore.points.get(j)
+            if not seen.contains(q.attrs.canonical()): q.count = 0
+            j = j + 1
+        seen.free()
+
+    def _num_point(self, sb: StringBuilder, p: DataPoint, start_ns: int, now: int):
+        sb.append("{\"attributes\":")
+        p.attrs.write_json(sb)
+        sb.append(",\"startTimeUnixNano\":")
+        json_i64(sb, start_ns)
+        sb.append(",\"timeUnixNano\":")
+        json_i64(sb, now)
+        if self.is_int:
+            sb.append(",\"asInt\":")
+            json_i64(sb, p.isum)
+        else:
+            sb.append(",\"asDouble\":")
+            json_double(sb, p.fsum)
+        sb.append_char(125)
+
+    def _hist_point(self, sb: StringBuilder, p: DataPoint, start_ns: int, now: int):
+        sb.append("{\"attributes\":")
+        p.attrs.write_json(sb)
+        sb.append(",\"startTimeUnixNano\":")
+        json_i64(sb, start_ns)
+        sb.append(",\"timeUnixNano\":")
+        json_i64(sb, now)
+        sb.append(",\"count\":")
+        json_i64(sb, p.count)
+        sb.append(",\"sum\":")
+        json_double(sb, p.fsum)
+        sb.append(",\"bucketCounts\":[")
+        mut i = 0
+        while i < p.buckets.len:
+            if i > 0: sb.append_char(44)
+            json_i64(sb, p.buckets.get(i))
+            i = i + 1
+        sb.append("],\"explicitBounds\":[")
+        i = 0
+        while i < self.bounds.len:
+            if i > 0: sb.append_char(44)
+            json_double(sb, self.bounds.get(i))
+            i = i + 1
+        sb.append_char(93)
+        if p.count > 0:
+            sb.append(",\"min\":")
+            json_double(sb, p.minv)
+            sb.append(",\"max\":")
+            json_double(sb, p.maxv)
+        sb.append_char(125)
+
+    # OTLP/JSON Metric for reader r ("" when there is nothing to report).
+    # Delta stores are reset afterwards.
+    pub def _collect(self, r: int, now: int) -> str:
+        if self.kind == INST_OBS_COUNTER or self.kind == INST_OBS_UPDOWN or self.kind == INST_OBS_GAUGE:
+            self._observe(r, now)
+        mut pstore = self._store(r)
+        mut agg = aggregation_temporality(self._shared.prefs.get(r), self.kind)
+        mut sb = StringBuilder.init(256)
+        sb.append("{\"name\":")
+        json_str(sb, self.name)
+        if self.desc.len() > 0:
+            sb.append(",\"description\":")
+            json_str(sb, self.desc)
+        if self.unit.len() > 0:
+            sb.append(",\"unit\":")
+            json_str(sb, self.unit)
+        mut is_gauge = self.kind == INST_GAUGE or self.kind == INST_OBS_GAUGE
+        if is_gauge:
+            sb.append(",\"gauge\":{\"dataPoints\":[")
+        elif self.kind == INST_HISTOGRAM:
+            sb.append(",\"histogram\":{\"dataPoints\":[")
+        else:
+            sb.append(",\"sum\":{\"dataPoints\":[")
+        mut written = 0
+        mut i = 0
+        while i < pstore.points.len:
+            mut p = pstore.points.get(i)
+            i = i + 1
+            if p.count == 0: continue
+            if written > 0: sb.append_char(44)
+            mut start = p.start_ns
+            if agg == AGG_DELTA and (self.kind == INST_OBS_COUNTER or self.kind == INST_OBS_UPDOWN):
+                start = pstore.last_collect_ns
+            if self.kind == INST_HISTOGRAM:
+                self._hist_point(sb, p, start, now)
+            else:
+                self._num_point(sb, p, start, now)
+            written = written + 1
+        sb.append_char(93)
+        if not is_gauge:
+            sb.append(",\"aggregationTemporality\":")
+            sb.append_int(agg)
+            if self.kind != INST_HISTOGRAM:
+                if self.kind == INST_COUNTER or self.kind == INST_OBS_COUNTER: sb.append(",\"isMonotonic\":true")
+                else: sb.append(",\"isMonotonic\":false")
+        sb.append("}}")
+        mut out = sb.to_owned()
+        sb.free()
+        # delta (and synchronous gauge under delta preference) start over
+        mut sync = self.kind == INST_COUNTER or self.kind == INST_UPDOWN or self.kind == INST_HISTOGRAM or self.kind == INST_GAUGE
+        mut reset = sync and (agg == AGG_DELTA or (self.kind == INST_GAUGE and self._shared.prefs.get(r) != TEMPORALITY_CUMULATIVE))
+        if reset:
+            pstore.points = Vec[DataPoint].init(4)
+            pstore.index.free()
+            pstore.index = Map[str, int].init(8)
+        pstore.last_collect_ns = now
+        if written == 0: return ""
+        return out
+
+# Synchronous instrument handles.
+pub class Counter:
+    pub inst: Instrument
+
+extend Counter:
+    # Non-negative increments only (negative values are dropped and counted
+    # in inst.dropped_negative).
+    pub def add(self, v: int, attrs: Attributes):
+        if v < 0:
+            self.inst.dropped_negative = self.inst.dropped_negative + 1
+            return
+        self.inst._record(v, v as float, attrs)
+
+    pub def add_f(self, v: float, attrs: Attributes):
+        if v < 0.0 or v != v:
+            self.inst.dropped_negative = self.inst.dropped_negative + 1
+            return
+        self.inst._record(v as int, v, attrs)
+
+pub class UpDownCounter:
+    pub inst: Instrument
+
+extend UpDownCounter:
+    pub def add(self, v: int, attrs: Attributes):
+        self.inst._record(v, v as float, attrs)
+
+    pub def add_f(self, v: float, attrs: Attributes):
+        self.inst._record(v as int, v, attrs)
+
+pub class Histogram:
+    pub inst: Instrument
+
+extend Histogram:
+    pub def record(self, v: float, attrs: Attributes):
+        if v != v: return
+        self.inst._record(v as int, v, attrs)
+
+pub class Gauge:
+    pub inst: Instrument
+
+extend Gauge:
+    pub def set(self, v: int, attrs: Attributes):
+        self.inst._record(v, v as float, attrs)
+
+    pub def set_f(self, v: float, attrs: Attributes):
+        self.inst._record(v as int, v, attrs)
+
+pub class Meter:
+    pub name:        str
+    pub version:     str
+    pub scope_json:  str
+    pub instruments: Vec[Instrument]
+    pub _shared:     MeterShared
+
+extend Meter:
+    def _inst(self, name: str, unit: str, desc: str, kind: int, is_int: bool) -> Instrument:
+        mut i = 0
+        while i < self.instruments.len:
+            mut ex = self.instruments.get(i)
+            if Str.to_lower(ex.name) == Str.to_lower(name) and ex.kind == kind: return ex
+            i = i + 1
+        mut it = Instrument()
+        it.name = name
+        it.unit = unit
+        it.desc = desc
+        it.kind = kind
+        it.is_int = is_int
+        it.bounds = Vec[float].init(0)
+        it.stores = Vec[PointStore].init(1)
+        it.cb = _noop_observe
+        it._shared = self._shared
+        it.dropped_negative = 0
+        self.instruments.push(it)
+        return it
+
+    # Integer-valued counter (asInt points). Use create_counter_f for doubles.
+    pub def create_counter(self, name: str, unit: str, desc: str) -> Counter:
+        mut c = Counter()
+        c.inst = self._inst(name, unit, desc, INST_COUNTER, true)
+        return c
+
+    pub def create_counter_f(self, name: str, unit: str, desc: str) -> Counter:
+        mut c = Counter()
+        c.inst = self._inst(name, unit, desc, INST_COUNTER, false)
+        return c
+
+    pub def create_up_down_counter(self, name: str, unit: str, desc: str) -> UpDownCounter:
+        mut c = UpDownCounter()
+        c.inst = self._inst(name, unit, desc, INST_UPDOWN, true)
+        return c
+
+    pub def create_up_down_counter_f(self, name: str, unit: str, desc: str) -> UpDownCounter:
+        mut c = UpDownCounter()
+        c.inst = self._inst(name, unit, desc, INST_UPDOWN, false)
+        return c
+
+    # Explicit-bucket histogram; an empty `bounds` list uses default_bounds().
+    pub def create_histogram(self, name: str, unit: str, desc: str, bounds: List[float]) -> Histogram:
+        mut h = Histogram()
+        h.inst = self._inst(name, unit, desc, INST_HISTOGRAM, false)
+        if h.inst.bounds.len == 0:
+            if len(bounds) == 0:
+                h.inst.bounds = default_bounds()
+            else:
+                mut i = 0
+                while i < len(bounds):
+                    h.inst.bounds.push(bounds[i])
+                    i = i + 1
+        return h
+
+    pub def create_gauge(self, name: str, unit: str, desc: str) -> Gauge:
+        mut g = Gauge()
+        g.inst = self._inst(name, unit, desc, INST_GAUGE, false)
+        return g
+
+    pub def create_int_gauge(self, name: str, unit: str, desc: str) -> Gauge:
+        mut g = Gauge()
+        g.inst = self._inst(name, unit, desc, INST_GAUGE, true)
+        return g
+
+    # Observable instruments: `cb` runs at every collection and reports
+    # values with obs.observe(v, attrs) / obs.observe_f(v, attrs). Counters
+    # report cumulative totals; the SDK computes deltas when needed.
+    pub def create_observable_gauge(self, name: str, unit: str, desc: str, cb: def(Observer)) -> Instrument:
+        mut it = self._inst(name, unit, desc, INST_OBS_GAUGE, false)
+        it.cb = cb
+        return it
+
+    pub def create_observable_counter(self, name: str, unit: str, desc: str, cb: def(Observer)) -> Instrument:
+        mut it = self._inst(name, unit, desc, INST_OBS_COUNTER, true)
+        it.cb = cb
+        return it
+
+    pub def create_observable_up_down_counter(self, name: str, unit: str, desc: str, cb: def(Observer)) -> Instrument:
+        mut it = self._inst(name, unit, desc, INST_OBS_UPDOWN, true)
+        it.cb = cb
+        return it
+
+pub class MetricReader:
+    pub index:       int
+    pub pipe:        Pipeline
+    pub preference:  int
+    pub interval_ms: int
+    pub next_due_ms: int
+    pub collections: int
+
+pub class MeterProvider:
+    pub resource: Resource
+    pub meters:   Vec[Meter]
+    pub readers:  Vec[MetricReader]
+    pub _shared:  MeterShared
+
+extend MeterProvider:
+    pub def init(resource: Resource) -> MeterProvider:
+        mut mp = MeterProvider()
+        mp.resource = resource
+        mp.meters = Vec[Meter].init(2)
+        mp.readers = Vec[MetricReader].init(1)
+        mut sh = MeterShared()
+        sh.prefs = Vec[int].init(1)
+        sh.start_ns = now_unix_nano()
+        sh.shutdown = false
+        mp._shared = sh
+        return mp
+
+    def _add(self, pipe: Pipeline, interval_ms: int, preference: int) -> MetricReader:
+        mut r = MetricReader()
+        r.index = self.readers.len
+        r.pipe = pipe
+        r.preference = preference
+        r.interval_ms = interval_ms
+        if r.interval_ms < 1: r.interval_ms = 1
+        r.next_due_ms = mono_ms() + r.interval_ms
+        r.collections = 0
+        self.readers.push(r)
+        self._shared.prefs.push(preference)
+        return r
+
+    # Periodic reader exporting on a background thread (one batch per
+    # collection). interval_ms <= 0 uses OTEL_METRIC_EXPORT_INTERVAL (60000).
+    pub def add_periodic_reader(self, exporter: Exporter, interval_ms: int, preference: int) -> MetricReader:
+        mut iv = interval_ms
+        if iv <= 0: iv = otel_env_int("OTEL_METRIC_EXPORT_INTERVAL", 60000)
+        mut cfg = BatchConfig.init(4096, 4096, 1000, otel_env_int("OTEL_METRIC_EXPORT_TIMEOUT", 30000))
+        mut p = Pipeline.batch(SIGNAL_METRICS, self.resource.to_json(), exporter, cfg)
+        return self._add(p, iv, preference)
+
+    # Reader that exports synchronously on the collecting thread.
+    pub def add_sync_reader(self, exporter: Exporter, interval_ms: int, preference: int) -> MetricReader:
+        mut p = Pipeline.simple(SIGNAL_METRICS, self.resource.to_json(), exporter)
+        return self._add(p, interval_ms, preference)
+
+    pub def get_meter(self, name: str, version: str) -> Meter:
+        mut i = 0
+        while i < self.meters.len:
+            mut m = self.meters.get(i)
+            if m.name == name and m.version == version: return m
+            i = i + 1
+        mut m2 = Meter()
+        m2.name = name
+        m2.version = version
+        mut sb = StringBuilder.init(64)
+        sb.append("{\"name\":")
+        json_str(sb, name)
+        if version.len() > 0:
+            sb.append(",\"version\":")
+            json_str(sb, version)
+        sb.append_char(125)
+        m2.scope_json = sb.to_owned()
+        sb.free()
+        m2.instruments = Vec[Instrument].init(4)
+        m2._shared = self._shared
+        self.meters.push(m2)
+        return m2
+
+    # Collect reader r: one "<scope>\n<metric>" item per non-empty instrument.
+    pub def collect_items(self, r: int) -> Vec[str]:
+        mut items = Vec[str].init(8)
+        mut now = now_unix_nano()
+        mut i = 0
+        while i < self.meters.len:
+            mut m = self.meters.get(i)
+            mut j = 0
+            while j < m.instruments.len:
+                mut inst = m.instruments.get(j)
+                mut mj = inst._collect(r, now)
+                if mj.len() > 0: items.push(m.scope_json + "\n" + mj)
+                j = j + 1
+            i = i + 1
+        return items
+
+    # Collect reader r and export the result through its pipeline.
+    pub def collect(self, r: int) -> bool:
+        if r < 0 or r >= self.readers.len: return false
+        mut rd = self.readers.get(r)
+        rd.collections = rd.collections + 1
+        rd.next_due_ms = mono_ms() + rd.interval_ms
+        mut items = self.collect_items(r)
+        if items.len == 0: return true
+        return rd.pipe.emit_all(items)
+
+    # Collect every reader whose interval has elapsed. Cheap when none is due.
+    pub def tick(self) -> int:
+        if self._shared.shutdown: return 0
+        mut now = mono_ms()
+        mut n = 0
+        mut i = 0
+        while i < self.readers.len:
+            mut rd = self.readers.get(i)
+            if now >= rd.next_due_ms:
+                self.collect(i)
+                n = n + 1
+            i = i + 1
+        return n
+
+    # Collect every reader now and wait for the exports.
+    pub def force_flush(self, timeout_ms: int) -> bool:
+        mut ok = true
+        mut i = 0
+        while i < self.readers.len:
+            if not self.collect(i): ok = false
+            mut rd = self.readers.get(i)
+            if not rd.pipe.force_flush(timeout_ms): ok = false
+            i = i + 1
+        return ok
+
+    # Final collection, then stop every reader's pipeline. Idempotent.
+    pub def shutdown(self) -> bool:
+        if self._shared.shutdown: return true
+        mut ok = true
+        mut i = 0
+        while i < self.readers.len:
+            if not self.collect(i): ok = false
+            mut rd = self.readers.get(i)
+            if not rd.pipe.shutdown(30000): ok = false
+            i = i + 1
+        self._shared.shutdown = true
+        return ok

@@ -106,6 +106,23 @@ added here as each phase lands.
   (public domain / MIT, with bounds checks on hostile comment lengths); Opus uses the vendored libopus
   1.5.2 decoder (BSD-3-Clause, float build, no SIMD) covering SILK, CELT and hybrid, RFC 7845 mapping
   families 0/1/2/255. Output verified against libvorbis / libopus; corrupted files fuzzed under ASan.
+- **`std.otel`**: OpenTelemetry for Tauraro. Traces (`TracerProvider`/`Tracer`/`Span` with kinds,
+  attributes, events, links, status, limits; always-on / always-off / parent-based /
+  trace-id-ratio samplers; ids from `std.crypto.random`), W3C `traceparent` / `tracestate` /
+  `baggage` parse, format, inject and extract, and a per-thread current context with a
+  `with ctx.activate()` / `with tracer.start_as_current(...)` scope. Metrics (`MeterProvider`/`Meter`,
+  Counter, UpDownCounter, explicit-bucket Histogram, Gauge, observable instruments, cumulative /
+  delta / low-memory temporality, periodic reader). Logs (OTLP log records with trace correlation and
+  a `LogBridge` for `std.log`). OTLP/HTTP JSON export (proto3 JSON mapping: lowerCamelCase, hex ids,
+  int64 as strings) via `std.net.client` with headers, timeout and retry/backoff, plus console,
+  memory and callback exporters, and a thread-safe batch processor (bounded queue, max batch,
+  schedule delay, force flush, drop counting). `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`,
+  `OTEL_EXPORTER_OTLP_*`, `OTEL_TRACES_SAMPLER(_ARG)`, `OTEL_BSP_*`, `OTEL_BLRP_*` and
+  `OTEL_METRICS_EXPORTER` style variables are honoured by `Otel.init_from_env`. Opt-in
+  `TracedHttpClient` (client span + traceparent injection around `HttpSession`) and
+  `ServerInstrumentation` (server span from the incoming traceparent). C shim `otel_native.c`
+  (wall clock, thread-local context stack, MPSC export queue). Test: `tests/lang/148_otel.tr`.
+- `std.log.Logger.set_hook` / `clear_hook`: optional per-record callback (used by the otel bridge).
 - **`std.font`**: TrueType / OpenType fonts, with a bounds-checked C core (`font_native.c`).
   - Parses TTF, OTF with CFF or CFF2 outlines (Type 2 charstrings, subroutines, CID fonts), TTC
     collections and WOFF 1.0; tables head, hhea, maxp, hmtx, cmap (formats 0, 4, 6, 10, 12, 13 and
