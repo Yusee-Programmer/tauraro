@@ -98,6 +98,14 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- `std.audio` decodes Ogg Vorbis and Ogg Opus: `Ogg.decode` / `Vorbis.decode` / `Opus.decode`, and
+  `Audio.decode` now sniffs `OggS`. New `std.audio.ogg` with `OggFile.info` (codec, exact length from
+  granule positions, Vorbis/Opus comments, OpusHead pre-skip and gain, multiplexed stream list),
+  `OggFile.open` (sample-exact `seek` / `read`), `OggFile.pages` / `packets` (CRC-checked RFC 3533
+  structure) and a streaming `OggDecoder` (`feed` / `pull`). Vorbis uses vendored stb_vorbis 1.22
+  (public domain / MIT, with bounds checks on hostile comment lengths); Opus uses the vendored libopus
+  1.5.2 decoder (BSD-3-Clause, float build, no SIMD) covering SILK, CELT and hybrid, RFC 7845 mapping
+  families 0/1/2/255. Output verified against libvorbis / libopus; corrupted files fuzzed under ASan.
 - **`std.font`**: TrueType / OpenType fonts, with a bounds-checked C core (`font_native.c`).
   - Parses TTF, OTF with CFF or CFF2 outlines (Type 2 charstrings, subroutines, CID fonts), TTC
     collections and WOFF 1.0; tables head, hhea, maxp, hmtx, cmap (formats 0, 4, 6, 10, 12, 13 and

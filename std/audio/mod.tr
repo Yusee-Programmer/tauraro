@@ -8,9 +8,12 @@
 #   Wav.encode   PCM 8/16/24/32-bit (TPDF dither for 8/16-bit) or float 32
 #   Mp3.decode   MPEG-1/2/2.5 Layer III (vendored minimp3, public domain)
 #   Flac.decode  FLAC (vendored dr_flac, public domain / MIT-0)
-#   Audio.decode sniffs the format
+#   Ogg.decode   Ogg Vorbis (vendored stb_vorbis) and Ogg Opus (vendored
+#                libopus decoder), the first such stream of the file;
+#                Vorbis.decode / Opus.decode accept only that codec
+#   Audio.decode sniffs the format (WAV, FLAC, MP3, Ogg Vorbis, Ogg Opus)
 #
-# Opus and Ogg Vorbis are not supported.
+# Ogg metadata, seeking and the streaming decoder live in std.audio.ogg.
 #
 # DSP helpers return new buffers: to_mono, to_channels, resample (windowed
 # sinc), gain_db, normalize, fade_in/out, trim, concat, mix, reverse;
@@ -25,6 +28,7 @@
 
 from std.audio.native import trc_au_free, trc_au_ok, trc_au_frames, trc_au_channels, trc_au_rate, trc_au_bits, trc_au_error, trc_au_copy
 from std.audio.native import trc_wav_decode, trc_wav_encode, trc_mp3_decode, trc_flac_decode, trc_au_buf_free, trc_au_resample
+from std.audio.ogg_native import trc_ogg_decode
 from std.audio.native import _tr_c_malloc, _tr_c_memcpy, _tr_str_wrap_len
 
 extern "C":
@@ -334,6 +338,33 @@ extend Flac:
         mut dp = data as Pointer[char]
         return _au_from_handle(trc_flac_decode(dp, len_))?
 
+# Ogg container: decodes the first Vorbis or Opus stream. Opus output is
+# 48 kHz (pre-skip and end trimming applied, output gain applied); Vorbis
+# keeps its own rate. Channels are in WAV order (L R C LFE ...).
+pub class Ogg:
+    _dummy: int
+
+extend Ogg:
+    pub def decode(data: str, len_: int) throws str -> AudioBuffer:
+        mut dp = data as Pointer[char]
+        return _au_from_handle(trc_ogg_decode(dp, len_, 0))?
+
+pub class Vorbis:
+    _dummy: int
+
+extend Vorbis:
+    pub def decode(data: str, len_: int) throws str -> AudioBuffer:
+        mut dp = data as Pointer[char]
+        return _au_from_handle(trc_ogg_decode(dp, len_, 1))?
+
+pub class Opus:
+    _dummy: int
+
+extend Opus:
+    pub def decode(data: str, len_: int) throws str -> AudioBuffer:
+        mut dp = data as Pointer[char]
+        return _au_from_handle(trc_ogg_decode(dp, len_, 2))?
+
 def _au_b(s: str, i: int) -> int:
     mut p = s as Pointer[char]
     unsafe:
@@ -343,13 +374,14 @@ pub class Audio:
     _dummy: int
 
 extend Audio:
-    # Decode WAV, FLAC or MP3 by sniffing the first bytes.
+    # Decode WAV, FLAC, MP3, Ogg Vorbis or Ogg Opus by sniffing the first bytes.
     pub def decode(data: str, len_: int) throws str -> AudioBuffer:
         if len_ >= 12 and data.slice(0, 4) == "RIFF": return Wav.decode(data, len_)?
         if len_ >= 4 and data.slice(0, 4) == "fLaC": return Flac.decode(data, len_)?
+        if len_ >= 4 and data.slice(0, 4) == "OggS": return Ogg.decode(data, len_)?
         if len_ >= 3 and data.slice(0, 3) == "ID3": return Mp3.decode(data, len_)?
         if len_ >= 2 and _au_b(data, 0) == 255 and (_au_b(data, 1) & 0xE0) == 0xE0: return Mp3.decode(data, len_)?
-        raise("audio: unrecognised format (WAV, FLAC and MP3 are supported)")
+        raise("audio: unrecognised format (WAV, FLAC, MP3, Ogg Vorbis and Ogg Opus are supported)")
 
     # ── generators ──
     pub def silence(seconds: float, rate: int, channels: int) -> AudioBuffer:

@@ -1,0 +1,7 @@
+# tauraro-cpp-shim: opus_native.c
+#
+# std.audio.opus_native -- internal: links the vendored libopus decoder
+# (std/audio/opus_native.c). std/audio/ogg_native.c calls into it.
+
+extern "C":
+    def opus_get_version_string() -> Pointer[char]

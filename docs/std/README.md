@@ -27,7 +27,7 @@ building libraries with `taupkg`)
 | [`std.geo`](geo.md) | Geodesy and geometry: haversine and Karney/Vincenty ellipsoid distances, bearings, destination, bounding boxes, geodesic area, geohash, Open Location Code, UTM/MGRS, Web Mercator, tiles/quadkeys, ECEF/ENU, point-in-polygon, Douglas-Peucker, WKT and GeoJSON |
 | [`std.gpu`](gpu.md) | GPU compute: CUDA/OpenCL/CPU device API (`Device`/`Buffer[T]`/`Module`/`Kernel`), Tauraro `@kernel` → PTX/SPIR-V, and OpenMP CPU dispatch (`Gpu.parallel`) |
 | [`std.image`](image.md) | Raster images: BMP, QOI, PNG, JPEG (baseline + progressive decode, encode), GIF (animated decode/encode); resizing, colour adjustments, blur/sharpen/edges, geometry; shared `Image` (RGBA8) type and format-sniffing `decode()` |
-| [`std.audio`](audio.md) | Audio: `AudioBuffer`, WAV decode/encode, MP3 and FLAC decoding, resampling, channel mixing, level and edit helpers, tone generators; spectra and filters via `std.audio.dsp` |
+| [`std.audio`](audio.md) | Audio: `AudioBuffer`, WAV decode/encode, MP3, FLAC, Ogg Vorbis and Ogg Opus decoding (`std.audio.ogg`: tags, seeking, streaming), resampling, channel mixing, level and edit helpers, tone generators; spectra and filters via `std.audio.dsp` |
 | [`std.io`](io.md) | File I/O, directory operations, path manipulation, console, buffered I/O, ZIP archive read/write (`ZipWriter`/`ZipReader`), tar archive read/write (`TarWriter`/`TarReader`) |
 | [`std.iter`](iter.md) | Range construction, int/float vector transforms, folds, prefix sums, normalization |
 | [`std.kv`](kv.md) | Embedded crash-safe key-value store: append-only CRC log, hash + sorted index, hint file, TTL, atomic batches, compaction, fsync policies, prefix iteration, lock file |
