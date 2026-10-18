@@ -1,0 +1,629 @@
+# tests/lang/147_kv.tr
+# std.kv: the embedded crash-safe key-value store. Covers put/get/delete,
+# binary values, persistence with and without the hint file, sorted prefix
+# iteration, TTL (with a frozen clock), atomic batches, compaction, fsync
+# policies, size limits, the lock file, and crash recovery: the log is cut at
+# EVERY byte offset of its last record (plain and batch) and every byte of
+# the last record is flipped; the store must open, hold exactly the earlier
+# records (all or nothing for the last), and accept new writes.
+
+from std.test import TestRunner
+from std.kv import KvStore, KvOptions, KvBatch, KvPair, KvStats, KV_SYNC_ALWAYS, KV_SYNC_INTERVAL, KV_SYNC_NEVER
+from std.io.file import File
+from std.sys.fs import Fs
+from std.core.string import StringBuilder
+
+const BASE = "kvtest_147"
+
+def p(name: str) -> str:
+    return f"{BASE}_{name}.kv"
+
+def wipe(path: str):
+    Fs.delete(path)
+    Fs.delete(path + ".hint")
+    Fs.delete(path + ".lock")
+    Fs.delete(path + ".compact")
+    Fs.delete(path + ".hint.tmp")
+
+def opts() -> KvOptions:
+    mut o = KvOptions.defaults()
+    o.sync_policy = KV_SYNC_NEVER
+    return o
+
+def no_hint() -> KvOptions:
+    mut o = opts()
+    o.use_hint = false
+    return o
+
+def try_put(st: KvStore, k: str, v: str) throws str -> bool:
+    st.put(k, v)?
+    return true
+
+def try_put_ttl(st: KvStore, k: str, v: str, ttl: int) throws str -> bool:
+    st.put_ttl(k, v, ttl)?
+    return true
+
+def try_batch(st: KvStore, b: KvBatch) throws str -> bool:
+    st.write_batch(b)?
+    return true
+
+def test_basics(t: TestRunner) throws str:
+    t.section("basics")
+    wipe(p("basic"))
+    mut st = KvStore.open(p("basic"), opts())?
+    t.assert_eq_int(st.len(), 0, "starts empty")
+    st.put("alpha", "1")?
+    st.put("beta", "two")?
+    t.assert_eq_str(st.get("alpha")?, "1", "get alpha")
+    t.assert_eq_str(st.get("beta")?, "two", "get beta")
+    t.assert_true(st.contains("alpha"), "contains")
+    t.assert_false(st.contains("gamma"), "contains missing")
+    st.put("alpha", "uno")?
+    t.assert_eq_str(st.get("alpha")?, "uno", "overwrite")
+    t.assert_eq_int(st.len(), 2, "overwrite keeps the count")
+    t.assert_true(st.delete("alpha")?, "delete existing")
+    t.assert_false(st.delete("alpha")?, "delete again")
+    t.assert_false(st.contains("alpha"), "deleted")
+    t.assert_eq_str(st.get_or("alpha", "dflt")?, "dflt", "get_or default")
+    mut r: Result[str, str] = st.get("alpha")
+    t.assert_true(r.is_err, "get missing raises")
+    t.assert_contains(r.err, "not found", "message")
+    st.put("empty", "")?
+    t.assert_eq_str(st.get("empty")?, "", "empty value")
+    t.assert_true(st.contains("empty"), "empty value is present")
+    mut bin = "a\x00b\xffc\x01\r\n\x7f\x80"
+    st.put("bin", bin)?
+    t.assert_true(st.get("bin")? == bin, "binary value round trip")
+    t.assert_eq_int(st.get("bin")?.len(), 10, "binary length")
+    mut big = "x".repeat(300000)
+    st.put("big", big)?
+    t.assert_true(st.get("big")? == big, "300 KB value")
+    st.close()
+    wipe(p("basic"))
+
+def test_validation(t: TestRunner) throws str:
+    t.section("validation / limits")
+    wipe(p("lim"))
+    mut o = opts()
+    o.max_key_size = 8
+    o.max_value_size = 16
+    mut st = KvStore.open(p("lim"), o)?
+    mut a: Result[bool, str] = try_put(st, "", "v")
+    t.assert_true(a.is_err, "empty key rejected")
+    mut b: Result[bool, str] = try_put(st, "123456789", "v")
+    t.assert_true(b.is_err, "oversized key rejected")
+    mut c: Result[bool, str] = try_put(st, "k", "12345678901234567")
+    t.assert_true(c.is_err, "oversized value rejected")
+    mut d: Result[bool, str] = try_put(st, "a\x00b", "v")
+    t.assert_true(d.is_err, "NUL in key rejected")
+    st.put("12345678", "1234567890123456")?
+    t.assert_eq_int(st.len(), 1, "exact-limit entry accepted")
+    st.close()
+    wipe(p("lim"))
+    mut o2 = opts()
+    o2.max_file_size = 200
+    mut s2 = KvStore.open(p("lim"), o2)?
+    mut stored = 0
+    mut full = false
+    mut i = 0
+    while i < 20 and not full:
+        mut r: Result[bool, str] = try_put(s2, f"key{i}", "0123456789")
+        if r.is_err:
+            full = true
+            t.assert_contains(r.err, "store full", "store full message")
+        else:
+            stored = stored + 1
+        i = i + 1
+    t.assert_true(full, "max_file_size enforced")
+    t.assert_true(s2.stats().file_size <= 200, "file stays within the limit")
+    t.assert_eq_int(s2.len(), stored, "failed put leaves the store unchanged")
+    s2.close()
+    wipe(p("lim"))
+    mut miss = opts()
+    miss.create = false
+    mut m: Result[KvStore, str] = KvStore.open(p("nofile"), miss)
+    t.assert_true(m.is_err, "create=false on a missing file")
+    wipe(p("nofile"))
+
+def test_persistence(t: TestRunner) throws str:
+    t.section("persistence / hint file")
+    wipe(p("per"))
+    mut st = KvStore.open(p("per"), opts())?
+    mut i = 0
+    while i < 200:
+        st.put(f"key{i:04}", f"value-{i}")?
+        i = i + 1
+    st.delete("key0007")?
+    st.put("key0008", "rewritten")?
+    st.close()
+    t.assert_true(File.file_exists(p("per") + ".hint"), "hint file written on close")
+    mut a = KvStore.open(p("per"), opts())?
+    t.assert_true(a.stats().hint_loaded, "index loaded from the hint")
+    t.assert_eq_int(a.len(), 199, "keys after reopen")
+    t.assert_eq_str(a.get("key0008")?, "rewritten", "rewritten value")
+    t.assert_false(a.contains("key0007"), "deleted key stays deleted")
+    t.assert_eq_str(a.get("key0199")?, "value-199", "last key")
+    # records appended after the hint was written are replayed
+    a.put("late", "L")?
+    a.delete("key0001")?
+    mut hint_then = File.read_text(p("per") + ".hint")
+    mut data_then = File.read_text(p("per"))
+    a.close()
+    wipe(p("per2"))
+    File.write_text(p("per2"), data_then)
+    File.write_text(p("per2") + ".hint", hint_then)
+    mut b = KvStore.open(p("per2"), opts())?
+    t.assert_true(b.stats().hint_loaded, "stale hint used")
+    t.assert_eq_str(b.get("late")?, "L", "tail record replayed over the hint")
+    t.assert_false(b.contains("key0001"), "tail tombstone replayed over the hint")
+    t.assert_eq_int(b.len(), 199, "count after tail replay")
+    b.close()
+    # no hint: full scan gives the same answer
+    wipe(p("per3"))
+    File.write_text(p("per3"), data_then)
+    mut c = KvStore.open(p("per3"), opts())?
+    t.assert_false(c.stats().hint_loaded, "no hint -> scan")
+    t.assert_eq_int(c.len(), 199, "scan count matches")
+    t.assert_eq_str(c.get("late")?, "L", "scan value")
+    c.close()
+    # corrupt hint is ignored
+    mut hint_now = File.read_text(p("per") + ".hint")
+    File.write_text(p("per") + ".hint", hint_now.slice(0, hint_now.len() - 9) + "garbage!!")
+    mut d = KvStore.open(p("per"), opts())?
+    t.assert_false(d.stats().hint_loaded, "corrupt hint ignored")
+    t.assert_eq_int(d.len(), 199, "state recovered from the log")
+    # a hint left over from before a compaction must not be used
+    File.write_text(p("per") + ".hint", hint_now)
+    d.close()
+    mut old_hint = File.read_text(p("per") + ".hint")
+    mut e = KvStore.open(p("per"), opts())?
+    e.compact()?
+    e.close()
+    File.write_text(p("per") + ".hint", old_hint)
+    mut f = KvStore.open(p("per"), opts())?
+    t.assert_false(f.stats().hint_loaded, "hint from another generation ignored")
+    t.assert_eq_int(f.len(), 199, "count correct after generation change")
+    f.close()
+    mut g = KvStore.open(p("per"), no_hint())?
+    t.assert_false(g.stats().hint_loaded, "use_hint=false ignores the hint")
+    t.assert_eq_int(g.len(), 199, "and still recovers everything")
+    g.close()
+    wipe(p("per"))
+    wipe(p("per2"))
+    wipe(p("per3"))
+
+def test_prefix(t: TestRunner) throws str:
+    t.section("prefix iteration")
+    wipe(p("pre"))
+    mut st = KvStore.open(p("pre"), opts())?
+    mut names: List[str] = ["user:3", "user:1", "user:2", "users", "usef", "item:9", "user:", "us", "v", "\xffa", "\xff\xffb", "\xff"]
+    for n in names: st.put(n, "v:" + n)?
+    mut ks = st.iter_prefix("user:")?
+    t.assert_eq_int(ks.len(), 4, "user: count")
+    t.assert_eq_str(ks[0], "user:", "sorted 0")
+    t.assert_eq_str(ks[1], "user:1", "sorted 1")
+    t.assert_eq_str(ks[3], "user:3", "sorted 3")
+    t.assert_eq_int(st.iter_prefix("us")?.len(), 7, "us prefix includes the exact key")
+    t.assert_eq_int(st.iter_prefix("nomatch")?.len(), 0, "no match")
+    t.assert_eq_int(st.iter_prefix("")?.len(), 12, "empty prefix = all keys")
+    t.assert_eq_int(st.keys()?.len(), 12, "keys()")
+    t.assert_eq_int(st.iter_prefix("\xff")?.len(), 3, "0xFF prefix")
+    t.assert_eq_int(st.iter_prefix("\xff\xff")?.len(), 1, "0xFF 0xFF prefix")
+    t.assert_eq_int(st.iter_prefix("\xff\xff\xff")?.len(), 0, "past the last key")
+    st.delete("user:2")?
+    t.assert_eq_int(st.iter_prefix("user:")?.len(), 3, "deleted keys leave the iteration")
+    mut items = st.iter_prefix_items("item:")?
+    t.assert_eq_int(items.len(), 1, "items count")
+    t.assert_eq_str(items[0].value, "v:item:9", "items value")
+    mut all = st.keys()?
+    mut sorted = true
+    mut i = 1
+    while i < all.len():
+        if not (all[i - 1] < all[i]): sorted = false
+        i = i + 1
+    t.assert_true(sorted, "keys come out in byte order")
+    st.close()
+    mut st2 = KvStore.open(p("pre"), opts())?
+    t.assert_eq_int(st2.iter_prefix("user:")?.len(), 3, "prefix after reopen")
+    st2.close()
+    wipe(p("pre"))
+
+def test_ttl(t: TestRunner) throws str:
+    t.section("TTL")
+    wipe(p("ttl"))
+    mut st = KvStore.open(p("ttl"), opts())?
+    st.set_clock(1000)
+    st.put_ttl("short", "s", 500)?
+    st.put_ttl("long", "l", 5000)?
+    st.put("forever", "f")?
+    t.assert_eq_int(st.ttl("short"), 500, "ttl remaining")
+    t.assert_eq_int(st.ttl("forever"), -1, "no expiry")
+    t.assert_eq_int(st.ttl("nothing"), -2, "missing")
+    st.set_clock(1499)
+    t.assert_true(st.contains("short"), "alive just before the deadline")
+    st.set_clock(1500)
+    t.assert_false(st.contains("short"), "expired at the deadline")
+    mut r: Result[str, str] = st.get("short")
+    t.assert_true(r.is_err, "get on expired")
+    t.assert_eq_str(st.get_or("short", "gone")?, "gone", "get_or on expired")
+    t.assert_eq_int(st.iter_prefix("")?.len(), 2, "expired keys hidden from iteration")
+    t.assert_true(st.contains("long"), "long still alive")
+    t.assert_eq_int(st.purge_expired()?, 1, "purge reaps one key")
+    t.assert_eq_int(st.len(), 2, "len after purge")
+    st.put_ttl("renew", "1", 100)?
+    st.put("renew", "2")?
+    st.set_clock(999999)
+    t.assert_eq_str(st.get("renew")?, "2", "plain put clears the ttl")
+    t.assert_false(st.contains("long"), "long expired later")
+    st.set_clock(-1)
+    st.put_ttl("real", "r", 3600000)?
+    t.assert_true(st.ttl("real") > 3500000, "ttl on the real clock")
+    st.put_ttl("dies", "d", 1)?
+    st.close()
+    # expiry is stored as an absolute time: frozen-clock entries (1970) are long dead
+    mut st2 = KvStore.open(p("ttl"), no_hint())?
+    t.assert_true(st2.contains("real"), "unexpired survives reopen")
+    t.assert_true(st2.contains("forever"), "persistent survives reopen")
+    t.assert_false(st2.contains("long"), "expired entries do not come back")
+    st2.close()
+    mut st2b = KvStore.open(p("ttl"), opts())?
+    mut bad: Result[bool, str] = try_put_ttl(st2b, "k", "v", -5)
+    t.assert_true(bad.is_err, "negative ttl rejected")
+    st2b.close()
+    wipe(p("ttl"))
+
+def test_batch(t: TestRunner) throws str:
+    t.section("batch")
+    wipe(p("bat"))
+    mut st = KvStore.open(p("bat"), opts())?
+    st.put("gone", "x")?
+    st.put("kept", "y")?
+    mut b = KvBatch.init()
+    b.put("a", "1")
+    b.put("b", "2")
+    b.delete("gone")
+    b.put("a", "11")
+    b.put_ttl("t", "temp", 3600000)
+    t.assert_eq_int(b.len(), 5, "batch length")
+    st.write_batch(b)?
+    t.assert_eq_str(st.get("a")?, "11", "later op in the batch wins")
+    t.assert_eq_str(st.get("b")?, "2", "batch put")
+    t.assert_false(st.contains("gone"), "batch delete")
+    t.assert_true(st.ttl("t") > 0, "batch ttl")
+    t.assert_eq_int(st.len(), 4, "count")
+    st.write_batch(KvBatch.init())?
+    mut bad = KvBatch.init()
+    bad.put("fine", "1")
+    bad.put("", "empty key")
+    mut r: Result[bool, str] = try_batch(st, bad)
+    t.assert_true(r.is_err, "invalid op rejects the whole batch")
+    t.assert_false(st.contains("fine"), "nothing from a rejected batch is applied")
+    st.close()
+    mut st2 = KvStore.open(p("bat"), no_hint())?
+    t.assert_eq_str(st2.get("a")?, "11", "batch survives reopen via scan")
+    t.assert_false(st2.contains("gone"), "batch delete survives reopen")
+    t.assert_eq_int(st2.len(), 4, "count after reopen")
+    st2.close()
+    wipe(p("bat"))
+
+def test_compaction(t: TestRunner) throws str:
+    t.section("compaction")
+    wipe(p("cmp"))
+    mut st = KvStore.open(p("cmp"), opts())?
+    mut round = 0
+    while round < 20:
+        mut i = 0
+        while i < 50:
+            st.put(f"k{i:03}", f"round {round} value {i} " + "p".repeat(40))?
+            i = i + 1
+        round = round + 1
+    mut i2 = 0
+    while i2 < 50:
+        if i2 % 2 == 0: st.delete(f"k{i2:03}")?
+        i2 = i2 + 1
+    st.put_ttl("shortlived", "x", 1)?
+    st.set_clock(trc_clock_far())
+    mut before = st.stats()
+    t.assert_true(before.garbage_ratio() > 0.8, "mostly garbage before compaction")
+    st.compact()?
+    mut after = st.stats()
+    t.assert_true(after.file_size < before.file_size / 10, "file shrank by an order of magnitude")
+    t.assert_eq_int(after.garbage_bytes, 0, "no garbage after compaction")
+    t.assert_eq_int(after.keys, 25, "live keys survive (expired one dropped)")
+    t.assert_eq_int(after.compactions, 1, "compaction counted")
+    t.assert_eq_str(st.get("k001")?, "round 19 value 1 " + "p".repeat(40), "values intact")
+    t.assert_false(st.contains("k002"), "deleted keys stay deleted")
+    t.assert_false(File.file_exists(p("cmp") + ".compact"), "temp file renamed away")
+    st.put("after", "compact")?
+    st.close()
+    mut st2 = KvStore.open(p("cmp"), opts())?
+    t.assert_true(st2.stats().hint_loaded, "hint written after compaction")
+    t.assert_eq_int(st2.len(), 26, "reopen after compaction")
+    t.assert_eq_str(st2.get("after")?, "compact", "post-compaction write")
+    t.assert_eq_str(st2.verify()?, "", "verify() is clean")
+    st2.compact()?
+    st2.compact()?
+    t.assert_eq_int(st2.len(), 26, "repeated compaction")
+    st2.close()
+    # a leftover temp file from a crashed compaction is cleaned up
+    File.write_text(p("cmp") + ".compact", "half written")
+    mut st3 = KvStore.open(p("cmp"), opts())?
+    t.assert_false(File.file_exists(p("cmp") + ".compact"), "stale .compact removed at open")
+    t.assert_eq_int(st3.len(), 26, "unaffected by the stale file")
+    st3.close()
+    wipe(p("cmp"))
+
+def trc_clock_far() -> int:
+    return 9000000000000
+
+def test_sync(t: TestRunner) throws str:
+    t.section("fsync policies")
+    wipe(p("syn"))
+    mut o = KvOptions.defaults()
+    o.sync_policy = KV_SYNC_ALWAYS
+    mut st = KvStore.open(p("syn"), o)?
+    mut base = st.stats().syncs
+    st.put("a", "1")?
+    st.put("b", "2")?
+    t.assert_eq_int(st.stats().syncs - base, 2, "ALWAYS syncs every write")
+    st.sync()?
+    t.assert_eq_int(st.stats().syncs - base, 3, "explicit sync")
+    st.close()
+    wipe(p("syn"))
+    mut o2 = KvOptions.defaults()
+    o2.sync_policy = KV_SYNC_NEVER
+    mut s2 = KvStore.open(p("syn"), o2)?
+    s2.put("a", "1")?
+    s2.put("b", "2")?
+    t.assert_eq_int(s2.stats().syncs, 0, "NEVER does not sync")
+    s2.close()
+    wipe(p("syn"))
+    mut o3 = KvOptions.defaults()
+    o3.sync_policy = KV_SYNC_INTERVAL
+    o3.sync_interval_ms = 1000
+    mut s3 = KvStore.open(p("syn"), o3)?
+    s3.set_clock(100000)
+    s3.put("a", "1")?
+    mut n1 = s3.stats().syncs
+    s3.put("b", "2")?
+    t.assert_eq_int(s3.stats().syncs, n1, "no sync inside the interval")
+    s3.set_clock(100000 + 1500)
+    s3.put("c", "3")?
+    t.assert_eq_int(s3.stats().syncs, n1 + 1, "sync after the interval")
+    s3.close()
+    mut s4 = KvStore.open(p("syn"), o3)?
+    t.assert_eq_int(s4.len(), 3, "data intact")
+    s4.close()
+    wipe(p("syn"))
+
+def test_lock(t: TestRunner) throws str:
+    t.section("lock file")
+    wipe(p("lck"))
+    mut a = KvStore.open(p("lck"), opts())?
+    mut b: Result[KvStore, str] = KvStore.open(p("lck"), opts())
+    t.assert_true(b.is_err, "second open fails while the first is open")
+    t.assert_contains(b.err, "locked", "message mentions the lock")
+    a.put("x", "1")?
+    a.close()
+    mut c = KvStore.open(p("lck"), opts())?
+    t.assert_eq_str(c.get("x")?, "1", "reopen after close")
+    c.close()
+    c.close()
+    mut r: Result[bool, str] = try_put(c, "y", "2")
+    t.assert_true(r.is_err, "closed store rejects writes")
+    t.assert_contains(r.err, "closed", "closed message")
+    mut nl = opts()
+    nl.lock = false
+    mut d = KvStore.open(p("lck"), nl)?
+    d.close()
+    wipe(p("lck"))
+
+def build_log(path: str, last_is_batch: bool) throws str -> int:
+    # writes a few records; returns the file size before the final record
+    wipe(path)
+    mut st = KvStore.open(path, no_hint())?
+    st.put("one", "1")?
+    st.put("two", "22")?
+    st.put("three", "")?
+    st.put("one", "uno")?
+    st.delete("two")?
+    st.put_ttl("ttl", "ttl-value", 3600000)?
+    mut before = st.stats().file_size
+    if last_is_batch:
+        mut b = KvBatch.init()
+        b.put("b1", "first")
+        b.put("b2", "second")
+        b.delete("three")
+        b.put("one", "batched")
+        st.write_batch(b)?
+    else:
+        st.put("last", "L")?
+    st.close()
+    wipe(path + ".hint")
+    return before
+
+def test_crash_truncation(t: TestRunner) throws str:
+    t.section("crash recovery: truncation at every byte of the last record")
+    mut modes: List[bool] = [false, true]
+    for is_batch in modes:
+        mut src = p("crash_src")
+        mut dst = p("crash_dst")
+        mut start = build_log(src, is_batch)?
+        mut data = File.read_text(src)
+        mut full = data.len()
+        t.assert_true(full > start, "last record has bytes")
+        mut label = "plain"
+        if is_batch: label = "batch"
+        mut bad = 0
+        mut cut = start
+        while cut <= full:
+            wipe(dst)
+            File.write_text(dst, data.slice(0, cut))
+            mut r: Result[KvStore, str] = KvStore.open(dst, no_hint())
+            if r.is_err:
+                bad = bad + 1
+                t.fail(f"{label}: open failed at cut {cut}: {r.err}")
+                cut = cut + 1
+                continue
+            mut st = r.ok
+            mut complete = cut == full
+            mut ok = true
+            if complete:
+                if is_batch:
+                    ok = st.get_or("b1", "?")? == "first" and st.get_or("b2", "?")? == "second" and not st.contains("three") and st.get_or("one", "?")? == "batched"
+                else:
+                    ok = st.get_or("last", "?")? == "L" and st.get_or("one", "?")? == "uno"
+            else:
+                ok = not st.contains("last") and not st.contains("b1") and not st.contains("b2") and st.contains("three") and st.get_or("one", "?")? == "uno"
+                ok = ok and st.get_or("ttl", "?")? == "ttl-value" and not st.contains("two")
+            if not ok:
+                bad = bad + 1
+                t.fail(f"{label}: wrong state at cut {cut} of {full}")
+            mut want_discard = cut - start
+            if complete: want_discard = 0
+            if st.stats().discarded_bytes != want_discard:
+                bad = bad + 1
+                t.fail(f"{label}: discarded {st.stats().discarded_bytes} != {want_discard} at cut {cut}")
+            # the repaired store must be writable and stay consistent
+            st.put("after", f"post-crash-{cut}")?
+            st.close()
+            mut again = KvStore.open(dst, no_hint())?
+            if again.get_or("after", "?")? != f"post-crash-{cut}" or again.verify()? != "":
+                bad = bad + 1
+                t.fail(f"{label}: store not clean after repair at cut {cut}")
+            again.close()
+            cut = cut + 1
+        t.assert_eq_int(bad, 0, f"{label}: every cut offset ({full - start + 1} of them) recovers")
+        wipe(src)
+        wipe(dst)
+
+def test_crash_corruption(t: TestRunner) throws str:
+    t.section("crash recovery: bit rot in the last record")
+    mut modes: List[bool] = [false, true]
+    for is_batch in modes:
+        mut src = p("rot_src")
+        mut dst = p("rot_dst")
+        mut start = build_log(src, is_batch)?
+        mut data = File.read_text(src)
+        mut label = "plain"
+        if is_batch: label = "batch"
+        mut bad = 0
+        mut at = start
+        while at < data.len():
+            # flip one byte
+            mut flipped = data.slice(0, at) + _flip(data.slice(at, at + 1)) + data.slice(at + 1, data.len())
+            wipe(dst)
+            File.write_text(dst, flipped)
+            mut r: Result[KvStore, str] = KvStore.open(dst, no_hint())
+            if r.is_err:
+                bad = bad + 1
+                t.fail(f"{label}: open failed with byte {at} flipped: {r.err}")
+            else:
+                mut st = r.ok
+                if st.contains("last") or st.contains("b1") or st.contains("b2") or st.get_or("one", "?")? == "batched":
+                    bad = bad + 1
+                    t.fail(f"{label}: corrupt record accepted (byte {at})")
+                if st.get_or("one", "?")? != "uno" or not st.contains("three"): 
+                    bad = bad + 1
+                    t.fail(f"{label}: earlier records damaged (byte {at})")
+                st.close()
+            at = at + 1
+        t.assert_eq_int(bad, 0, f"{label}: every flipped byte is caught by the CRC")
+        wipe(src)
+        wipe(dst)
+    # corruption in the middle drops everything after it, and says so
+    mut start2 = build_log(p("mid"), false)?
+    mut d2 = File.read_text(p("mid"))
+    mut mid = 20
+    File.write_text(p("mid"), d2.slice(0, mid) + _flip(d2.slice(mid, mid + 1)) + d2.slice(mid + 1, d2.len()))
+    mut strict = no_hint()
+    strict.truncate_corrupt = false
+    mut sr: Result[KvStore, str] = KvStore.open(p("mid"), strict)
+    t.assert_true(sr.is_err, "truncate_corrupt=false refuses a damaged file")
+    t.assert_contains(sr.err, "corrupt record", "message")
+    t.assert_eq_int(File.read_text(p("mid")).len(), d2.len(), "and leaves it untouched")
+    mut rec = KvStore.open(p("mid"), no_hint())?
+    t.assert_eq_int(rec.stats().discarded_bytes, d2.len() - 16, "default repair drops from the first bad record on")
+    t.assert_eq_int(rec.len(), 0, "nothing survives a bad first record")
+    rec.close()
+    wipe(p("mid"))
+    # not a store at all
+    File.write_text(p("junk"), "this is not a kv file, just text")
+    mut jr: Result[KvStore, str] = KvStore.open(p("junk"), no_hint())
+    t.assert_true(jr.is_err, "foreign file rejected")
+    t.assert_contains(jr.err, "bad magic", "magic message")
+    wipe(p("junk"))
+    # a file cut inside the header is treated as a fresh store
+    File.write_text(p("short"), "TAURA")
+    mut sh = KvStore.open(p("short"), no_hint())?
+    sh.put("k", "v")?
+    sh.close()
+    mut sh2 = KvStore.open(p("short"), no_hint())?
+    t.assert_eq_str(sh2.get("k")?, "v", "short header repaired")
+    sh2.close()
+    wipe(p("short"))
+
+def _flip(s: str) -> str:
+    return byte_str((s.char_at(0) & 255) ^ 85)
+
+def byte_str(c: int) -> str:
+    mut sb = StringBuilder.init(4)
+    sb.append_char(c)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def test_crash_batch_midlog(t: TestRunner) throws str:
+    t.section("crash recovery: write_batch in the middle of a log")
+    wipe(p("mb"))
+    mut st = KvStore.open(p("mb"), no_hint())?
+    st.put("x", "1")?
+    mut b = KvBatch.init()
+    b.put("y", "2")
+    b.put("z", "3")
+    st.write_batch(b)?
+    mut cut_at = st.stats().file_size
+    st.put("w", "4")?
+    st.close()
+    mut data = File.read_text(p("mb"))
+    # cut inside the batch record: neither y nor z, and w (after it) is gone too
+    mut ok = true
+    mut cut = 16
+    mut results = 0
+    while cut < cut_at:
+        wipe(p("mb2"))
+        File.write_text(p("mb2"), data.slice(0, cut))
+        mut s2 = KvStore.open(p("mb2"), no_hint())?
+        mut y = s2.contains("y")
+        mut z = s2.contains("z")
+        if y != z or s2.contains("w"): ok = false
+        if cut >= cut_at and not (y and z): ok = false
+        s2.close()
+        cut = cut + 7
+        results = results + 1
+    t.assert_true(ok, "batch members appear together or not at all")
+    t.assert_true(results > 3, "several cuts tried")
+    wipe(p("mb"))
+    wipe(p("mb2"))
+
+def main():
+    mut t = TestRunner.init("147_kv")
+    mut r: Result[bool, str] = run_all(t)
+    t.assert_true(r.is_ok, "no unexpected error")
+    if r.is_err: print(r.err)
+    t.summary()
+
+def run_all(t: TestRunner) throws str -> bool:
+    test_basics(t)?
+    test_validation(t)?
+    test_persistence(t)?
+    test_prefix(t)?
+    test_ttl(t)?
+    test_batch(t)?
+    test_compaction(t)?
+    test_sync(t)?
+    test_lock(t)?
+    test_crash_truncation(t)?
+    test_crash_corruption(t)?
+    test_crash_batch_midlog(t)?
+    return true

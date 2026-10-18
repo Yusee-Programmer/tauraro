@@ -126,6 +126,19 @@ added here as each phase lands.
   client- and bidirectional streaming, deadlines, cancellation, metadata incl. `-bin`, gzip, h2c and
   TLS) and server (`GrpcServer`: unary and streaming handlers, status/trailers, deadline propagation,
   built-in `grpc.health.v1` Check/Watch). Tested against Python grpcio in both directions.
+- `std.geo`: geodesy, location encodings, projections and geometry. Haversine and sphere bearings/destination/
+  midpoint/cross-track/bounding boxes (pole and antimeridian aware); ellipsoid distances with Karney's algorithm
+  (vendored GeographicLib C 2.2, MIT; exact for antipodal and polar pairs, direct/inverse, geodesic area and path length)
+  and a pure-Tauraro Vincenty inverse/direct that raises instead of returning a wrong answer near antipodes; geohash
+  (neighbours), Open Location Code (encode/decode/shorten/recover, verified against the open-location-code CSVs),
+  UTM (Krueger series, Norway/Svalbard zones) and MGRS; Web Mercator, slippy tiles and quadkeys, ECEF and ENU/AER;
+  `Geometry` with point-in-polygon (holes, multipolygons), spherical and ellipsoidal area, Douglas-Peucker, WKT and GeoJSON
+  (FeatureCollection/Feature/Multi*) read and write. Checked against GeographicLib, PROJ and `mgrs` (tests/lang/146_geo.tr).
+- `std.kv`: an embedded crash-safe key-value store (Bitcask style): append-only log with a CRC per record, in-memory hash
+  index plus a skip list for sorted `iter_prefix`, hint file for fast start-up, per-key TTL, atomic batch records, compaction
+  by atomic rename, fsync policies (always / interval / never), size limits, and an exclusive lock file (flock / LockFileEx).
+  Torn or corrupt tails are discarded on open; tests cut the log at every byte of the last record and flip every byte of it
+  (tests/lang/147_kv.tr).
 - **`std.encoding.xlsx`**: Excel workbooks (Office Open XML SpreadsheetML), pure Tauraro.
   - Reads sheets (names, visibility), shared strings with rich-text runs, inline strings, numbers,
     booleans, errors, formulas with cached values (shared formulas expanded per cell), dates from

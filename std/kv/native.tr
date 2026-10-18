@@ -1,0 +1,76 @@
+# tauraro-cpp-shim: kv_native.c
+#
+# std.kv.native -- internal bindings to std/kv/kv_native.c (positional file
+# I/O, fsync, truncate, atomic replace, lock file, CRC-32). Not a public API:
+# use std.kv.
+
+extern "C":
+    def trc_kv_open(path: Pointer[char], create: int) -> int
+    def trc_kv_close(fd: int) -> int
+    def trc_kv_size(fd: int) -> int
+    def trc_kv_pread(fd: int, off: int, buf: Pointer[char], n: int) -> int
+    def trc_kv_pwrite(fd: int, off: int, buf: Pointer[char], n: int) -> int
+    def trc_kv_sync(fd: int) -> int
+    def trc_kv_truncate(fd: int, size: int) -> int
+    def trc_kv_replace(src: Pointer[char], dst: Pointer[char]) -> int
+    def trc_kv_unlink(path: Pointer[char]) -> int
+    def trc_kv_exists(path: Pointer[char]) -> int
+    def trc_kv_sync_dir(path: Pointer[char]) -> int
+    def trc_kv_lock(path: Pointer[char]) -> int
+    def trc_kv_unlock(h: int)
+    def trc_kv_now_ms() -> int
+    def trc_kv_nanos() -> int
+    def trc_kv_crc32(crc: int, buf: Pointer[char], n: int) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+# Read exactly `n` bytes at `off` (fewer only at end of file) as a string.
+pub def kv_pread_str(fd: int, off: int, n: int) -> str:
+    if n <= 0: return ""
+    mut p = _tr_c_malloc(n + 1)
+    mut got = trc_kv_pread(fd, off, p, n)
+    if got < 0: got = 0
+    unsafe:
+        p.offset(got).write('\0')
+    return _tr_str_wrap_len(p, got)
+
+pub def kv_pwrite_str(fd: int, off: int, data: str) -> int:
+    mut n = data.len()
+    if n == 0: return 0
+    mut p = data as Pointer[char]
+    return trc_kv_pwrite(fd, off, p, n)
+
+pub def kv_crc32(data: str) -> int:
+    mut p = data as Pointer[char]
+    return trc_kv_crc32(0, p, data.len())
+
+pub def kv_crc32_from(crc: int, data: str) -> int:
+    mut p = data as Pointer[char]
+    return trc_kv_crc32(crc, p, data.len())
+
+pub def kv_path_exists(path: str) -> bool:
+    mut p = path as Pointer[char]
+    return trc_kv_exists(p) == 1
+
+pub def kv_unlink(path: str) -> bool:
+    mut p = path as Pointer[char]
+    return trc_kv_unlink(p) == 0
+
+pub def kv_replace(src: str, dst: str) -> bool:
+    mut a = src as Pointer[char]
+    mut b = dst as Pointer[char]
+    return trc_kv_replace(a, b) == 0
+
+pub def kv_open_fd(path: str, create: bool) -> int:
+    mut p = path as Pointer[char]
+    mut c = 0
+    if create: c = 1
+    return trc_kv_open(p, c)
+
+pub def kv_lock(path: str) -> int:
+    mut p = path as Pointer[char]
+    return trc_kv_lock(p)
+
+pub def kv_sync_dir(path: str):
+    mut p = path as Pointer[char]
+    trc_kv_sync_dir(p)
