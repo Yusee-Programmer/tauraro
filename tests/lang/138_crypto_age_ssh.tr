@@ -300,7 +300,7 @@ def test_age_roundtrip(t: TestRunner):
     t.assert_true(tu.is_ok and tf.is_err, "truncated stream fails at finish")
 
     t.section("age: files")
-    mut dir = "/tmp/tauraro_138_age"
+    mut dir = "build/tauraro_138_age"
     mut src = dir + "_in.bin"
     mut mid = dir + "_mid.age"
     mut dst = dir + "_out.bin"
