@@ -2704,6 +2704,10 @@ pub class CGenerator:
                     elif _is_str_type(self.resolve_generic_prim(_csfld.ty.name)):
                         self.ws("    _tr_str_release(self->" + _c_field(_csfld.name) + ");\n")
                         _csf = _csf + 1
+                    elif _csfld.ty.name == "Shared":
+                        # A Shared[T] field owns one strong reference to the control block.
+                        self.ws("    if (self->" + _c_field(_csfld.name) + ") _tr_shared_drop(self->" + _c_field(_csfld.name) + ");\n")
+                        _csf = _csf + 1
                     elif self.is_heap_class_tn(_csfld.ty.name):
                         # Owned heap-class field: recursively release it (its own
                         # _trdrop releases ITS str/class fields). Field stores co-own
@@ -3069,6 +3073,8 @@ pub class CGenerator:
                     nq_val = "_tr_ptr_to_f64(" + nq + ".data.Ok.val)"
                 elif self.value_types.contains(ok_ty.name):
                     nq_val = self.take_payload(nq + ".data.Ok.val", ok_ty.name)
+                elif ok_ty.name == "Tuple" or ok_ty.name == "tuple":
+                    nq_val = self.take_payload(nq + ".data.Ok.val", "TrTuple")
                 elif ok_c.ends_with("*"):
                     nq_val = "(" + ok_c + ")" + nq + ".data.Ok.val"
                 else:
@@ -4521,6 +4527,8 @@ pub class CGenerator:
             # needs an explicit cast or `->field` on the element is invalid C.
             if o_full_ty.args.len > 0:
                 mut _lie = o_full_ty.args.get(0).read()
+                if self.interfaces.contains(_lie.name):
+                    return "(*(" + self.type_to_c(_lie) + "*)" + idx_r + ")"
                 if self.is_heap_class_tn(_lie.name):
                     return "((" + _lie.name + "*)" + idx_r + ")"
                 # List[List[T]] / List[Dict[..]]: the slot is a void*; cast to the
@@ -6994,6 +7002,17 @@ pub class CGenerator:
                     elif _is_float_type(push_arg_ty): elem_sfx = "f64"
                     elif push_arg_ty == "str" or push_arg_ty == "char*": elem_sfx = "str"
                     lsfx = self.list_sfx(elem_sfx)
+                # List[Interface]: store a heap-boxed fat pointer (vtable + retained object).
+                mut _oty_i = hir_expr_type(obj)
+                if args.len > 0 and (_oty_i.name == "List" or _oty_i.name == "Vec") and _oty_i.args.len > 0 and self.interfaces.contains(_oty_i.args.get(0).read().name):
+                    mut _ifc = self.type_to_c(_oty_i.args.get(0).read())
+                    mut _ifa = self.gen_expr(args.get(0))
+                    if self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(args.get(0)).name)):
+                        _ifa = self.obj_retain_wrap(args.get(0), _ifa, false)
+                        if self._obj_store_needs_retain(args.get(0)): _ifa = "_tr_obj_retain(" + _ifa + ")"
+                    _ifa = self.iface_wrap_to(_oty_i.args.get(0).read(), args.get(0), _ifa)
+                    mut _ifb = "_ifb" + self.next_temp()
+                    return "List_" + lsfx + "_append(" + obj_s + ", ({ " + _ifc + "* " + _ifb + " = (" + _ifc + "*)_tr_checked_alloc(sizeof(" + _ifc + ")); *" + _ifb + " = (" + _ifa + "); (void*)" + _ifb + "; }))"
                 # Heap-class element: the list holds a reference. Retain an ALIAS
                 # (a local/field); MOVE a fresh ctor result (rc=1) — obj_retain_wrap
                 # picks correctly, so fresh temps aren't double-counted.
@@ -7088,6 +7107,13 @@ pub class CGenerator:
                 return "List_" + lsfx + "_is_empty(" + obj_s + ")"
             if method == "extend":
                 return "List_" + lsfx + "_extend(" + obj_s + ", " + self.gen_args(args) + ")"
+            if method == "slice" and args.len == 2:
+                # list.slice(a, b): a new list with copies of elements [a, b), clamped.
+                mut _sl = self.next_temp()
+                mut _sl_el = "_sl_src" + _sl + "->data[_sl_i" + _sl + "]"
+                if call_ty.args.len > 0 and self.is_heap_class_tn(self.resolve_generic_tyname(call_ty.args.get(0).read().name)):
+                    _sl_el = "_tr_obj_retain((" + call_ty.args.get(0).read().name + "*)" + _sl_el + ")"
+                return "({ __auto_type _sl_src" + _sl + " = " + obj_s + "; long long _sl_a" + _sl + " = (long long)(" + self.gen_expr(args.get(0)) + "); long long _sl_b" + _sl + " = (long long)(" + self.gen_expr(args.get(1)) + "); if (_sl_a" + _sl + " < 0) _sl_a" + _sl + " = 0; if (_sl_b" + _sl + " > _sl_src" + _sl + "->len) _sl_b" + _sl + " = _sl_src" + _sl + "->len; __auto_type _sl_r" + _sl + " = List_" + lsfx + "_new(); for (long long _sl_i" + _sl + " = _sl_a" + _sl + "; _sl_i" + _sl + " < _sl_b" + _sl + "; _sl_i" + _sl + "++) List_" + lsfx + "_append(_sl_r" + _sl + ", " + _sl_el + "); _sl_r" + _sl + "; })"
             if method == "index_of":
                 # Same discarded-side-effect hazard as push/append above.
                 mut idx_args = ""
@@ -8363,6 +8389,9 @@ pub class CGenerator:
                 self.prescan_await_all_in_expr(se)
             case HirStmt.SLet(_, _, _, _, _, _, se_v):
                 self.prescan_await_all_in_expr(se_v)
+            case HirStmt.SAssign(_, se_a):
+                # `self.t = Thread.spawn(fn, arg)`: the wrapper must exist here too.
+                self.prescan_await_all_in_expr(se_a)
             case HirStmt.SReturn(se_r):
                 if not _is_invalid_ptr(se_r as usize):
                     self.prescan_await_all_in_expr(se_r)
@@ -8740,7 +8769,11 @@ pub class CGenerator:
                         mut ret_s = self.gen_expr(e)
                         ret_s = self.flush_wraps(ret_s, false)
                         mut ret_ty_n = hir_expr_type(e).name
-                        if ret_ty_n == "Result" or ret_ty_n == "Option" or ret_ty_n == "Tuple" or ret_ty_n == "tuple":
+                        if ret_ty_n == "Tuple" or ret_ty_n == "tuple":
+                            # `throws E -> (A, B)`: the tuple value rides in the Ok slot,
+                            # heap-boxed like any other by-value payload.
+                            self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=" + self.box_value(ret_s, "TrTuple") + "});\n")
+                        elif ret_ty_n == "Result" or ret_ty_n == "Option":
                             # The returned EXPRESSION's own type is already the
                             # correctly-shaped aggregate (a call to another
                             # throws/Result-returning function, now correctly
@@ -8893,6 +8926,8 @@ pub class CGenerator:
                                 self.str_local_names.insert(n, true)
                             elif self.value_types.contains(ok_ty3.name):
                                 ok_val3 = self.take_payload(tmp_qr3 + ".data.Ok.val", ok_ty3.name)
+                            elif ok_ty3.name == "Tuple" or ok_ty3.name == "tuple":
+                                ok_val3 = self.take_payload(tmp_qr3 + ".data.Ok.val", "TrTuple")
                             elif ok_c3.ends_with("*"):
                                 # type_to_c already returned a pointer type (heap class) —
                                 # cast straight to it; appending another '*' here produced a
@@ -8971,6 +9006,10 @@ pub class CGenerator:
                                     self.w(" = _tr_shared_clone(" + vn + ");\n")
                                     is_clone = true
                             case _: pass
+                        # `shared x = f()` where f returns a Shared[T] handle (+1 strong ref): bind it directly.
+                        if (not is_clone) and hir_expr_type(v).name == "Shared":
+                            self.w(" = " + self.gen_expr(v) + ";\n")
+                            is_clone = true
                         if not is_clone:
                             # Pass the payload's drop fn so _tr_shared_drop reclaims a
                             # plain-ARC payload's owned fields (not just the struct).
@@ -9183,6 +9222,8 @@ pub class CGenerator:
                                 self.w(pad + tf_c + " " + tf_tmp + " = _tr_ptr_to_f64(" + tf_qr + ".data.Ok.val);\n")
                             elif tf_is_str:
                                 self.w(pad + "TrStr " + tf_tmp + " = _tr_str_unbox(" + tf_qr + ".data.Ok.val);\n")
+                            elif ok_tyf.name == "Tuple" or ok_tyf.name == "tuple":
+                                self.w(pad + "TrTuple " + tf_tmp + " = " + self.take_payload(tf_qr + ".data.Ok.val", "TrTuple") + ";\n")
                             elif tf_c.ends_with("*"):
                                 self.w(pad + tf_c + " " + tf_tmp + " = (" + tf_c + ")" + tf_qr + ".data.Ok.val;\n")
                             else:
@@ -9419,6 +9460,8 @@ pub class CGenerator:
                                     ok_val4 = self.take_payload(tmp_qr4 + ".data.Ok.val", "str")
                                 elif self.value_types.contains(ok_ty4.name):
                                     ok_val4 = self.take_payload(tmp_qr4 + ".data.Ok.val", ok_ty4.name)
+                                elif ok_ty4.name == "Tuple" or ok_ty4.name == "tuple":
+                                    ok_val4 = self.take_payload(tmp_qr4 + ".data.Ok.val", "TrTuple")
                                 elif ok_c4.ends_with("*"):
                                     ok_val4 = "(" + ok_c4 + ")" + tmp_qr4 + ".data.Ok.val"
                                 else:
@@ -9485,6 +9528,24 @@ pub class CGenerator:
                                         if _fi_ixn == "List" or _fi_ixn == "Vec" or _fi_ixn == "Array":
                                             _assign_rhs = "_tr_str_retain(" + _assign_rhs + ")"
                                     case _: pass
+                        case _: pass
+                elif hir_expr_type(t).name == "Shared":
+                    match t.read():
+                        case HirExpr.EPropAccess(_, _, _):
+                            # The field co-owns the control block: clone an existing handle
+                            # (a shared local / param / field); a fresh Shared call result
+                            # (+1 ref) transfers. Drop the old handle first.
+                            mut _shf = self.gen_expr(t)
+                            mut _shv = _assign_rhs
+                            match v.read():
+                                case HirExpr.EIdent(_, _, _): _shv = "_tr_shared_clone(" + _assign_rhs + ")"
+                                case HirExpr.EPropAccess(_, _, _): _shv = "_tr_shared_clone(" + _assign_rhs + ")"
+                                case _: pass
+                            mut _shn = "_shn" + self.next_temp()
+                            self.w(pad + "_TrSharedBox* " + _shn + " = " + _shv + ";\n")
+                            self.w(pad + "if (" + _shf + ") _tr_shared_drop(" + _shf + ");\n")
+                            self.w(pad + _shf + " = " + _shn + ";\n")
+                            return
                         case _: pass
                 elif (hir_expr_type(t).name == "List" or hir_expr_type(t).name == "Vec") and hir_expr_type(t).args.len > 0 and self._list_clone_elem_suffix(hir_expr_type(t)) != "":
                     # [UAF, DEFERRED] `objA.field = objB.field` on a List[T]/Vec[T] field
@@ -9738,7 +9799,25 @@ pub class CGenerator:
                     mut exit_ty_n: str = hir_expr_type(exit_actual).name
                     if self.has_method(exit_ty_n, "__exit__"):
                         mut ctx_exit = with_base + "_ctx" + rei.to_str()
-                        self.w(pad + self.cls_method_c_call(exit_ty_n, "__exit__", ctx_exit, "_tr_str_lit(\"\"), _tr_str_lit(\"\"), _tr_str_lit(\"\")") + ";\n")
+                        # Pass as many (empty) exception-info strings as the method declares
+                        # (docs show `__exit__(self)` / `(self, exc_type)`; the full form has 3).
+                        mut exit_np = 3
+                        if self.classes.contains(exit_ty_n):
+                            mut exit_cls = self.classes.get(exit_ty_n)
+                            mut exit_mi = 0
+                            while exit_mi < exit_cls.methods.len:
+                                if exit_cls.methods.get(exit_mi).name == "__exit__":
+                                    exit_np = exit_cls.methods.get(exit_mi).params.len - 1
+                                    if exit_np < 0: exit_np = 0
+                                    if exit_np > 3: exit_np = 3
+                                exit_mi = exit_mi + 1
+                        mut exit_extra = ""
+                        mut exit_k = 0
+                        while exit_k < exit_np:
+                            if exit_k > 0: exit_extra = exit_extra + ", "
+                            exit_extra = exit_extra + "_tr_str_lit(\"\")"
+                            exit_k = exit_k + 1
+                        self.w(pad + self.cls_method_c_call(exit_ty_n, "__exit__", ctx_exit, exit_extra) + ";\n")
                     rei = rei - 1
             case HirStmt.SAsm(code, outputs, inputs, clobbers):
                 mut asm_s = pad + "__asm__ volatile(\"" + _escape_str_for_c(code, code.len()) + "\""
@@ -10087,6 +10166,9 @@ pub class CGenerator:
             self.w(pad + "    TrStr " + var + " = _tr_str_lit(" + tmp + "_col->data[" + tmp + "_i]);\n")
         elif elem_c == "__auto_type":
             self.w(pad + "    __auto_type " + var + " = " + tmp + "_col->data[" + tmp + "_i];\n")
+        elif (iter_ty.name == "List" or iter_ty.name == "Vec") and iter_ty.args.len > 0 and self.interfaces.contains(iter_ty.args.get(0).read().name):
+            # List[Interface]: slots hold heap-boxed fat pointers.
+            self.w(pad + "    " + elem_c + " " + var + " = *(" + elem_c + "*)" + tmp + "_col->data[" + tmp + "_i];\n")
         else:
             self.w(pad + "    " + elem_c + " " + var + " = (" + elem_c + ")" + tmp + "_col->data[" + tmp + "_i];\n")
         self.gen_block(body, indent + 2)

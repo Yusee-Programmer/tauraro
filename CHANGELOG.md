@@ -448,6 +448,8 @@ added here as each phase lands.
   layer does not verify certificates.
 
 ### Fixed
+- Compiler: `Thread.spawn` assigned to a field compiles; `shared x = f()` with `f -> Shared[T]` works and a `Shared[T]` field co-owns (clones) its handle and drops it with the object; `List[Interface]` stores boxed fat pointers (append, index, iterate, dispatch); `throws E -> (A, B)` wraps and unwraps tuples through `?`, `return` and destructuring; `mut (a, b) = ...` destructuring; `List.slice(a, b)`; `with` calls `__exit__` with the declared number of arguments; `?` in a non-throwing function is a clear diagnostic; keywords used as names are named in the error; top-level names that collide with C keywords / libc identifiers / Windows macros are rejected.
+- `std.net.tls`: a read timeout part-way through a record keeps the bytes already read (no stream desync on the next read).
 - Compiler: a user method named `as_str` is no longer treated as the builtin cast; `Dict[int, V].has` is true for a stored 0; `return list[i]` / `self.f = list[i]` of a str retain the element; an owned class local or list slot reassigned from a list element retains it; `List[List[T]]` element reads and slot assignment compile; nested f-string format specs (`f"{x:.{p}g}"`, `{s:>{w}}`) are applied.
 - TLS server: ClientHellos listing more than 16 cipher suites (Go's crypto/tls lists 19, the TLS 1.3
   ones last) failed with handshake_failure, so Go clients such as ACME validators could not connect.

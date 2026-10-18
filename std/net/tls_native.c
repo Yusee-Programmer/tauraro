@@ -125,6 +125,8 @@ typedef struct {
     u8* certs[TLS_MAX_CERTS]; int64_t cert_lens[TLS_MAX_CERTS]; int ncerts;
     int verify; void* store; char host[256];
     int is_server;                       /* 1 for connections accepted by trc_tls_server_fd */
+    /* Partially read record (a read timeout mid-record must not lose or desync bytes). */
+    u8 rhdr[5]; size_t rh_got; int rh_done; size_t rb_len, rb_got;
 } tls_conn;
 
 static void tls_fail(tls_conn* c, const char* msg) {
@@ -144,29 +146,36 @@ static int sock_wait(tls_sock fd, int write, int ms) {
     return r;
 #endif
 }
-static int sock_read_full(tls_conn* c, u8* buf, size_t n) {
-    size_t got = 0;
+/* Read until `*gotp` reaches n, resuming from the bytes already in buf. 1 = complete,
+ * 0 = clean EOF with nothing read, -1 = error / EOF mid-way, -2 = timeout (progress kept). */
+static int sock_read_part(tls_conn* c, u8* buf, size_t n, size_t* gotp) {
+    size_t got = *gotp;
     while (got < n) {
         long r;
         if (c->timeout_ms > 0) {
             int w = sock_wait(c->fd, 0, c->timeout_ms);
-            if (w == 0) return -2;
-            if (w < 0) return -1;
+            if (w == 0) { *gotp = got; return -2; }
+            if (w < 0) { *gotp = got; return -1; }
         }
         r = (long)recv(c->fd, (char*)buf + got, (int)(n - got), 0);
-        if (r == 0) return got == 0 ? 0 : -1;
+        if (r == 0) { *gotp = got; return got == 0 ? 0 : -1; }
         if (r < 0) {
 #if defined(_WIN32)
-            if (WSAGetLastError() == WSAEWOULDBLOCK) { if (sock_wait(c->fd, 0, c->timeout_ms > 0 ? c->timeout_ms : -1) == 0) return -2; continue; }
+            if (WSAGetLastError() == WSAEWOULDBLOCK) { if (sock_wait(c->fd, 0, c->timeout_ms > 0 ? c->timeout_ms : -1) == 0) { *gotp = got; return -2; } continue; }
 #else
             if (errno == EINTR) continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK) { if (sock_wait(c->fd, 0, c->timeout_ms > 0 ? c->timeout_ms : -1) == 0) return -2; continue; }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) { if (sock_wait(c->fd, 0, c->timeout_ms > 0 ? c->timeout_ms : -1) == 0) { *gotp = got; return -2; } continue; }
 #endif
-            return -1;
+            *gotp = got; return -1;
         }
         got += (size_t)r;
     }
+    *gotp = got;
     return 1;
+}
+static int sock_read_full(tls_conn* c, u8* buf, size_t n) {
+    size_t got = 0;
+    return sock_read_part(c, buf, n, &got);
 }
 static int sock_write_all(tls_conn* c, const u8* buf, size_t n) {
     size_t sent = 0;
@@ -274,17 +283,25 @@ static void send_alert(tls_conn* c, int level, int desc) { u8 a[2]; a[0] = (u8)l
 /* Read one record; returns its content type and fills out/outlen with the
  * plaintext. -1 error (c->err set), -2 timeout, 0 clean EOF. */
 static int read_record(tls_conn* c, u8** outp, size_t* outlen) {
-    u8 hdr[5]; u8* body = c->raw; u8* out = c->plain; size_t len; int r;
+    u8* hdr = c->rhdr; u8* body = c->raw; u8* out = c->plain; size_t len; int r;
     *outp = out;
     for (;;) {
-        r = sock_read_full(c, hdr, 5);
-        if (r == 0) return 0;
+        /* A timeout part-way through a record keeps the bytes read so far, so the
+         * next call resumes at the same offset instead of desyncing the stream. */
+        if (!c->rh_done) {
+            r = sock_read_part(c, hdr, 5, &c->rh_got);
+            if (r == 0) return 0;
+            if (r == -2) return -2;
+            if (r < 0) { tls_fail(c, "TLS: connection closed during record header"); return -1; }
+            len = ((size_t)hdr[3] << 8) | hdr[4];
+            if (len > TLS_MAX_REC + 256) { tls_fail(c, "TLS: record too long"); return -1; }
+            c->rh_done = 1; c->rb_len = len; c->rb_got = 0;
+        }
+        len = c->rb_len;
+        r = sock_read_part(c, body, len, &c->rb_got);
         if (r == -2) return -2;
-        if (r < 0) { tls_fail(c, "TLS: connection closed during record header"); return -1; }
-        len = ((size_t)hdr[3] << 8) | hdr[4];
-        if (len > TLS_MAX_REC + 256) { tls_fail(c, "TLS: record too long"); return -1; }
-        r = sock_read_full(c, body, len);
-        if (r <= 0) { tls_fail(c, r == -2 ? "TLS: timed out" : "TLS: connection closed during record"); return r == -2 ? -2 : -1; }
+        if (r <= 0) { tls_fail(c, "TLS: connection closed during record"); return -1; }
+        c->rh_done = 0; c->rh_got = 0; c->rb_got = 0;
         if (hdr[0] == 20) continue;                       /* ChangeCipherSpec (compat) is ignored */
         if (!c->rd.suite || hdr[0] != 23) {
             if (c->rd.suite && hdr[0] != 21) { tls_fail(c, "TLS: unexpected plaintext record"); return -1; }
