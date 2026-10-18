@@ -31,10 +31,7 @@
 #define DR_FLAC_NO_OGG
 #include "vendor/dr_flac.h"
 
-typedef struct {
-    double* data; int64_t frames; int channels; int rate; int bits; int is_float;
-    char err[160];
-} au_result;
+#include "au_result.h"
 
 void trc_au_free(void* h) { au_result* r = (au_result*)h; if (r) { free(r->data); free(r); } }
 int64_t trc_au_ok(void* h) { au_result* r = (au_result*)h; return r && r->data && r->channels > 0; }

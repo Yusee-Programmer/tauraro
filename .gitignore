@@ -62,6 +62,8 @@ bootstrap/*.zip
 !std/**/*_native.c
 # Vendored third-party C decoders for std.compress (see std/compress/vendor/README.md)
 !std/compress/vendor/**/*.c
+# Vendored third-party C decoders for std.audio (see std/audio/vendor/README.md)
+!std/audio/vendor/**/*.c
 # Python bytecode is never source:
 __pycache__/
 *.pyc
