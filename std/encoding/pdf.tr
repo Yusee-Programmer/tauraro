@@ -33,6 +33,7 @@
 
 from std.core.string import StringBuilder
 from std.image.mod import Image
+from std.color import Color
 from std.sys.datetime import DateTime
 from std.io.file import File
 from std.font.mod import Font, ShapedGlyph
@@ -595,6 +596,16 @@ extend PdfPage:
 
     pub def set_stroke_color(self, r: int, g: int, b: int):
         self._op(pdf_num((r as float) / 255.0) + " " + pdf_num((g as float) / 255.0) + " " + pdf_num((b as float) / 255.0) + " RG")
+
+    # Fill / stroke with a std.color Color (its alpha, when below 1, is applied
+    # with set_alpha as well).
+    pub def set_fill_color_c(self, c: Color):
+        self.set_fill_color(c.r8(), c.g8(), c.b8())
+        if c.a < 0.999: self.set_alpha(c.a, 1.0)
+
+    pub def set_stroke_color_c(self, c: Color):
+        self.set_stroke_color(c.r8(), c.g8(), c.b8())
+        if c.a < 0.999: self.set_alpha(1.0, c.a)
 
     pub def set_fill_gray(self, level: float): self._op(pdf_num(level) + " g")
     pub def set_stroke_gray(self, level: float): self._op(pdf_num(level) + " G")

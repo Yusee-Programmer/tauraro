@@ -122,6 +122,17 @@ added here as each phase lands.
   (`PdfDocument.add_font_ttf`): subset CIDFontType2 / Identity-H fonts with `/W` widths and a
   ToUnicode CMap (searchable text), shaping with kerning and ligatures, and `text_width`,
   `text_aligned`, `text_box` and `wrap_text` that use real font metrics.
+- `std.image.webp`: WebP decode (lossy VP8 with ALPH alpha, lossless VP8L, animated ANIM/ANMF composited like
+  libwebp) bit-identical to libwebp/Pillow, and lossless VP8L encode (palette or subtract-green + predictor, LZ77,
+  Huffman) plus an animated `WebpEncoder`. `std.image.tiff`: baseline TIFF decode (strips/tiles, chunky/planar,
+  none/PackBits/LZW/Deflate, predictor 2, 1-16 bit, gray/RGB/RGBA/palette/CMYK, multi-page) and uncompressed/LZW
+  encode (`TiffEncoder` for several pages). `std.image.decode()` sniffs both.
+- `std.image.qr`: QR Code encoder (versions 1-40, L/M/Q/H with free ECC boost, optimal numeric/alphanumeric/byte
+  segmentation, penalty-scored masks) with `to_image`, `to_svg` and half-block `to_text` renderers; verified with
+  zxing-cpp for every version and level.
+- `std.color`: `Color` with sRGB/linear/HSL/HSV/HWB/Lab/LCH/OKLab/OKLCH/XYZ conversions, hex and CSS Color 4
+  parsing, compositing, interpolation in any space, WCAG contrast, delta E 76/94/2000 (Sharma-verified) and palette
+  helpers. `Image.get_color/set_color/filled/fill_color` and `PdfPage.set_fill_color_c/set_stroke_color_c` take it.
 - **`std.net.http2_server`**: HTTP/2 server (RFC 9113) over h2c or TLS 1.3 with ALPN `h2`. Preface,
   SETTINGS, HPACK, HEADERS/CONTINUATION, DATA with connection and stream flow control, WINDOW_UPDATE,
   PING, RST_STREAM, GOAWAY (graceful `shutdown()`), request and response trailers, concurrent streams;

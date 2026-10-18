@@ -1,0 +1,973 @@
+# std.color -- colour values, colour spaces, CSS parsing, mixing and metrics.
+#
+# A Color holds non-linear sRGB components r, g, b and an alpha a, all as
+# floats nominally in [0, 1]. Out-of-gamut values (from Lab/OKLCH/wide
+# conversions) are kept as they are so round trips do not lose information;
+# `clamped()` / `gamut_mapped()` bring them back, and every byte/hex output
+# clamps.
+#
+# Spaces (white point D65 unless noted, sRGB transfer curve applied exactly):
+#   SPACE_SRGB, SPACE_LINEAR (linear-light sRGB), SPACE_HSL, SPACE_HSV,
+#   SPACE_HWB, SPACE_LAB (CIE L*a*b*), SPACE_LCH, SPACE_OKLAB, SPACE_OKLCH,
+#   SPACE_XYZ (CIE XYZ, Y = 1 for white).
+# Hue is in degrees, saturation/lightness/whiteness/blackness in [0, 1].
+# CSS `lab()` / `lch()` are D50-referenced; the CSS parser and to_css()
+# convert with the Bradford transform, while to_lab()/Color.lab() use D65.
+#
+# Usage:
+#   from std.color import Color, SPACE_OKLCH
+#   mut c = Color.parse("#3366cc")?
+#   mut d = Color.parse("oklch(70% 0.15 200 / 0.5)")?
+#   mut m = c.mix(d, 0.5, SPACE_OKLCH)
+#   print(m.to_hex_alpha())
+#   print(c.contrast_ratio(Color.white()))
+#   print(c.delta_e2000(d))
+
+from std.string.fmt import Fmt
+from std.string.str import Str
+from std.core.string import StringBuilder
+
+extern "C":
+    def sqrt(x: float) -> float
+    def cbrt(x: float) -> float
+    def pow(x: float, y: float) -> float
+    def sin(x: float) -> float
+    def cos(x: float) -> float
+    def atan2(y: float, x: float) -> float
+    def exp(x: float) -> float
+    def fabs(x: float) -> float
+    def fmod(x: float, y: float) -> float
+    def floor(x: float) -> float
+
+pub const SPACE_SRGB: int = 0
+pub const SPACE_LINEAR: int = 1
+pub const SPACE_HSL: int = 2
+pub const SPACE_HSV: int = 3
+pub const SPACE_HWB: int = 4
+pub const SPACE_LAB: int = 5
+pub const SPACE_LCH: int = 6
+pub const SPACE_OKLAB: int = 7
+pub const SPACE_OKLCH: int = 8
+pub const SPACE_XYZ: int = 9
+
+# CSS named colours as ";name=rrggbb" records.
+const _NAMES: str = ";aliceblue=f0f8ff;antiquewhite=faebd7;aqua=00ffff;aquamarine=7fffd4;azure=f0ffff;beige=f5f5dc;bisque=ffe4c4;black=000000;blanchedalmond=ffebcd;blue=0000ff;blueviolet=8a2be2;brown=a52a2a;burlywood=deb887;cadetblue=5f9ea0;chartreuse=7fff00;chocolate=d2691e;coral=ff7f50;cornflowerblue=6495ed;cornsilk=fff8dc;crimson=dc143c;cyan=00ffff;darkblue=00008b;darkcyan=008b8b;darkgoldenrod=b8860b;darkgray=a9a9a9;darkgreen=006400;darkgrey=a9a9a9;darkkhaki=bdb76b;darkmagenta=8b008b;darkolivegreen=556b2f;darkorange=ff8c00;darkorchid=9932cc;darkred=8b0000;darksalmon=e9967a;darkseagreen=8fbc8f;darkslateblue=483d8b;darkslategray=2f4f4f;darkslategrey=2f4f4f;darkturquoise=00ced1;darkviolet=9400d3;deeppink=ff1493;deepskyblue=00bfff;dimgray=696969;dimgrey=696969;dodgerblue=1e90ff;firebrick=b22222;floralwhite=fffaf0;forestgreen=228b22;fuchsia=ff00ff;gainsboro=dcdcdc;ghostwhite=f8f8ff;gold=ffd700;goldenrod=daa520;gray=808080;green=008000;greenyellow=adff2f;grey=808080;honeydew=f0fff0;hotpink=ff69b4;indianred=cd5c5c;indigo=4b0082;ivory=fffff0;khaki=f0e68c;lavender=e6e6fa;lavenderblush=fff0f5;lawngreen=7cfc00;lemonchiffon=fffacd;lightblue=add8e6;lightcoral=f08080;lightcyan=e0ffff;lightgoldenrodyellow=fafad2;lightgray=d3d3d3;lightgreen=90ee90;lightgrey=d3d3d3;lightpink=ffb6c1;lightsalmon=ffa07a;lightseagreen=20b2aa;lightskyblue=87cefa;lightslategray=778899;lightslategrey=778899;lightsteelblue=b0c4de;lightyellow=ffffe0;lime=00ff00;limegreen=32cd32;linen=faf0e6;magenta=ff00ff;maroon=800000;mediumaquamarine=66cdaa;mediumblue=0000cd;mediumorchid=ba55d3;mediumpurple=9370db;mediumseagreen=3cb371;mediumslateblue=7b68ee;mediumspringgreen=00fa9a;mediumturquoise=48d1cc;mediumvioletred=c71585;midnightblue=191970;mintcream=f5fffa;mistyrose=ffe4e1;moccasin=ffe4b5;navajowhite=ffdead;navy=000080;oldlace=fdf5e6;olive=808000;olivedrab=6b8e23;orange=ffa500;orangered=ff4500;orchid=da70d6;palegoldenrod=eee8aa;palegreen=98fb98;paleturquoise=afeeee;palevioletred=db7093;papayawhip=ffefd5;peachpuff=ffdab9;peru=cd853f;pink=ffc0cb;plum=dda0dd;powderblue=b0e0e6;purple=800080;rebeccapurple=663399;red=ff0000;rosybrown=bc8f8f;royalblue=4169e1;saddlebrown=8b4513;salmon=fa8072;sandybrown=f4a460;seagreen=2e8b57;seashell=fff5ee;sienna=a0522d;silver=c0c0c0;skyblue=87ceeb;slateblue=6a5acd;slategray=708090;slategrey=708090;snow=fffafa;springgreen=00ff7f;steelblue=4682b4;tan=d2b48c;teal=008080;thistle=d8bfd8;tomato=ff6347;turquoise=40e0d0;violet=ee82ee;wheat=f5deb3;white=ffffff;whitesmoke=f5f5f5;yellow=ffff00;yellowgreen=9acd32;"
+
+# ---------------------------------------------------------------- helpers
+
+def _clamp01(v: float) -> float:
+    if v < 0.0: return 0.0
+    if v > 1.0: return 1.0
+    return v
+
+def _hue_norm(h: float) -> float:
+    mut r = fmod(h, 360.0)
+    if r < 0.0: r = r + 360.0
+    return r
+
+def _to_byte(v: float) -> int:
+    mut x = v * 255.0 + 0.5
+    if x < 0.0: return 0
+    if x > 255.0: return 255
+    return floor(x) as int
+
+def _srgb_to_lin(v: float) -> float:
+    mut a = fabs(v)
+    mut r = 0.0
+    if a <= 0.04045: r = a / 12.92
+    else: r = pow((a + 0.055) / 1.055, 2.4)
+    if v < 0.0: return 0.0 - r
+    return r
+
+def _lin_to_srgb(v: float) -> float:
+    mut a = fabs(v)
+    mut r = 0.0
+    if a <= 0.0031308: r = a * 12.92
+    else: r = 1.055 * pow(a, 1.0 / 2.4) - 0.055
+    if v < 0.0: return 0.0 - r
+    return r
+
+def _lin_to_xyz(r: float, g: float, b: float) -> (float, float, float):
+    mut x = 0.41239079926595934 * r + 0.357584339383878 * g + 0.1804807884018343 * b
+    mut y = 0.21263900587151027 * r + 0.715168678767756 * g + 0.07219231536073371 * b
+    mut z = 0.01933081871559182 * r + 0.11919477979462598 * g + 0.9505321522496607 * b
+    return (x, y, z)
+
+def _xyz_to_lin(x: float, y: float, z: float) -> (float, float, float):
+    mut r = 3.2409699419045226 * x - 1.537383177570094 * y - 0.4986107602930034 * z
+    mut g = 0.0 - 0.9692436362808796 * x + 1.8759675015077202 * y + 0.04155505740717559 * z
+    mut b = 0.05563007969699366 * x - 0.20397695888897652 * y + 1.0569715142428786 * z
+    return (r, g, b)
+
+def _d65_to_d50(x: float, y: float, z: float) -> (float, float, float):
+    mut a = 1.0479297925449969 * x + 0.022946870601609652 * y - 0.05019226628920524 * z
+    mut b = 0.02962780877005599 * x + 0.9904344267538799 * y - 0.017073799063418826 * z
+    mut c = 0.0 - 0.009243040646204504 * x + 0.015055191490298152 * y + 0.7518742814281371 * z
+    return (a, b, c)
+
+def _d50_to_d65(x: float, y: float, z: float) -> (float, float, float):
+    mut a = 0.955473421488075 * x - 0.02309845494876471 * y + 0.06325924320057072 * z
+    mut b = 0.0 - 0.0283697093338637 * x + 1.0099953980813041 * y + 0.021041441191917323 * z
+    mut c = 0.012314014864481998 * x - 0.020507649298898964 * y + 1.330365926242124 * z
+    return (a, b, c)
+
+def _lab_f(t: float) -> float:
+    if t > 0.008856451679035631: return cbrt(t)
+    return (903.2962962962963 * t + 16.0) / 116.0
+
+def _lab_finv(t: float) -> float:
+    mut t3 = t * t * t
+    if t3 > 0.008856451679035631: return t3
+    return (116.0 * t - 16.0) / 903.2962962962963
+
+def _xyz_to_lab(x: float, y: float, z: float, wx: float, wy: float, wz: float) -> (float, float, float):
+    mut fx = _lab_f(x / wx)
+    mut fy = _lab_f(y / wy)
+    mut fz = _lab_f(z / wz)
+    return (116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz))
+
+def _lab_to_xyz(l: float, a: float, b: float, wx: float, wy: float, wz: float) -> (float, float, float):
+    mut fy = (l + 16.0) / 116.0
+    mut fx = fy + a / 500.0
+    mut fz = fy - b / 200.0
+    mut yy = 0.0
+    if l > 8.0: yy = fy * fy * fy
+    else: yy = l / 903.2962962962963
+    return (_lab_finv(fx) * wx, yy * wy, _lab_finv(fz) * wz)
+
+def _polar(a: float, b: float) -> (float, float):
+    mut c = sqrt(a * a + b * b)
+    mut h = 0.0
+    if c > 0.0000001: h = _hue_norm(atan2(b, a) * 57.29577951308232)
+    return (c, h)
+
+def _rect(c: float, h: float) -> (float, float):
+    mut r = h * 0.017453292519943295
+    return (c * cos(r), c * sin(r))
+
+def _hsl_to_rgb(h: float, s: float, l: float) -> (float, float, float):
+    mut hh = _hue_norm(h)
+    mut a = s * (l if l < 1.0 - l else 1.0 - l)
+    mut k0 = fmod(hh / 30.0, 12.0)
+    mut k8 = fmod(8.0 + hh / 30.0, 12.0)
+    mut k4 = fmod(4.0 + hh / 30.0, 12.0)
+    return (l - a * _f_hsl(k0), l - a * _f_hsl(k8), l - a * _f_hsl(k4))
+
+def _f_hsl(k: float) -> float:
+    mut m = k - 3.0
+    mut t = 9.0 - k
+    if t < m: m = t
+    if m > 1.0: m = 1.0
+    if m < -1.0: m = -1.0
+    return m
+
+def _f_hsv(k: float) -> float:
+    mut m = 4.0 - k
+    if k < m: m = k
+    if m > 1.0: m = 1.0
+    if m < 0.0: m = 0.0
+    return m
+
+def _hsv_to_rgb(h: float, s: float, v: float) -> (float, float, float):
+    mut hh = _hue_norm(h) / 60.0
+    mut k5 = fmod(5.0 + hh, 6.0)
+    mut k3 = fmod(3.0 + hh, 6.0)
+    mut k1 = fmod(1.0 + hh, 6.0)
+    return (v - v * s * _f_hsv(k5), v - v * s * _f_hsv(k3), v - v * s * _f_hsv(k1))
+
+def _rgb_to_hsl(r: float, g: float, b: float) -> (float, float, float):
+    mut mx = r
+    if g > mx: mx = g
+    if b > mx: mx = b
+    mut mn = r
+    if g < mn: mn = g
+    if b < mn: mn = b
+    mut l = (mx + mn) / 2.0
+    mut d = mx - mn
+    mut h = 0.0
+    mut s = 0.0
+    if d != 0.0:
+        mut den = 1.0 - fabs(2.0 * l - 1.0)
+        if den > 0.0: s = d / den
+        h = _rgb_hue(r, g, b, mx, d)
+    return (h, s, l)
+
+def _rgb_hue(r: float, g: float, b: float, mx: float, d: float) -> float:
+    mut h = 0.0
+    if mx == r: h = (g - b) / d + (6.0 if g < b else 0.0)
+    elif mx == g: h = (b - r) / d + 2.0
+    else: h = (r - g) / d + 4.0
+    return h * 60.0
+
+def _rgb_to_hsv(r: float, g: float, b: float) -> (float, float, float):
+    mut mx = r
+    if g > mx: mx = g
+    if b > mx: mx = b
+    mut mn = r
+    if g < mn: mn = g
+    if b < mn: mn = b
+    mut d = mx - mn
+    mut h = 0.0
+    mut s = 0.0
+    if mx > 0.0: s = d / mx
+    if d != 0.0: h = _rgb_hue(r, g, b, mx, d)
+    return (h, s, mx)
+
+def _lin_to_oklab(r: float, g: float, b: float) -> (float, float, float):
+    mut l = cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+    mut m = cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+    mut s = cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+    return (0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+            1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+            0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s)
+
+def _oklab_to_lin(ll: float, a: float, b: float) -> (float, float, float):
+    mut l = ll + 0.3963377774 * a + 0.2158037573 * b
+    mut m = ll - 0.1055613458 * a - 0.0638541728 * b
+    mut s = ll - 0.0894841775 * a - 1.2914855480 * b
+    mut l3 = l * l * l
+    mut m3 = m * m * m
+    mut s3 = s * s * s
+    return (4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3,
+            0.0 - 1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3,
+            0.0 - 0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3)
+
+# ---------------------------------------------------------------- Color
+
+pub class Color:
+    pub r: float
+    pub g: float
+    pub b: float
+    pub a: float
+
+extend Color:
+    # --- constructors
+    pub def rgba(r: float, g: float, b: float, a: float) -> Color:
+        mut c = Color()
+        c.r = r
+        c.g = g
+        c.b = b
+        c.a = a
+        return c
+
+    pub def rgb(r: float, g: float, b: float) -> Color:
+        return Color.rgba(r, g, b, 1.0)
+
+    pub def rgb8(r: int, g: int, b: int) -> Color:
+        return Color.rgba(r as float / 255.0, g as float / 255.0, b as float / 255.0, 1.0)
+
+    pub def rgba8(r: int, g: int, b: int, a: int) -> Color:
+        return Color.rgba(r as float / 255.0, g as float / 255.0, b as float / 255.0, a as float / 255.0)
+
+    pub def black() -> Color: return Color.rgb(0.0, 0.0, 0.0)
+    pub def white() -> Color: return Color.rgb(1.0, 1.0, 1.0)
+    pub def transparent() -> Color: return Color.rgba(0.0, 0.0, 0.0, 0.0)
+
+    pub def hsl(h: float, s: float, l: float, a: float) -> Color:
+        mut r, g, b = _hsl_to_rgb(h, s, l)
+        return Color.rgba(r, g, b, a)
+
+    pub def hsv(h: float, s: float, v: float, a: float) -> Color:
+        mut r, g, b = _hsv_to_rgb(h, s, v)
+        return Color.rgba(r, g, b, a)
+
+    pub def hwb(h: float, w: float, bl: float, a: float) -> Color:
+        mut sum = w + bl
+        if sum >= 1.0:
+            mut gray = w / sum
+            return Color.rgba(gray, gray, gray, a)
+        mut r, g, b = _hsl_to_rgb(h, 1.0, 0.5)
+        mut f = 1.0 - w - bl
+        return Color.rgba(r * f + w, g * f + w, b * f + w, a)
+
+    pub def linear(r: float, g: float, b: float, a: float) -> Color:
+        return Color.rgba(_lin_to_srgb(r), _lin_to_srgb(g), _lin_to_srgb(b), a)
+
+    pub def xyz(x: float, y: float, z: float, a: float) -> Color:
+        mut r, g, b = _xyz_to_lin(x, y, z)
+        return Color.linear(r, g, b, a)
+
+    # CIE L*a*b* relative to D65 (L in 0..100).
+    pub def lab(l: float, a: float, b: float, alpha: float) -> Color:
+        mut x, y, z = _lab_to_xyz(l, a, b, 0.9504559270516716, 1.0, 1.0890577507598784)
+        return Color.xyz(x, y, z, alpha)
+
+    pub def lch(l: float, c: float, h: float, alpha: float) -> Color:
+        mut a, b = _rect(c, h)
+        return Color.lab(l, a, b, alpha)
+
+    # CIE L*a*b* relative to D50 (what CSS lab() means).
+    pub def lab_d50(l: float, a: float, b: float, alpha: float) -> Color:
+        mut x, y, z = _lab_to_xyz(l, a, b, 0.96429567643, 1.0, 0.82510460251)
+        mut x2, y2, z2 = _d50_to_d65(x, y, z)
+        return Color.xyz(x2, y2, z2, alpha)
+
+    pub def lch_d50(l: float, c: float, h: float, alpha: float) -> Color:
+        mut a, b = _rect(c, h)
+        return Color.lab_d50(l, a, b, alpha)
+
+    pub def oklab(l: float, a: float, b: float, alpha: float) -> Color:
+        mut r, g, bl = _oklab_to_lin(l, a, b)
+        return Color.linear(r, g, bl, alpha)
+
+    pub def oklch(l: float, c: float, h: float, alpha: float) -> Color:
+        mut a, b = _rect(c, h)
+        return Color.oklab(l, a, b, alpha)
+
+    # --- conversions out
+    pub def to_hsl(self) -> (float, float, float):
+        return _rgb_to_hsl(self.r, self.g, self.b)
+
+    pub def to_hsv(self) -> (float, float, float):
+        return _rgb_to_hsv(self.r, self.g, self.b)
+
+    pub def to_hwb(self) -> (float, float, float):
+        mut h, s, v = _rgb_to_hsv(self.r, self.g, self.b)
+        mut mn = self.r
+        if self.g < mn: mn = self.g
+        if self.b < mn: mn = self.b
+        mut h2, s2, l2 = _rgb_to_hsl(self.r, self.g, self.b)
+        return (h2, mn, 1.0 - v)
+
+    pub def to_linear(self) -> (float, float, float):
+        return (_srgb_to_lin(self.r), _srgb_to_lin(self.g), _srgb_to_lin(self.b))
+
+    pub def to_xyz(self) -> (float, float, float):
+        return _lin_to_xyz(_srgb_to_lin(self.r), _srgb_to_lin(self.g), _srgb_to_lin(self.b))
+
+    pub def to_lab(self) -> (float, float, float):
+        mut x, y, z = self.to_xyz()
+        return _xyz_to_lab(x, y, z, 0.9504559270516716, 1.0, 1.0890577507598784)
+
+    pub def to_lch(self) -> (float, float, float):
+        mut l, a, b = self.to_lab()
+        mut c, h = _polar(a, b)
+        return (l, c, h)
+
+    pub def to_lab_d50(self) -> (float, float, float):
+        mut x, y, z = self.to_xyz()
+        mut x2, y2, z2 = _d65_to_d50(x, y, z)
+        return _xyz_to_lab(x2, y2, z2, 0.96429567643, 1.0, 0.82510460251)
+
+    pub def to_lch_d50(self) -> (float, float, float):
+        mut l, a, b = self.to_lab_d50()
+        mut c, h = _polar(a, b)
+        return (l, c, h)
+
+    pub def to_oklab(self) -> (float, float, float):
+        return _lin_to_oklab(_srgb_to_lin(self.r), _srgb_to_lin(self.g), _srgb_to_lin(self.b))
+
+    pub def to_oklch(self) -> (float, float, float):
+        mut l, a, b = self.to_oklab()
+        mut c, h = _polar(a, b)
+        return (l, c, h)
+
+    # Coordinates in `space` (one of the SPACE_* constants).
+    pub def to_space(self, space: int) -> (float, float, float):
+        if space == 1: return self.to_linear()
+        if space == 2: return self.to_hsl()
+        if space == 3: return self.to_hsv()
+        if space == 4: return self.to_hwb()
+        if space == 5: return self.to_lab()
+        if space == 6: return self.to_lch()
+        if space == 7: return self.to_oklab()
+        if space == 8: return self.to_oklch()
+        if space == 9: return self.to_xyz()
+        return (self.r, self.g, self.b)
+
+    pub def from_space(space: int, x: float, y: float, z: float, alpha: float) -> Color:
+        if space == 1: return Color.linear(x, y, z, alpha)
+        if space == 2: return Color.hsl(x, y, z, alpha)
+        if space == 3: return Color.hsv(x, y, z, alpha)
+        if space == 4: return Color.hwb(x, y, z, alpha)
+        if space == 5: return Color.lab(x, y, z, alpha)
+        if space == 6: return Color.lch(x, y, z, alpha)
+        if space == 7: return Color.oklab(x, y, z, alpha)
+        if space == 8: return Color.oklch(x, y, z, alpha)
+        if space == 9: return Color.xyz(x, y, z, alpha)
+        return Color.rgba(x, y, z, alpha)
+
+    # --- bytes and text
+    pub def r8(self) -> int: return _to_byte(self.r)
+    pub def g8(self) -> int: return _to_byte(self.g)
+    pub def b8(self) -> int: return _to_byte(self.b)
+    pub def a8(self) -> int: return _to_byte(self.a)
+
+    pub def to_rgba8(self) -> (int, int, int, int):
+        return (_to_byte(self.r), _to_byte(self.g), _to_byte(self.b), _to_byte(self.a))
+
+    # 0xAARRGGBB
+    pub def to_argb32(self) -> int:
+        return (_to_byte(self.a) << 24) | (_to_byte(self.r) << 16) | (_to_byte(self.g) << 8) | _to_byte(self.b)
+
+    pub def from_argb32(v: int) -> Color:
+        return Color.rgba8((v >> 16) & 255, (v >> 8) & 255, v & 255, (v >> 24) & 255)
+
+    # "#rrggbb" (alpha ignored)
+    pub def to_hex(self) -> str:
+        return "#" + _hex2(_to_byte(self.r)) + _hex2(_to_byte(self.g)) + _hex2(_to_byte(self.b))
+
+    # "#rrggbbaa"
+    pub def to_hex_alpha(self) -> str:
+        return self.to_hex() + _hex2(_to_byte(self.a))
+
+    # "#rgb" when every channel is a repeated nibble, else "#rrggbb".
+    pub def to_hex_short(self) -> str:
+        mut r = _to_byte(self.r)
+        mut g = _to_byte(self.g)
+        mut b = _to_byte(self.b)
+        if r % 17 == 0 and g % 17 == 0 and b % 17 == 0:
+            return "#" + _hex1(r / 17) + _hex1(g / 17) + _hex1(b / 17)
+        return self.to_hex()
+
+    # "rgb(r g b)" / "rgb(r g b / a)" with byte channels.
+    pub def to_css(self) -> str:
+        mut s = "rgb(" + Fmt.int_to_str(_to_byte(self.r)) + " " + Fmt.int_to_str(_to_byte(self.g)) + " " + Fmt.int_to_str(_to_byte(self.b))
+        if self.a < 0.9999: s = s + " / " + _num(self.a, 3)
+        return s + ")"
+
+    pub def to_css_hsl(self) -> str:
+        mut h, s, l = self.to_hsl()
+        mut t = "hsl(" + _num(h, 1) + " " + _num(s * 100.0, 1) + "% " + _num(l * 100.0, 1) + "%"
+        if self.a < 0.9999: t = t + " / " + _num(self.a, 3)
+        return t + ")"
+
+    pub def to_css_oklch(self) -> str:
+        mut l, c, h = self.to_oklch()
+        mut t = "oklch(" + _num(l * 100.0, 2) + "% " + _num(c, 4) + " " + _num(h, 2)
+        if self.a < 0.9999: t = t + " / " + _num(self.a, 3)
+        return t + ")"
+
+    pub def to_css_lab(self) -> str:
+        mut l, a, b = self.to_lab_d50()
+        mut t = "lab(" + _num(l, 2) + "% " + _num(a, 2) + " " + _num(b, 2)
+        if self.a < 0.9999: t = t + " / " + _num(self.a, 3)
+        return t + ")"
+
+    # --- parsing
+    # "#rgb" "#rgba" "#rrggbb" "#rrggbbaa" (leading # optional).
+    pub def from_hex(s: str) throws str -> Color:
+        mut t = Str.trim(s)
+        if t.len() > 0 and Str.char_at(t, 0) == 35: t = Str.slice(t, 1, t.len())
+        mut n = t.len()
+        if n != 3 and n != 4 and n != 6 and n != 8: raise("color: bad hex length in '" + s + "'")
+        mut v: List[int] = []
+        mut i = 0
+        while i < n:
+            mut d = _hexval(Str.char_at(t, i))
+            if d < 0: raise("color: bad hex digit in '" + s + "'")
+            v.append(d)
+            i = i + 1
+        if n <= 4:
+            mut a = 255
+            if n == 4: a = v[3] * 17
+            return Color.rgba8(v[0] * 17, v[1] * 17, v[2] * 17, a)
+        mut a2 = 255
+        if n == 8: a2 = v[6] * 16 + v[7]
+        return Color.rgba8(v[0] * 16 + v[1], v[2] * 16 + v[3], v[4] * 16 + v[5], a2)
+
+    # A CSS named colour ("rebeccapurple", "transparent", ...), case-insensitive.
+    pub def named(name: str) throws str -> Color:
+        mut low = Str.to_lower(Str.trim(name))
+        if low == "transparent": return Color.transparent()
+        mut at = Str.index_of(_NAMES, ";" + low + "=")
+        if at < 0: raise("color: unknown colour name '" + name + "'")
+        mut p = at + low.len() + 2
+        return Color.from_hex(Str.slice(_NAMES, p, p + 6))
+
+    # Any CSS colour: #hex, names, rgb()/rgba(), hsl()/hsla(), hwb(), lab(), lch(),
+    # oklab(), oklch(), color(srgb | srgb-linear | xyz | xyz-d65 | xyz-d50 ...).
+    pub def parse(text: str) throws str -> Color:
+        mut s = Str.to_lower(Str.trim(text))
+        if s.len() == 0: raise("color: empty string")
+        if Str.char_at(s, 0) == 35: return Color.from_hex(s)
+        mut lp = Str.index_of(s, "(")
+        if lp < 0:
+            mut nm: Result[Color, str] = Color.named(s)
+            if nm.is_ok: return nm.ok
+            return Color.from_hex(s)
+        if Str.char_at(s, s.len() - 1) != 41: raise("color: missing ')' in '" + text + "'")
+        mut fname = Str.trim(Str.slice(s, 0, lp))
+        mut toks = _tokens(Str.slice(s, lp + 1, s.len() - 1))
+        return _parse_function(fname, toks, text)
+
+    # --- alpha and compositing
+    pub def with_alpha(self, a: float) -> Color:
+        return Color.rgba(self.r, self.g, self.b, a)
+
+    pub def clamped(self) -> Color:
+        return Color.rgba(_clamp01(self.r), _clamp01(self.g), _clamp01(self.b), _clamp01(self.a))
+
+    pub def in_gamut(self) -> bool:
+        mut e = 0.00001
+        return self.r >= 0.0 - e and self.r <= 1.0 + e and self.g >= 0.0 - e and self.g <= 1.0 + e and self.b >= 0.0 - e and self.b <= 1.0 + e
+
+    # Bring an out-of-gamut colour into sRGB by reducing OKLCH chroma (hue and
+    # lightness are kept), the CSS Color 4 approach in spirit.
+    pub def gamut_mapped(self) -> Color:
+        if self.in_gamut(): return self.clamped()
+        mut l, c, h = self.to_oklch()
+        if l >= 1.0: return Color.rgba(1.0, 1.0, 1.0, self.a)
+        if l <= 0.0: return Color.rgba(0.0, 0.0, 0.0, self.a)
+        mut lo = 0.0
+        mut hi = c
+        mut i = 0
+        while i < 24:
+            mut mid = (lo + hi) / 2.0
+            if Color.oklch(l, mid, h, self.a).in_gamut(): lo = mid
+            else: hi = mid
+            i = i + 1
+        return Color.oklch(l, lo, h, self.a).clamped()
+
+    # Source-over compositing of self on `bg` in gamma-encoded sRGB (what most
+    # image editors do).
+    pub def over(self, bg: Color) -> Color:
+        mut ao = self.a + bg.a * (1.0 - self.a)
+        if ao <= 0.0: return Color.transparent()
+        mut k = bg.a * (1.0 - self.a)
+        return Color.rgba((self.r * self.a + bg.r * k) / ao, (self.g * self.a + bg.g * k) / ao, (self.b * self.a + bg.b * k) / ao, ao)
+
+    # Same, but blending in linear light (physically correct).
+    pub def over_linear(self, bg: Color) -> Color:
+        mut ao = self.a + bg.a * (1.0 - self.a)
+        if ao <= 0.0: return Color.transparent()
+        mut k = bg.a * (1.0 - self.a)
+        mut r = (_srgb_to_lin(self.r) * self.a + _srgb_to_lin(bg.r) * k) / ao
+        mut g = (_srgb_to_lin(self.g) * self.a + _srgb_to_lin(bg.g) * k) / ao
+        mut b = (_srgb_to_lin(self.b) * self.a + _srgb_to_lin(bg.b) * k) / ao
+        return Color.linear(r, g, b, ao)
+
+    # Interpolate towards `other` (t = 0 gives self, 1 gives other) in `space`.
+    # Polar spaces take the shorter hue arc; alpha is interpolated and the other
+    # channels are premultiplied, as in CSS Color 4.
+    pub def mix(self, other: Color, t: float, space: int) -> Color:
+        mut a1, a2, a3 = self.to_space(space)
+        mut b1, b2, b3 = other.to_space(space)
+        mut hue_at = -1
+        if space == 2 or space == 3 or space == 4: hue_at = 0
+        if space == 6 or space == 8: hue_at = 2
+        if hue_at >= 0:
+            mut h1 = a1
+            mut h2 = b1
+            mut c1 = a2
+            mut c2 = b2
+            if hue_at == 2:
+                h1 = a3
+                h2 = b3
+                c1 = a2
+                c2 = b2
+            # achromatic colours borrow the other's hue
+            mut ach1 = c1 < 0.000001
+            mut ach2 = c2 < 0.000001
+            if space == 4:
+                ach1 = a2 + a3 >= 0.999999
+                ach2 = b2 + b3 >= 0.999999
+            if ach1 and not ach2: h1 = h2
+            if ach2 and not ach1: h2 = h1
+            mut dh = h2 - h1
+            if dh > 180.0: dh = dh - 360.0
+            if dh < -180.0: dh = dh + 360.0
+            mut h = _hue_norm(h1 + dh * t)
+            if hue_at == 0:
+                a1 = h
+                b1 = h
+            else:
+                a3 = h
+                b3 = h
+        mut al = self.a + (other.a - self.a) * t
+        mut p1 = self.a
+        mut p2 = other.a
+        mut r1 = a1
+        mut r2 = a2
+        mut r3 = a3
+        mut s1 = b1
+        mut s2 = b2
+        mut s3 = b3
+        # premultiply non-hue components
+        if hue_at != 0:
+            r1 = r1 * p1
+            s1 = s1 * p2
+        if hue_at != 2:
+            r3 = r3 * p1
+            s3 = s3 * p2
+        if hue_at == -1 or hue_at == 0 or hue_at == 2:
+            r2 = r2 * p1
+            s2 = s2 * p2
+        mut x = r1 + (s1 - r1) * t
+        mut y = r2 + (s2 - r2) * t
+        mut z = r3 + (s3 - r3) * t
+        if hue_at == 0:
+            x = a1
+        if hue_at == 2:
+            z = a3
+        if al > 0.0:
+            if hue_at != 0: x = x / al
+            y = y / al
+            if hue_at != 2: z = z / al
+        return Color.from_space(space, x, y, z, al)
+
+    # --- luminance, contrast
+    # WCAG relative luminance (0 black .. 1 white).
+    pub def luminance(self) -> float:
+        return 0.21263900587151027 * _srgb_to_lin(_clamp01(self.r)) + 0.715168678767756 * _srgb_to_lin(_clamp01(self.g)) + 0.07219231536073371 * _srgb_to_lin(_clamp01(self.b))
+
+    # WCAG 2 contrast ratio, 1..21 (composite translucent colours first).
+    pub def contrast_ratio(self, other: Color) -> float:
+        mut l1 = self.luminance()
+        mut l2 = other.luminance()
+        if l2 > l1:
+            mut t = l1
+            l1 = l2
+            l2 = t
+        return (l1 + 0.05) / (l2 + 0.05)
+
+    # "AAA", "AA", "AA Large" or "Fail".
+    pub def wcag_level(self, other: Color) -> str:
+        mut cr = self.contrast_ratio(other)
+        if cr >= 7.0: return "AAA"
+        if cr >= 4.5: return "AA"
+        if cr >= 3.0: return "AA Large"
+        return "Fail"
+
+    # Black or white, whichever reads better on this colour.
+    pub def readable_text(self) -> Color:
+        if self.contrast_ratio(Color.black()) >= self.contrast_ratio(Color.white()): return Color.black()
+        return Color.white()
+
+    # --- distance
+    pub def delta_e76(self, other: Color) -> float:
+        mut l1, a1, b1 = self.to_lab()
+        mut l2, a2, b2 = other.to_lab()
+        return delta_e76_lab(l1, a1, b1, l2, a2, b2)
+
+    pub def delta_e94(self, other: Color) -> float:
+        mut l1, a1, b1 = self.to_lab()
+        mut l2, a2, b2 = other.to_lab()
+        return delta_e94_lab(l1, a1, b1, l2, a2, b2, false)
+
+    pub def delta_e2000(self, other: Color) -> float:
+        mut l1, a1, b1 = self.to_lab()
+        mut l2, a2, b2 = other.to_lab()
+        return delta_e2000_lab(l1, a1, b1, l2, a2, b2)
+
+    # Euclidean distance in OKLab (about 0.02 is a just-noticeable difference).
+    pub def delta_e_ok(self, other: Color) -> float:
+        mut l1, a1, b1 = self.to_oklab()
+        mut l2, a2, b2 = other.to_oklab()
+        return sqrt((l1 - l2) * (l1 - l2) + (a1 - a2) * (a1 - a2) + (b1 - b2) * (b1 - b2))
+
+    pub def equals(self, other: Color, eps: float) -> bool:
+        return fabs(self.r - other.r) <= eps and fabs(self.g - other.g) <= eps and fabs(self.b - other.b) <= eps and fabs(self.a - other.a) <= eps
+
+    # --- palette helpers (HSL based; amounts are fractions, e.g. 0.1 = 10 points)
+    pub def lighten(self, amount: float) -> Color:
+        mut h, s, l = self.to_hsl()
+        return Color.hsl(h, s, _clamp01(l + amount), self.a)
+
+    pub def darken(self, amount: float) -> Color:
+        return self.lighten(0.0 - amount)
+
+    pub def saturate(self, amount: float) -> Color:
+        mut h, s, l = self.to_hsl()
+        return Color.hsl(h, _clamp01(s + amount), l, self.a)
+
+    pub def desaturate(self, amount: float) -> Color:
+        return self.saturate(0.0 - amount)
+
+    pub def rotate_hue(self, degrees: float) -> Color:
+        mut h, s, l = self.to_hsl()
+        return Color.hsl(h + degrees, s, l, self.a)
+
+    pub def grayscale(self) -> Color:
+        mut y = self.luminance()
+        mut v = _lin_to_srgb(y)
+        return Color.rgba(v, v, v, self.a)
+
+    pub def invert(self) -> Color:
+        return Color.rgba(1.0 - self.r, 1.0 - self.g, 1.0 - self.b, self.a)
+
+    pub def complementary(self) -> Color:
+        return self.rotate_hue(180.0)
+
+    # self plus the colours 120 and 240 degrees around the hue wheel.
+    pub def triadic(self) -> List[Color]:
+        mut out: List[Color] = [self, self.rotate_hue(120.0), self.rotate_hue(240.0)]
+        return out
+
+    pub def tetradic(self) -> List[Color]:
+        mut out: List[Color] = [self, self.rotate_hue(90.0), self.rotate_hue(180.0), self.rotate_hue(270.0)]
+        return out
+
+    pub def split_complementary(self) -> List[Color]:
+        mut out: List[Color] = [self, self.rotate_hue(150.0), self.rotate_hue(210.0)]
+        return out
+
+    # n colours spread over `spread` degrees centred on this hue.
+    pub def analogous(self, n: int, spread: float) -> List[Color]:
+        mut out: List[Color] = []
+        if n < 1: return out
+        mut i = 0
+        while i < n:
+            mut off = 0.0
+            if n > 1: off = (i as float / (n - 1) as float - 0.5) * spread
+            out.append(self.rotate_hue(off))
+            i = i + 1
+        return out
+
+    # n steps from self to `other` inclusive, mixed in `space`.
+    pub def scale_to(self, other: Color, n: int, space: int) -> List[Color]:
+        mut out: List[Color] = []
+        if n < 1: return out
+        if n == 1:
+            out.append(self)
+            return out
+        mut i = 0
+        while i < n:
+            out.append(self.mix(other, i as float / (n - 1) as float, space))
+            i = i + 1
+        return out
+
+    # n tints (mixed with white) from self towards white, excluding self.
+    pub def tints(self, n: int) -> List[Color]:
+        mut out: List[Color] = []
+        mut i = 1
+        while i <= n:
+            out.append(self.mix(Color.white(), i as float / (n + 1) as float, SPACE_OKLAB))
+            i = i + 1
+        return out
+
+    pub def shades(self, n: int) -> List[Color]:
+        mut out: List[Color] = []
+        mut i = 1
+        while i <= n:
+            out.append(self.mix(Color.black(), i as float / (n + 1) as float, SPACE_OKLAB))
+            i = i + 1
+        return out
+
+# ---------------------------------------------------------------- delta E
+
+pub def delta_e76_lab(l1: float, a1: float, b1: float, l2: float, a2: float, b2: float) -> float:
+    return sqrt((l1 - l2) * (l1 - l2) + (a1 - a2) * (a1 - a2) + (b1 - b2) * (b1 - b2))
+
+# CIE94. `textiles` selects kL = 2, K1 = 0.048, K2 = 0.014 instead of graphic arts.
+pub def delta_e94_lab(l1: float, a1: float, b1: float, l2: float, a2: float, b2: float, textiles: bool) -> float:
+    mut kl = 1.0
+    mut k1 = 0.045
+    mut k2 = 0.015
+    if textiles:
+        kl = 2.0
+        k1 = 0.048
+        k2 = 0.014
+    mut c1 = sqrt(a1 * a1 + b1 * b1)
+    mut c2 = sqrt(a2 * a2 + b2 * b2)
+    mut dl = l1 - l2
+    mut dc = c1 - c2
+    mut da = a1 - a2
+    mut db = b1 - b2
+    mut dh2 = da * da + db * db - dc * dc
+    if dh2 < 0.0: dh2 = 0.0
+    mut sc = 1.0 + k1 * c1
+    mut sh = 1.0 + k2 * c1
+    mut tl = dl / kl
+    mut tc = dc / sc
+    return sqrt(tl * tl + tc * tc + dh2 / (sh * sh))
+
+# CIEDE2000 (kL = kC = kH = 1), following Sharma, Wu and Dalal (2005).
+pub def delta_e2000_lab(l1: float, a1: float, b1: float, l2: float, a2: float, b2: float) -> float:
+    mut rad = 0.017453292519943295
+    mut c1 = sqrt(a1 * a1 + b1 * b1)
+    mut c2 = sqrt(a2 * a2 + b2 * b2)
+    mut cb = (c1 + c2) / 2.0
+    mut cb7 = pow(cb, 7.0)
+    mut g = 0.5 * (1.0 - sqrt(cb7 / (cb7 + 6103515625.0)))
+    mut a1p = (1.0 + g) * a1
+    mut a2p = (1.0 + g) * a2
+    mut c1p = sqrt(a1p * a1p + b1 * b1)
+    mut c2p = sqrt(a2p * a2p + b2 * b2)
+    mut h1p = 0.0
+    mut h2p = 0.0
+    if c1p != 0.0: h1p = _hue_norm(atan2(b1, a1p) / rad)
+    if c2p != 0.0: h2p = _hue_norm(atan2(b2, a2p) / rad)
+    mut dlp = l2 - l1
+    mut dcp = c2p - c1p
+    mut dhp = 0.0
+    if c1p * c2p != 0.0:
+        dhp = h2p - h1p
+        if dhp > 180.0: dhp = dhp - 360.0
+        if dhp < -180.0: dhp = dhp + 360.0
+    mut dhh = 2.0 * sqrt(c1p * c2p) * sin(dhp * rad / 2.0)
+    mut lbp = (l1 + l2) / 2.0
+    mut cbp = (c1p + c2p) / 2.0
+    mut hbp = h1p + h2p
+    if c1p * c2p != 0.0:
+        if fabs(h1p - h2p) <= 180.0: hbp = (h1p + h2p) / 2.0
+        elif h1p + h2p < 360.0: hbp = (h1p + h2p + 360.0) / 2.0
+        else: hbp = (h1p + h2p - 360.0) / 2.0
+    mut t = 1.0 - 0.17 * cos((hbp - 30.0) * rad) + 0.24 * cos(2.0 * hbp * rad) + 0.32 * cos((3.0 * hbp + 6.0) * rad) - 0.20 * cos((4.0 * hbp - 63.0) * rad)
+    mut dth = 30.0 * exp(0.0 - ((hbp - 275.0) / 25.0) * ((hbp - 275.0) / 25.0))
+    mut cbp7 = pow(cbp, 7.0)
+    mut rc = 2.0 * sqrt(cbp7 / (cbp7 + 6103515625.0))
+    mut sl = 1.0 + 0.015 * (lbp - 50.0) * (lbp - 50.0) / sqrt(20.0 + (lbp - 50.0) * (lbp - 50.0))
+    mut sc = 1.0 + 0.045 * cbp
+    mut sh = 1.0 + 0.015 * cbp * t
+    mut rt = 0.0 - sin(2.0 * dth * rad) * rc
+    mut tl = dlp / sl
+    mut tc = dcp / sc
+    mut th = dhh / sh
+    return sqrt(tl * tl + tc * tc + th * th + rt * tc * th)
+
+# ---------------------------------------------------------------- internals
+
+def _hex1(n: int) -> str:
+    if n < 10: return Fmt.int_to_str(n)
+    return Str.slice("abcdef", n - 10, n - 9)
+
+def _hex2(n: int) -> str:
+    return _hex1(n / 16) + _hex1(n % 16)
+
+def _hexval(c: int) -> int:
+    if c >= 48 and c <= 57: return c - 48
+    if c >= 97 and c <= 102: return c - 87
+    if c >= 65 and c <= 70: return c - 55
+    return -1
+
+def _num(v: float, decimals: int) -> str:
+    mut s = Fmt.float_to_str(v, decimals)
+    if Str.index_of(s, ".") >= 0:
+        mut n = s.len()
+        while n > 0 and Str.char_at(s, n - 1) == 48: n = n - 1
+        if n > 0 and Str.char_at(s, n - 1) == 46: n = n - 1
+        s = Str.slice(s, 0, n)
+    if s == "-0": return "0"
+    return s
+
+# Split the inside of a CSS function on spaces, commas and '/'.
+def _tokens(inner: str) -> List[str]:
+    mut out: List[str] = []
+    mut cur = StringBuilder.init(16)
+    mut i = 0
+    mut n = inner.len()
+    while i < n:
+        mut c = Str.char_at(inner, i)
+        if c == 32 or c == 44 or c == 47 or c == 9 or c == 10:
+            if cur.len() > 0:
+                out.append(cur.to_owned())
+                cur.clear()
+        else:
+            cur.append_char(c)
+        i = i + 1
+    if cur.len() > 0: out.append(cur.to_owned())
+    cur.free()
+    return out
+
+class _Val:
+    v: float
+    u: int
+
+def _val(v: float, u: int) -> _Val:
+    mut r = _Val()
+    r.v = v
+    r.u = u
+    return r
+
+# Number with optional unit; u is 0 none, 1 '%', 2 angle (already in degrees).
+def _parse_value(tok: str) throws str -> _Val:
+    if tok == "none": return _val(0.0, 0)
+    mut n = tok.len()
+    mut i = 0
+    mut neg = false
+    if n > 0 and (Str.char_at(tok, 0) == 45 or Str.char_at(tok, 0) == 43):
+        neg = Str.char_at(tok, 0) == 45
+        i = 1
+    mut v = 0.0
+    mut digits = 0
+    while i < n and Str.char_at(tok, i) >= 48 and Str.char_at(tok, i) <= 57:
+        v = v * 10.0 + (Str.char_at(tok, i) - 48) as float
+        digits = digits + 1
+        i = i + 1
+    if i < n and Str.char_at(tok, i) == 46:
+        i = i + 1
+        mut scale = 0.1
+        while i < n and Str.char_at(tok, i) >= 48 and Str.char_at(tok, i) <= 57:
+            v = v + (Str.char_at(tok, i) - 48) as float * scale
+            scale = scale / 10.0
+            digits = digits + 1
+            i = i + 1
+    if digits == 0: raise("color: bad number '" + tok + "'")
+    if i < n and Str.char_at(tok, i) == 101 and i + 1 < n and (Str.char_at(tok, i + 1) == 45 or Str.char_at(tok, i + 1) == 43 or (Str.char_at(tok, i + 1) >= 48 and Str.char_at(tok, i + 1) <= 57)):
+        mut j = i + 1
+        mut eneg = false
+        if Str.char_at(tok, j) == 45 or Str.char_at(tok, j) == 43:
+            eneg = Str.char_at(tok, j) == 45
+            j = j + 1
+        mut ev = 0
+        while j < n and Str.char_at(tok, j) >= 48 and Str.char_at(tok, j) <= 57:
+            ev = ev * 10 + (Str.char_at(tok, j) - 48)
+            j = j + 1
+        if eneg: ev = 0 - ev
+        v = v * pow(10.0, ev as float)
+        i = j
+    if neg: v = 0.0 - v
+    mut unit = Str.slice(tok, i, n)
+    if unit == "": return _val(v, 0)
+    if unit == "%": return _val(v, 1)
+    if unit == "deg": return _val(v, 2)
+    if unit == "rad": return _val(v * 57.29577951308232, 2)
+    if unit == "grad": return _val(v * 0.9, 2)
+    if unit == "turn": return _val(v * 360.0, 2)
+    raise("color: unknown unit '" + unit + "' in '" + tok + "'")
+
+# Channel value: percent maps 100% to `full`; plain numbers are used as-is.
+def _chan(tok: str, full: float) throws str -> float:
+    mut pv = _parse_value(tok)?
+    if pv.u == 1: return pv.v * full / 100.0
+    return pv.v
+
+def _hue_of(tok: str) throws str -> float:
+    mut pv = _parse_value(tok)?
+    return pv.v
+
+def _alpha_of(toks: List[str]) throws str -> float:
+    if toks.len() < 4: return 1.0
+    return _clamp01(_chan(toks[3], 1.0)?)
+
+def _parse_function(fname: str, toks: List[str], text: str) throws str -> Color:
+    mut n = toks.len()
+    if fname == "color":
+        if n < 4: raise("color: color() needs a space and three components: '" + text + "'")
+        mut sp = toks[0]
+        mut x = _chan(toks[1], 1.0)?
+        mut y = _chan(toks[2], 1.0)?
+        mut z = _chan(toks[3], 1.0)?
+        mut al = 1.0
+        if n >= 5: al = _clamp01(_chan(toks[4], 1.0)?)
+        if sp == "srgb": return Color.rgba(x, y, z, al)
+        if sp == "srgb-linear": return Color.linear(x, y, z, al)
+        if sp == "xyz" or sp == "xyz-d65": return Color.xyz(x, y, z, al)
+        if sp == "xyz-d50":
+            mut a, b, c = _d50_to_d65(x, y, z)
+            return Color.xyz(a, b, c, al)
+        raise("color: unsupported colour space '" + sp + "'")
+    if n < 3 or n > 4: raise("color: expected 3 or 4 arguments in '" + text + "'")
+    mut alpha = _alpha_of(toks)?
+    if fname == "rgb" or fname == "rgba":
+        return Color.rgba(_chan(toks[0], 255.0)? / 255.0, _chan(toks[1], 255.0)? / 255.0, _chan(toks[2], 255.0)? / 255.0, alpha)
+    if fname == "hsl" or fname == "hsla":
+        return Color.hsl(_hue_of(toks[0])?, _clamp01(_chan(toks[1], 1.0)? / _pct_scale(toks[1])), _clamp01(_chan(toks[2], 1.0)? / _pct_scale(toks[2])), alpha)
+    if fname == "hwb":
+        return Color.hwb(_hue_of(toks[0])?, _clamp01(_chan(toks[1], 1.0)? / _pct_scale(toks[1])), _clamp01(_chan(toks[2], 1.0)? / _pct_scale(toks[2])), alpha)
+    if fname == "lab":
+        return Color.lab_d50(_chan(toks[0], 100.0)?, _chan(toks[1], 125.0)?, _chan(toks[2], 125.0)?, alpha)
+    if fname == "lch":
+        return Color.lch_d50(_chan(toks[0], 100.0)?, _chan(toks[1], 150.0)?, _hue_of(toks[2])?, alpha)
+    if fname == "oklab":
+        return Color.oklab(_chan(toks[0], 1.0)?, _chan(toks[1], 0.4)?, _chan(toks[2], 0.4)?, alpha)
+    if fname == "oklch":
+        return Color.oklch(_chan(toks[0], 1.0)?, _chan(toks[1], 0.4)?, _hue_of(toks[2])?, alpha)
+    raise("color: unknown function '" + fname + "'")
+
+# hsl()/hwb() saturation and lightness: "50%" is 0.5; a bare number is read as a percentage (50 -> 0.5).
+def _pct_scale(tok: str) -> float:
+    if Str.index_of(tok, "%") >= 0: return 1.0
+    return 100.0
+

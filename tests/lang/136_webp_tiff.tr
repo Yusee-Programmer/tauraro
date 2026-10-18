@@ -1,0 +1,285 @@
+# tests/lang/136_webp_tiff.tr
+# std.image.webp / std.image.tiff. Fixtures were written by Pillow (libwebp /
+# libtiff); expected values are FNV-1a hashes of the RGBA pixels Pillow
+# decodes from the same bytes, so a match means bit-identical output.
+# The C codecs were also checked against Pillow on 56 WebP files (all
+# lossy/lossless/alpha/animation variants, random sizes and qualities) and
+# 29 TIFF files (every compression, strips/tiles, chunky/planar, 1-16 bit,
+# palette, CMYK, multi-page), and fuzzed under ASan/UBSan.
+
+from std.test import TestRunner
+from std.image.mod import Image, decode
+from std.image.webp import decode_webp, decode_webp_checked, decode_webp_animation, webp_info, encode_webp, WebpEncoder, WebpAnimation, WebpInfo
+from std.image.tiff import decode_tiff, decode_tiff_page, decode_tiff_checked, tiff_page_count, tiff_info, encode_tiff, TiffEncoder, TiffInfo, TIFF_NONE, TIFF_LZW
+from std.crypto.native import _cn_unhex
+
+def unhex(h: str) -> str:
+    mut r: Result[str, str] = _cn_unhex(h)
+    return r.ok
+
+def fnv(img: Image) -> int:
+    mut h = 2166136261
+    mut n = img.width * img.height * 4
+    mut i = 0
+    while i < n:
+        h = h ^ (img.pixels.get(i) as int & 0xFF)
+        h = (h * 16777619) & 0xFFFFFFFF
+        i = i + 1
+    return h
+
+def same_pixels(a: Image, b: Image) -> bool:
+    if a.width != b.width or a.height != b.height: return false
+    mut n = a.width * a.height * 4
+    mut i = 0
+    while i < n:
+        if a.pixels.get(i) != b.pixels.get(i): return false
+        i = i + 1
+    return true
+
+# 37x23 test card with a gradient, noise-like texture and translucent pixels.
+def card(alpha: bool) -> Image:
+    mut img = Image.init(37, 23)
+    mut y = 0
+    while y < 23:
+        mut x = 0
+        while x < 37:
+            mut a = 255
+            if alpha: a = (x * 7 + y * 11) % 256
+            img.set_pixel(x, y, (x * 7) % 256, (y * 11) % 256, (x * y * 13 + 5) % 256, a)
+            x = x + 1
+        y = y + 1
+    return img
+
+def fx_webp_lossy() -> str:
+    return unhex("52494646aa00000057454250565038209e0000001003009d012a10000c0002003425b002744c807e806000792afb0683524e372d1000fef4c43d78603ccd885dd15a8ed13c87c3fb27d01e8f8bbdf03ba29b428f9522b733cd8acf33514ab9bff8c19b93dd450aa54d7a1f3f15ba260dd914f8fd727fbee64bc241fb6a44fbe4e399ae41cda2a50e6768f57f6ab7bc7fd37a1ac7f66f7bfd494edc7dc4fcffe8a5cafbd4ab1f315f583f183f9ffd15fc0000")
+
+def fx_webp_lossy_alpha() -> str:
+    return unhex("52494646b000000057454250565038580a000000100000000b0000090000414c504813000000051730141111864080f83fc1a98388fe07e5010056503820760000005002009d012a0c000a0002804225b00274471581ec3d5f24fb4d8000feece1ec9ef8f5571f59f8cd6b67759053ca8799cc39b119477203ab2ce64f09dba0b11e2913e319b9ec793fc8b87e56f48b1c6762957024f3c7ec74af5302fff0047e4b3f87f690f3a60891169fe57cfe059adfda448d641000")
+
+def fx_webp_lossless() -> str:
+    return unhex("5249464632000000574542505650384c250000002f0c000210b98ce87fec22a2ff012101e194ffef347d4aa643209b867687209a00c0676d0300")
+
+def fx_webp_lossless_pal() -> str:
+    return unhex("5249464628000000574542505650384c1c0000002f094001000f700fdf0b211f4566fe430b028124f0f57788e87fd000")
+
+def fx_webp_anim() -> str:
+    return unhex("52494646be00000057454250565038580a00000012000000070000050000414e494d06000000000000000000414e4d462a000000000000000000030000040000460000035650384c110000002f030001100f10f31ff31f8c7988e87f7800414e4d462c000000010000000000030000040000500000015650384c130000002f030001100f3050f31ff31f38e621a2ffe10100414e4d462c0000000200000000000300000400005a0000005650384c130000002f030001100f30a0f31ff31f38e621a2ffe10100")
+
+def fx_tiff_raw() -> str:
+    return unhex("49492a00080000000a0000010400010000000900000001010400010000000700000002010300030000008600000003010300010000000100000006010300010000000200000011010400010000008c0000001501030001000000030000001601040001000000070000001701040001000000bd0000001c01030001000000010000000000000008000800080000000025001d4a003a6f0057940074b90091de00ae0300cb2800e800351d25353a4a35576f3574943591b935aede35cb0335e8283505006a3a256a574a6a746f6a91946aaeb96acbde6ae8036a05286a22009f57259f744a9f916f9fae949fcbb99fe8de9f05039f22289f3f00d47425d4914ad4ae6fd4cb94d4e8b9d405ded42203d43f28d45c0009912509ae4a09cb6f09e8940905b90922de093f03095c280979003eae253ecb4a3ee86f3e05943e22b93e3fde3e5c033e79283e96")
+
+def fx_tiff_lzw_rgba() -> str:
+    return unhex("49492a0026010000800020400128003a2825000745037800ae784a000e8a05c80122c86f0015cf001801961814001d040000d43a14128d4743c250d4ae64378d4e88c4a0d522b45c8d55cdc6f0d59604018d5d02c140d40a54001a87428129a8ae50251a8e878379a922a04a1a95cc85c9a996f06f1a9d018019a80a40141a844680027cae3c12a7ce8642527d228c37a7d5cb44a27d96dc5ca7dd0046f27c0a2c01a7c44541427c7e7c00350e85012b512278253515ca037b5196c84a351d0f05cb500a186f350444001b507e6814350b890000252264128255c8c2502596b437825d0dc4a0240a045c824442c6f0247e5401824b87c14024f2a4000f95c78128f996a0250f9d0c8378f80af04a0f844185c8f87e406f0f8b868018f8f290140f92cb8808000b000001030001000000090000000101030001000000070000000201030004000000b001000003010300010000000500000006010300010000000200000011010400010000000800000015010300010000000400000016010300010000000700000017010400010000001d0100001c0103000100000001000000520103000100000002000000000000000800080008000800")
+
+def fx_tiff_deflate() -> str:
+    return unhex("49492a00ac000000789c05c1a10d05210c00d02604d121be212161819a133dcf02676e821a0ce68f4142beed067866c056a319e3bf0700113e19ae024f873aa16d180e568203f48974657a0ad54e6dd2d8b41c9d441ee48af264a9455a9731656d394e7c9200fa44ad595bd1d1754d3d5bbdd390f406abd15ab6516c753bd3fcb6e0ec4ef602b68823e32a783afa8961e3edf04df8051e9157e653d8770e93efcdafe36fe2df1ff4a94883000a0000010300010000000900000001010300010000000700000002010300030000002a0100000301030001000000080000000601030001000000020000001101040001000000080000001501030001000000030000001601030001000000070000001701040001000000a30000001c010300010000000100000000000000080008000800")
+
+def fx_tiff_packbits_gray() -> str:
+    return unhex("49492a004e00000008000e1d2b39485618260822313f4e5c6a793a2c08455362707e8d9b404e0867768492a1afa06270088a98a6b5c3b4c38593081624334132404f111f0838475546556371334109000001030001000000090000000101030001000000070000000201030001000000080000000301030001000000058000000601030001000000010000001101040001000000080000001601030001000000070000001701040001000000460000001c010300010000000100000000000000")
+
+def fx_tiff_palette() -> str:
+    return unhex("49492a003a000000800180c05028120c0702c0806038300604020100c031300c4220000044c0116014623d1003c220b070381a250c8340a020000a000001030001000000090000000101030001000000070000000201030001000000080000000301030001000000050000000601030001000000030000001101040001000000080000001601030001000000070000001701040001000000310000001c01030001000000010000004001030000030000b800000000000000009400940014005b00b9005d001400140000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ba006a009f003e00150015001f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008d00ae004b007700760083006b007400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
+
+def fx_tiff_bilevel() -> str:
+    return unhex("49492a0008000000080000010400010000000900000001010400010000000700000003010300010000000100000006010300010000000100000011010400010000006e00000016010400010000000700000017010400010000000e0000001c0103000100000001000000000000000200140056805500be8000004a00")
+
+def fx_tiff_gray16_pred_be() -> str:
+    return unhex("4d4d002a0000001e789c636050d680403f05186b8e038c050043ca04cf00000a010000030000000100050000010100030000000100030000010200030000000100100000010300030000000100080000010600030000000100010000011100040000000100000008011500030000000100010000011600030000000100030000011700040000000100000015013d0003000000010002000000000000")
+
+def fx_tiff_multi() -> str:
+    return unhex("49492a005c0000008000204250007494001d1bc00574a000e8b90024400350e8946a3a250d4ae6f1a9d1283548ae46aae001a874253515c946a3a1bcd4914a1a95cb93532c009f2b8953e742527d226f4fab9289f65ae53ee88080000a000001030001000000060000000101030001000000040000000201030003000000da0000000301030001000000050000000601030001000000020000001101040001000000080000001501030001000000030000001601030001000000040000001701040001000000530000001c01030001000000010000002e01000008000800080049492a004e000000800020400128003a2825000745037800ae784a000e8a0000d43a14128d4743c250d4ae64378d4e88c4a0d522b4001a87428129a8ae50251a8e878379a922a04a1a95cc8808000b000001030001000000050000000101030001000000030000000201030004000000b80100000301030001000000050000000601030001000000020000001101040001000000e80000001501030001000000040000001601030001000000030000001701040001000000450000001c0103000100000001000000520103000100000002000000000000000800080008000800")
+
+def test_webp_decode(t: TestRunner):
+    t.section("WebP decode")
+
+    mut b_webp_lossy = fx_webp_lossy()
+    mut i_webp_lossy = decode_webp(b_webp_lossy, b_webp_lossy.len())
+    t.assert_eq_int(i_webp_lossy.width, 16, "webp_lossy: width")
+    t.assert_eq_int(i_webp_lossy.height, 12, "webp_lossy: height")
+    t.assert_eq_int(fnv(i_webp_lossy), 2343756016, "webp_lossy: pixels identical to Pillow")
+
+    mut b_webp_lossy_alpha = fx_webp_lossy_alpha()
+    mut i_webp_lossy_alpha = decode_webp(b_webp_lossy_alpha, b_webp_lossy_alpha.len())
+    t.assert_eq_int(i_webp_lossy_alpha.width, 12, "webp_lossy_alpha: width")
+    t.assert_eq_int(i_webp_lossy_alpha.height, 10, "webp_lossy_alpha: height")
+    t.assert_eq_int(fnv(i_webp_lossy_alpha), 2406862224, "webp_lossy_alpha: pixels identical to Pillow")
+
+    mut b_webp_lossless = fx_webp_lossless()
+    mut i_webp_lossless = decode_webp(b_webp_lossless, b_webp_lossless.len())
+    t.assert_eq_int(i_webp_lossless.width, 13, "webp_lossless: width")
+    t.assert_eq_int(i_webp_lossless.height, 9, "webp_lossless: height")
+    t.assert_eq_int(fnv(i_webp_lossless), 1956341429, "webp_lossless: pixels identical to Pillow")
+
+    mut b_webp_lossless_pal = fx_webp_lossless_pal()
+    mut i_webp_lossless_pal = decode_webp(b_webp_lossless_pal, b_webp_lossless_pal.len())
+    t.assert_eq_int(i_webp_lossless_pal.width, 10, "webp_lossless_pal: width")
+    t.assert_eq_int(i_webp_lossless_pal.height, 6, "webp_lossless_pal: height")
+    t.assert_eq_int(fnv(i_webp_lossless_pal), 1680637445, "webp_lossless_pal: pixels identical to Pillow")
+
+    mut ab = fx_webp_anim()
+    mut ar: Result[WebpAnimation, str] = decode_webp_animation(ab, ab.len())
+    t.assert_true(ar.is_ok, "animation decodes")
+    mut anim = ar.ok
+    t.assert_eq_int(anim.frames.len(), 3, "3 frames")
+    t.assert_eq_int(anim.width, 8, "canvas width")
+    t.assert_eq_int(anim.loop_count, 0, "loop forever")
+    t.assert_eq_int(anim.delays[1], 80, "frame 1 duration")
+    t.assert_eq_int(fnv(anim.frames[0]), 489485733, "frame 0 composited like libwebp")
+    t.assert_eq_int(fnv(anim.frames[1]), 3074541733, "frame 1 composited like libwebp")
+    t.assert_eq_int(fnv(anim.frames[2]), 1670297125, "frame 2 composited like libwebp")
+    mut ir: Result[WebpInfo, str] = webp_info(ab, ab.len())
+    t.assert_true(ir.ok.animated, "info: animated")
+    t.assert_true(ir.ok.lossless, "info: lossless")
+    mut lb = fx_webp_lossy_alpha()
+    mut li: Result[WebpInfo, str] = webp_info(lb, lb.len())
+    t.assert_true(li.ok.has_alpha and not li.ok.lossless, "info: lossy with alpha")
+    mut sniff = decode(lb, lb.len())
+    t.assert_eq_int(sniff.width, 12, "std.image.decode sniffs WebP")
+
+
+def test_webp_encode(t: TestRunner):
+    t.section("WebP lossless encode")
+    mut img = card(true)
+    mut out, n = encode_webp(img)
+    t.assert_true(n > 30, "encodes")
+    mut back = decode_webp(out, n)
+    t.assert_true(same_pixels(img, back), "RGBA round trip is lossless")
+    mut opaque = card(false)
+    mut o2, n2 = encode_webp(opaque)
+    t.assert_true(same_pixels(opaque, decode_webp(o2, n2)), "opaque round trip")
+    t.assert_true(n2 < 37 * 23 * 3, "compresses")
+    mut flat = Image.init(40, 30)
+    mut y = 0
+    while y < 30:
+        mut x = 0
+        while x < 40:
+            if x < 20: flat.set_pixel(x, y, 255, 0, 0, 255)
+            else: flat.set_pixel(x, y, 0, 0, 255, 128)
+            x = x + 1
+        y = y + 1
+    mut o3, n3 = encode_webp(flat)
+    t.assert_true(same_pixels(flat, decode_webp(o3, n3)), "palette path round trip")
+    t.assert_true(n3 < 120, "two-colour image is tiny")
+    mut one = Image.init(1, 1)
+    one.set_pixel(0, 0, 9, 8, 7, 6)
+    mut o4, n4 = encode_webp(one)
+    t.assert_true(same_pixels(one, decode_webp(o4, n4)), "1x1 round trip")
+    mut enc = WebpEncoder.init(37, 23, 2)
+    mut r1: Result[bool, str] = enc.add_frame(img, 120)
+    mut r2: Result[bool, str] = enc.add_frame(opaque, 60)
+    t.assert_true(r1.is_ok and r2.is_ok, "frames added")
+    mut bad: Result[bool, str] = enc.add_frame(one, 10)
+    t.assert_true(bad.is_err, "frame size checked")
+    mut ao, an = enc.finish()
+    mut ar: Result[WebpAnimation, str] = decode_webp_animation(ao, an)
+    t.assert_true(ar.is_ok, "animated output decodes")
+    t.assert_eq_int(ar.ok.frames.len(), 2, "2 frames")
+    t.assert_eq_int(ar.ok.loop_count, 2, "loop count kept")
+    t.assert_eq_int(ar.ok.delays[0], 120, "duration kept")
+    t.assert_true(same_pixels(ar.ok.frames[1], opaque), "frame pixels kept")
+
+def test_webp_errors(t: TestRunner):
+    t.section("WebP errors")
+    mut b = fx_webp_lossy()
+    t.assert_eq_int(decode_webp(b, 60).width, -1, "truncated file fails cleanly")
+    mut r: Result[Image, str] = decode_webp_checked("RIFF\x10\x00\x00\x00WEBPJUNK", 16)
+    t.assert_true(r.is_err, "garbage raises")
+    t.assert_true(r.err.starts_with("WebP:"), "error message")
+
+
+def test_tiff_decode(t: TestRunner):
+    t.section("TIFF decode")
+
+    mut b_tiff_raw = fx_tiff_raw()
+    mut i_tiff_raw = decode_tiff(b_tiff_raw, b_tiff_raw.len())
+    t.assert_eq_int(i_tiff_raw.width, 9, "tiff_raw: width")
+    t.assert_eq_int(i_tiff_raw.height, 7, "tiff_raw: height")
+    t.assert_eq_int(fnv(i_tiff_raw), 1110307782, "tiff_raw: pixels identical to Pillow")
+
+    mut b_tiff_lzw_rgba = fx_tiff_lzw_rgba()
+    mut i_tiff_lzw_rgba = decode_tiff(b_tiff_lzw_rgba, b_tiff_lzw_rgba.len())
+    t.assert_eq_int(i_tiff_lzw_rgba.width, 9, "tiff_lzw_rgba: width")
+    t.assert_eq_int(i_tiff_lzw_rgba.height, 7, "tiff_lzw_rgba: height")
+    t.assert_eq_int(fnv(i_tiff_lzw_rgba), 4112300559, "tiff_lzw_rgba: pixels identical to Pillow")
+
+    mut b_tiff_deflate = fx_tiff_deflate()
+    mut i_tiff_deflate = decode_tiff(b_tiff_deflate, b_tiff_deflate.len())
+    t.assert_eq_int(i_tiff_deflate.width, 9, "tiff_deflate: width")
+    t.assert_eq_int(i_tiff_deflate.height, 7, "tiff_deflate: height")
+    t.assert_eq_int(fnv(i_tiff_deflate), 1110307782, "tiff_deflate: pixels identical to Pillow")
+
+    mut b_tiff_packbits_gray = fx_tiff_packbits_gray()
+    mut i_tiff_packbits_gray = decode_tiff(b_tiff_packbits_gray, b_tiff_packbits_gray.len())
+    t.assert_eq_int(i_tiff_packbits_gray.width, 9, "tiff_packbits_gray: width")
+    t.assert_eq_int(i_tiff_packbits_gray.height, 7, "tiff_packbits_gray: height")
+    t.assert_eq_int(fnv(i_tiff_packbits_gray), 1982188590, "tiff_packbits_gray: pixels identical to Pillow")
+
+    mut b_tiff_palette = fx_tiff_palette()
+    mut i_tiff_palette = decode_tiff(b_tiff_palette, b_tiff_palette.len())
+    t.assert_eq_int(i_tiff_palette.width, 9, "tiff_palette: width")
+    t.assert_eq_int(i_tiff_palette.height, 7, "tiff_palette: height")
+    t.assert_eq_int(fnv(i_tiff_palette), 140806317, "tiff_palette: pixels identical to Pillow")
+
+    mut b_tiff_bilevel = fx_tiff_bilevel()
+    mut i_tiff_bilevel = decode_tiff(b_tiff_bilevel, b_tiff_bilevel.len())
+    t.assert_eq_int(i_tiff_bilevel.width, 9, "tiff_bilevel: width")
+    t.assert_eq_int(i_tiff_bilevel.height, 7, "tiff_bilevel: height")
+    t.assert_eq_int(fnv(i_tiff_bilevel), 2040118824, "tiff_bilevel: pixels identical to Pillow")
+
+    mut b_tiff_gray16_pred_be = fx_tiff_gray16_pred_be()
+    mut i_tiff_gray16_pred_be = decode_tiff(b_tiff_gray16_pred_be, b_tiff_gray16_pred_be.len())
+    t.assert_eq_int(i_tiff_gray16_pred_be.width, 5, "tiff_gray16_pred_be: width")
+    t.assert_eq_int(i_tiff_gray16_pred_be.height, 3, "tiff_gray16_pred_be: height")
+    t.assert_eq_int(fnv(i_tiff_gray16_pred_be), 456247062, "tiff_gray16_pred_be: pixels identical to Pillow")
+
+    mut mb = fx_tiff_multi()
+    t.assert_eq_int(tiff_page_count(mb, mb.len()), 2, "page count")
+    mut p1: Result[Image, str] = decode_tiff_page(mb, mb.len(), 1)
+    t.assert_true(p1.is_ok, "page 1 decodes")
+    t.assert_eq_int(p1.ok.width, 5, "page 1 width")
+    t.assert_eq_int(fnv(p1.ok), 2508194987, "page 1 pixels")
+    mut p9: Result[Image, str] = decode_tiff_page(mb, mb.len(), 9)
+    t.assert_true(p9.is_err, "missing page raises")
+    mut inf: Result[TiffInfo, str] = tiff_info(mb, mb.len(), 0)
+    t.assert_eq_int(inf.ok.compression, 5, "info: LZW")
+    t.assert_eq_int(inf.ok.samples_per_pixel, 3, "info: RGB")
+    mut g = fx_tiff_gray16_pred_be()
+    mut gi: Result[TiffInfo, str] = tiff_info(g, g.len(), 0)
+    t.assert_eq_int(gi.ok.bits_per_sample, 16, "info: 16-bit")
+    mut sniff = decode(g, g.len())
+    t.assert_eq_int(sniff.width, 5, "std.image.decode sniffs TIFF")
+    mut bad: Result[Image, str] = decode_tiff_checked("II*\x00\xff\xff\x00\x00", 8)
+    t.assert_true(bad.is_err, "bad IFD offset raises")
+
+
+def test_tiff_encode(t: TestRunner):
+    t.section("TIFF encode")
+    mut img = card(true)
+    mut a, an = encode_tiff(img, TIFF_LZW)
+    t.assert_true(same_pixels(img, decode_tiff(a, an)), "LZW RGBA round trip")
+    mut b, bn = encode_tiff(img, TIFF_NONE)
+    t.assert_true(same_pixels(img, decode_tiff(b, bn)), "uncompressed round trip")
+    t.assert_true(bn > 37 * 23 * 4, "uncompressed size")
+    mut op = card(false)
+    mut c, cn = encode_tiff(op, TIFF_LZW)
+    mut ci: Result[TiffInfo, str] = tiff_info(c, cn, 0)
+    t.assert_eq_int(ci.ok.samples_per_pixel, 3, "opaque image written as RGB")
+    t.assert_true(same_pixels(op, decode_tiff(c, cn)), "RGB round trip")
+    mut e = TiffEncoder.init()
+    e.add_page(img, TIFF_LZW)
+    e.add_page(op, TIFF_NONE)
+    mut m, mn = e.finish()
+    t.assert_eq_int(tiff_page_count(m, mn), 2, "two pages written")
+    mut p1: Result[Image, str] = decode_tiff_page(m, mn, 1)
+    t.assert_true(same_pixels(op, p1.ok), "second page round trip")
+    mut bad: Result[bool, str] = TiffEncoder.init().add_page(img, 7)
+    t.assert_true(bad.is_err, "unknown compression rejected")
+
+def main():
+    mut t = TestRunner.init("136_webp_tiff")
+    test_webp_decode(t)
+    test_webp_encode(t)
+    test_webp_errors(t)
+    test_tiff_decode(t)
+    test_tiff_encode(t)
+    t.summary()
