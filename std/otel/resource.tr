@@ -1,0 +1,137 @@
+# std.otel.resource -- Resource (the entity producing telemetry) and the
+# OTEL_* environment configuration helpers.
+#
+#   mut r = Resource.default_for("checkout")        # + env overrides
+#   mut r2 = Resource.create(Attributes.new().str("service.name", "api"))
+#
+# Resource.from_env() / default_for() read:
+#   OTEL_RESOURCE_ATTRIBUTES  "key1=value1,key2=value2" (values percent-decoded)
+#   OTEL_SERVICE_NAME         wins over service.name from anywhere else
+# and always add telemetry.sdk.name / .language / .version.
+
+from std.core.vec import Vec
+from std.core.string import StringBuilder
+from std.string.str import Str
+from std.sys.env import Env
+from std.otel.attr import Attributes
+from std.otel.context import baggage_decode
+from std.otel.native import trim_ows
+
+pub const SDK_NAME     = "opentelemetry"
+pub const SDK_LANGUAGE = "tauraro"
+pub const SDK_VERSION  = "0.1.0"
+
+# Value of an environment variable ("" when unset).
+pub def otel_env(name: str) -> str:
+    mut e = Env.init()
+    return e.get_var(name)
+
+# Integer environment variable, or `dflt` when unset or not a number.
+pub def otel_env_int(name: str, dflt: int) -> int:
+    mut v = trim_ows(otel_env(name))
+    if v.len() == 0: return dflt
+    mut i = 0
+    while i < v.len():
+        mut c = Str.char_at(v, i)
+        if c < 48 or c > 57: return dflt
+        i = i + 1
+    return Str.parse_int(v)
+
+pub class Resource:
+    pub attributes: Attributes
+    pub schema_url: str
+
+extend Resource:
+    pub def create(attrs: Attributes) -> Resource:
+        mut r = Resource()
+        r.attributes = attrs
+        r.schema_url = ""
+        return r
+
+    pub def empty() -> Resource:
+        return Resource.create(Attributes.new())
+
+    # telemetry.sdk.* plus service.name = "unknown_service" (spec default).
+    pub def sdk_default() -> Resource:
+        mut a = Attributes.new()
+        a.str("service.name", "unknown_service")
+        a.str("telemetry.sdk.name", SDK_NAME)
+        a.str("telemetry.sdk.language", SDK_LANGUAGE)
+        a.str("telemetry.sdk.version", SDK_VERSION)
+        return Resource.create(a)
+
+    # Attributes from OTEL_RESOURCE_ATTRIBUTES / OTEL_SERVICE_NAME only.
+    pub def from_env() -> Resource:
+        mut a = parse_resource_attributes(otel_env("OTEL_RESOURCE_ATTRIBUTES"))
+        mut sn = trim_ows(otel_env("OTEL_SERVICE_NAME"))
+        if sn.len() > 0: a.str("service.name", sn)
+        return Resource.create(a)
+
+    # SDK defaults, then `service_name` (if not ""), then the environment.
+    pub def default_for(service_name: str) -> Resource:
+        mut r = Resource.sdk_default()
+        if service_name.len() > 0: r.attributes.str("service.name", service_name)
+        r = r.merge(Resource.from_env())
+        return r
+
+    # New resource: self's attributes updated by `other` (other wins).
+    pub def merge(self, other: Resource) -> Resource:
+        mut a = self.attributes.clone()
+        a.merge(other.attributes)
+        mut r = Resource.create(a)
+        r.schema_url = self.schema_url
+        if other.schema_url.len() > 0: r.schema_url = other.schema_url
+        return r
+
+    pub def get(self, key: str) -> str:
+        return self.attributes.get(key)
+
+    pub def service_name(self) -> str:
+        return self.attributes.get("service.name")
+
+    # OTLP/JSON Resource message.
+    pub def to_json(self) -> str:
+        mut sb = StringBuilder.init(256)
+        sb.append("{\"attributes\":")
+        self.attributes.write_json(sb)
+        if self.attributes.dropped > 0:
+            sb.append(",\"droppedAttributesCount\":")
+            sb.append_int(self.attributes.dropped)
+        sb.append_char(125)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+# Parse "k1=v1,k2=v2" (W3C-baggage-like, values percent-decoded); entries
+# without '=' or with an empty key are skipped.
+pub def parse_resource_attributes(s: str) -> Attributes:
+    mut a = Attributes.new()
+    if trim_ows(s).len() == 0: return a
+    mut parts = s.split_exact(",")
+    mut i = 0
+    while i < len(parts):
+        mut m = parts[i]
+        i = i + 1
+        mut eq = Str.index_of(m, "=")
+        if eq <= 0: continue
+        mut k = trim_ows(Str.slice(m, 0, eq))
+        mut v = trim_ows(Str.slice(m, eq + 1, m.len()))
+        if k.len() == 0: continue
+        a.str(k, baggage_decode(v))
+    return a
+
+# Parse OTEL_EXPORTER_OTLP_HEADERS style "k=v,k2=v2" into parallel lists.
+pub def parse_header_list(s: str, names: Vec[str], values: Vec[str]):
+    if trim_ows(s).len() == 0: return
+    mut parts = s.split_exact(",")
+    mut i = 0
+    while i < len(parts):
+        mut m = parts[i]
+        i = i + 1
+        mut eq = Str.index_of(m, "=")
+        if eq <= 0: continue
+        mut k = trim_ows(Str.slice(m, 0, eq))
+        mut v = trim_ows(Str.slice(m, eq + 1, m.len()))
+        if k.len() == 0: continue
+        names.push(k)
+        values.push(baggage_decode(v))

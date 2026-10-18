@@ -1,0 +1,262 @@
+# std.otel.logs -- OTLP log records, a LoggerProvider and the std.log bridge.
+#
+#   mut lp = LoggerProvider.init(Resource.default_for("api"))
+#   lp.add_batch_processor(Exporter.otlp_from_env(SIGNAL_LOGS), BatchConfig.from_env("OTEL_BLRP"))
+#   mut ol = lp.get_logger("api.payments", "1.0")
+#   ol.emit(SEVERITY_WARN, "card declined", Attributes.new().str("card.brand", "visa"))
+#
+#   # Bridge std.log: every record of `log` (after its level filter) also
+#   # becomes an OTLP LogRecord, correlated with the current span.
+#   LogBridge.install(lp)?                 # uses lp's first batch processor
+#   mut log = Logger.init("http")
+#   LogBridge.attach(log)
+#   log.info_f("served", Fields.new().int("status", 200))
+#
+# Trace correlation: a record emitted while a span is current (see
+# std.otel.context) carries that span's traceId, spanId and trace flags.
+# std.log levels map to severity numbers TRACE=1, DEBUG=5, INFO=9, WARN=13,
+# ERROR=17; the logger target becomes the instrumentation scope name
+# ("std.log" for an untagged logger) and fields become attributes.
+
+from std.core.vec import Vec
+from std.core.string import StringBuilder
+from std.otel.native import now_unix_nano, json_str, json_i64, _slot_set, _slot_push, OT_SLOT_LOGS, trc_otel_slot_set, trc_otel_slot_ptr
+from std.otel.attr import Attributes
+from std.otel.context import Context, SpanContext
+from std.otel.resource import Resource
+from std.otel.exporter import Exporter, Pipeline, BatchConfig, SIGNAL_LOGS
+from std.log.level import LogLevel
+from std.log.field import Field, Fields, FIELD_STR, FIELD_INT, FIELD_FLOAT, FIELD_BOOL
+from std.log.logger import Logger
+
+pub const SEVERITY_TRACE = 1
+pub const SEVERITY_DEBUG = 5
+pub const SEVERITY_INFO  = 9
+pub const SEVERITY_WARN  = 13
+pub const SEVERITY_ERROR = 17
+pub const SEVERITY_FATAL = 21
+
+pub def severity_text(n: int) -> str:
+    if n >= 21: return "FATAL"
+    if n >= 17: return "ERROR"
+    if n >= 13: return "WARN"
+    if n >= 9: return "INFO"
+    if n >= 5: return "DEBUG"
+    if n >= 1: return "TRACE"
+    return ""
+
+pub def severity_of_level(level: LogLevel) -> int:
+    match level:
+        case LogLevel.Trace: return SEVERITY_TRACE
+        case LogLevel.Debug: return SEVERITY_DEBUG
+        case LogLevel.Info:  return SEVERITY_INFO
+        case LogLevel.Warn:  return SEVERITY_WARN
+        case LogLevel.Error: return SEVERITY_ERROR
+        case _:              return SEVERITY_INFO
+
+# std.log Fields -> Attributes.
+pub def attributes_from_fields(fields: Fields) -> Attributes:
+    mut a = Attributes.new()
+    mut i = 0
+    while i < fields.items.len:
+        mut f = fields.items.get(i)
+        if f.tag == FIELD_STR(): a.str(f.key, f.sval)
+        elif f.tag == FIELD_INT(): a.int(f.key, f.ival)
+        elif f.tag == FIELD_BOOL(): a.bool(f.key, f.bval)
+        else: a.float(f.key, f.fval)
+        i = i + 1
+    return a
+
+def _scope_json(name: str, version: str) -> str:
+    mut sb = StringBuilder.init(64)
+    sb.append("{\"name\":")
+    json_str(sb, name)
+    if version.len() > 0:
+        sb.append(",\"version\":")
+        json_str(sb, version)
+    sb.append_char(125)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# OTLP/JSON LogRecord. `sc` (when valid) supplies traceId/spanId/flags.
+pub def encode_log_record(time_ns: int, severity: int, sev_text: str, body: str, attrs: Attributes, sc: SpanContext) -> str:
+    mut sb = StringBuilder.init(256)
+    sb.append("{\"timeUnixNano\":")
+    json_i64(sb, time_ns)
+    sb.append(",\"observedTimeUnixNano\":")
+    json_i64(sb, now_unix_nano())
+    if severity > 0:
+        sb.append(",\"severityNumber\":")
+        sb.append_int(severity)
+    if sev_text.len() > 0:
+        sb.append(",\"severityText\":")
+        json_str(sb, sev_text)
+    sb.append(",\"body\":{\"stringValue\":")
+    json_str(sb, body)
+    sb.append("},\"attributes\":")
+    attrs.write_json(sb)
+    if attrs.dropped > 0:
+        sb.append(",\"droppedAttributesCount\":")
+        sb.append_int(attrs.dropped)
+    if sc.is_valid():
+        sb.append(",\"flags\":")
+        sb.append_int(sc.flags & 255)
+        sb.append(",\"traceId\":\"")
+        sb.append(sc.trace_id)
+        sb.append("\",\"spanId\":\"")
+        sb.append(sc.span_id)
+        sb.append_char(34)
+    sb.append_char(125)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+pub class LogsShared:
+    pub pipes:    Vec[Pipeline]
+    pub shutdown: bool
+    pub emitted:  int
+
+pub class OtelLogger:
+    pub name:       str
+    pub version:    str
+    pub scope_json: str
+    pub _shared:    LogsShared
+
+extend OtelLogger:
+    # Emit a record now, correlated with the current span.
+    pub def emit(self, severity: int, body: str, attrs: Attributes):
+        self.emit_full(now_unix_nano(), severity, severity_text(severity), body, attrs, Context.current_span())
+
+    pub def emit_full(self, time_ns: int, severity: int, sev_text: str, body: str, attrs: Attributes, sc: SpanContext):
+        if self._shared.shutdown: return
+        mut item = self.scope_json + "\n" + encode_log_record(time_ns, severity, sev_text, body, attrs, sc)
+        self._shared.emitted = self._shared.emitted + 1
+        mut i = 0
+        while i < self._shared.pipes.len:
+            mut p = self._shared.pipes.get(i)
+            p.emit(item)
+            i = i + 1
+
+    pub def trace(self, body: str, attrs: Attributes):
+        self.emit(SEVERITY_TRACE, body, attrs)
+
+    pub def debug(self, body: str, attrs: Attributes):
+        self.emit(SEVERITY_DEBUG, body, attrs)
+
+    pub def info(self, body: str, attrs: Attributes):
+        self.emit(SEVERITY_INFO, body, attrs)
+
+    pub def warn(self, body: str, attrs: Attributes):
+        self.emit(SEVERITY_WARN, body, attrs)
+
+    pub def error(self, body: str, attrs: Attributes):
+        self.emit(SEVERITY_ERROR, body, attrs)
+
+pub class LoggerProvider:
+    pub resource: Resource
+    pub loggers:  Vec[OtelLogger]
+    pub _shared:  LogsShared
+
+extend LoggerProvider:
+    pub def init(resource: Resource) -> LoggerProvider:
+        mut lp = LoggerProvider()
+        lp.resource = resource
+        lp.loggers = Vec[OtelLogger].init(2)
+        mut sh = LogsShared()
+        sh.pipes = Vec[Pipeline].init(1)
+        sh.shutdown = false
+        sh.emitted = 0
+        lp._shared = sh
+        return lp
+
+    pub def add_simple_processor(self, exporter: Exporter) -> Pipeline:
+        mut p = Pipeline.simple(SIGNAL_LOGS, self.resource.to_json(), exporter)
+        self._shared.pipes.push(p)
+        return p
+
+    pub def add_batch_processor(self, exporter: Exporter, cfg: BatchConfig) -> Pipeline:
+        mut p = Pipeline.batch(SIGNAL_LOGS, self.resource.to_json(), exporter, cfg)
+        self._shared.pipes.push(p)
+        return p
+
+    pub def get_logger(self, name: str, version: str) -> OtelLogger:
+        mut i = 0
+        while i < self.loggers.len:
+            mut l = self.loggers.get(i)
+            if l.name == name and l.version == version: return l
+            i = i + 1
+        mut l2 = OtelLogger()
+        l2.name = name
+        l2.version = version
+        l2.scope_json = _scope_json(name, version)
+        l2._shared = self._shared
+        self.loggers.push(l2)
+        return l2
+
+    pub def records_emitted(self) -> int:
+        return self._shared.emitted
+
+    pub def force_flush(self, timeout_ms: int) -> bool:
+        mut ok = true
+        mut i = 0
+        while i < self._shared.pipes.len:
+            mut p = self._shared.pipes.get(i)
+            if not p.force_flush(timeout_ms): ok = false
+            i = i + 1
+        return ok
+
+    # Uninstalls the std.log bridge if it points here, then stops processors.
+    pub def shutdown(self) -> bool:
+        if self._shared.shutdown: return true
+        self._shared.shutdown = true
+        LogBridge.uninstall()
+        mut ok = true
+        mut i = 0
+        while i < self._shared.pipes.len:
+            mut p = self._shared.pipes.get(i)
+            if not p.shutdown(30000): ok = false
+            i = i + 1
+        return ok
+
+# Process-wide std.log -> OTLP bridge. The std.log hook is a plain function,
+# so the target queue lives in a C registry slot (thread-safe: loggers on any
+# thread may emit through it).
+pub class LogBridge:
+    _dummy: int
+
+extend LogBridge:
+    # Route bridged records to `lp`'s first batch processor.
+    pub def install(lp: LoggerProvider) throws str -> bool:
+        mut i = 0
+        while i < lp._shared.pipes.len:
+            mut p = lp._shared.pipes.get(i)
+            if p.is_batch():
+                _slot_set(OT_SLOT_LOGS, p.queue(), "1")
+                return true
+            i = i + 1
+        raise("LogBridge.install: the LoggerProvider has no batch processor")
+        return false
+
+    pub def uninstall():
+        trc_otel_slot_set(OT_SLOT_LOGS, 0 as Pointer[void], 0 as Pointer[char], 0)
+
+    pub def is_installed() -> bool:
+        mut p = trc_otel_slot_ptr(OT_SLOT_LOGS)
+        return (p as int) != 0
+
+    # Hook `log` into the bridge (std.log Logger.set_hook).
+    pub def attach(log: Logger):
+        log.set_hook(otel_log_hook)
+
+    pub def detach(log: Logger):
+        log.clear_hook()
+
+# The std.log hook: encodes the record (with the current span context) and
+# queues it for the installed provider's export thread.
+pub def otel_log_hook(level: LogLevel, target: str, msg: str, fields: Fields):
+    mut scope = "std.log"
+    if target.len() > 0: scope = target
+    mut sev = severity_of_level(level)
+    mut rec = encode_log_record(now_unix_nano(), sev, severity_text(sev), msg, attributes_from_fields(fields), Context.current_span())
+    _slot_push(OT_SLOT_LOGS, _scope_json(scope, "") + "\n" + rec, 512)

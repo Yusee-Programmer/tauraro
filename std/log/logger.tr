@@ -22,6 +22,9 @@ from std.log.field import Fields
 from std.log.format import LogFormat
 from std.log.sink import StdoutSink, FileSink
 
+def _no_log_hook(level: LogLevel, target: str, msg: str, fields: Fields):
+    pass
+
 pub class Logger:
     pub target:      str          # subsystem/module tag, e.g. "http", "db"; "" = untagged
     pub min_level:   LogLevel
@@ -30,6 +33,8 @@ pub class Logger:
     pub _stdout:     StdoutSink
     pub _has_file:   bool
     pub _file:       FileSink
+    pub _has_hook:   bool         # opt-in record hook (e.g. the std.otel log bridge)
+    pub _hook:       def(LogLevel, str, str, Fields)
 
 extend Logger:
     # Create a logger tagged with `target` (pass "" for an untagged logger).
@@ -43,6 +48,8 @@ extend Logger:
         l._stdout     = StdoutSink.init()
         l._has_file   = false
         l._file       = FileSink()
+        l._has_hook   = false
+        l._hook       = _no_log_hook
         return l
 
     # ── Configuration ─────────────────────────────────────────────────────────
@@ -76,6 +83,22 @@ extend Logger:
             self._file.close_sink()
             self._has_file = false
 
+    # Opt-in hook called with (level, target, msg, fields) for every record
+    # that passes the level filter, before the sinks run -- how bridges such
+    # as std.otel's LogBridge see records. One hook per logger; replaces any
+    # previous hook. Local output is unaffected (use set_stdout(false) to
+    # route records only through the hook).
+    pub def set_hook(self, hook: def(LogLevel, str, str, Fields)):
+        self._hook = hook
+        self._has_hook = true
+
+    pub def clear_hook(self):
+        self._hook = _no_log_hook
+        self._has_hook = false
+
+    pub def has_hook(self) -> bool:
+        return self._has_hook
+
     # ── Core dispatch ─────────────────────────────────────────────────────────
 
     # True when a call at `level` would actually produce output — lets callers
@@ -87,6 +110,8 @@ extend Logger:
     def _emit(self, level: LogLevel, msg: str, fields: Fields):
         # Level check happens first: below min_level, we do zero formatting work.
         if not level.at_least(self.min_level): return
+        if self._has_hook: self._hook(level, self.target, msg, fields)
+        if not self.to_stdout and not self._has_file: return
         mut ts   = DateTime.now().strftime("%Y-%m-%dT%H:%M:%S")
         mut line = ""
         if self.json_format:
