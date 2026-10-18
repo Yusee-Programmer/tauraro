@@ -1,0 +1,335 @@
+# std.font -- TrueType / OpenType fonts: parsing, metrics, shaping,
+# rasterizing and subsetting.
+#
+# Reads sfnt fonts -- TrueType (glyf outlines), OpenType with CFF or CFF2
+# outlines, TrueType/OpenType collections (.ttc) and WOFF 1.0 -- from bytes.
+# Parsed tables: head, hhea, maxp, hmtx, cmap (formats 0/4/6/10/12/13 and 14
+# variation sequences), name, OS/2, post, loca/glyf (simple and composite
+# glyphs), CFF/CFF2 Type 2 charstrings, kern (format 0), GPOS pair kerning
+# (formats 1 and 2) and GSUB ligatures (`liga`).
+#
+# Sub-modules (also re-exported here):
+#   std.font.render  -- draw_text / draw_glyph into an std.image Image,
+#                       render_text / render_glyph to new images
+#   std.font.layout  -- wrap_text (line breaking on UAX #29 word boundaries),
+#                       text_lines_height
+#   std.font.system  -- system_font_dirs / system_font_files / find_system_font
+#   std.font.subset  -- FontSubset: a standalone TrueType font holding only
+#                       the glyphs you use (CFF outlines become quadratic)
+#
+# Units: glyph metrics are in font units (Font.units_per_em per em); the
+# measuring and drawing functions take a size in pixels (or points) per em.
+#
+# Usage:
+#   from std.font import Font, draw_text, wrap_text, find_system_font
+#   mut f = Font.open("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")?
+#   mut w = f.measure("Hello, world", 24.0)        # advance width at 24 px
+#   mut img = Image.init(400, 60)
+#   draw_text(img, f, "Hello, world", 24.0, 10.0, 40.0, 20, 20, 20, 255)
+#   f.free()
+#
+# Shaping is simple left-to-right: cmap (with variation selectors), GSUB
+# ligatures and pair kerning. Complex scripts (Arabic joining, Indic
+# reordering, mark positioning) are not shaped, and no hinting is applied.
+
+from std.io.file import File
+from std.font.native import trc_font_load, trc_font_ok, trc_font_free, trc_font_count, trc_font_info, trc_font_glyph_index, trc_font_glyph_index_vs, trc_font_advance, trc_font_lsb, trc_font_kerning, trc_font_glyph_box, trc_font_shape, trc_font_sg_gid, trc_font_sg_cluster, trc_font_sg_cluster_end, trc_font_sg_advance, trc_font_sg_total, trc_font_outline, trc_font_outline_ncmd, trc_font_outline_cmd, trc_font_outline_npt, trc_font_outline_x, trc_font_outline_y, trc_font_outline_free, font_error_of, font_name_of
+
+# Outline commands in GlyphOutline.cmds.
+pub const FONT_MOVE = 0      # 1 point
+pub const FONT_LINE = 1      # 1 point
+pub const FONT_QUAD = 2      # 2 points: control, end
+pub const FONT_CUBIC = 3     # 3 points: control 1, control 2, end
+pub const FONT_CLOSE = 4     # no points
+
+# Outline formats (Font.outline_format()).
+pub const FONT_TRUETYPE = 0
+pub const FONT_CFF = 1
+pub const FONT_CFF2 = 2
+
+# Font-unit metrics of one glyph. The box is the outline's bounding box
+# (all zero for an empty glyph such as the space).
+pub class GlyphMetrics:
+    pub advance: int
+    pub lsb:     int
+    pub x_min:   int
+    pub y_min:   int
+    pub x_max:   int
+    pub y_max:   int
+    pub empty:   bool
+
+# One shaped glyph: its id, the byte range [cluster, cluster_end) of the text
+# it came from, its advance (font units, kerning included) and its pen
+# position x (font units from the start of the run).
+pub class ShapedGlyph:
+    pub gid:         int
+    pub cluster:     int
+    pub cluster_end: int
+    pub advance:     float
+    pub x:           float
+
+# A glyph outline in font units (y up): cmds[i] is a FONT_* command and the
+# points it uses follow in order in xs / ys.
+pub class GlyphOutline:
+    pub cmds: List[int]
+    pub xs:   List[float]
+    pub ys:   List[float]
+
+pub class Font:
+    pub handle:          int
+    pub units_per_em:    int
+    pub num_glyphs:      int
+    pub ascent:          int        # hhea ascender (font units, > 0)
+    pub descent:         int        # hhea descender (font units, usually < 0)
+    pub line_gap:        int
+    pub family:          str
+    pub subfamily:       str
+    pub full_name:       str
+    pub postscript_name: str
+    pub kerning:         bool       # apply kerning when shaping (default true)
+    pub ligatures:       bool       # apply GSUB `liga` when shaping (default true)
+
+def _font_byte(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+extend Font:
+    # Parse a font file's bytes (TTF, OTF, WOFF; the first font of a TTC).
+    pub def load(data: str) throws str -> Font:
+        return Font.load_index(data, 0)?
+
+    # Parse font number `index` of a collection (0 for a single font).
+    pub def load_index(data: str, index: int) throws str -> Font:
+        mut dp = data as Pointer[char]
+        mut h = trc_font_load(dp, data.len(), index)
+        if h == 0: raise("font: out of memory")
+        if trc_font_ok(h) == 0:
+            mut msg = font_error_of(h)
+            trc_font_free(h)
+            raise(msg)
+        mut f = Font()
+        f.handle = h
+        f.units_per_em = trc_font_info(h, 0)
+        f.num_glyphs = trc_font_info(h, 1)
+        f.ascent = trc_font_info(h, 2)
+        f.descent = trc_font_info(h, 3)
+        f.line_gap = trc_font_info(h, 4)
+        f.family = font_name_of(h, 16)
+        if f.family.len() == 0: f.family = font_name_of(h, 1)
+        f.subfamily = font_name_of(h, 17)
+        if f.subfamily.len() == 0: f.subfamily = font_name_of(h, 2)
+        f.full_name = font_name_of(h, 4)
+        f.postscript_name = font_name_of(h, 6)
+        f.kerning = true
+        f.ligatures = true
+        return f
+
+    # Read and parse a font file.
+    pub def open(path: str) throws str -> Font:
+        return Font.open_index(path, 0)?
+
+    pub def open_index(path: str, index: int) throws str -> Font:
+        if not File.file_exists(path): raise("font: cannot open " + path)
+        mut data = File.read_text(path)
+        if data.len() == 0: raise("font: empty file " + path)
+        return Font.load_index(data, index)?
+
+    # Number of fonts in a buffer: the TTC count, 1 for a single font, 0 if
+    # the bytes are not a font.
+    pub def collection_count(data: str) -> int:
+        mut dp = data as Pointer[char]
+        return trc_font_count(dp, data.len())
+
+    pub def free(self):
+        if self.handle != 0:
+            trc_font_free(self.handle)
+            self.handle = 0
+
+    # ── font-wide metrics ──
+    # Pixels (or points) per font unit at `size` per em.
+    pub def scale(self, size: float) -> float:
+        return size / (self.units_per_em as float)
+
+    # Baseline-to-baseline distance at `size`: ascent - descent + line gap.
+    pub def line_height(self, size: float) -> float:
+        return ((self.ascent - self.descent + self.line_gap) as float) * size / (self.units_per_em as float)
+
+    pub def ascent_at(self, size: float) -> float: return (self.ascent as float) * size / (self.units_per_em as float)
+    pub def descent_at(self, size: float) -> float: return (self.descent as float) * size / (self.units_per_em as float)
+
+    # Font bounding box (head table) as (x_min, y_min, x_max, y_max).
+    pub def bbox(self) -> (int, int, int, int):
+        return (trc_font_info(self.handle, 5), trc_font_info(self.handle, 6), trc_font_info(self.handle, 7), trc_font_info(self.handle, 8))
+
+    # FONT_TRUETYPE, FONT_CFF or FONT_CFF2.
+    pub def outline_format(self) -> int: return trc_font_info(self.handle, 9)
+    # OS/2 usWeightClass (400 regular, 700 bold).
+    pub def weight(self) -> int: return trc_font_info(self.handle, 10)
+    # OS/2 fsType embedding permission bits (0 = installable).
+    pub def embedding_flags(self) -> int: return trc_font_info(self.handle, 11)
+    # False when the font forbids embedding (fsType "restricted license" or
+    # "bitmap embedding only").
+    pub def embeddable(self) -> bool:
+        mut t = trc_font_info(self.handle, 11)
+        return (t & 0x0F) != 2 and (t & 0x0200) == 0
+    # OS/2 typographic ascender / descender / line gap.
+    pub def typo_metrics(self) -> (int, int, int):
+        return (trc_font_info(self.handle, 12), trc_font_info(self.handle, 13), trc_font_info(self.handle, 14))
+    # OS/2 usWinAscent / usWinDescent.
+    pub def win_metrics(self) -> (int, int):
+        return (trc_font_info(self.handle, 27), trc_font_info(self.handle, 28))
+    # OS/2 sxHeight and sCapHeight (0 when the table is older than version 2).
+    pub def x_height(self) -> int: return trc_font_info(self.handle, 15)
+    pub def cap_height(self) -> int: return trc_font_info(self.handle, 16)
+    # post italicAngle in degrees (negative for right-leaning italics).
+    pub def italic_angle(self) -> float: return (trc_font_info(self.handle, 17) as float) / 65536.0
+    pub def underline_position(self) -> int: return trc_font_info(self.handle, 18)
+    pub def underline_thickness(self) -> int: return trc_font_info(self.handle, 19)
+    pub def is_fixed_pitch(self) -> bool: return trc_font_info(self.handle, 20) != 0
+    pub def is_italic(self) -> bool:
+        return (trc_font_info(self.handle, 21) & 1) != 0 or (trc_font_info(self.handle, 26) & 2) != 0 or trc_font_info(self.handle, 17) != 0
+    pub def is_bold(self) -> bool:
+        return (trc_font_info(self.handle, 21) & 32) != 0 or (trc_font_info(self.handle, 26) & 1) != 0 or self.weight() >= 600
+    pub def has_kerning(self) -> bool: return trc_font_info(self.handle, 23) != 0
+    pub def has_ligatures(self) -> bool: return trc_font_info(self.handle, 24) != 0
+    pub def has_variation_sequences(self) -> bool: return trc_font_info(self.handle, 25) != 0
+    # Fonts in the collection this font came from (1 for a single font).
+    pub def font_count(self) -> int: return trc_font_info(self.handle, 22)
+
+    # A name-table string (1 family, 2 subfamily, 4 full name, 5 version,
+    # 6 PostScript name, ...); "" when absent.
+    pub def name(self, name_id: int) -> str: return font_name_of(self.handle, name_id)
+
+    # ── glyphs ──
+    # Glyph id of a code point (0 = .notdef when the font lacks it).
+    pub def glyph_index(self, cp: int) -> int: return trc_font_glyph_index(self.handle, cp)
+
+    # Glyph id of the variation sequence cp + selector (cmap format 14);
+    # falls back to the plain mapping.
+    pub def glyph_index_vs(self, cp: int, selector: int) -> int:
+        return trc_font_glyph_index_vs(self.handle, cp, selector)
+
+    pub def has_char(self, cp: int) -> bool: return trc_font_glyph_index(self.handle, cp) != 0
+
+    # True when every code point of `text` has a glyph (controls and
+    # variation selectors aside).
+    pub def covers(self, text: str) -> bool:
+        mut n = trc_font_shape(self.handle, text as Pointer[char], text.len(), 0)
+        mut i = 0
+        while i < n:
+            if trc_font_sg_gid(self.handle, i) == 0:
+                mut c = _font_byte(text, trc_font_sg_cluster(self.handle, i))
+                if c >= 32: return false
+            i = i + 1
+        return true
+
+    pub def glyph_advance(self, gid: int) -> int: return trc_font_advance(self.handle, gid)
+    pub def glyph_lsb(self, gid: int) -> int: return trc_font_lsb(self.handle, gid)
+
+    pub def glyph_metrics(self, gid: int) -> GlyphMetrics:
+        mut box: List[int] = [0, 0, 0, 0]
+        mut bp = box as Pointer[int]
+        mut ne = trc_font_glyph_box(self.handle, gid, bp)
+        mut m = GlyphMetrics()
+        m.advance = trc_font_advance(self.handle, gid)
+        m.lsb = trc_font_lsb(self.handle, gid)
+        m.x_min = box[0]
+        m.y_min = box[1]
+        m.x_max = box[2]
+        m.y_max = box[3]
+        m.empty = ne == 0
+        return m
+
+    # Kerning adjustment between two glyphs (font units; GPOS `kern` pair
+    # adjustment, else the kern table).
+    pub def kern(self, left: int, right: int) -> int: return trc_font_kerning(self.handle, left, right)
+
+    # The outline of a glyph in font units.
+    pub def glyph_outline(self, gid: int) -> GlyphOutline:
+        mut o = GlyphOutline()
+        o.cmds = []
+        o.xs = []
+        o.ys = []
+        mut h = trc_font_outline(self.handle, gid)
+        if h == 0: return o
+        mut nc = trc_font_outline_ncmd(h)
+        mut i = 0
+        while i < nc:
+            o.cmds.append(trc_font_outline_cmd(h, i))
+            i = i + 1
+        mut np = trc_font_outline_npt(h)
+        i = 0
+        while i < np:
+            o.xs.append(trc_font_outline_x(h, i))
+            o.ys.append(trc_font_outline_y(h, i))
+            i = i + 1
+        trc_font_outline_free(h)
+        return o
+
+    # ── shaping and measuring ──
+    def _flags(self) -> int:
+        mut fl = 0
+        if self.kerning: fl = fl | 1
+        if self.ligatures: fl = fl | 2
+        return fl
+
+    # Shape UTF-8 text left to right (cmap, variation selectors, ligatures,
+    # kerning).
+    pub def shape(self, text: str) -> List[ShapedGlyph]:
+        mut out: List[ShapedGlyph] = []
+        mut n = trc_font_shape(self.handle, text as Pointer[char], text.len(), self._flags())
+        mut pen = 0.0
+        mut i = 0
+        while i < n:
+            mut g = ShapedGlyph()
+            g.gid = trc_font_sg_gid(self.handle, i)
+            g.cluster = trc_font_sg_cluster(self.handle, i)
+            g.cluster_end = trc_font_sg_cluster_end(self.handle, i)
+            g.advance = trc_font_sg_advance(self.handle, i)
+            g.x = pen
+            pen = pen + g.advance
+            out.append(g)
+            i = i + 1
+        return out
+
+    # Advance width of `text` in font units (one line: newlines are not
+    # special).
+    pub def measure_units(self, text: str) -> float:
+        trc_font_shape(self.handle, text as Pointer[char], text.len(), self._flags())
+        return trc_font_sg_total(self.handle)
+
+    # Advance width of `text` at `size` per em.
+    pub def measure(self, text: str, size: float) -> float:
+        return self.measure_units(text) * size / (self.units_per_em as float)
+
+    # Ink bounds of `text` at `size` with the pen starting at the origin,
+    # y up: (x_min, y_min, x_max, y_max); all zero when nothing is inked.
+    pub def text_bounds(self, text: str, size: float) -> (float, float, float, float):
+        mut glyphs = self.shape(text)
+        mut sc = size / (self.units_per_em as float)
+        mut have = false
+        mut x0 = 0.0
+        mut y0 = 0.0
+        mut x1 = 0.0
+        mut y1 = 0.0
+        mut i = 0
+        while i < len(glyphs):
+            mut m = self.glyph_metrics(glyphs[i].gid)
+            if not m.empty:
+                mut a = (glyphs[i].x + (m.x_min as float)) * sc
+                mut b = (m.y_min as float) * sc
+                mut c = (glyphs[i].x + (m.x_max as float)) * sc
+                mut d = (m.y_max as float) * sc
+                if not have or a < x0: x0 = a
+                if not have or b < y0: y0 = b
+                if not have or c > x1: x1 = c
+                if not have or d > y1: y1 = d
+                have = true
+            i = i + 1
+        return (x0, y0, x1, y1)
+
+from std.font.render import draw_text, draw_glyph, render_text, render_glyph, GlyphBitmap
+from std.font.layout import wrap_text, text_lines_height
+from std.font.system import system_font_dirs, system_font_files, find_system_font
+from std.font.subset import FontSubset

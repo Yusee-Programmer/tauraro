@@ -1,0 +1,53 @@
+# std.font.subset -- standalone TrueType subsets.
+#
+# A FontSubset collects the glyphs you use and writes a minimal TrueType font
+# containing just those glyphs (plus .notdef and composite components), with
+# glyph ids renumbered densely in the order they were added: new id 0 is
+# .notdef, the first added glyph is 1, and so on. TrueType glyphs are copied
+# byte for byte (hinting programs kept); CFF/CFF2 outlines are converted to
+# quadratic TrueType contours (error well under one font unit). The output
+# has the tables head, hhea, maxp, hmtx, loca, glyf, post, OS/2 and a stub
+# cmap -- suitable for embedding (std.encoding.pdf uses it for CIDFontType2
+# fonts), not for installing.
+#
+#   mut sub = FontSubset.init(f)
+#   mut new_id = sub.add(f.glyph_index(0x4E2D))
+#   mut ttf = sub.build()?
+
+from std.font.mod import Font
+from std.font.native import trc_font_subset_new, trc_font_subset_add, trc_font_subset_count, trc_font_subset_old, trc_font_subset_build, trc_font_subset_take, trc_font_subset_free, _tr_c_malloc, _tr_str_wrap_len
+
+pub class FontSubset:
+    pub handle: int
+    pub font:   Font
+
+extend FontSubset:
+    pub def init(font: Font) -> FontSubset:
+        mut s = FontSubset()
+        s.font = font
+        s.handle = trc_font_subset_new(font.handle)
+        return s
+
+    # Add a glyph (original id); returns its id in the subset.
+    pub def add(self, gid: int) -> int: return trc_font_subset_add(self.handle, gid)
+
+    # Glyphs in the subset so far (including .notdef).
+    pub def count(self) -> int: return trc_font_subset_count(self.handle)
+
+    # Original glyph id of subset glyph `new_id`.
+    pub def original(self, new_id: int) -> int: return trc_font_subset_old(self.handle, new_id)
+
+    # The subset font file. Composite components are added as needed (they
+    # get ids after the glyphs added so far).
+    pub def build(self) throws str -> str:
+        mut n = trc_font_subset_build(self.handle)
+        if n <= 0: raise("font: subsetting failed")
+        mut buf = _tr_c_malloc(n + 1)
+        trc_font_subset_take(buf)
+        unsafe: buf.offset(n).write('\0')
+        return _tr_str_wrap_len(buf, n)
+
+    pub def free(self):
+        if self.handle != 0:
+            trc_font_subset_free(self.handle)
+            self.handle = 0

@@ -98,6 +98,22 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- **`std.font`**: TrueType / OpenType fonts, with a bounds-checked C core (`font_native.c`).
+  - Parses TTF, OTF with CFF or CFF2 outlines (Type 2 charstrings, subroutines, CID fonts), TTC
+    collections and WOFF 1.0; tables head, hhea, maxp, hmtx, cmap (formats 0, 4, 6, 10, 12, 13 and
+    14 variation sequences), name, OS/2, post, loca/glyf (simple and composite glyphs), kern,
+    GPOS pair kerning (formats 1 and 2) and GSUB ligatures.
+  - Metrics, `measure(text, size)`, left-to-right shaping (cmap, ligatures, kerning), UAX #29 line
+    breaking (`wrap_text`), anti-aliased signed-area rasterizer (`draw_text`, `draw_glyph`,
+    `render_text`, `render_glyph`) into `std.image` images, glyph outlines, `FontSubset`
+    (standalone TrueType subsets; CFF converted to quadratics) and best-effort system font lookup
+    (`find_system_font`).
+  - Checked against fontTools (metrics, cmaps, advances, bounds, kerning, subsets) on DejaVu,
+    Liberation, Ubuntu, Noto (incl. CJK .ttc) and URW fonts, and against Pillow coverage.
+- **`std.encoding.pdf`**: Unicode text through embedded TrueType/OpenType fonts
+  (`PdfDocument.add_font_ttf`): subset CIDFontType2 / Identity-H fonts with `/W` widths and a
+  ToUnicode CMap (searchable text), shaping with kerning and ligatures, and `text_width`,
+  `text_aligned`, `text_box` and `wrap_text` that use real font metrics.
 - **`std.net.http2_server`**: HTTP/2 server (RFC 9113) over h2c or TLS 1.3 with ALPN `h2`. Preface,
   SETTINGS, HPACK, HEADERS/CONTINUATION, DATA with connection and stream flow control, WINDOW_UPDATE,
   PING, RST_STREAM, GOAWAY (graceful `shutdown()`), request and response trailers, concurrent streams;

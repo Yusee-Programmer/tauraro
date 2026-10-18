@@ -1,0 +1,102 @@
+# tauraro-cpp-shim: font_native.c
+#
+# std.font.native -- internal bindings to std/font/font_native.c (sfnt
+# parsing, CFF charstrings, cmap/kerning/ligature lookups, rasterizer,
+# subsetter, font directory scan). User code imports std.font instead.
+#
+# Text and font bytes cross as (Pointer[char], byte length): an extern `str`
+# parameter is the TrStr struct itself, so callers cast a named `str` local.
+# Fonts, outlines and subsets live behind int handles.
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+    def trc_font_load(data: Pointer[char], n: int, index: int) -> int
+    def trc_font_ok(h: int) -> int
+    def trc_font_error(h: int, out: Pointer[char], cap: int) -> int
+    def trc_font_free(h: int)
+    def trc_font_count(data: Pointer[char], n: int) -> int
+    def trc_font_info(h: int, what: int) -> int
+    def trc_font_glyph_index(h: int, cp: int) -> int
+    def trc_font_glyph_index_vs(h: int, cp: int, vs: int) -> int
+    def trc_font_advance(h: int, gid: int) -> int
+    def trc_font_lsb(h: int, gid: int) -> int
+    def trc_font_kerning(h: int, g1: int, g2: int) -> int
+    def trc_font_name(h: int, id: int, out: Pointer[char], cap: int) -> int
+    def trc_font_glyph_box(h: int, gid: int, box: Pointer[int]) -> int
+
+    def trc_font_shape(h: int, text: Pointer[char], n: int, flags: int) -> int
+    def trc_font_sg_gid(h: int, i: int) -> int
+    def trc_font_sg_cluster(h: int, i: int) -> int
+    def trc_font_sg_cluster_end(h: int, i: int) -> int
+    def trc_font_sg_advance(h: int, i: int) -> float
+    def trc_font_sg_total(h: int) -> float
+
+    def trc_font_outline(h: int, gid: int) -> int
+    def trc_font_outline_ncmd(o: int) -> int
+    def trc_font_outline_cmd(o: int, i: int) -> int
+    def trc_font_outline_npt(o: int) -> int
+    def trc_font_outline_x(o: int, i: int) -> float
+    def trc_font_outline_y(o: int, i: int) -> float
+    def trc_font_outline_free(o: int)
+
+    def trc_font_raster(h: int, gid: int, size_px: float, ox: float, oy: float) -> int
+    def trc_font_raster_box(i: int) -> int
+    def trc_font_raster_copy(dst: Pointer[char])
+    def trc_font_draw_glyph(h: int, gid: int, size_px: float, ox: float, oy: float, img: Pointer[char], w: int, hh: int, r: int, g: int, b: int, a: int) -> int
+
+    def trc_font_subset_new(h: int) -> int
+    def trc_font_subset_add(s: int, gid: int) -> int
+    def trc_font_subset_count(s: int) -> int
+    def trc_font_subset_old(s: int, i: int) -> int
+    def trc_font_subset_build(s: int) -> int
+    def trc_font_subset_take(dst: Pointer[char])
+    def trc_font_subset_free(s: int)
+
+    def trc_font_scan(dir: Pointer[char], n: int) -> int
+    def trc_font_scan_take(dst: Pointer[char])
+
+# trc_font_info selectors.
+pub const FI_UPEM = 0
+pub const FI_NGLYPHS = 1
+pub const FI_ASCENT = 2
+pub const FI_DESCENT = 3
+pub const FI_LINE_GAP = 4
+pub const FI_XMIN = 5
+pub const FI_YMIN = 6
+pub const FI_XMAX = 7
+pub const FI_YMAX = 8
+pub const FI_OUTLINES = 9
+pub const FI_WEIGHT = 10
+pub const FI_FSTYPE = 11
+pub const FI_TYPO_ASC = 12
+pub const FI_TYPO_DESC = 13
+pub const FI_TYPO_GAP = 14
+pub const FI_XHEIGHT = 15
+pub const FI_CAPHEIGHT = 16
+pub const FI_ITALIC = 17
+pub const FI_UL_POS = 18
+pub const FI_UL_THICK = 19
+pub const FI_FIXED = 20
+pub const FI_FSSEL = 21
+pub const FI_NFONTS = 22
+pub const FI_HAS_KERN = 23
+pub const FI_HAS_LIGA = 24
+pub const FI_HAS_UVS = 25
+pub const FI_MACSTYLE = 26
+pub const FI_WIN_ASC = 27
+pub const FI_WIN_DESC = 28
+
+# The error message of a failed load.
+pub def font_error_of(h: int) -> str:
+    mut out = _tr_c_malloc(201)
+    mut n = trc_font_error(h, out, 200)
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap_len(out, n)
+
+pub def font_name_of(h: int, id: int) -> str:
+    mut out = _tr_c_malloc(1025)
+    mut n = trc_font_name(h, id, out, 1024)
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap_len(out, n)
