@@ -1,0 +1,141 @@
+# tests/lang/151_compiler_fixes3.tr
+# Regressions: Thread.spawn stored into a field, Shared[T] returned from a function and
+# stored in a field, List[Interface], throws + tuple return, `mut (a, b) = ...`,
+# List.slice, `with` exit-method arities.
+
+from std.test import TestRunner
+
+class W implements Sendable:
+    pub n: Atomic[int]
+
+class Holder:
+    pub t: Thread
+
+class Keep:
+    pub w: Shared[W]
+
+def work(w: Shared[W]):
+    w.n.add(1)
+
+def mk_shared() -> Shared[W]:
+    shared w = W()
+    w.n = Atomic.new(5)
+    return w
+
+def make_keep() -> Keep:
+    shared w = W()
+    w.n = Atomic.new(0)
+    mut k = Keep()
+    k.w = w
+    mut t: Thread = Thread.spawn(work, w)
+    t.join()
+    return k
+
+interface Proc:
+    def run(self) -> int
+
+class PA implements Proc:
+    pub v: int
+extend PA:
+    pub def run(self) -> int: return self.v
+
+class PB implements Proc:
+    pub v: int
+extend PB:
+    pub def run(self) -> int: return self.v * 2
+
+class Item:
+    pub n: int
+
+def pair(x: int) throws str -> (float, int):
+    if x < 0: raise("neg")
+    return (1.5, x)
+
+def pair_via_local(x: int) throws str -> (float, int):
+    mut t = pair(x)?
+    return t
+
+def pair_pass(x: int) throws str -> (float, int):
+    return pair(x)?
+
+def sum_pairs(x: int) throws str -> int:
+    mut a, b = pair(x)?
+    mut c, d = pair_via_local(x)?
+    mut (e, f) = pair_pass(x)?
+    return b + d + f
+
+class G1:
+    pub n: int
+extend G1:
+    pub def __enter__(self) -> G1: return self
+    pub def __exit__(self, exc_type: str) -> void: print("")
+
+class G3:
+    pub n: int
+extend G3:
+    pub def __enter__(self) -> G3: return self
+    pub def __exit__(self, a: str, b: str, c: str) -> bool: return false
+
+def main():
+    mut t = TestRunner.init("151_compiler_fixes3")
+
+    t.section("Thread.spawn stored into a field")
+    shared sw = W()
+    sw.n = Atomic.new(0)
+    mut h = Holder()
+    h.t = Thread.spawn(work, sw)
+    h.t.join()
+    t.assert_eq_int(sw.n.load(), 1, "worker ran")
+
+    t.section("Shared[T] returned and stored")
+    shared rs = mk_shared()
+    t.assert_eq_int(rs.n.load(), 5, "shared local bound to a Shared-returning call")
+    mut k = make_keep()
+    t.assert_eq_int(k.w.n.load(), 1, "field keeps its own reference to the shared box")
+
+    t.section("List of interface values")
+    mut ps: List[Proc] = []
+    mut a = PA()
+    a.v = 3
+    mut b = PB()
+    b.v = 4
+    ps.append(a)
+    ps.append(b)
+    mut total = 0
+    for p in ps:
+        total = total + p.run()
+    t.assert_eq_int(total, 11, "iterate and dispatch")
+    t.assert_eq_int(ps[1].run(), 8, "index and dispatch")
+
+    t.section("throws with a tuple return")
+    mut r: Result[int, str] = sum_pairs(3)
+    t.assert_true(r.is_ok and r.ok == 9, "tuples flow through ?, return and destructuring")
+    mut bad: Result[int, str] = sum_pairs(0 - 1)
+    t.assert_true(bad.is_err, "error propagates")
+    t.assert_eq_str(bad.err, "neg", "error text")
+
+    t.section("List.slice")
+    mut xs: List[float] = [1.0, 2.0, 3.0]
+    mut ys = xs.slice(1, 3)
+    t.assert_eq_int(len(ys), 2, "float slice length")
+    mut is_: List[int] = [5, 6, 7, 8]
+    t.assert_eq_int(len(is_.slice(0, 99)), 4, "clamped upper bound")
+    t.assert_eq_int(len(is_.slice(0 - 3, 2)), 2, "clamped lower bound")
+    mut ss: List[str] = ["a", "b", "c"]
+    mut ts = ss.slice(1, 3)
+    t.assert_eq_str(ts[0] + ts[1], "bc", "str slice")
+    mut its: List[Item] = []
+    mut it = Item()
+    it.n = 4
+    its.append(it)
+    mut qs = its.slice(0, 1)
+    t.assert_eq_int(qs[0].n, 4, "class slice")
+
+    t.section("with: exit method arities")
+    mut g1 = G1()
+    with g1 as x1:
+        t.assert_eq_int(x1.n, 0, "one-parameter __exit__")
+    mut g3 = G3()
+    with g3 as x3:
+        t.assert_eq_int(x3.n, 0, "three-parameter __exit__")
+    t.summary()

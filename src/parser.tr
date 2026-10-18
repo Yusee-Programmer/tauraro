@@ -1156,6 +1156,20 @@ extend Parser:
     pub def parse_let_stmt(self, is_mut: bool) -> Pointer[Stmt]:
         if is_mut:
             self.pos = self.pos + 1
+        # Parenthesised destructuring: mut (a, b, c) = expr  (same as mut a, b, c = expr)
+        if self.peek() == Token.LParen:
+            self.pos = self.pos + 1
+            mut pnames = Vec[str].init(4)
+            pnames.push(self.consume_ident())
+            while self.peek() == Token.Comma:
+                self.pos = self.pos + 1
+                if self.peek() == Token.RParen: break
+                pnames.push(self.consume_ident())
+            if self.peek() == Token.RParen: self.pos = self.pos + 1
+            if self.peek() == Token.Eq: self.pos = self.pos + 1
+            mut pval = self.parse_expr()
+            self.expect_newline()
+            return box_stmt(Stmt.SMultiLet(pnames, is_mut, pval))
         name = self.consume_ident()
         # Detect tuple unpacking: mut a, b, c = expr
         if self.peek() == Token.Comma:
@@ -2344,6 +2358,27 @@ extend Parser:
                     self.pos = self.pos + 1
                     return box_expr(Expr.ELitNone)
                 case _: pass
+            if tok_desc == "token":
+                # A reserved word used where a value / name was expected (`mut pass = 1`,
+                # `f(shared)`): name it instead of the generic message.
+                mut kw: str = ""
+                mut kln = self.cur_line()
+                mut kcol = self.cur_col()
+                if self.src_text.len() > 0 and kln > 0 and kcol > 0:
+                    mut ksrc = _nth_source_line(self.src_text, kln)
+                    mut kend = kcol - 1
+                    while kend < ksrc.len() and ((ksrc.char_at(kend) >= 97 and ksrc.char_at(kend) <= 122) or ksrc.char_at(kend) == 95):
+                        kend = kend + 1
+                    if kend > kcol - 1: kw = ksrc.slice(kcol - 1, kend)
+                mut kw_ok = kw.len() > 1 and kw.len() < 16
+                mut ki = 0
+                while kw_ok and ki < kw.len():
+                    mut kc = kw.char_at(ki)
+                    if not ((kc >= 97 and kc <= 122) or kc == 95): kw_ok = false
+                    ki = ki + 1
+                if kw_ok:
+                    tok_desc = "keyword '" + kw + "'"
+                    hint = "'" + kw + "' is a reserved word and cannot be used as a name or value here - rename it (for example '" + kw + "_')."
             self.emit_diag("unexpected " + tok_desc + " in expression", hint)
             self.pos = self.pos + 1
         return box_expr(Expr.ELitNone)
