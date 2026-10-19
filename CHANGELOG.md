@@ -98,6 +98,7 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- Build driver: the generated C modules and the C/C++ shims now compile in parallel (worker pool; `TAURARO_JOBS=N`, default = CPU count) and the compile output is replayed in module order — a cold HTTP+TLS+crypto build drops from ~18 s to ~7 s on 8 cores. gcc builds precompile the shared runtime header (`TAURARO_NO_PCH=1` disables). New `--dev` flag selects `-O1` for fast iteration (~4 s cold). See docs/lang/22.
 - `std.audio` decodes Ogg Vorbis and Ogg Opus: `Ogg.decode` / `Vorbis.decode` / `Opus.decode`, and
   `Audio.decode` now sniffs `OggS`. New `std.audio.ogg` with `OggFile.info` (codec, exact length from
   granule positions, Vorbis/Opus comments, OpusHead pre-skip and gain, multiplexed stream list),

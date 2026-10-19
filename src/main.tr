@@ -7,6 +7,7 @@ from core.vec import Vec
 from core.map import Map
 from core.string import StringObj, StringBuilder
 from resolver import ModuleResolver
+from pjobs import pjobs_run, pjobs_workers, PendingShims
 from lexer import Lexer
 from parser import Parser, _nth_source_line
 from diag import c_red, c_yellow, c_green, c_cyan, c_dim, c_bold, spaces, repeat_char, first_quoted, col_of, loc_file, loc_line
@@ -98,6 +99,7 @@ pub def print_usage():
     print("  --export-cpp      Also emit an ergonomic C++ header to call Tauraro from C++ (implies --lib)")
     print("  -O0/-O1/-O2/-O3  Optimization level (default: -O2)")
     print("  -Os               Optimize for size")
+    print("  --dev             Fast-iteration build: -O1 (about 30% faster C compile than -O2) unless -O is given")
     print("  --link <path>     Link a file by path (.c .o .a .dll .lib .so)")
     print("  -l<name>          Link a library by name (e.g. -luser32, -lgdi32)")
     print("  -l <name>         Same as -l<name> with a space")
@@ -246,10 +248,11 @@ pub def cpp_lto_ok(cc: str, target: str) -> bool:
 # link must then use the C++ driver (and, when `lto`, was compiled as bitcode).
 pub def auto_link_cpp_shims(mod_file_paths: Vec[str], build_dir: str, cc: str,
                             opt_level: str, link_paths: Vec[str], lib_flags: Vec[str],
-                            verbose: bool, lto: bool) -> bool:
+                            verbose: bool, lto: bool, pend: PendingShims) -> bool:
     mut any = false
     mut seen: Map[str, bool] = Map[str, bool].init(8)
     mut cxx = cxx_of(cc)
+    # Shim compiles are queued on `pend` and run together with the generated modules.
     mut mi = 0
     while mi < mod_file_paths.len:
         mut trpath = mod_file_paths.get(mi)
@@ -335,11 +338,12 @@ pub def auto_link_cpp_shims(mod_file_paths: Vec[str], build_dir: str, cc: str,
                         if lto: ltof = " -flto"
                         ccmd = cxx + " -O" + opt_level + ltof + stdflag + " -c \"" + shim_src + "\" " + cflags + " -o \"" + oname + "\""
                         if verbose: print("  [CXX shim] " + shim_src)
-                    mut rc = _tr_system(ccmd)
-                    if rc != 0:
-                        print(c_red("error") + ": compiling shim " + shim_src + " failed (exit code " + str(rc) + ")")
-                        _tr_exit(rc)
-                    write_file(sidecar, cache_key)
+                    # Compile later, in parallel with the other pending shims.
+                    pend.cmds.push(ccmd + " > \"" + oname + ".log\" 2>&1")
+                    pend.names.push(shim_src)
+                    pend.logs.push(oname + ".log")
+                    pend.sidecars.push(sidecar)
+                    pend.keys.push(cache_key)
                 link_paths.push(oname)
                 mut bi = 0
                 while bi < libs.len:
@@ -1223,11 +1227,54 @@ pub def obj_path_for(c_path: str) -> str:
 #
 # This is correctness-preserving: identical .c + identical flags produce an
 # identical .o, so reusing it yields the same program as a from-scratch build.
+# Cheap non-cryptographic content hash (two polynomial hashes; no integer overflow, so it
+# is safe under -ftrapv). Only used to detect "did this header change" for the PCH cache.
+pub def text_hash(s: str) -> str:
+    mut h1 = 7
+    mut h2 = 11
+    mut i = 0
+    mut n = s.len()
+    while i < n:
+        mut c = s.char_at(i)
+        h1 = (h1 * 131 + c) % 2147483629
+        h2 = (h2 * 257 + c) % 2147483587
+        i = i + 1
+    return str(n) + "-" + str(h1) + "-" + str(h2)
+
+# Precompiled header for tauraro_types.h (gcc, native non-Windows builds only): every module
+# includes it first, and a PCH skips re-parsing the 770 KB runtime for each of them. The PCH is
+# keyed by compiler + flags + header contents; a stale one is deleted (gcc would not notice a
+# changed header) and only rebuilt when enough modules are about to compile to pay for it.
+# Opt out with TAURARO_NO_PCH=1. Returns true when a valid PCH is in place.
+pub def prepare_pch(cc: str, common: str, inc_dir: str, ncompile: int, target: str, verbose: bool) -> bool:
+    if target != "" or _tr_is_windows(): return false
+    if _tr_getenv("TAURARO_NO_PCH") == "1": return false
+    if not _tr_str_contains(cc, "gcc") or is_clang_compiler(cc): return false
+    mut hdr = inc_dir + "tauraro_types.h"
+    mut gch = hdr + ".gch"
+    mut kfile = gch + ".key"
+    if not file_exists(hdr):
+        delete_file(gch)
+        return false
+    mut key = cc + "|" + common + "|" + text_hash(read_file(hdr)) + "|" + text_hash(read_file(inc_dir + "tauraro_rt.h"))
+    if file_exists(gch) and file_exists(kfile):
+        if read_file(kfile) == key: return true
+    delete_file(gch)
+    delete_file(kfile)
+    if ncompile < 4: return false
+    mut rc = _tr_system(cc + common + " -x c-header \"" + hdr + "\" -o \"" + gch + "\" > /dev/null 2>&1")
+    if rc != 0 or not file_exists(gch):
+        delete_file(gch)
+        return false
+    write_file(kfile, key)
+    if verbose: print("  [PCH] built " + gch)
+    return true
+
 pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: str, inc_dir: str,
                       link_paths: Vec[str], lib_flags: Vec[str],
                       opt_level: str, verbose: bool, static_link: bool,
                       target: str, sysroot: str, debug_mode: bool, build_shared: bool,
-                      link_cxx: bool, use_lto: bool, coverage: bool) -> int:
+                      link_cxx: bool, use_lto: bool, coverage: bool, pend: PendingShims) -> int:
     mut cc = detect_c_compiler()
     mut triple = ""
     mut cross_flags = ""
@@ -1276,8 +1323,14 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
     # Flags common to both per-module `-c` compiles and the final link.
     mut common = " -O" + opt_level + overflow_flag + static_flag + native_flags + cross_flags + warn_flags + dbg + pic + lto_flag + " \"-I" + inc_dir + "\""
 
-    # -- 1. Compile each changed module to its .o ------------------------------
+    # -- 1. Compile each changed module to its .o (in parallel) -----------------
+    # Pass 1 decides which objects need (re)compiling; pass 2 runs those compiles on
+    # TAURARO_JOBS worker threads (default: CPU count), each job's output captured to a
+    # log and replayed in module order so diagnostics stay deterministic. Unchanged
+    # modules reuse their cached object untouched.
     mut o_files = Vec[str].init(c_files.len)
+    mut todo = Vec[int].init(c_files.len)
+    mut todo_cmds = Vec[str].init(c_files.len)
     mut i = 0
     mut compiled = 0
     while i < c_files.len:
@@ -1285,45 +1338,73 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
         mut opath = obj_path_for(cpath)
         o_files.push(opath)
         if needs.get(i) or not file_exists(opath):
-            # Delete the old object first: some compiler/linker toolchains write
-            # the new object via an atomic temp-file-then-rename (observed with
-            # clang/lld on Windows, where the rename can silently lose a race
-            # against another process briefly holding the destination path open,
-            # e.g. antivirus scanning or a just-exited prior build's handle).
-            # If that rename is ever skipped, the STALE object from a previous,
-            # unrelated compilation must not still be sitting at `opath` for the
-            # link step to pick up unnoticed -- with nothing there, a lost race
-            # becomes an immediate, loud "object file missing" error instead of
-            # a silent wrong-binary link.
-            mut ccmd = cc + common + " -c \"" + cpath + "\" -o \"" + opath + "\""
+            # Delete the old object first: some compiler/linker toolchains write the
+            # new object via an atomic temp-file-then-rename (observed with clang/lld
+            # on Windows, where the rename can silently lose a race against another
+            # process briefly holding the destination path open). A stale object from
+            # an earlier build must never be left at `opath` for the link to pick up.
+            delete_file(opath)
+            todo.push(i)
+            todo_cmds.push(cc + common + " -c \"" + cpath + "\" -o \"" + opath + "\" > \"" + opath + ".log\" 2>&1")
             if verbose: print("  [CC -c] " + cpath)
-            mut attempt = 0
-            mut crc = 0
-            while true:
-                delete_file(opath)
-                crc = _tr_system(ccmd)
-                if crc != 0:
-                    print(c_red("error") + ": compiling " + cpath + " failed (exit code " + str(crc) + ")")
-                    # The remaining changed modules were not compiled, but their new .c
-                    # is already on disk: drop their old objects so the next build does
-                    # not mistake "same .c as last time" for "object up to date".
-                    mut rj = i + 1
-                    while rj < c_files.len:
-                        if needs.get(rj): delete_file(obj_path_for(c_files.get(rj)))
-                        rj = rj + 1
-                    return crc
-                if file_exists(opath): break
-                # Lost the race described above: the compiler exited 0 but the
-                # object never landed at `opath`. Retry once (the other process
-                # holding the path is almost always gone a moment later) before
-                # treating it as a hard failure.
-                attempt = attempt + 1
-                if attempt > 1:
-                    print(c_red("error") + ": compiling " + cpath + " reported success but " + opath + " was not written (lost atomic-rename race?)")
-                    return 1
         else:
             compiled = compiled + 1
         i = i + 1
+    prepare_pch(cc, common, inc_dir, todo.len, target, verbose)
+    # Run shim compiles (usually the heaviest jobs) and module compiles as ONE batch.
+    mut nshim = pend.cmds.len
+    mut all_cmds = Vec[str].init(nshim + todo.len + 1)
+    mut ci = 0
+    while ci < nshim:
+        all_cmds.push(pend.cmds.get(ci))
+        ci = ci + 1
+    ci = 0
+    while ci < todo.len:
+        all_cmds.push(todo_cmds.get(ci))
+        ci = ci + 1
+    if all_cmds.len > 0:
+        mut workers = pjobs_workers(all_cmds.len)
+        if verbose: print("  [CC] " + str(all_cmds.len) + " job(s) (" + str(nshim) + " shim) on " + str(workers) + " worker(s)")
+        mut rcs = pjobs_run(all_cmds, workers, inc_dir + ".pj_")
+        mut first_fail = 0
+        mut shi = 0
+        while shi < nshim:
+            mut shlog = pend.logs.get(shi)
+            if file_exists(shlog):
+                mut shtxt = read_file(shlog)
+                if shtxt.len() > 0: print(shtxt)
+                delete_file(shlog)
+            if rcs.get(shi) != 0:
+                print(c_red("error") + ": compiling shim " + pend.names.get(shi) + " failed (exit code " + str(rcs.get(shi)) + ")")
+                if first_fail == 0: first_fail = rcs.get(shi)
+            else:
+                write_file(pend.sidecars.get(shi), pend.keys.get(shi))
+            shi = shi + 1
+        mut ti = 0
+        while ti < todo.len:
+            mut tpath = c_files.get(todo.get(ti))
+            mut topath = obj_path_for(tpath)
+            mut tlog = topath + ".log"
+            if file_exists(tlog):
+                mut ttxt = read_file(tlog)
+                if ttxt.len() > 0: print(ttxt)
+                delete_file(tlog)
+            mut trc = rcs.get(nshim + ti)
+            if trc == 0 and not file_exists(topath):
+                # Lost-rename race (see above): the compiler exited 0 but the object never
+                # landed. Retry once, serially, before treating it as a hard failure.
+                trc = _tr_system(cc + common + " -c \"" + tpath + "\" -o \"" + topath + "\"")
+                if trc == 0 and not file_exists(topath):
+                    print(c_red("error") + ": compiling " + tpath + " reported success but " + topath + " was not written (lost atomic-rename race?)")
+                    trc = 1
+            if trc != 0:
+                print(c_red("error") + ": compiling " + tpath + " failed (exit code " + str(trc) + ")")
+                # A failed module's new .c is already on disk; drop its object so the next
+                # build does not mistake "same .c as last time" for "object up to date".
+                delete_file(topath)
+                if first_fail == 0: first_fail = trc
+            ti = ti + 1
+        if first_fail != 0: return first_fail
     if verbose: print("  [incremental] reused " + str(compiled) + " of " + str(c_files.len) + " cached object(s)")
 
     # -- 2. Link all .o into the output executable (or shared library) ---------
@@ -1748,6 +1829,7 @@ pub def main(args: Vec[str]):
     mut check_only  = false
     mut verbose     = false
     mut opt_level   = "2"
+    mut dev_mode = false
     mut opt_level_explicit = false   # true once the user passes -O0/-O1/-O2/-O3/-Os
     mut link_paths  = Vec[str].init(8)   # --link <path>  : quoted file paths
     mut lib_flags   = Vec[str].init(8)   # -l<name>       : verbatim -l flags
@@ -1824,6 +1906,7 @@ pub def main(args: Vec[str]):
         elif arg == "-O2": opt_level = "2"; opt_level_explicit = true
         elif arg == "-O3": opt_level = "3"; opt_level_explicit = true
         elif arg == "-Os": opt_level = "s"; opt_level_explicit = true
+        elif arg == "--dev": dev_mode = true
         elif arg == "--static": static_link = true
         elif arg == "--target" and i + 1 < args.len:
             i = i + 1
@@ -1874,6 +1957,8 @@ pub def main(args: Vec[str]):
     # narrow, documented workaround, not a silent behavior change.
     if not opt_level_explicit and opt_level == "2" and _tr_is_macos_arm64():
         opt_level = "1"
+    # --dev: fast-iteration profile (an explicit -O level still wins)
+    if dev_mode and not opt_level_explicit: opt_level = "1"
     # coverage counts are only line-accurate without optimisation
     if cov_mode and not opt_level_explicit: opt_level = "0"
 
@@ -2608,11 +2693,12 @@ pub def main(args: Vec[str]):
     # no manual `clang++ -c` / `--link -lstdc++`. Under LTO the wrapper is inlined away.
     mut has_cpp = false
     mut use_lto = false
+    mut pend_shims = PendingShims.init()
     if not no_auto_cpp:
         mut cc0 = detect_c_compiler()
         if target != "": cc0 = resolve_cross_driver(resolve_target_triple(target))
         use_lto = cpp_lto_ok(cc0, target)
-        has_cpp = auto_link_cpp_shims(resolver.mod_file_paths, build_dir, cc0, opt_level, link_paths, lib_flags, verbose, use_lto)
+        has_cpp = auto_link_cpp_shims(resolver.mod_file_paths, build_dir, cc0, opt_level, link_paths, lib_flags, verbose, use_lto, pend_shims)
     if not has_cpp: use_lto = false
 
     # --gpu-embed: auto-compile every @kernel function to a GPU module and embed it
@@ -2660,7 +2746,7 @@ pub def main(args: Vec[str]):
     if not lib_mode and _tr_str_contains(tgt_triple, "wasm32-unknown-unknown"):
         rc = compile_wasm_incremental(all_c_files, needs_recompile, exe_path, build_dir, opt_level, verbose, wasm_memory_mb)
     else:
-        rc = compile_all_c_incremental(all_c_files, needs_recompile, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot, debug_mode, lib_mode, has_cpp, use_lto, cov_mode)
+        rc = compile_all_c_incremental(all_c_files, needs_recompile, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot, debug_mode, lib_mode, has_cpp, use_lto, cov_mode, pend_shims)
     if rc != 0:
         print(c_red("error") + ": compilation failed (exit code " + str(rc) + ")")
         _tr_exit(rc)
