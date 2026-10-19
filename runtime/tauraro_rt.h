@@ -10283,7 +10283,7 @@ _TR_XLINK void _tr_prof_cpu_stop(void) {
 }
 static char* _tr_prof_symbolize(void* pc) {
     Dl_info info;
-    if (dladdr(pc, &info) && info.dli_sname) return _tr_strdup(info.dli_sname);
+    if (dladdr(pc, &info) && info.dli_sname) return _tr_strdup((char*)info.dli_sname);
     return NULL;
 }
 #endif
