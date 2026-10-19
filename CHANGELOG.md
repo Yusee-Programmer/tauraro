@@ -448,6 +448,7 @@ added here as each phase lands.
   layer does not verify certificates.
 
 ### Fixed
+- Runtime: `Dict` / `Map` / `Set` (string keys), the int-keyed dict and typed inline dicts now grow their bucket array (x2 at 75% load); the fixed 16 buckets made bulk inserts quadratic (160k string keys: 40 s -> 0.12 s). `StringBuilder.to_owned()` is typed `str`.
 - Compiler: `Thread.spawn` assigned to a field compiles; `shared x = f()` with `f -> Shared[T]` works and a `Shared[T]` field co-owns (clones) its handle and drops it with the object; `List[Interface]` stores boxed fat pointers (append, index, iterate, dispatch); `throws E -> (A, B)` wraps and unwraps tuples through `?`, `return` and destructuring; `mut (a, b) = ...` destructuring; `List.slice(a, b)`; `with` calls `__exit__` with the declared number of arguments; `?` in a non-throwing function is a clear diagnostic; keywords used as names are named in the error; top-level names that collide with C keywords / libc identifiers / Windows macros are rejected.
 - `std.net.tls`: a read timeout part-way through a record keeps the bytes already read (no stream desync on the next read).
 - Compiler: a user method named `as_str` is no longer treated as the builtin cast; `Dict[int, V].has` is true for a stored 0; `return list[i]` / `self.f = list[i]` of a str retain the element; an owned class local or list slot reassigned from a list element retains it; `List[List[T]]` element reads and slot assignment compile; nested f-string format specs (`f"{x:.{p}g}"`, `{s:>{w}}`) are applied.

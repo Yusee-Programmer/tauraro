@@ -6186,6 +6186,25 @@ static Dict* Dict_new(void) {
     d->cap=0; d->len=0; d->buckets=NULL;
     return d;
 }
+/* Grow the bucket array (x2) once the load factor passes 0.75, so lookups stay O(1)
+ * on average. Without this the 16 initial buckets never grew and a dict with N keys
+ * had chains of N/16 (quadratic bulk inserts). */
+static void _dict_rehash(Dict* d) {
+    size_t ncap = d->cap * 2;
+    _DictNode** nb = (_DictNode**)TAURARO_CALLOC(ncap, sizeof(_DictNode*));
+    if (!nb) return;
+    for (size_t i = 0; i < d->cap; i++) {
+        _DictNode* n = d->buckets[i];
+        while (n) {
+            _DictNode* nx = n->next;
+            size_t j = _dict_hash(n->key, ncap);
+            n->next = nb[j]; nb[j] = n;
+            n = nx;
+        }
+    }
+    _tr_free(d->buckets);
+    d->buckets = nb; d->cap = ncap;
+}
 static void Dict_set(Dict* d, char* key, void* val) {
     if (!d || !key) return;
     if (d->cap==0) { d->cap=16; d->buckets=(_DictNode**)TAURARO_CALLOC(16,sizeof(_DictNode*)); _TR_MEMCOUNT_INC(); }
@@ -6194,6 +6213,7 @@ static void Dict_set(Dict* d, char* key, void* val) {
     while (n) { if (strcmp(n->key,key)==0) { n->value=val; return; } n=n->next; }
     _DictNode* nd=(_DictNode*)malloc(sizeof(_DictNode)); _TR_MEMCOUNT_INC();
     nd->key=strdup(key); _TR_MEMCOUNT_INC(); nd->value=val; nd->next=d->buckets[i]; d->buckets[i]=nd; d->len++;
+    if (d->len > d->cap - (d->cap >> 2)) _dict_rehash(d);
 }
 static void*     Dict_get(Dict* d, char* key) {
     if (!d||!key||d->cap==0) return NULL;
@@ -6310,6 +6330,17 @@ static inline void _tr_idict_set_impl(TrIDict* d, long long k, void* v) {
     _TrIDictNode* nd = (_TrIDictNode*)malloc(sizeof(_TrIDictNode));
     nd->key = k; nd->value = v; nd->next = d->buckets[idx];
     d->buckets[idx] = nd; d->len++;
+    if (d->len > d->cap - (d->cap >> 2)) {   /* keep chains short: grow x2 at 75% load */
+        size_t ncap = d->cap * 2;
+        _TrIDictNode** nb = (_TrIDictNode**)TAURARO_CALLOC(ncap, sizeof(_TrIDictNode*));
+        if (nb) {
+            for (size_t i = 0; i < d->cap; i++) {
+                _TrIDictNode* m = d->buckets[i];
+                while (m) { _TrIDictNode* nx = m->next; size_t j = (size_t)((unsigned long long)m->key % ncap); m->next = nb[j]; nb[j] = m; m = nx; }
+            }
+            free(d->buckets); d->buckets = nb; d->cap = ncap;
+        }
+    }
 }
 #define _tr_idict_set(d, k, v) _tr_idict_set_impl((d), (k), (void*)(uintptr_t)(v))
 static inline void* _tr_idict_get(TrIDict* d, long long k) {

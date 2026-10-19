@@ -6573,6 +6573,7 @@ extend Sema:
                         if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                         else: ret_ty = AstType.init("int")
                 elif hobj_ty.name == "StringBuilder" and method == "to_string": ret_ty = AstType.init("StringObj")
+                elif hobj_ty.name == "StringBuilder" and method == "to_owned": ret_ty = AstType.init("str")
                 # Shared[T] method return types
                 # Note: s1's HIR type is the inner T (not Shared[T]), so these branches
                 # are reached only when an explicit Shared[T] annotation is used.
