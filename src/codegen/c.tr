@@ -494,7 +494,9 @@ pub class CGenerator:
         mut keyeq = "n->key==key"
         mut keystore = "key"
         mut keyfree = ""
+        mut rehash_expr = "((size_t)m->key) % nc"
         if is_str:
+            rehash_expr = "_dict_hash(m->key, nc)"
             hashexpr = "_dict_hash(key, d->cap)"
             keyeq = "strcmp(n->key,key)==0"
             keystore = "strdup(key)"
@@ -502,7 +504,7 @@ pub class CGenerator:
         self.wlt("typedef struct " + node + " { " + ktype + " key; " + vname + " value; struct " + node + "* next; } " + node + ";\n")
         self.wlt("typedef struct { " + node + "** buckets; size_t cap; size_t len; } " + dn + ";\n")
         self.wlt("static inline " + dn + "* " + dn + "_new(long long c){ (void)c; " + dn + "* d=(" + dn + "*)malloc(sizeof(" + dn + ")); d->cap=0; d->len=0; d->buckets=NULL; return d; }\n")
-        self.wlt("static inline void " + dn + "_set(" + dn + "* d, " + ktype + " key, " + vname + " val){ if(!d) return; if(d->cap==0){ d->cap=16; d->buckets=(" + node + "**)calloc(16,sizeof(" + node + "*)); } size_t i=" + hashexpr + "; " + node + "* n=d->buckets[i]; while(n){ if(" + keyeq + "){ n->value=val; return; } n=n->next; } " + node + "* nd=(" + node + "*)malloc(sizeof(" + node + ")); nd->key=" + keystore + "; nd->value=val; nd->next=d->buckets[i]; d->buckets[i]=nd; d->len++; }\n")
+        self.wlt("static inline void " + dn + "_set(" + dn + "* d, " + ktype + " key, " + vname + " val){ if(!d) return; if(d->cap==0){ d->cap=16; d->buckets=(" + node + "**)calloc(16,sizeof(" + node + "*)); } size_t i=" + hashexpr + "; " + node + "* n=d->buckets[i]; while(n){ if(" + keyeq + "){ n->value=val; return; } n=n->next; } " + node + "* nd=(" + node + "*)malloc(sizeof(" + node + ")); nd->key=" + keystore + "; nd->value=val; nd->next=d->buckets[i]; d->buckets[i]=nd; d->len++; if(d->len > d->cap - (d->cap>>2)){ size_t nc=d->cap*2; " + node + "** nb=(" + node + "**)calloc(nc,sizeof(" + node + "*)); if(nb){ for(size_t k=0;k<d->cap;k++){ " + node + "* m=d->buckets[k]; while(m){ " + node + "* nx=m->next; size_t j=" + rehash_expr + "; m->next=nb[j]; nb[j]=m; m=nx; } } free(d->buckets); d->buckets=nb; d->cap=nc; } } }\n")
         self.wlt("static inline " + vname + " " + dn + "_get(" + dn + "* d, " + ktype + " key){ if(!d||d->cap==0) return (" + vname + "){0}; size_t i=" + hashexpr + "; " + node + "* n=d->buckets[i]; while(n){ if(" + keyeq + ") return n->value; n=n->next; } return (" + vname + "){0}; }\n")
         self.wlt("static inline bool " + dn + "_has(" + dn + "* d, " + ktype + " key){ if(!d||d->cap==0) return false; size_t i=" + hashexpr + "; " + node + "* n=d->buckets[i]; while(n){ if(" + keyeq + ") return true; n=n->next; } return false; }\n")
         self.wlt("static inline long long " + dn + "_len(" + dn + "* d){ return d?(long long)d->len:0LL; }\n")
