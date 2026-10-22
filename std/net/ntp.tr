@@ -1,0 +1,137 @@
+# std.net.ntp -- SNTP client (RFC 4330 / RFC 5905 client mode).
+#
+# `Ntp.query(server)` sends one NTPv4 client request and returns the
+# server time, this machine's clock offset from it and the round-trip delay
+# (both in milliseconds, using the standard four-timestamp formulas).
+# `Ntp.best_of(server, n)` keeps the sample with the smallest delay.
+# The local clock is never changed -- apply the offset yourself if needed.
+#
+# Usage:
+#   from std.net.ntp import Ntp
+#   mut r = Ntp.query("pool.ntp.org")?
+#   print(f"offset {r.offset_ms} ms, delay {r.delay_ms} ms, stratum {r.stratum}")
+
+from std.core.string import StringBuilder
+from std.net.udpx import UdpEndpoint, Datagram, unix_ms
+
+# Seconds from 1900-01-01 (NTP era 0) to 1970-01-01.
+const NTP_UNIX_DELTA = 2208988800
+
+def _nb(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+def _n32(s: str, i: int) -> int:
+    return (_nb(s, i) << 24) | (_nb(s, i + 1) << 16) | (_nb(s, i + 2) << 8) | _nb(s, i + 3)
+
+# 64-bit NTP timestamp at offset i -> Unix milliseconds.
+def _ntp_ms(s: str, i: int) -> int:
+    mut secs = _n32(s, i)
+    mut frac = _n32(s, i + 4)
+    return (secs - NTP_UNIX_DELTA) * 1000 + (frac * 1000) / 4294967296
+
+def _put_ntp(sb: StringBuilder, ms: int):
+    mut secs = ms / 1000 + NTP_UNIX_DELTA
+    mut frac = ((ms % 1000) * 4294967296) / 1000
+    sb.append_char((secs >> 24) & 255)
+    sb.append_char((secs >> 16) & 255)
+    sb.append_char((secs >> 8) & 255)
+    sb.append_char(secs & 255)
+    sb.append_char((frac >> 24) & 255)
+    sb.append_char((frac >> 16) & 255)
+    sb.append_char((frac >> 8) & 255)
+    sb.append_char(frac & 255)
+
+pub class NtpResult:
+    pub server_time_ms: int    # server clock at the moment the reply arrived (Unix ms)
+    pub offset_ms:      int    # server clock - local clock
+    pub delay_ms:       int    # round-trip network delay
+    pub stratum:        int
+    pub leap:           int    # 0 none, 1/2 leap second pending, 3 unsynchronised
+    pub version:        int
+    pub ref_id:         str    # e.g. "GPS" for stratum 1, or the upstream IP
+    pub server:         str
+
+pub class Ntp:
+    _dummy: int
+
+extend Ntp:
+    pub def query(server: str) throws str -> NtpResult:
+        return Ntp.query_port(server, 123, 3000)?
+
+    pub def query_port(server: str, port: int, timeout_ms: int) throws str -> NtpResult:
+        mut fam = 4
+        if server.find(":") >= 0: fam = 6
+        mut u = UdpEndpoint.open(fam, 0)?
+        mut t1 = unix_ms()
+        mut sb = StringBuilder.init(48)
+        sb.append_char(0x23)        # LI 0, VN 4, mode 3 (client)
+        mut i = 1
+        while i < 40:
+            sb.append_char(0)
+            i = i + 1
+        _put_ntp(sb, t1)            # transmit timestamp (echoed back as "originate")
+        mut pkt = sb.to_owned()
+        sb.free()
+        mut sr: Result[bool, str] = _ntp_send(u, pkt, server, port)
+        if sr.is_err:
+            u.close()
+            raise(sr.err)
+        mut deadline = unix_ms() + timeout_ms
+        while true:
+            mut left = deadline - unix_ms()
+            if left <= 0:
+                u.close()
+                raise(f"NTP: no reply from {server}")
+            mut d: Result[Datagram, str] = u.recv(512, left)
+            if d.is_err:
+                u.close()
+                raise(d.err)
+            if d.ok.timed_out:
+                u.close()
+                raise(f"NTP: no reply from {server}")
+            mut t4 = unix_ms()
+            mut m = d.ok.data
+            if m.len() < 48: continue
+            mut mode = _nb(m, 0) & 7
+            if mode != 4: continue
+            # reject replies that do not echo our transmit timestamp
+            if _n32(m, 24) != _n32(pkt, 40) or _n32(m, 28) != _n32(pkt, 44): continue
+            mut r = NtpResult()
+            r.leap = (_nb(m, 0) >> 6) & 3
+            r.version = (_nb(m, 0) >> 3) & 7
+            r.stratum = _nb(m, 1)
+            if r.stratum == 0: 
+                u.close()
+                mut code = m.slice(12, 16)
+                raise(f"NTP: kiss-o'-death from {server} ({code})")
+            if r.stratum <= 1:
+                mut rid = m.slice(12, 16)
+                r.ref_id = rid.replace("\0", "")
+            else:
+                r.ref_id = f"{_nb(m, 12)}.{_nb(m, 13)}.{_nb(m, 14)}.{_nb(m, 15)}"
+            mut t2 = _ntp_ms(m, 32)
+            mut t3 = _ntp_ms(m, 40)
+            r.offset_ms = ((t2 - t1) + (t3 - t4)) / 2
+            r.delay_ms = (t4 - t1) - (t3 - t2)
+            r.server_time_ms = t4 + r.offset_ms
+            r.server = server
+            u.close()
+            return r
+        u.close()
+        raise("NTP: unreachable")
+
+    # Query n times and keep the reply with the smallest round-trip delay.
+    pub def best_of(server: str, n: int) throws str -> NtpResult:
+        mut best = Ntp.query(server)?
+        mut i = 1
+        while i < n:
+            mut r: Result[NtpResult, str] = Ntp.query(server)
+            if r.is_ok and r.ok.delay_ms < best.delay_ms: best = r.ok
+            i = i + 1
+        return best
+
+def _ntp_send(u: UdpEndpoint, pkt: str, server: str, port: int) throws str -> bool:
+    u.send_to(pkt, server, port)?
+    return true

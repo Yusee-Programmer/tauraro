@@ -13,3 +13,8 @@
 # In case of conflicts, always keep the current branch version
 # (Results are auto-generated, so conflicts are resolved by taking current state)
 benchmarks/results.md merge=ours
+
+# Tauraro sources (and their embedded multi-line test vectors / tables) keep LF
+# line endings on every platform; a CRLF checkout changes the bytes of
+# triple-quoted strings.
+*.tr      text eol=lf

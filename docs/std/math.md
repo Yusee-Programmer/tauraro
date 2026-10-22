@@ -7,6 +7,8 @@ from std.math.bits   import Bits          # bitwise operations (static methods)
 from std.math.random import Random        # pseudo-random number generation
 from std.math.stats  import Stats         # descriptive statistics (static methods)
 from std.math.bigint import BigInt        # arbitrary-precision integers
+from std.math.fft    import fft, rfft     # FFT of any length (C-backed)
+from std.math.dsp    import Biquad, stft  # windows, filters, spectra
 ```
 
 ---
@@ -393,3 +395,155 @@ print((a * b).to_str())    # 246913578246913578246913578
 mut neg = BigInt.from_int(-7).div(BigInt.from_int(2))
 print(neg.to_str())        # -3 (rounds toward zero, not floor -4)
 ```
+
+---
+
+## Exact and arbitrary-precision numbers — `std.math.decimal`, `std.math.rational`, `std.math.bigfloat`
+
+### Decimal
+
+Coefficient × 10^exponent with a `BigInt` coefficient: `+ - *` are exact; division and rounding take decimal places
+and a rounding mode (`ROUND_HALF_EVEN`, `ROUND_HALF_UP`, `ROUND_HALF_DOWN`, `ROUND_DOWN`, `ROUND_UP`, `ROUND_FLOOR`,
+`ROUND_CEILING`).
+
+```tauraro
+from std.math.decimal import Decimal, ROUND_HALF_UP
+mut total = Decimal.parse("19.99")?.mul(Decimal.from_int(3))          # 59.97
+mut tax = total.mul(Decimal.parse("0.075")?).quantize(2, ROUND_HALF_UP)  # 4.50
+mut shares = Decimal.parse("100")?.allocate(3, 2)?                     # 33.34, 33.33, 33.33
+```
+
+`parse` ("1.5e-3", underscores allowed), `from_int`, `to_str` (plain), `to_sci_str`, `add/sub/mul`,
+`div(o, places, mode)?`, `div_sig(o, digits, mode)?`, `rem(o)?`, `quantize(places, mode)` (negative places round to
+tens/hundreds), `round_sig(digits, mode)`, `normalize`, `sqrt(places)?`, `pow(n)`, `trunc/floor/ceil -> BigInt`,
+`to_int`, `to_float`, `cmp/eq/lt/le/gt/ge`, `min/max`, `neg/abs/sign/scale`, `allocate(n, places)?`. Operators
+`+ - * == < ...` work too. Zero has no sign (`-0.00` prints as `0.00`).
+
+### Rational
+
+`num/den` in lowest terms (`BigInt`s). `Rational.parse("3/4" | "-7" | "0.125" | "1e-3")?`, `of(n, d)?`, `from_int`,
+`from_decimal`, `add/sub/mul`, `div(o)?`, `inv()?`, `pow(n)?` (negative n allowed), `cmp/eq/lt/...`,
+`floor/ceil/round/trunc -> BigInt` (round is half-even), `frac`, `to_decimal(places, mode)`, `to_decimal_str(places)`,
+`to_float`, `to_str` ("n/d"), `is_integer`, `limit_denominator(max_den)` (continued fractions, like Python's).
+
+### BigFloat
+
+A `Decimal` rounded to `prec` significant digits after each operation: `BigFloat.parse(text, prec)?`, `from_int`,
+`add/sub/mul`, `div(o)?`, `sqrt()?`, `exp()?`, `ln()?`, `pow(y)?`, `pow_int(n)?`, `BigFloat.pi(prec)`,
+`BigFloat.e(prec)`, `to_str`, `to_sci_str`, `with_prec`. Checked against Python's `decimal` at 50 digits.
+
+Tested by `tests/lang/112_decimal_rational.tr`.
+
+---
+
+## Tensors — `std.math.tensor`
+
+n-dimensional float64 arrays with NumPy-style broadcasting; elementwise loops, reductions and matmul run in C
+(`std/math/tensor_native.c`).
+
+```tauraro
+from std.math.tensor import Tensor
+mut a = Tensor.arange(0.0, 6.0, 1.0).reshape([2, 3])?
+mut b = a.add(Tensor.vector([10.0, 20.0, 30.0]))?        # broadcast over rows
+mut m = a.matmul(a.transpose())?                          # (2, 2)
+mut p = a.softmax(1)?
+print(b.sum_axis(0, false)?.to_str())
+```
+
+- **Create**: `zeros/ones/full(shape[, v])`, `scalar(v)`, `from_list(values, shape)?`, `vector(values)`,
+  `arange(start, stop, step)`, `linspace(a, b, n)`, `eye(n)`, `random_uniform(shape, seed)`,
+  `random_normal(shape, mean, std, seed)`, `from_matrix`, `from_vector`.
+- **Views** (share storage): `reshape(shape)?` (one `-1`; copies non-contiguous data), `transpose()`, `permute(axes)?`,
+  `slice(axis, start, stop, step)?`, `select(axis, i)?`, `expand_dims(axis)`, `squeeze()`, `squeeze_axis(a)?`,
+  `broadcast_to(shape)?`. `copy()`, `contiguous()`, `flatten()`, `to_list()`.
+- **Access**: `get(idx)?`, `set(idx, v)?`, `item()?`, `shape`, `ndim()`, `size()`, `dim(axis)`, `shape_str()`.
+- **Elementwise** (broadcasting, raise on incompatible shapes): `add sub mul div pow maximum minimum atan2 fmod`,
+  comparisons `eq ne lt le gt ge` (0/1 masks), `logical_and/or`, `Tensor.where(cond, a, b)?`; scalar forms `add_s
+  sub_s mul_s div_s pow_s rsub_s rdiv_s max_s min_s gt_s lt_s eq_s clip`; unary `neg abs sqrt exp log log2 log10
+  log1p expm1 sin cos tan asin acos atan tanh relu leaky_relu sigmoid floor ceil round square sign`, `apply(f)`.
+- **Reductions**: `sum prod max min argmax argmin mean var std norm count_nonzero`, and `*_axis(axis, keepdims)?`
+  for sum/prod/max/min/argmax/argmin/mean; `softmax(axis)?`.
+- **Linear algebra**: `matmul(o)?` (2-D, vector cases, batched with broadcast leading dims), `dot(o)?`, `outer(o)?`,
+  `to_matrix()?` / `Tensor.from_matrix` (std.math.linalg).
+- **Join**: `Tensor.concat(parts, axis)?`, `Tensor.stack(parts, axis)?`. Text: `to_str()`.
+
+GPU execution is not wired in; use `std.gpu` kernels on `to_list()` data for that. Tested by `tests/lang/113_tensor.tr`.
+
+---
+
+## FFT — `std.math.fft`
+
+Fast Fourier transforms of **any length** in O(n log n), with the loops in C (`std/math/fft_native.c`). Complex
+sequences are interleaved `List[float]` (`z[2k]` = re, `z[2k+1]` = im); real sequences are plain `List[float]`.
+Lengths made of 2/3/4/5 use radix-4/2/3/5 Stockham passes, other small primes a generic odd-radix pass, and lengths
+with large prime factors (e.g. primes) Bluestein's algorithm. Real transforms of even length run a half-length
+complex FFT. Results match NumPy to ~1e-16 relative (checked up to n = 2^20).
+
+```tauraro
+from std.math.fft import fft, ifft, rfft, irfft, rfftfreq, magnitudes, FftPlan
+mut spec = rfft(signal)?                         # n/2+1 complex bins
+mut mags = magnitudes(spec)
+mut freqs = rfftfreq(len(signal), 1.0 / 48000.0)
+mut back = irfft(spec, len(signal))?
+mut plan = FftPlan.new(1009)?                    # explicit plan (Bluestein here)
+mut z = plan.forward(data)?                      # data: 2 * 1009 floats
+plan.dispose()
+```
+
+- **Transforms**: `fft(z)?`, `ifft(z)?` (1/n), `rfft(x)?`, `irfft(spec, n)?` (`n = 0` means `2*(bins-1)`; missing bins
+  are zero, the imaginary parts of DC/Nyquist are ignored like NumPy), `fft_real(x)?` (full spectrum of real input),
+  `fft2(z, rows, cols)?` / `ifft2(...)?` (row-major). `fft_norm`, `ifft_norm`, `rfft_norm`, `irfft_norm`, `fft2_norm`
+  take NumPy's `norm`: `"backward"` (default), `"ortho"`, `"forward"`.
+- **Plans**: one-shot functions keep a per-thread cache of the last 8 lengths' twiddles (`fft_clear_cache()` frees it).
+  `FftPlan.new(n)?` — `forward`, `inverse`, `execute(z, inverse, scale)?`, `execute_in_place(...)?`, `uses_bluestein()`,
+  `dispose()`; `RfftPlan.new(n)?` — `forward(x)?`, `inverse(spec)?`, `dispose()`. A plan owns scratch memory: do not
+  run one plan on two threads at once.
+- **Axes**: `fftfreq(n, d)`, `rfftfreq(n, d)`, `fftshift` / `ifftshift` (real lists), `fftshift_complex` /
+  `ifftshift_complex`, `next_fast_len(n)`, `next_fast_len_real(n)`.
+- **Complex helpers**: `to_complex(re)`, `complex_from(re, im)?`, `real_parts`, `imag_parts`, `magnitudes`, `power`,
+  `phases`, `conjugate`, `complex_mul(a, b)?`, `fft_zeros(n)`.
+
+Speed (this machine, µs per call including the Tauraro wrapper; NumPy 2.4 `np.fft` in brackets):
+n = 1024: 12.8 (22.8) · 4096: 70 (83) · 1000: 21 (24) · 1009 (prime): 76 (100) · 2^20: 44 000 (54 000);
+`rfft` 1024: 8.3 (16.7) · 2^20: 27 000 (26 000).
+
+## Signal processing — `std.math.dsp`
+
+Built on `std.math.fft`; semantics follow NumPy/SciPy and are checked against them in `tests/lang/125_fft.tr`.
+
+```tauraro
+from std.math.dsp import hann, stft, istft, Biquad, firwin, convolve, filtfilt, welch
+mut bq = Biquad.lowpass(48000.0, 1000.0, 0.7071)
+mut y = bq.filter(x)
+mut taps = firwin(101, [3000.0], true, 48000.0, "hamming")?
+mut z = convolve(x, taps, "same")?
+mut s = stft(x, hann(512, false), 128, 512, true)?
+mut x2 = istft(s, len(x))?
+mut psd = welch(x, 48000.0, 1024)?
+```
+
+- **Windows** (`sym = true` for filter design, `false` = periodic for spectra, like SciPy): `hann`, `hamming`,
+  `blackman`, `blackman_harris`, `flattop`, `kaiser(n, beta, sym)`, `tukey(n, alpha, sym)`, `boxcar(n)`,
+  `general_cosine(n, coeffs, sym)`, `get_window(name, n, sym)?`, `bessel_i0(x)`.
+- **Convolution**: `convolve(a, b, mode)?` / `correlate(a, v, mode)?` with NumPy's `"full" | "same" | "valid"`;
+  FFT-based when cheaper, direct for short kernels; `convolve_method(a, b, mode, "auto" | "direct" | "fft")?`.
+- **Filtering**: `lfilter(b, a, x)?` (direct form II transposed), `lfilter_state(b, a, x, zi)?` (streaming, `zi`
+  updated in place), `lfilter_zi(b, a)?`, `filtfilt(b, a, x)?` / `filtfilt_pad(..., padlen)?` (SciPy's odd extension),
+  `freqz(b, a, n, fs)` → `FreqResponse` (`freqs`, complex `h`, `magnitude()`, `magnitude_db()`), `response_at`.
+- **FIR design**: `firwin(numtaps, cutoffs_hz, pass_zero, fs, window)?` (SciPy `firwin`, scale=True),
+  `firwin_window(..., win)?` (any window, e.g. Kaiser), `fir_lowpass/highpass(numtaps, cutoff, fs)?`,
+  `fir_bandpass/bandstop(numtaps, low, high, fs)?`.
+- **Biquads** (RBJ Audio EQ Cookbook): `Biquad.lowpass/highpass/bandpass/notch/allpass(fs, f0, q)`,
+  `Biquad.peaking/lowshelf/highshelf(fs, f0, q, gain_db)`, `Biquad.from_coeffs(...)`; `filter(x)`, `filtfilt(x)?`,
+  streaming `process(block)` / `reset()`, `coeffs_b()`, `coeffs_a()`, `magnitude_at(f, fs)`, `gain_db_at(f, fs)`.
+- **Spectra**: `stft(x, window, hop, nfft, center)?` → `Stft` (unscaled, frames × bins, `get(t, k)`, `times(fs)`,
+  `freqs(fs)`); `istft(s, length)?` (weighted overlap-add); `spectrogram(x, fs, window, hop, nfft, mode)?` with mode
+  `"magnitude" | "power" | "db"` → `Spectrogram` (`get`, `times`, `freqs`, `to_tensor()` → `[frames, bins]` `Tensor`);
+  `welch(x, fs, nperseg)?` (SciPy defaults) and `welch_window(x, fs, window, noverlap, nfft, detrend, scaling)?` → `Psd`
+  (`freqs`, `values`, `segments`, `peak_freq()`); `goertzel(x, freq, fs)` (complex DFT at any frequency),
+  `goertzel_power`.
+- **Misc**: `resample_poly(x, up, down)?` (SciPy's polyphase Kaiser(5) design), `find_peaks(x, min_height, distance,
+  min_prominence)` (plateaus report their middle; pass `-1e300` / `0` / `0.0` to skip a criterion),
+  `local_maxima(x)`, `peak_prominences(x, peaks)`.
+
+For `AudioBuffer`s see [`std.audio.dsp`](audio.md#spectra-and-filters--stdaudiodsp).

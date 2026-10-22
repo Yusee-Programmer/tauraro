@@ -12,6 +12,7 @@
 #   from std.encoding.base32 import Base32
 #   from std.encoding.cbor   import CBVal, Cbor
 #   from std.encoding.protobuf import Proto, ProtoWriter, ProtoReader
+#   from std.encoding.xlsx   import Workbook, Worksheet, Cell, CellStyle, CellRange
 
 from std.encoding.json   import JsonDoc
 from std.encoding.json   import JsonRef

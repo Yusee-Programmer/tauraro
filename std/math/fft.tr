@@ -1,0 +1,411 @@
+# tauraro-cpp-shim: fft_native.c
+#
+# std.math.fft -- fast Fourier transforms of any length.
+#
+# Complex sequences are interleaved List[float]: element k is
+# (z[2k], z[2k+1]) = (re, im). Real sequences are plain List[float].
+#
+# Lengths built from 2, 3, 4 and 5 use radix-4/2/3/5 Stockham passes, other
+# small prime factors a generic odd-radix pass, and lengths with large prime
+# factors (e.g. primes) Bluestein's algorithm, so every length is
+# O(n log n). Real transforms of even length run a half-length complex FFT.
+# The hot loops are C (std/math/fft_native.c).
+#
+# Normalisation follows NumPy: "backward" (default: forward unscaled,
+# inverse 1/n), "ortho" (both 1/sqrt(n)) and "forward" (forward 1/n).
+#
+# fft / ifft / rfft / irfft / fft2 / ifft2 cache twiddle plans per thread
+# (the last 8 lengths). FftPlan / RfftPlan hold one length's plan
+# explicitly; a plan object must not be used from two threads at once.
+#
+# Usage:
+#   from std.math.fft import fft, ifft, rfft, irfft, rfftfreq, magnitudes, FftPlan
+#   mut spec = rfft(signal)?                 # n/2+1 complex bins
+#   mut mags = magnitudes(spec)
+#   mut freqs = rfftfreq(len(signal), 1.0 / 48000.0)
+#   mut back = irfft(spec, len(signal))?
+#   mut plan = FftPlan.new(1024)?
+#   mut z = plan.forward(data)?               # data: 2048 floats (interleaved)
+#   plan.dispose()
+
+extern "C":
+    def trc_fft_good_size(n: int) -> int
+    def trc_fft_good_size_real(n: int) -> int
+    def trc_fft_plan_new(n: int) -> Pointer[char]
+    def trc_fft_plan_free(p: Pointer[char])
+    def trc_fft_plan_is_bluestein(p: Pointer[char]) -> int
+    def trc_fft_c2c(p: Pointer[char], inp: Pointer[float], out: Pointer[float], inverse: int, scale: float)
+    def trc_rfft_plan_new(n: int) -> Pointer[char]
+    def trc_rfft_plan_free(p: Pointer[char])
+    def trc_rfft_r2c(p: Pointer[char], inp: Pointer[float], out: Pointer[float], scale: float)
+    def trc_rfft_c2r(p: Pointer[char], inp: Pointer[float], out: Pointer[float], scale: float)
+    def trc_fft_c2c_n(n: int, inp: Pointer[float], out: Pointer[float], inverse: int, scale: float) -> int
+    def trc_fft_r2c_n(n: int, inp: Pointer[float], out: Pointer[float], scale: float) -> int
+    def trc_fft_c2r_n(n: int, inp: Pointer[float], out: Pointer[float], scale: float) -> int
+    def trc_fft_cache_clear()
+    def trc_fft2_c2c(rows: int, cols: int, inp: Pointer[float], out: Pointer[float], inverse: int, scale: float) -> int
+    def trc_dsp_convolve(a: Pointer[float], na: int, b: Pointer[float], nb: int, out: Pointer[float], method: int) -> int
+    def trc_dsp_lfilter(b: Pointer[float], nb: int, a: Pointer[float], na: int, x: Pointer[float], n: int, zi: Pointer[float], y: Pointer[float]) -> int
+    def trc_dsp_lfilter_zi(b: Pointer[float], nb: int, a: Pointer[float], na: int, zi: Pointer[float]) -> int
+    def trc_dsp_filtfilt(b: Pointer[float], nb: int, a: Pointer[float], na: int, x: Pointer[float], n: int, padlen: int, y: Pointer[float]) -> int
+    def trc_dsp_goertzel(x: Pointer[float], n: int, omega: float, out: Pointer[float])
+    def trc_dsp_stft(x: Pointer[float], n: int, win: Pointer[float], nwin: int, hop: int, nfft: int, pad: int, nframes: int, out: Pointer[float]) -> int
+    def trc_dsp_istft(spec: Pointer[float], nframes: int, win: Pointer[float], nwin: int, hop: int, nfft: int, pad: int, out: Pointer[float], len_: int) -> int
+    def trc_dsp_welch(x: Pointer[float], n: int, win: Pointer[float], nwin: int, step: int, nfft: int, detrend: int, scaling: int, fs: float, out: Pointer[float]) -> int
+    def sqrt(x: float) -> float
+    def atan2(y: float, x: float) -> float
+
+# n zeros (also the way to allocate an output buffer for the C kernels).
+pub def fft_zeros(n: int) -> List[float]:
+    mut xs: List[float] = []
+    xs.reserve(n)
+    mut i = 0
+    while i < n:
+        xs.append(0.0)
+        i = i + 1
+    return xs
+
+def _null_check(p: Pointer[char]) -> bool:
+    return (p as usize) != (0 as usize)
+
+# Scale factor for a transform of length n in the given direction.
+def _fft_scale(n: int, norm: str, inverse: bool) throws str -> float:
+    if norm == "backward" or norm == "":
+        if inverse: return 1.0 / (n as float)
+        return 1.0
+    if norm == "ortho": return 1.0 / sqrt(n as float)
+    if norm == "forward":
+        if inverse: return 1.0
+        return 1.0 / (n as float)
+    raise(f"fft: unknown norm '{norm}' (use backward, ortho or forward)")
+
+def _check_complex(z: List[float], what: str) throws str -> int:
+    if len(z) % 2 != 0: raise(f"{what}: complex input must have an even number of floats (interleaved re, im)")
+    if len(z) == 0: raise(f"{what}: empty input")
+    return len(z) / 2
+
+# ── complex helpers ─────────────────────────────────────────────────────────
+
+# Real values -> interleaved complex with zero imaginary parts.
+pub def to_complex(re: List[float]) -> List[float]:
+    mut out = fft_zeros(2 * len(re))
+    mut i = 0
+    while i < len(re):
+        out[2 * i] = re[i]
+        i = i + 1
+    return out
+
+# Separate real and imaginary parts -> interleaved complex.
+pub def complex_from(re: List[float], im: List[float]) throws str -> List[float]:
+    if len(re) != len(im): raise("complex_from: re and im lengths differ")
+    mut out = fft_zeros(2 * len(re))
+    mut i = 0
+    while i < len(re):
+        out[2 * i] = re[i]
+        out[2 * i + 1] = im[i]
+        i = i + 1
+    return out
+
+pub def real_parts(z: List[float]) -> List[float]:
+    mut n = len(z) / 2
+    mut out = fft_zeros(n)
+    mut i = 0
+    while i < n:
+        out[i] = z[2 * i]
+        i = i + 1
+    return out
+
+pub def imag_parts(z: List[float]) -> List[float]:
+    mut n = len(z) / 2
+    mut out = fft_zeros(n)
+    mut i = 0
+    while i < n:
+        out[i] = z[2 * i + 1]
+        i = i + 1
+    return out
+
+# |z_k|
+pub def magnitudes(z: List[float]) -> List[float]:
+    mut n = len(z) / 2
+    mut out = fft_zeros(n)
+    mut i = 0
+    while i < n:
+        mut a = z[2 * i]
+        mut b = z[2 * i + 1]
+        out[i] = sqrt(a * a + b * b)
+        i = i + 1
+    return out
+
+# |z_k|^2
+pub def power(z: List[float]) -> List[float]:
+    mut n = len(z) / 2
+    mut out = fft_zeros(n)
+    mut i = 0
+    while i < n:
+        out[i] = z[2 * i] * z[2 * i] + z[2 * i + 1] * z[2 * i + 1]
+        i = i + 1
+    return out
+
+# arg(z_k) in radians, (-pi, pi].
+pub def phases(z: List[float]) -> List[float]:
+    mut n = len(z) / 2
+    mut out = fft_zeros(n)
+    mut i = 0
+    while i < n:
+        out[i] = atan2(z[2 * i + 1], z[2 * i])
+        i = i + 1
+    return out
+
+pub def conjugate(z: List[float]) -> List[float]:
+    mut out = fft_zeros(len(z))
+    mut i = 0
+    while i < len(z):
+        out[i] = z[i]
+        if i % 2 == 1: out[i] = 0.0 - z[i]
+        i = i + 1
+    return out
+
+# Elementwise complex product (both interleaved, same length).
+pub def complex_mul(a: List[float], b: List[float]) throws str -> List[float]:
+    if len(a) != len(b): raise("complex_mul: lengths differ")
+    mut out = fft_zeros(len(a))
+    mut i = 0
+    while i + 1 < len(a):
+        out[i] = a[i] * b[i] - a[i + 1] * b[i + 1]
+        out[i + 1] = a[i] * b[i + 1] + a[i + 1] * b[i]
+        i = i + 2
+    return out
+
+# ── sizes and frequency axes ────────────────────────────────────────────────
+
+# Smallest 2^a 3^b 5^c >= n (a fast complex FFT length).
+pub def next_fast_len(n: int) -> int: return trc_fft_good_size(n)
+
+# Smallest even 2^a 3^b 5^c >= n (a fast real FFT length).
+pub def next_fast_len_real(n: int) -> int: return trc_fft_good_size_real(n)
+
+# Sample frequencies of fft bins: [0, 1, ..., ceil(n/2)-1, -floor(n/2), ..., -1] / (d*n).
+pub def fftfreq(n: int, d: float) -> List[float]:
+    mut out = fft_zeros(n)
+    if n <= 0: return out
+    mut half = (n - 1) / 2 + 1
+    mut step = 1.0 / (d * (n as float))
+    mut i = 0
+    while i < half:
+        out[i] = (i as float) * step
+        i = i + 1
+    mut k = 0 - (n / 2)
+    while i < n:
+        out[i] = (k as float) * step
+        k = k + 1
+        i = i + 1
+    return out
+
+# Sample frequencies of rfft bins: [0, 1, ..., n/2] / (d*n).
+pub def rfftfreq(n: int, d: float) -> List[float]:
+    mut m = n / 2 + 1
+    mut out = fft_zeros(m)
+    mut step = 1.0 / (d * (n as float))
+    mut i = 0
+    while i < m:
+        out[i] = (i as float) * step
+        i = i + 1
+    return out
+
+def _roll(x: List[float], shift: int, width: int) -> List[float]:
+    # rotate elements (each `width` floats) right by shift
+    mut n = len(x) / width
+    mut out = fft_zeros(len(x))
+    if n == 0: return out
+    mut s = shift % n
+    if s < 0: s = s + n
+    mut i = 0
+    while i < n:
+        mut j = (i + s) % n
+        mut w = 0
+        while w < width:
+            out[j * width + w] = x[i * width + w]
+            w = w + 1
+        i = i + 1
+    return out
+
+# Move the zero-frequency bin to the centre (real values, like numpy.fft.fftshift).
+pub def fftshift(x: List[float]) -> List[float]: return _roll(x, len(x) / 2, 1)
+pub def ifftshift(x: List[float]) -> List[float]: return _roll(x, 0 - (len(x) / 2), 1)
+# The same for interleaved complex data.
+pub def fftshift_complex(z: List[float]) -> List[float]: return _roll(z, len(z) / 4, 2)
+pub def ifftshift_complex(z: List[float]) -> List[float]: return _roll(z, 0 - (len(z) / 4), 2)
+
+# ── one-shot transforms (per-thread plan cache) ─────────────────────────────
+
+# Complex FFT with an explicit norm ("backward", "ortho" or "forward").
+pub def fft_norm(z: List[float], norm: str) throws str -> List[float]:
+    mut n = _check_complex(z, "fft")?
+    mut sc = _fft_scale(n, norm, false)?
+    mut out = fft_zeros(2 * n)
+    mut ip = z as Pointer[float]
+    mut op = out as Pointer[float]
+    if trc_fft_c2c_n(n, ip, op, 0, sc) != 0: raise("fft: out of memory")
+    return out
+
+pub def ifft_norm(z: List[float], norm: str) throws str -> List[float]:
+    mut n = _check_complex(z, "ifft")?
+    mut sc = _fft_scale(n, norm, true)?
+    mut out = fft_zeros(2 * n)
+    mut ip = z as Pointer[float]
+    mut op = out as Pointer[float]
+    if trc_fft_c2c_n(n, ip, op, 1, sc) != 0: raise("ifft: out of memory")
+    return out
+
+# Forward complex FFT (unscaled).
+pub def fft(z: List[float]) throws str -> List[float]: return fft_norm(z, "backward")?
+# Inverse complex FFT (scaled by 1/n), so ifft(fft(z)) == z.
+pub def ifft(z: List[float]) throws str -> List[float]: return ifft_norm(z, "backward")?
+
+# FFT of real samples: the full n-bin complex spectrum.
+pub def fft_real(x: List[float]) throws str -> List[float]: return fft_norm(to_complex(x), "backward")?
+
+# Real-input FFT: n real samples -> n/2+1 complex bins.
+pub def rfft_norm(x: List[float], norm: str) throws str -> List[float]:
+    mut n = len(x)
+    if n == 0: raise("rfft: empty input")
+    mut sc = _fft_scale(n, norm, false)?
+    mut out = fft_zeros(2 * (n / 2 + 1))
+    mut ip = x as Pointer[float]
+    mut op = out as Pointer[float]
+    if trc_fft_r2c_n(n, ip, op, sc) != 0: raise("rfft: out of memory")
+    return out
+
+pub def rfft(x: List[float]) throws str -> List[float]: return rfft_norm(x, "backward")?
+
+# Inverse of rfft: n/2+1 complex bins -> n real samples. n = 0 means
+# 2*(bins-1). Missing bins count as zero and extra bins are ignored; the
+# imaginary parts of the DC (and, for even n, Nyquist) bins are ignored.
+pub def irfft_norm(spec: List[float], n: int, norm: str) throws str -> List[float]:
+    mut bins = _check_complex(spec, "irfft")?
+    mut nn = n
+    if nn == 0: nn = 2 * (bins - 1)
+    if nn < 1: raise("irfft: output length must be positive")
+    mut sc = _fft_scale(nn, norm, true)?
+    mut need = nn / 2 + 1
+    # c2r works on a copy (it must not see bins past n/2)
+    mut src = fft_zeros(2 * need)
+    mut i = 0
+    while i < 2 * need and i < len(spec):
+        src[i] = spec[i]
+        i = i + 1
+    mut out = fft_zeros(nn)
+    mut ip = src as Pointer[float]
+    mut op = out as Pointer[float]
+    if trc_fft_c2r_n(nn, ip, op, sc) != 0: raise("irfft: out of memory")
+    return out
+
+pub def irfft(spec: List[float], n: int) throws str -> List[float]: return irfft_norm(spec, n, "backward")?
+
+# 2-D complex FFT of a rows x cols row-major interleaved array.
+pub def fft2_norm(z: List[float], rows: int, cols: int, norm: str, inverse: bool) throws str -> List[float]:
+    if rows < 1 or cols < 1: raise("fft2: rows and cols must be positive")
+    if len(z) != 2 * rows * cols: raise(f"fft2: expected {2 * rows * cols} floats for {rows}x{cols} complex values, got {len(z)}")
+    mut sc = _fft_scale(rows * cols, norm, inverse)?
+    mut out = fft_zeros(len(z))
+    mut ip = z as Pointer[float]
+    mut op = out as Pointer[float]
+    mut inv = 0
+    if inverse: inv = 1
+    if trc_fft2_c2c(rows, cols, ip, op, inv, sc) != 0: raise("fft2: out of memory")
+    return out
+
+pub def fft2(z: List[float], rows: int, cols: int) throws str -> List[float]: return fft2_norm(z, rows, cols, "backward", false)?
+pub def ifft2(z: List[float], rows: int, cols: int) throws str -> List[float]: return fft2_norm(z, rows, cols, "backward", true)?
+
+# Free this thread's cached plans (they are otherwise kept for reuse).
+pub def fft_clear_cache(): trc_fft_cache_clear()
+
+# ── explicit plans ──────────────────────────────────────────────────────────
+
+# A reusable complex FFT plan for one length (twiddles computed once).
+pub class FftPlan:
+    pub n: int
+    handle: Pointer[char]
+
+extend FftPlan:
+    pub def new(n: int) throws str -> FftPlan:
+        if n < 1: raise("FftPlan: length must be positive")
+        mut h = trc_fft_plan_new(n)
+        if not _null_check(h): raise("FftPlan: out of memory")
+        mut p = FftPlan()
+        p.n = n
+        p.handle = h
+        return p
+
+    # True when the length is handled by Bluestein's algorithm.
+    pub def uses_bluestein(self) -> bool: return trc_fft_plan_is_bluestein(self.handle) == 1
+
+    # Transform `z` (2n floats) with an explicit direction and output scale.
+    pub def execute(self, z: List[float], inverse: bool, scale: float) throws str -> List[float]:
+        if not _null_check(self.handle): raise("FftPlan: plan was disposed")
+        if len(z) != 2 * self.n: raise(f"FftPlan: expected {2 * self.n} floats, got {len(z)}")
+        mut out = fft_zeros(2 * self.n)
+        mut ip = z as Pointer[float]
+        mut op = out as Pointer[float]
+        mut inv = 0
+        if inverse: inv = 1
+        trc_fft_c2c(self.handle, ip, op, inv, scale)
+        return out
+
+    # Transform in place (no allocation).
+    pub def execute_in_place(self, z: List[float], inverse: bool, scale: float) throws str:
+        if not _null_check(self.handle): raise("FftPlan: plan was disposed")
+        if len(z) != 2 * self.n: raise(f"FftPlan: expected {2 * self.n} floats, got {len(z)}")
+        mut ip = z as Pointer[float]
+        mut inv = 0
+        if inverse: inv = 1
+        trc_fft_c2c(self.handle, ip, ip, inv, scale)
+
+    pub def forward(self, z: List[float]) throws str -> List[float]: return self.execute(z, false, 1.0)?
+    pub def inverse(self, z: List[float]) throws str -> List[float]: return self.execute(z, true, 1.0 / (self.n as float))?
+
+    pub def dispose(self):
+        if _null_check(self.handle):
+            trc_fft_plan_free(self.handle)
+            self.handle = 0 as Pointer[char]
+
+# A reusable real FFT plan for one length.
+pub class RfftPlan:
+    pub n: int
+    handle: Pointer[char]
+
+extend RfftPlan:
+    pub def new(n: int) throws str -> RfftPlan:
+        if n < 1: raise("RfftPlan: length must be positive")
+        mut h = trc_rfft_plan_new(n)
+        if not _null_check(h): raise("RfftPlan: out of memory")
+        mut p = RfftPlan()
+        p.n = n
+        p.handle = h
+        return p
+
+    # n real samples -> n/2+1 complex bins (unscaled).
+    pub def forward(self, x: List[float]) throws str -> List[float]:
+        if not _null_check(self.handle): raise("RfftPlan: plan was disposed")
+        if len(x) != self.n: raise(f"RfftPlan: expected {self.n} samples, got {len(x)}")
+        mut out = fft_zeros(2 * (self.n / 2 + 1))
+        mut ip = x as Pointer[float]
+        mut op = out as Pointer[float]
+        trc_rfft_r2c(self.handle, ip, op, 1.0)
+        return out
+
+    # n/2+1 complex bins -> n real samples (scaled by 1/n).
+    pub def inverse(self, spec: List[float]) throws str -> List[float]:
+        if not _null_check(self.handle): raise("RfftPlan: plan was disposed")
+        if len(spec) != 2 * (self.n / 2 + 1): raise(f"RfftPlan: expected {2 * (self.n / 2 + 1)} floats, got {len(spec)}")
+        mut out = fft_zeros(self.n)
+        mut ip = spec as Pointer[float]
+        mut op = out as Pointer[float]
+        trc_rfft_c2r(self.handle, ip, op, 1.0 / (self.n as float))
+        return out
+
+    pub def dispose(self):
+        if _null_check(self.handle):
+            trc_rfft_plan_free(self.handle)
+            self.handle = 0 as Pointer[char]

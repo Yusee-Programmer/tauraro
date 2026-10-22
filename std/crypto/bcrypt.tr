@@ -1,0 +1,117 @@
+# std.crypto.bcrypt -- bcrypt password hashing (OpenBSD $2b$ format).
+#
+# Produces and checks the 60-character strings used everywhere bcrypt is:
+#
+#   $2b$12$<22-char salt><31-char hash>
+#
+# `$2a$` and `$2y$` hashes from other systems verify too (for passwords under
+# 255 bytes all three prefixes compute the same value).
+#
+# bcrypt only uses the first 72 bytes of a password. Bcrypt.hash refuses
+# longer passwords rather than silently ignoring the rest; pre-hash them
+# (e.g. Base64 of SHA-256) if you need longer input. Bcrypt.verify truncates
+# at 72 bytes so hashes made by truncating libraries still verify.
+#
+# Prefer std.crypto.argon2 for new systems; bcrypt is here for compatibility.
+#
+# Usage:
+#   from std.crypto.bcrypt import Bcrypt
+#   mut stored = Bcrypt.hash("hunter2", 12)?
+#   if Bcrypt.verify("hunter2", stored): ...
+
+from std.crypto.native import trc_bcrypt_raw, trc_ct_eq, _cn_alloc, _cn_take, _cn_free, _cn_b64, _cn_unb64
+from std.crypto.random import SecureRandom
+from std.core.string import StringBuilder
+
+def _bc_byte(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+# password bytes + NUL, capped at 72 bytes (the $2b$ rule).
+def _bc_key(password: str) -> str:
+    mut n = password.len() + 1
+    if n > 72: n = 72
+    mut p = _cn_alloc(n)
+    mut i = 0
+    while i < n and i < password.len():
+        unsafe: p.offset(i).write(_bc_byte(password, i) as char)
+        i = i + 1
+    return _cn_take(p, n)
+
+def _bc_raw(password: str, salt16: str, cost: int) throws str -> str:
+    mut key = _bc_key(password)
+    mut out = _cn_alloc(24)
+    mut kp = key as Pointer[char]
+    mut sp = salt16 as Pointer[char]
+    if trc_bcrypt_raw(kp, key.len(), sp, cost, out) != 0:
+        _cn_free(out)
+        raise("bcrypt: invalid parameters")
+    return _cn_take(out, 24)
+
+def _bc_two(n: int) -> str:
+    if n < 10: return f"0{n}"
+    return f"{n}"
+
+pub class Bcrypt:
+    _dummy: int
+
+extend Bcrypt:
+    # Hash with a random salt. cost is the log2 work factor (4..31; 10-12 is typical).
+    pub def hash(password: str, cost: int) throws str -> str:
+        mut salt = SecureRandom.bytes(16)?
+        return Bcrypt.hash_with_salt(password, salt, cost)?
+
+    # Deterministic form with an explicit 16-byte raw salt.
+    pub def hash_with_salt(password: str, salt16: str, cost: int) throws str -> str:
+        if cost < 4 or cost > 31: raise("bcrypt: cost must be between 4 and 31")
+        if salt16.len() != 16: raise("bcrypt: salt must be 16 bytes")
+        if password.len() > 72: raise("bcrypt: password longer than 72 bytes")
+        mut raw = _bc_raw(password, salt16, cost)?
+        mut head = raw.slice(0, 23)
+        mut sb = StringBuilder.init(64)
+        sb.append("$2b$")
+        mut cs = _bc_two(cost)
+        sb.append(cs)
+        sb.append("$")
+        mut s64 = _cn_b64(2, false, salt16)
+        mut h64 = _cn_b64(2, false, head)
+        sb.append(s64)
+        sb.append(h64)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # The cost factor of a bcrypt string, or -1 if it is malformed.
+    pub def cost_of(hashed: str) -> int:
+        if hashed.len() != 60 or _bc_byte(hashed, 0) != 36 or _bc_byte(hashed, 3) != 36 or _bc_byte(hashed, 6) != 36: return -1
+        mut d1 = _bc_byte(hashed, 4) - 48
+        mut d2 = _bc_byte(hashed, 5) - 48
+        if d1 < 0 or d1 > 9 or d2 < 0 or d2 > 9: return -1
+        return d1 * 10 + d2
+
+    # True if `password` matches the bcrypt string ($2a$, $2b$ or $2y$).
+    pub def verify(password: str, hashed: str) -> bool:
+        mut cost = Bcrypt.cost_of(hashed)
+        if cost < 4 or cost > 31: return false
+        if _bc_byte(hashed, 1) != 50: return false
+        mut v = _bc_byte(hashed, 2)
+        if v != 97 and v != 98 and v != 121: return false
+        mut salt_txt = hashed.slice(7, 29)
+        mut sr: Result[str, str] = _cn_unb64(2, salt_txt)
+        if sr.is_err: return false
+        mut salt = sr.ok
+        if salt.len() != 16: return false
+        mut rr: Result[str, str] = _bc_raw(password, salt, cost)
+        if rr.is_err: return false
+        mut raw = rr.ok
+        mut head = raw.slice(0, 23)
+        mut h64 = _cn_b64(2, false, head)
+        mut want = hashed.slice(29, 60)
+        mut ap = h64 as Pointer[char]
+        mut bp = want as Pointer[char]
+        return trc_ct_eq(ap, h64.len(), bp, want.len()) == 1
+
+    # True if the stored hash's cost differs from `cost` (e.g. after raising it).
+    pub def needs_rehash(hashed: str, cost: int) -> bool:
+        return Bcrypt.cost_of(hashed) != cost

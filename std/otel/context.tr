@@ -1,0 +1,600 @@
+# std.otel.context -- SpanContext, W3C Trace Context (traceparent /
+# tracestate), W3C Baggage, id generation and the per-thread current context.
+#
+#   mut sc = TraceContext.parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+#   sc.is_valid()  sc.is_sampled()  sc.trace_id  sc.span_id
+#   TraceContext.format_traceparent(sc)        # back to the header value
+#
+#   mut ts = TraceState.parse("rojo=00f067aa0ba902b7,congo=t61rcWkgMzE")
+#   ts.get("rojo")   ts.set("vendor", "v")   ts.to_header()
+#
+#   mut bg = Baggage.parse("userId=alice,serverNode=DF%2028;meta")
+#   bg.get("serverNode") == "DF 28"           bg.to_header()
+#
+# Current context: every thread has its own stack of active contexts
+# (thread-local, kept in std/otel/otel_native.c). `Context.current()` reads
+# the top; `ctx.attach()` pushes and returns a token for `Context.detach`;
+# `with ctx.activate() as scope:` does both around a block.
+
+from std.core.vec import Vec
+from std.core.string import StringBuilder
+from std.string.str import Str
+from std.string.fmt import Fmt
+from std.crypto.random import SecureRandom
+from std.otel.native import _ot_alloc, _ot_take, trc_otel_fallback_hex, _ctx_push, _ctx_pop, _ctx_top, _ctx_depth, is_lower_hex, all_zero, hex_value, byte_at, trim_ows
+
+pub const TRACE_FLAG_SAMPLED = 1
+pub const TRACE_FLAG_RANDOM  = 2
+
+pub const INVALID_TRACE_ID = "00000000000000000000000000000000"
+pub const INVALID_SPAN_ID  = "0000000000000000"
+
+# ---------------------------------------------------------------- ids
+
+# Random trace / span ids from std.crypto.random (never all-zero). Falls back
+# to a time-seeded generator only if the OS random source is unavailable.
+pub class IdGenerator:
+    _dummy: int
+
+def _fallback_hex(nbytes: int) -> str:
+    mut p = _ot_alloc(nbytes * 2)
+    trc_otel_fallback_hex(p, nbytes)
+    return _ot_take(p, nbytes * 2)
+
+def _hexch(v: int) -> int:
+    if v < 10: return 48 + v
+    return 87 + v
+
+def _random_hex(nbytes: int) -> str:
+    mut r: Result[str, str] = SecureRandom.token_hex(nbytes)
+    if r.is_ok: return r.ok
+    return _fallback_hex(nbytes)
+
+extend IdGenerator:
+    pub def trace_id() -> str:
+        mut t = _random_hex(16)
+        while all_zero(t): t = _random_hex(16)
+        return t
+
+    pub def span_id() -> str:
+        mut s = _random_hex(8)
+        while all_zero(s): s = _random_hex(8)
+        return s
+
+# ---------------------------------------------------------------- TraceState
+
+def _lcalpha(c: int) -> bool:
+    return c >= 97 and c <= 122
+
+def _digit(c: int) -> bool:
+    return c >= 48 and c <= 57
+
+def _key_char(c: int) -> bool:
+    return _lcalpha(c) or _digit(c) or c == 95 or c == 45 or c == 42 or c == 47
+
+# W3C tracestate key: simple-key = lcalpha 0*255(lcalpha/DIGIT/"_"/"-"/"*"/"/")
+# multi-tenant-key = tenant-id "@" system-id,
+#   tenant-id = (lcalpha/DIGIT) 0*240(keychar), system-id = lcalpha 0*13(keychar)
+pub def tracestate_key_valid(k: str) -> bool:
+    mut n = k.len()
+    if n == 0 or n > 256: return false
+    mut at = -1
+    mut i = 0
+    while i < n:
+        mut c = byte_at(k, i)
+        if c == 64:
+            if at >= 0: return false
+            at = i
+        elif not _key_char(c):
+            return false
+        i = i + 1
+    if at < 0:
+        return _lcalpha(byte_at(k, 0))
+    # multi-tenant
+    if at == 0 or at > 241: return false
+    mut sys_len = n - at - 1
+    if sys_len < 1 or sys_len > 14: return false
+    mut c0 = byte_at(k, 0)
+    if not (_lcalpha(c0) or _digit(c0)): return false
+    return _lcalpha(byte_at(k, at + 1))
+
+# value = 0*255(chr) nblk-chr ; chr = %x20 / nblk-chr ;
+# nblk-chr = %x21-2B / %x2D-3C / %x3E-7E
+pub def tracestate_value_valid(v: str) -> bool:
+    mut n = v.len()
+    if n == 0 or n > 256: return false
+    mut i = 0
+    while i < n:
+        mut c = byte_at(v, i)
+        if c < 32 or c > 126 or c == 44 or c == 61: return false
+        i = i + 1
+    return byte_at(v, n - 1) != 32
+
+pub class TraceState:
+    pub keys:   Vec[str]
+    pub values: Vec[str]
+    pub valid:  bool       # false when a parsed header was rejected
+
+extend TraceState:
+    pub def empty() -> TraceState:
+        mut t = TraceState()
+        t.keys = Vec[str].init(2)
+        t.values = Vec[str].init(2)
+        t.valid = true
+        return t
+
+    # Parse a tracestate header. Empty list members are skipped; an invalid
+    # member, a duplicate key or more than 32 members discards the whole
+    # header (the result is empty and `valid` is false).
+    pub def parse(header: str) -> TraceState:
+        mut t = TraceState.empty()
+        if trim_ows(header).len() == 0: return t
+        mut parts = header.split_exact(",")
+        mut i = 0
+        while i < len(parts):
+            mut m = trim_ows(parts[i])
+            i = i + 1
+            if m.len() == 0: continue
+            mut eq = Str.index_of(m, "=")
+            if eq <= 0:
+                return TraceState._rejected()
+            mut k = Str.slice(m, 0, eq)
+            mut v = Str.slice(m, eq + 1, m.len())
+            if not tracestate_key_valid(k) or not tracestate_value_valid(v):
+                return TraceState._rejected()
+            if t.keys.index_of(k) >= 0:
+                return TraceState._rejected()
+            t.keys.push(k)
+            t.values.push(v)
+            if t.keys.len > 32:
+                return TraceState._rejected()
+        return t
+
+    pub def _rejected() -> TraceState:
+        mut t = TraceState.empty()
+        t.valid = false
+        return t
+
+    pub def len(self) -> int:
+        return self.keys.len
+
+    pub def is_empty(self) -> bool:
+        return self.keys.len == 0
+
+    pub def get(self, key: str) -> str:
+        mut i = self.keys.index_of(key)
+        if i < 0: return ""
+        return self.values.get(i)
+
+    # New TraceState with key=value moved to the front (W3C mutation rule).
+    # Invalid keys/values leave the state unchanged and return false.
+    pub def set(self, key: str, value: str) -> bool:
+        if not tracestate_key_valid(key) or not tracestate_value_valid(value): return false
+        mut i = self.keys.index_of(key)
+        if i >= 0:
+            self.keys.remove(i)
+            self.values.remove(i)
+        mut nk = Vec[str].init(self.keys.len + 1)
+        mut nv = Vec[str].init(self.keys.len + 1)
+        nk.push(key)
+        nv.push(value)
+        mut j = 0
+        while j < self.keys.len and nk.len < 32:
+            nk.push(self.keys.get(j))
+            nv.push(self.values.get(j))
+            j = j + 1
+        self.keys = nk
+        self.values = nv
+        return true
+
+    pub def delete(self, key: str):
+        mut i = self.keys.index_of(key)
+        if i < 0: return
+        self.keys.remove(i)
+        self.values.remove(i)
+
+    pub def to_header(self) -> str:
+        mut sb = StringBuilder.init(64)
+        mut i = 0
+        while i < self.keys.len:
+            if i > 0: sb.append_char(44)
+            sb.append(self.keys.get(i))
+            sb.append_char(61)
+            sb.append(self.values.get(i))
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+# ---------------------------------------------------------------- SpanContext
+
+pub class SpanContext:
+    pub trace_id:    str        # 32 lower-case hex digits
+    pub span_id:     str        # 16 lower-case hex digits
+    pub flags:       int        # trace-flags byte (bit 0 = sampled)
+    pub trace_state: str        # tracestate header text ("" = none)
+    pub remote:      bool       # true when extracted from a carrier
+
+extend SpanContext:
+    pub def init(trace_id: str, span_id: str, flags: int, trace_state: str, remote: bool) -> SpanContext:
+        mut c = SpanContext()
+        c.trace_id = trace_id
+        c.span_id = span_id
+        c.flags = flags & 255
+        c.trace_state = trace_state
+        c.remote = remote
+        return c
+
+    pub def invalid() -> SpanContext:
+        return SpanContext.init(INVALID_TRACE_ID, INVALID_SPAN_ID, 0, "", false)
+
+    pub def is_valid(self) -> bool:
+        return is_lower_hex(self.trace_id, 32) and is_lower_hex(self.span_id, 16) and not all_zero(self.trace_id) and not all_zero(self.span_id)
+
+    pub def is_sampled(self) -> bool:
+        return (self.flags & TRACE_FLAG_SAMPLED) != 0
+
+    pub def is_remote(self) -> bool:
+        return self.remote
+
+    pub def state(self) -> TraceState:
+        return TraceState.parse(self.trace_state)
+
+    pub def traceparent(self) -> str:
+        return TraceContext.format_traceparent(self)
+
+# ---------------------------------------------------------------- traceparent
+
+pub class TraceContext:
+    _dummy: int
+
+extend TraceContext:
+    # Parse a W3C traceparent header value. Returns SpanContext.invalid() for
+    # anything the spec says to reject: wrong length or separators, upper-case
+    # or non-hex digits, version "ff", all-zero trace-id or parent-id, a
+    # version-00 header with trailing data, or a higher version whose extra
+    # data does not start with "-". Future versions are parsed as version 00.
+    pub def parse_traceparent(header: str) -> SpanContext:
+        mut h = trim_ows(header)
+        mut n = h.len()
+        if n < 55: return SpanContext.invalid()
+        if byte_at(h, 2) != 45 or byte_at(h, 35) != 45 or byte_at(h, 52) != 45: return SpanContext.invalid()
+        mut ver = Str.slice(h, 0, 2)
+        if not is_lower_hex(ver, 2) or ver == "ff": return SpanContext.invalid()
+        if ver == "00" and n != 55: return SpanContext.invalid()
+        if ver != "00" and n > 55 and byte_at(h, 55) != 45: return SpanContext.invalid()
+        mut tid = Str.slice(h, 3, 35)
+        mut sid = Str.slice(h, 36, 52)
+        mut fl  = Str.slice(h, 53, 55)
+        if not is_lower_hex(tid, 32) or not is_lower_hex(sid, 16) or not is_lower_hex(fl, 2): return SpanContext.invalid()
+        if all_zero(tid) or all_zero(sid): return SpanContext.invalid()
+        return SpanContext.init(tid, sid, hex_value(fl), "", true)
+
+    # Version-00 traceparent for a valid context ("" when invalid).
+    pub def format_traceparent(sc: SpanContext) -> str:
+        if not sc.is_valid(): return ""
+        mut sb = StringBuilder.init(56)
+        sb.append("00-")
+        sb.append(sc.trace_id)
+        sb.append_char(45)
+        sb.append(sc.span_id)
+        sb.append_char(45)
+        mut f = sc.flags & 255
+        sb.append_char(_hexch(f >> 4))
+        sb.append_char(_hexch(f & 15))
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # traceparent + tracestate -> remote SpanContext (tracestate is only kept
+    # when traceparent is valid and the tracestate parses).
+    pub def extract(traceparent: str, tracestate: str) -> SpanContext:
+        mut sc = TraceContext.parse_traceparent(traceparent)
+        if not sc.is_valid(): return sc
+        mut ts = TraceState.parse(tracestate)
+        if ts.valid: sc.trace_state = ts.to_header()
+        return sc
+
+# ---------------------------------------------------------------- Baggage
+
+def _is_token_char(c: int) -> bool:
+    # RFC 7230 tchar
+    if _lcalpha(c) or _digit(c) or (c >= 65 and c <= 90): return true
+    return c == 33 or c == 35 or c == 36 or c == 37 or c == 38 or c == 39 or c == 42 or c == 43 or c == 45 or c == 46 or c == 94 or c == 95 or c == 96 or c == 124 or c == 126
+
+pub def baggage_key_valid(k: str) -> bool:
+    mut n = k.len()
+    if n == 0: return false
+    mut i = 0
+    while i < n:
+        if not _is_token_char(byte_at(k, i)): return false
+        i = i + 1
+    return true
+
+def _hexnib(c: int) -> int:
+    if c >= 48 and c <= 57: return c - 48
+    if c >= 97 and c <= 102: return c - 87
+    if c >= 65 and c <= 70: return c - 55
+    return -1
+
+# Percent-decode a baggage value (invalid escapes are kept literally).
+pub def baggage_decode(v: str) -> str:
+    mut n = v.len()
+    if Str.index_of(v, "%") < 0: return v
+    mut sb = StringBuilder.init(n)
+    mut i = 0
+    while i < n:
+        mut c = byte_at(v, i)
+        if c == 37 and i + 2 < n:
+            mut hi = _hexnib(byte_at(v, i + 1))
+            mut lo = _hexnib(byte_at(v, i + 2))
+            if hi >= 0 and lo >= 0:
+                sb.append_char(hi * 16 + lo)
+                i = i + 3
+                continue
+        sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Percent-encode everything outside baggage-octet (%x21 / %x23-2B / %x2D-3A /
+# %x3C-5B / %x5D-7E) plus '%' itself.
+pub def baggage_encode(v: str) -> str:
+    mut n = v.len()
+    mut sb = StringBuilder.init(n + 8)
+    mut i = 0
+    while i < n:
+        mut c = byte_at(v, i)
+        mut ok = c == 33 or (c >= 35 and c <= 43) or (c >= 45 and c <= 58) or (c >= 60 and c <= 91) or (c >= 93 and c <= 126)
+        if c == 37: ok = false
+        if ok:
+            sb.append_char(c)
+        else:
+            sb.append_char(37)
+            sb.append_char(_hexch_up(c >> 4))
+            sb.append_char(_hexch_up(c & 15))
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _hexch_up(v: int) -> int:
+    if v < 10: return 48 + v
+    return 55 + v
+
+pub const BAGGAGE_MAX_MEMBERS = 180
+pub const BAGGAGE_MAX_BYTES   = 8192
+
+pub class Baggage:
+    pub keys:   Vec[str]
+    pub values: Vec[str]       # decoded values
+    pub metas:  Vec[str]       # raw property text after ';' ("" = none)
+
+extend Baggage:
+    pub def empty() -> Baggage:
+        mut b = Baggage()
+        b.keys = Vec[str].init(2)
+        b.values = Vec[str].init(2)
+        b.metas = Vec[str].init(2)
+        return b
+
+    # Parse a W3C baggage header. Malformed members are skipped; parsing
+    # stops at 180 members. A later duplicate key replaces the earlier value.
+    pub def parse(header: str) -> Baggage:
+        mut b = Baggage.empty()
+        if header.len() == 0 or header.len() > BAGGAGE_MAX_BYTES * 2: return b
+        mut parts = header.split_exact(",")
+        mut i = 0
+        while i < len(parts) and b.keys.len < BAGGAGE_MAX_MEMBERS:
+            mut m = parts[i]
+            i = i + 1
+            mut semi = Str.index_of(m, ";")
+            mut kv = m
+            mut meta = ""
+            if semi >= 0:
+                kv = Str.slice(m, 0, semi)
+                meta = trim_ows(Str.slice(m, semi + 1, m.len()))
+            mut eq = Str.index_of(kv, "=")
+            if eq <= 0: continue
+            mut k = trim_ows(Str.slice(kv, 0, eq))
+            mut v = trim_ows(Str.slice(kv, eq + 1, kv.len()))
+            if not baggage_key_valid(k): continue
+            b.set_meta(k, baggage_decode(v), meta)
+        return b
+
+    pub def len(self) -> int:
+        return self.keys.len
+
+    pub def is_empty(self) -> bool:
+        return self.keys.len == 0
+
+    pub def get(self, key: str) -> str:
+        mut i = self.keys.index_of(key)
+        if i < 0: return ""
+        return self.values.get(i)
+
+    pub def has(self, key: str) -> bool:
+        return self.keys.index_of(key) >= 0
+
+    pub def metadata(self, key: str) -> str:
+        mut i = self.keys.index_of(key)
+        if i < 0: return ""
+        return self.metas.get(i)
+
+    pub def set(self, key: str, value: str) -> Baggage:
+        self.set_meta(key, value, "")
+        return self
+
+    pub def set_meta(self, key: str, value: str, meta: str):
+        if not baggage_key_valid(key): return
+        mut i = self.keys.index_of(key)
+        if i >= 0:
+            self.values.set(i, value)
+            self.metas.set(i, meta)
+            return
+        self.keys.push(key)
+        self.values.push(value)
+        self.metas.push(meta)
+
+    pub def remove(self, key: str):
+        mut i = self.keys.index_of(key)
+        if i < 0: return
+        self.keys.remove(i)
+        self.values.remove(i)
+        self.metas.remove(i)
+
+    pub def clone(self) -> Baggage:
+        mut b = Baggage.empty()
+        mut i = 0
+        while i < self.keys.len:
+            b.keys.push(self.keys.get(i))
+            b.values.push(self.values.get(i))
+            b.metas.push(self.metas.get(i))
+            i = i + 1
+        return b
+
+    # Header text; members that would push it past 8192 bytes are left out.
+    pub def to_header(self) -> str:
+        mut sb = StringBuilder.init(64)
+        mut i = 0
+        mut count = 0
+        while i < self.keys.len and count < BAGGAGE_MAX_MEMBERS:
+            mut sb2 = StringBuilder.init(32)
+            sb2.append(self.keys.get(i))
+            sb2.append_char(61)
+            sb2.append(baggage_encode(self.values.get(i)))
+            if self.metas.get(i).len() > 0:
+                sb2.append_char(59)
+                sb2.append(self.metas.get(i))
+            mut member = sb2.to_owned()
+            sb2.free()
+            mut extra = member.len()
+            if count > 0: extra = extra + 1
+            if sb.len() + extra <= BAGGAGE_MAX_BYTES:
+                if count > 0: sb.append_char(44)
+                sb.append(member)
+                count = count + 1
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+# ---------------------------------------------------------------- Context
+
+# An immutable-by-convention propagation context: the active span's
+# SpanContext plus baggage.
+pub class Context:
+    pub span:    SpanContext
+    pub baggage: Baggage
+
+extend Context:
+    pub def empty() -> Context:
+        mut c = Context()
+        c.span = SpanContext.invalid()
+        c.baggage = Baggage.empty()
+        return c
+
+    pub def with_span(sc: SpanContext) -> Context:
+        mut c = Context()
+        c.span = sc
+        c.baggage = Baggage.empty()
+        return c
+
+    pub def of(sc: SpanContext, bg: Baggage) -> Context:
+        mut c = Context()
+        c.span = sc
+        c.baggage = bg
+        return c
+
+    pub def has_span(self) -> bool:
+        return self.span.is_valid()
+
+    # This thread's current context (empty when nothing is attached).
+    pub def current() -> Context:
+        mut enc = _ctx_top()
+        if enc.len() == 0: return Context.empty()
+        return Context._decode(enc)
+
+    # The current span context (invalid when none).
+    pub def current_span() -> SpanContext:
+        return Context.current().span
+
+    pub def current_baggage() -> Baggage:
+        return Context.current().baggage
+
+    # Depth of this thread's context stack.
+    pub def depth() -> int:
+        return _ctx_depth()
+
+    # Make self current on this thread; returns the token for detach().
+    pub def attach(self) -> int:
+        return _ctx_push(self._encode())
+
+    # Restore the context that was current before attach() returned `token`.
+    # Returns false for a stale token or out-of-order detach (contexts
+    # attached after the token are detached too).
+    pub def detach(token: int) -> bool:
+        return _ctx_pop(token) == 0
+
+    # `with ctx.activate() as scope:` -- attach for the duration of a block.
+    pub def activate(self) -> ContextScope:
+        return ContextScope.init(self)
+
+    # A copy of self with a different span.
+    pub def set_span(self, sc: SpanContext) -> Context:
+        return Context.of(sc, self.baggage)
+
+    pub def set_baggage(self, bg: Baggage) -> Context:
+        return Context.of(self.span, bg)
+
+    def _encode(self) -> str:
+        mut sb = StringBuilder.init(128)
+        sb.append(self.span.trace_id)
+        sb.append_char(10)
+        sb.append(self.span.span_id)
+        sb.append_char(10)
+        sb.append_int(self.span.flags)
+        sb.append_char(10)
+        if self.span.remote: sb.append_char(49)
+        else: sb.append_char(48)
+        sb.append_char(10)
+        sb.append(self.span.trace_state)
+        sb.append_char(10)
+        sb.append(self.baggage.to_header())
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    def _decode(enc: str) -> Context:
+        mut parts = enc.split_exact("\n")
+        if len(parts) < 6: return Context.empty()
+        mut sc = SpanContext.init(parts[0], parts[1], Str.parse_int(parts[2]), parts[4], parts[3] == "1")
+        return Context.of(sc, Baggage.parse(parts[5]))
+
+# Scope guard returned by Context.activate(): attaches on __enter__, detaches
+# on __exit__ (also when the block raises).
+pub class ContextScope:
+    pub ctx:   Context
+    pub token: int
+
+extend ContextScope:
+    pub def init(ctx: Context) -> ContextScope:
+        mut s = ContextScope()
+        s.ctx = ctx
+        s.token = 0
+        return s
+
+    pub def __enter__(self) -> ContextScope:
+        self.token = self.ctx.attach()
+        return self
+
+    pub def __exit__(self, et: str, ev: str, tb: str) -> bool:
+        self.close()
+        return false
+
+    # Detach now (idempotent); for code that does not use `with`.
+    pub def close(self):
+        if self.token > 0:
+            Context.detach(self.token)
+            self.token = 0

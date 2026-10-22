@@ -1,0 +1,105 @@
+# std.crypto.blake2 -- BLAKE2b and BLAKE2s (RFC 7693).
+#
+# BLAKE2b produces 1..64-byte digests and accepts a key of up to 64 bytes
+# (a keyed BLAKE2b is a MAC: no HMAC wrapper needed). BLAKE2s is the 32-bit
+# variant: 1..32-byte digests, keys up to 32 bytes. Inputs are binary-safe.
+# Functions return RAW bytes; `_hex` forms return hex.
+#
+# Usage:
+#   from std.crypto.blake2 import Blake2, Blake2bStream
+#   Blake2.b512_hex("abc")                       # "ba80a53f..."
+#   mut tag = Blake2.b_keyed(msg, key, 32)?      # 32-byte MAC
+#   mut st = Blake2bStream.init(32, "")?
+#   st.update(chunk)
+#   mut d = st.finish()
+
+from std.crypto.native import trc_blake2b, trc_blake2s, trc_blake2b_state_size, trc_blake2b_begin, trc_blake2b_update, trc_blake2b_finish
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free, _cn_hex
+
+def _b2b(data: str, key: str, outlen: int) throws str -> str:
+    if outlen < 1 or outlen > 64: raise("BLAKE2b: digest length must be 1..64")
+    if key.len() > 64: raise("BLAKE2b: key must be at most 64 bytes")
+    mut p = _cn_alloc(outlen)
+    mut dp = data as Pointer[char]
+    mut kp = key as Pointer[char]
+    trc_blake2b(dp, data.len(), kp, key.len(), p, outlen)
+    return _cn_take(p, outlen)
+
+def _b2s(data: str, key: str, outlen: int) throws str -> str:
+    if outlen < 1 or outlen > 32: raise("BLAKE2s: digest length must be 1..32")
+    if key.len() > 32: raise("BLAKE2s: key must be at most 32 bytes")
+    mut p = _cn_alloc(outlen)
+    mut dp = data as Pointer[char]
+    mut kp = key as Pointer[char]
+    trc_blake2s(dp, data.len(), kp, key.len(), p, outlen)
+    return _cn_take(p, outlen)
+
+pub class Blake2:
+    _dummy: int
+
+extend Blake2:
+    # BLAKE2b-512 (the common default).
+    pub def b512(data: str) -> str:
+        mut r: Result[str, str] = _b2b(data, "", 64)
+        return r.ok
+    pub def b512_hex(data: str) -> str:
+        mut d = Blake2.b512(data)
+        return _cn_hex(d)
+
+    # BLAKE2b with a chosen digest length (1..64).
+    pub def b(data: str, outlen: int) throws str -> str:
+        return _b2b(data, "", outlen)?
+
+    # Keyed BLAKE2b (a MAC). key: 0..64 bytes; outlen: 1..64.
+    pub def b_keyed(data: str, key: str, outlen: int) throws str -> str:
+        return _b2b(data, key, outlen)?
+
+    # BLAKE2s-256.
+    pub def s256(data: str) -> str:
+        mut r: Result[str, str] = _b2s(data, "", 32)
+        return r.ok
+    pub def s256_hex(data: str) -> str:
+        mut d = Blake2.s256(data)
+        return _cn_hex(d)
+
+    pub def s(data: str, outlen: int) throws str -> str:
+        return _b2s(data, "", outlen)?
+
+    pub def s_keyed(data: str, key: str, outlen: int) throws str -> str:
+        return _b2s(data, key, outlen)?
+
+# Incremental BLAKE2b. finish() returns the digest and releases the state.
+pub class Blake2bStream:
+    pub outlen: int
+    _st: Pointer[char]
+    _live: bool
+
+extend Blake2bStream:
+    # outlen 1..64; key "" for unkeyed hashing.
+    pub def init(outlen: int, key: str) throws str -> Blake2bStream:
+        if outlen < 1 or outlen > 64: raise("BLAKE2b: digest length must be 1..64")
+        if key.len() > 64: raise("BLAKE2b: key must be at most 64 bytes")
+        mut s = Blake2bStream()
+        s.outlen = outlen
+        s._st = _cn_alloc(trc_blake2b_state_size())
+        mut kp = key as Pointer[char]
+        trc_blake2b_begin(s._st, kp, key.len(), outlen)
+        s._live = true
+        return s
+
+    pub def update(self, data: str):
+        if not self._live: return
+        mut dp = data as Pointer[char]
+        trc_blake2b_update(self._st, dp, data.len())
+
+    pub def finish(self) -> str:
+        mut p = _cn_alloc(self.outlen)
+        if self._live:
+            trc_blake2b_finish(self._st, p)
+            self.dispose()
+        return _cn_take(p, self.outlen)
+
+    pub def dispose(self):
+        if self._live:
+            _cn_free(self._st)
+            self._live = false

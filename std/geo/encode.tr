@@ -1,0 +1,682 @@
+# std.geo.encode -- location encodings: geohash, Open Location Code (plus
+# codes), UTM and MGRS.
+#
+#   Geohash.encode(lat, lon, precision) -> str
+#   Geohash.decode(hash)? -> GeohashCell        (centre, error, bounds)
+#   Geohash.neighbor(hash, "n"/"ne"/.../"nw")? -> str   ("" past a pole)
+#   Geohash.neighbors(hash)? -> List[str]        n, ne, e, se, s, sw, w, nw
+#
+#   PlusCode.encode(lat, lon, length)? -> str    length 2,4,6,8,10..15
+#   PlusCode.decode(code)? -> CodeArea
+#   PlusCode.is_valid / is_short / is_full
+#   PlusCode.shorten(code, ref_lat, ref_lon)? -> str
+#   PlusCode.recover_nearest(short, ref_lat, ref_lon)? -> str
+#
+#   Utm.from_latlon(lat, lon)? -> UtmCoord      (Norway / Svalbard zones)
+#   Utm.from_latlon_zone(lat, lon, zone)? -> UtmCoord   (forced zone)
+#   Utm.to_latlon(zone, northern, easting, northing) -> LatLon
+#   Mgrs.from_latlon(lat, lon, digits)? -> str   ("04QFJ1841756542")
+#   Mgrs.to_latlon(ref)? -> LatLon               (south-west corner of the cell)
+#   Mgrs.to_utm(ref)? -> UtmCoord
+#
+# UTM uses Krüger's series to 6th order in n (Karney 2011), accurate to
+# well under a millimetre within the UTM zone. UTM/MGRS cover latitudes
+# -80 .. 84; the polar UPS grids are not implemented.
+
+from std.geo.native import sin, cos, tan, atan, atan2, sqrt, hypot, sinh, cosh, asinh, atanh, floor, fabs, round
+from std.geo.native import GEO_PI, GEO_DEG, GEO_RAD, geo_clamp, geo_wrap_lon
+from std.geo.geodesy import LatLon
+
+const _GH_ALPHA = "0123456789bcdefghjkmnpqrstuvwxyz"
+const _OLC_ALPHA = "23456789CFGHJMPQRVWX"
+const _BANDS = "CDEFGHJKLMNPQRSTUVWX"
+const _MGRS_ROWS = "ABCDEFGHJKLMNPQRSTUV"
+
+def _idx(alpha: str, c: str) -> int:
+    return alpha.find(c)
+
+# ─── Geohash ─────────────────────────────────────────────────────────────────
+
+pub class GeohashCell:
+    pub lat: float          # centre
+    pub lon: float
+    pub lat_err: float      # half the cell height / width
+    pub lon_err: float
+    pub min_lat: float
+    pub min_lon: float
+    pub max_lat: float
+    pub max_lon: float
+
+pub class Geohash:
+    _dummy: int
+
+extend Geohash:
+    pub def encode(lat: float, lon: float, precision: int) -> str:
+        mut lat_lo = -90.0
+        mut lat_hi = 90.0
+        mut lon_lo = -180.0
+        mut lon_hi = 180.0
+        mut la = geo_clamp(lat, -90.0, 90.0)
+        mut lo = lon
+        if lo < -180.0 or lo > 180.0: lo = geo_wrap_lon(lo)
+        mut out = ""
+        mut even = true
+        mut bit = 0
+        mut ch = 0
+        mut p = precision
+        if p < 1: p = 1
+        if p > 22: p = 22
+        while out.len() < p:
+            if even:
+                mut mid = (lon_lo + lon_hi) / 2.0
+                if lo >= mid:
+                    ch = ch * 2 + 1
+                    lon_lo = mid
+                else:
+                    ch = ch * 2
+                    lon_hi = mid
+            else:
+                mut mid = (lat_lo + lat_hi) / 2.0
+                if la >= mid:
+                    ch = ch * 2 + 1
+                    lat_lo = mid
+                else:
+                    ch = ch * 2
+                    lat_hi = mid
+            even = not even
+            bit = bit + 1
+            if bit == 5:
+                out = out + _GH_ALPHA.slice(ch, ch + 1)
+                bit = 0
+                ch = 0
+        return out
+
+    pub def decode(hash: str) throws str -> GeohashCell:
+        if hash.len() == 0: raise("geohash: empty hash")
+        mut lat_lo = -90.0
+        mut lat_hi = 90.0
+        mut lon_lo = -180.0
+        mut lon_hi = 180.0
+        mut even = true
+        mut i = 0
+        mut h = hash.lower()
+        while i < h.len():
+            mut v = _idx(_GH_ALPHA, h.slice(i, i + 1))
+            if v < 0: raise(f"geohash: invalid character in '{hash}'")
+            mut b = 4
+            while b >= 0:
+                mut bitv = (v >> b) & 1
+                if even:
+                    mut mid = (lon_lo + lon_hi) / 2.0
+                    if bitv == 1: lon_lo = mid
+                    else: lon_hi = mid
+                else:
+                    mut mid = (lat_lo + lat_hi) / 2.0
+                    if bitv == 1: lat_lo = mid
+                    else: lat_hi = mid
+                even = not even
+                b = b - 1
+            i = i + 1
+        mut c = GeohashCell()
+        c.min_lat = lat_lo
+        c.max_lat = lat_hi
+        c.min_lon = lon_lo
+        c.max_lon = lon_hi
+        c.lat = (lat_lo + lat_hi) / 2.0
+        c.lon = (lon_lo + lon_hi) / 2.0
+        c.lat_err = (lat_hi - lat_lo) / 2.0
+        c.lon_err = (lon_hi - lon_lo) / 2.0
+        return c
+
+    pub def is_valid(hash: str) -> bool:
+        if hash.len() == 0: return false
+        mut h = hash.lower()
+        mut i = 0
+        while i < h.len():
+            if _idx(_GH_ALPHA, h.slice(i, i + 1)) < 0: return false
+            i = i + 1
+        return true
+
+    # Adjacent cell of the same precision; direction is one of n, ne, e, se,
+    # s, sw, w, nw. Longitude wraps at the antimeridian; there is no cell past
+    # a pole, so a northward neighbour of a top-row cell is "".
+    pub def neighbor(hash: str, direction: str) throws str -> str:
+        mut c = Geohash.decode(hash)?
+        mut dlat = 0.0
+        mut dlon = 0.0
+        mut d = direction.lower()
+        if d.contains("n"): dlat = 1.0
+        if d.contains("s"): dlat = -1.0
+        if d.contains("e"): dlon = 1.0
+        if d.contains("w"): dlon = -1.0
+        if dlat == 0.0 and dlon == 0.0: raise(f"geohash: bad direction '{direction}'")
+        mut lat = c.lat + dlat * 2.0 * c.lat_err
+        if lat > 90.0 or lat < -90.0: return ""
+        mut lon = geo_wrap_lon(c.lon + dlon * 2.0 * c.lon_err)
+        return Geohash.encode(lat, lon, hash.len())
+
+    pub def neighbors(hash: str) throws str -> List[str]:
+        mut out: List[str] = []
+        out.append(Geohash.neighbor(hash, "n")?)
+        out.append(Geohash.neighbor(hash, "ne")?)
+        out.append(Geohash.neighbor(hash, "e")?)
+        out.append(Geohash.neighbor(hash, "se")?)
+        out.append(Geohash.neighbor(hash, "s")?)
+        out.append(Geohash.neighbor(hash, "sw")?)
+        out.append(Geohash.neighbor(hash, "w")?)
+        out.append(Geohash.neighbor(hash, "nw")?)
+        return out
+
+# ─── Open Location Code ──────────────────────────────────────────────────────
+
+pub class CodeArea:
+    pub lat_lo: float
+    pub lon_lo: float
+    pub lat_hi: float
+    pub lon_hi: float
+    pub lat: float          # centre
+    pub lon: float
+    pub code_length: int
+
+def _olc_clip_lat(x: float) -> float:
+    return geo_clamp(x, -90.0, 90.0)
+
+def _olc_norm_lon(x: float) -> float:
+    mut y = x
+    while y < -180.0: y = y + 360.0
+    while y >= 180.0: y = y - 360.0
+    return y
+
+def _ipow(b: int, e: int) -> int:
+    mut r = 1
+    mut i = 0
+    while i < e:
+        r = r * b
+        i = i + 1
+    return r
+
+def _olc_lat_precision(n: int) -> float:
+    if n <= 10:
+        mut e = 2 - n / 2
+        mut r = 1.0
+        if e >= 0:
+            mut i = 0
+            while i < e:
+                r = r * 20.0
+                i = i + 1
+        else:
+            mut i = 0
+            while i < 0 - e:
+                r = r / 20.0
+                i = i + 1
+        return r
+    return 1.0 / 8000.0 / (_ipow(5, n - 10) as float)
+
+# Round x to 6 decimals then truncate (Python's int(round(x, 6))).
+def _olc_ival(x: float) -> int:
+    mut r = round(x * 1000000.0) / 1000000.0
+    return floor(r) as int
+
+def _round14(x: float) -> float:
+    return round(x * 100000000000000.0) / 100000000000000.0
+
+pub class PlusCode:
+    _dummy: int
+
+extend PlusCode:
+    pub def is_valid(code: str) -> bool:
+        mut sep = code.find("+")
+        if code.count("+") > 1: return false
+        if code.len() == 1: return false
+        if sep == -1 or sep > 8 or sep % 2 == 1: return false
+        mut pad = code.find("0")
+        if pad != -1:
+            if sep < 8: return false
+            if pad == 0: return false
+            mut rpad = pad
+            mut j = pad
+            while j < code.len():
+                if code.slice(j, j + 1) == "0": rpad = j + 1
+                j = j + 1
+            mut pads = code.slice(pad, rpad)
+            if pads.len() % 2 == 1: return false
+            mut k = 0
+            while k < pads.len():
+                if pads.slice(k, k + 1) != "0": return false
+                k = k + 1
+            if not code.ends_with("+"): return false
+        if code.len() - sep - 1 == 1: return false
+        mut i = 0
+        mut up = code.upper()
+        while i < up.len():
+            mut ch = up.slice(i, i + 1)
+            if _idx(_OLC_ALPHA, ch) < 0 and ch != "+" and ch != "0": return false
+            i = i + 1
+        return true
+
+    pub def is_short(code: str) -> bool:
+        if not PlusCode.is_valid(code): return false
+        mut sep = code.find("+")
+        return sep >= 0 and sep < 8
+
+    pub def is_full(code: str) -> bool:
+        if not PlusCode.is_valid(code): return false
+        if PlusCode.is_short(code): return false
+        mut up = code.upper()
+        mut first_lat = _idx(_OLC_ALPHA, up.slice(0, 1)) * 20
+        if first_lat >= 180: return false
+        if up.len() > 1:
+            mut first_lon = _idx(_OLC_ALPHA, up.slice(1, 2)) * 20
+            if first_lon >= 360: return false
+        return true
+
+    pub def encode(lat: float, lon: float, code_length: int) throws str -> str:
+        if code_length < 2 or (code_length < 10 and code_length % 2 == 1):
+            raise(f"pluscode: invalid code length {code_length}")
+        mut n = code_length
+        if n > 15: n = 15
+        mut la = _olc_clip_lat(lat)
+        mut lo = _olc_norm_lon(lon)
+        if la == 90.0: la = la - _olc_lat_precision(n)
+        mut lat_val = _olc_ival((la + 90.0) * 25000000.0)
+        mut lon_val = _olc_ival((lo + 180.0) * 8192000.0)
+        mut code = ""
+        if n > 10:
+            mut i = 0
+            while i < 5:
+                mut lat_d = lat_val % 5
+                mut lon_d = lon_val % 4
+                mut ndx = lat_d * 4 + lon_d
+                code = _OLC_ALPHA.slice(ndx, ndx + 1) + code
+                lat_val = lat_val / 5
+                lon_val = lon_val / 4
+                i = i + 1
+        else:
+            lat_val = lat_val / 3125
+            lon_val = lon_val / 1024
+        mut i = 0
+        while i < 5:
+            mut a = lon_val % 20
+            mut b = lat_val % 20
+            code = _OLC_ALPHA.slice(a, a + 1) + code
+            code = _OLC_ALPHA.slice(b, b + 1) + code
+            lat_val = lat_val / 20
+            lon_val = lon_val / 20
+            i = i + 1
+        code = code.slice(0, 8) + "+" + code.slice(8, code.len())
+        if n >= 8: return code.slice(0, n + 1)
+        mut out = code.slice(0, n)
+        mut k = n
+        while k < 8:
+            out = out + "0"
+            k = k + 1
+        return out + "+"
+
+    pub def decode(code: str) throws str -> CodeArea:
+        if not PlusCode.is_full(code): raise(f"pluscode: not a valid full code '{code}'")
+        mut c = code.replace("+", "").replace("0", "").upper()
+        if c.len() > 15: c = c.slice(0, 15)
+        mut normal_lat = -90 * 8000
+        mut normal_lon = -180 * 8000
+        mut grid_lat = 0
+        mut grid_lon = 0
+        mut digits = c.len()
+        if digits > 10: digits = 10
+        mut pv = 160000
+        mut i = 0
+        while i < digits:
+            normal_lat = normal_lat + _idx(_OLC_ALPHA, c.slice(i, i + 1)) * pv
+            normal_lon = normal_lon + _idx(_OLC_ALPHA, c.slice(i + 1, i + 2)) * pv
+            if i < digits - 2: pv = pv / 20
+            i = i + 2
+        mut lat_prec = (pv as float) / 8000.0
+        mut lon_prec = (pv as float) / 8000.0
+        if c.len() > 10:
+            mut rowpv = 625
+            mut colpv = 256
+            mut dg = c.len()
+            mut j = 10
+            while j < dg:
+                mut dv = _idx(_OLC_ALPHA, c.slice(j, j + 1))
+                mut row = dv / 4
+                mut col = dv % 4
+                grid_lat = grid_lat + row * rowpv
+                grid_lon = grid_lon + col * colpv
+                if j < dg - 1:
+                    rowpv = rowpv / 5
+                    colpv = colpv / 4
+                j = j + 1
+            lat_prec = (rowpv as float) / 25000000.0
+            lon_prec = (colpv as float) / 8192000.0
+        mut lat = (normal_lat as float) / 8000.0 + (grid_lat as float) / 25000000.0
+        mut lon = (normal_lon as float) / 8000.0 + (grid_lon as float) / 8192000.0
+        mut a = CodeArea()
+        a.lat_lo = _round14(lat)
+        a.lon_lo = _round14(lon)
+        a.lat_hi = _round14(lat + lat_prec)
+        a.lon_hi = _round14(lon + lon_prec)
+        a.code_length = c.len()
+        a.lat = a.lat_lo + (a.lat_hi - a.lat_lo) / 2.0
+        if a.lat > 90.0: a.lat = 90.0
+        a.lon = a.lon_lo + (a.lon_hi - a.lon_lo) / 2.0
+        if a.lon > 180.0: a.lon = 180.0
+        return a
+
+    pub def recover_nearest(code: str, ref_lat: float, ref_lon: float) throws str -> str:
+        if PlusCode.is_full(code): return code.upper()
+        if not PlusCode.is_short(code): raise(f"pluscode: not a valid short code '{code}'")
+        mut rlat = _olc_clip_lat(ref_lat)
+        mut rlon = _olc_norm_lon(ref_lon)
+        mut c = code.upper()
+        mut padlen = 8 - c.find("+")
+        mut res = 1.0
+        mut e = 2 - padlen / 2
+        mut i = 0
+        while i < e:
+            res = res * 20.0
+            i = i + 1
+        while i > e:
+            res = res / 20.0
+            i = i - 1
+        mut half = res / 2.0
+        mut full = PlusCode.encode(rlat, rlon, 10)?
+        mut area = PlusCode.decode(full.slice(0, padlen) + c)?
+        mut clat = area.lat
+        mut clon = area.lon
+        if rlat + half < clat and clat - res >= -90.0:
+            clat = clat - res
+        elif rlat - half > clat and clat + res <= 90.0:
+            clat = clat + res
+        if rlon + half < clon:
+            clon = clon - res
+        elif rlon - half > clon:
+            clon = clon + res
+        return PlusCode.encode(clat, clon, area.code_length)
+
+    pub def shorten(code: str, ref_lat: float, ref_lon: float) throws str -> str:
+        if not PlusCode.is_full(code): raise(f"pluscode: not a valid full code '{code}'")
+        if code.find("0") != -1: raise(f"pluscode: cannot shorten padded code '{code}'")
+        mut c = code.upper()
+        mut area = PlusCode.decode(c)?
+        if area.code_length < 6: raise("pluscode: code length must be at least 6")
+        mut rlat = _olc_clip_lat(ref_lat)
+        mut rlon = _olc_norm_lon(ref_lon)
+        mut rng = fabs(area.lat - rlat)
+        mut dlo = fabs(area.lon - rlon)
+        if dlo > rng: rng = dlo
+        # PAIR_RESOLUTIONS = 20, 1, 0.05, 0.0025, 0.000125; try i = 3, 2, 1
+        if rng < 0.0025 * 0.3: return c.slice(8, c.len())
+        if rng < 0.05 * 0.3: return c.slice(6, c.len())
+        if rng < 1.0 * 0.3: return c.slice(4, c.len())
+        return c
+
+# ─── UTM (Krüger series, 6th order) ──────────────────────────────────────────
+
+pub class UtmCoord:
+    pub zone: int
+    pub band: str           # latitude band letter C..X
+    pub northern: bool
+    pub easting: float
+    pub northing: float
+    pub convergence: float  # meridian convergence, degrees
+    pub scale: float        # point scale factor
+
+extend UtmCoord:
+    pub def to_str(self) -> str:
+        return f"{self.zone}{self.band} {self.easting} {self.northing}"
+
+const _UTM_A = 6378137.0
+const _UTM_F = 0.0033528106647474805
+const _UTM_K0 = 0.9996
+
+def _utm_n() -> float:
+    return _UTM_F / (2.0 - _UTM_F)
+
+def _utm_alpha(j: int) -> float:
+    mut n = _utm_n()
+    mut n2 = n * n
+    mut n3 = n2 * n
+    mut n4 = n3 * n
+    mut n5 = n4 * n
+    mut n6 = n5 * n
+    if j == 1: return n / 2.0 - 2.0 * n2 / 3.0 + 5.0 * n3 / 16.0 + 41.0 * n4 / 180.0 - 127.0 * n5 / 288.0 + 7891.0 * n6 / 37800.0
+    if j == 2: return 13.0 * n2 / 48.0 - 3.0 * n3 / 5.0 + 557.0 * n4 / 1440.0 + 281.0 * n5 / 630.0 - 1983433.0 * n6 / 1935360.0
+    if j == 3: return 61.0 * n3 / 240.0 - 103.0 * n4 / 140.0 + 15061.0 * n5 / 26880.0 + 167603.0 * n6 / 181440.0
+    if j == 4: return 49561.0 * n4 / 161280.0 - 179.0 * n5 / 168.0 + 6601661.0 * n6 / 7257600.0
+    if j == 5: return 34729.0 * n5 / 80640.0 - 3418889.0 * n6 / 1995840.0
+    return 212378941.0 * n6 / 319334400.0
+
+def _utm_beta(j: int) -> float:
+    mut n = _utm_n()
+    mut n2 = n * n
+    mut n3 = n2 * n
+    mut n4 = n3 * n
+    mut n5 = n4 * n
+    mut n6 = n5 * n
+    if j == 1: return n / 2.0 - 2.0 * n2 / 3.0 + 37.0 * n3 / 96.0 - n4 / 360.0 - 81.0 * n5 / 512.0 + 96199.0 * n6 / 604800.0
+    if j == 2: return n2 / 48.0 + n3 / 15.0 - 437.0 * n4 / 1440.0 + 46.0 * n5 / 105.0 - 1118711.0 * n6 / 3870720.0
+    if j == 3: return 17.0 * n3 / 480.0 - 37.0 * n4 / 840.0 - 209.0 * n5 / 4480.0 + 5569.0 * n6 / 90720.0
+    if j == 4: return 4397.0 * n4 / 161280.0 - 11.0 * n5 / 504.0 - 830251.0 * n6 / 7257600.0
+    if j == 5: return 4583.0 * n5 / 161280.0 - 108847.0 * n6 / 3991680.0
+    return 20648693.0 * n6 / 638668800.0
+
+def _utm_big_a() -> float:
+    mut n = _utm_n()
+    mut n2 = n * n
+    return _UTM_A / (1.0 + n) * (1.0 + n2 / 4.0 + n2 * n2 / 64.0 + n2 * n2 * n2 / 256.0)
+
+def _utm_e() -> float:
+    return sqrt(_UTM_F * (2.0 - _UTM_F))
+
+pub class Utm:
+    _dummy: int
+
+extend Utm:
+    # Standard zone for a point, honouring the Norway (32V) and Svalbard
+    # (31X/33X/35X/37X) exceptions.
+    pub def zone_for(lat: float, lon: float) -> int:
+        mut lo = lon
+        if lo < -180.0 or lo >= 180.0: lo = geo_wrap_lon(lo)
+        mut z = (floor((lo + 180.0) / 6.0) as int) + 1
+        if z > 60 or lon == 180.0: z = 60
+        if lat >= 56.0 and lat < 64.0 and lo >= 3.0 and lo < 12.0: z = 32
+        if lat >= 72.0 and lat <= 84.0 and lo >= 0.0 and lo < 42.0:
+            if lo < 9.0: z = 31
+            elif lo < 21.0: z = 33
+            elif lo < 33.0: z = 35
+            else: z = 37
+        return z
+
+    # Latitude band letter (C..X) or "" outside -80 .. 84.
+    pub def band_for(lat: float) -> str:
+        if lat < -80.0 or lat > 84.0: return ""
+        mut i = floor((lat + 80.0) / 8.0) as int
+        if i > 19: i = 19
+        return _BANDS.slice(i, i + 1)
+
+    pub def central_meridian(zone: int) -> float:
+        return (zone as float) * 6.0 - 183.0
+
+    pub def from_latlon(lat: float, lon: float) throws str -> UtmCoord:
+        return Utm.from_latlon_zone(lat, lon, Utm.zone_for(lat, lon))
+
+    pub def from_latlon_zone(lat: float, lon: float, zone: int) throws str -> UtmCoord:
+        if lat < -80.0 or lat > 84.0: raise("utm: latitude outside -80 .. 84 (polar regions use UPS)")
+        if zone < 1 or zone > 60: raise(f"utm: bad zone {zone}")
+        mut e = _utm_e()
+        mut phi = lat * GEO_DEG
+        mut dl = geo_wrap_lon(lon - Utm.central_meridian(zone)) * GEO_DEG
+        mut tau = tan(phi)
+        mut sigma = sinh(e * atanh(e * tau / sqrt(1.0 + tau * tau)))
+        mut taup = tau * sqrt(1.0 + sigma * sigma) - sigma * sqrt(1.0 + tau * tau)
+        mut xip = atan2(taup, cos(dl))
+        mut etap = asinh(sin(dl) / sqrt(taup * taup + cos(dl) * cos(dl)))
+        mut xi = xip
+        mut eta = etap
+        mut pp = 1.0
+        mut qq = 0.0
+        mut j = 1
+        while j <= 6:
+            mut al = _utm_alpha(j)
+            mut jj = 2.0 * (j as float)
+            xi = xi + al * sin(jj * xip) * cosh(jj * etap)
+            eta = eta + al * cos(jj * xip) * sinh(jj * etap)
+            pp = pp + jj * al * cos(jj * xip) * cosh(jj * etap)
+            qq = qq + jj * al * sin(jj * xip) * sinh(jj * etap)
+            j = j + 1
+        mut ba = _utm_big_a()
+        mut x = _UTM_K0 * ba * eta
+        mut y = _UTM_K0 * ba * xi
+        mut r = UtmCoord()
+        r.zone = zone
+        r.band = Utm.band_for(lat)
+        r.northern = lat >= 0.0
+        r.easting = x + 500000.0
+        r.northing = y
+        if not r.northern: r.northing = y + 10000000.0
+        # convergence and scale
+        mut gp = atan(taup / sqrt(1.0 + taup * taup) * tan(dl))
+        mut gpp = atan2(qq, pp)
+        r.convergence = (gp + gpp) * GEO_RAD
+        mut sphi = sin(phi)
+        mut kp = sqrt(1.0 - e * e * sphi * sphi) * sqrt(1.0 + tau * tau) / sqrt(taup * taup + cos(dl) * cos(dl))
+        mut kpp = ba / _UTM_A * sqrt(pp * pp + qq * qq)
+        r.scale = _UTM_K0 * kp * kpp
+        return r
+
+    pub def to_latlon(zone: int, northern: bool, easting: float, northing: float) -> LatLon:
+        mut e = _utm_e()
+        mut ba = _utm_big_a()
+        mut x = easting - 500000.0
+        mut y = northing
+        if not northern: y = y - 10000000.0
+        mut xi = y / (_UTM_K0 * ba)
+        mut eta = x / (_UTM_K0 * ba)
+        mut xip = xi
+        mut etap = eta
+        mut j = 1
+        while j <= 6:
+            mut be = _utm_beta(j)
+            mut jj = 2.0 * (j as float)
+            xip = xip - be * sin(jj * xi) * cosh(jj * eta)
+            etap = etap - be * cos(jj * xi) * sinh(jj * eta)
+            j = j + 1
+        mut sh = sinh(etap)
+        mut taup = sin(xip) / sqrt(sh * sh + cos(xip) * cos(xip))
+        mut lam = atan2(sh, cos(xip))
+        mut tau = taup
+        mut it = 0
+        while it < 20:
+            mut sig = sinh(e * atanh(e * tau / sqrt(1.0 + tau * tau)))
+            mut tpi = tau * sqrt(1.0 + sig * sig) - sig * sqrt(1.0 + tau * tau)
+            mut dt = (taup - tpi) / sqrt(1.0 + tpi * tpi) * (1.0 + (1.0 - e * e) * tau * tau) / ((1.0 - e * e) * sqrt(1.0 + tau * tau))
+            tau = tau + dt
+            it = it + 1
+            if fabs(dt) < 1e-14: break
+        mut lat = atan(tau) * GEO_RAD
+        mut lon = geo_wrap_lon(lam * GEO_RAD + Utm.central_meridian(zone))
+        return LatLon.init(lat, lon)
+
+# ─── MGRS ────────────────────────────────────────────────────────────────────
+
+def _mgrs_cols(zone: int) -> str:
+    mut s = zone % 3
+    if s == 1: return "ABCDEFGH"
+    if s == 2: return "JKLMNPQR"
+    return "STUVWXYZ"
+
+def _mgrs_row_offset(zone: int) -> int:
+    if zone % 2 == 0: return 5
+    return 0
+
+def _pad_int(v: int, width: int) -> str:
+    mut s = f"{v}"
+    while s.len() < width: s = "0" + s
+    return s
+
+pub class Mgrs:
+    _dummy: int
+
+extend Mgrs:
+    # MGRS reference with `digits` (0..5) digits per axis: 5 = 1 m, 4 = 10 m,
+    # ... 0 = the 100 km square only. Coordinates are truncated, as MGRS
+    # requires (the reference names the cell's south-west corner).
+    pub def from_latlon(lat: float, lon: float, digits: int) throws str -> str:
+        if digits < 0 or digits > 5: raise("mgrs: digits must be 0..5")
+        mut u = Utm.from_latlon(lat, lon)?
+        return Mgrs.from_utm(u, digits)
+
+    pub def from_utm(u: UtmCoord, digits: int) -> str:
+        mut e100 = floor(u.easting / 100000.0) as int
+        mut n100 = floor(u.northing / 100000.0) as int
+        mut cols = _mgrs_cols(u.zone)
+        mut ci = e100 - 1
+        if ci < 0: ci = 0
+        if ci > 7: ci = 7
+        mut ri = (n100 % 20 + _mgrs_row_offset(u.zone)) % 20
+        mut out = _pad_int(u.zone, 2) + u.band + cols.slice(ci, ci + 1) + _MGRS_ROWS.slice(ri, ri + 1)
+        if digits == 0: return out
+        mut div = 1.0
+        mut k = 5
+        while k > digits:
+            div = div * 10.0
+            k = k - 1
+        # tiny epsilon so values like 99999.99999999 do not truncate down
+        mut er = floor((u.easting - (e100 as float) * 100000.0 + 1e-6) / div) as int
+        mut nr = floor((u.northing - (n100 as float) * 100000.0 + 1e-6) / div) as int
+        return out + _pad_int(er, digits) + _pad_int(nr, digits)
+
+    pub def to_utm(ref: str) throws str -> UtmCoord:
+        mut s = ref.replace(" ", "").upper()
+        mut i = 0
+        while i < s.len() and i < 2 and s.char_at(i) >= 48 and s.char_at(i) <= 57: i = i + 1
+        if i == 0: raise(f"mgrs: missing zone in '{ref}'")
+        mut zone = int(s.slice(0, i))
+        if zone < 1 or zone > 60: raise(f"mgrs: bad zone in '{ref}'")
+        if s.len() < i + 3: raise(f"mgrs: too short '{ref}'")
+        mut band = s.slice(i, i + 1)
+        mut bi = _BANDS.find(band)
+        if bi < 0: raise(f"mgrs: bad latitude band in '{ref}' (polar UPS references are not supported)")
+        mut ci = _mgrs_cols(zone).find(s.slice(i + 1, i + 2))
+        mut ri = _MGRS_ROWS.find(s.slice(i + 2, i + 3))
+        if ci < 0 or ri < 0: raise(f"mgrs: bad 100 km square in '{ref}'")
+        mut rest = s.slice(i + 3, s.len())
+        if rest.len() % 2 == 1 or rest.len() > 10: raise(f"mgrs: odd number of digits in '{ref}'")
+        mut k = 0
+        while k < rest.len():
+            if rest.char_at(k) < 48 or rest.char_at(k) > 57: raise(f"mgrs: bad digits in '{ref}'")
+            k = k + 1
+        mut nd = rest.len() / 2
+        mut mul = 1.0
+        mut q = nd
+        while q < 5:
+            mul = mul * 10.0
+            q = q + 1
+        mut ev = 0.0
+        mut nv = 0.0
+        if nd > 0:
+            ev = (int(rest.slice(0, nd)) as float) * mul
+            nv = (int(rest.slice(nd, rest.len())) as float) * mul
+        mut easting = ((ci + 1) as float) * 100000.0 + ev
+        mut rr = (ri - _mgrs_row_offset(zone) + 20) % 20
+        mut northing = (rr as float) * 100000.0 + nv
+        # lift by 2000 km cycles into the latitude band
+        mut band_lat = -80.0 + 8.0 * (bi as float)
+        mut northern = band_lat >= 0.0
+        mut base = Utm.from_latlon_zone(band_lat, Utm.central_meridian(zone), zone)?
+        mut min_n = base.northing - 100000.0
+        if min_n < 0.0: min_n = 0.0
+        while northing < min_n: northing = northing + 2000000.0
+        mut u = UtmCoord()
+        u.zone = zone
+        u.band = band
+        u.northern = northern
+        u.easting = easting
+        u.northing = northing
+        u.convergence = 0.0
+        u.scale = 0.0
+        return u
+
+    pub def to_latlon(ref: str) throws str -> LatLon:
+        mut u = Mgrs.to_utm(ref)?
+        return Utm.to_latlon(u.zone, u.northern, u.easting, u.northing)

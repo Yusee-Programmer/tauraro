@@ -19,6 +19,7 @@ from core.map import Map
 from core.string import StringObj, StringBuilder
 from lexer import Lexer
 from parser import Parser
+from token import Token
 from ast import Program, Decl, FunctionDef, ClassDef, EnumDef, InterfaceDef, ImportItem
 
 extern "C":
@@ -62,6 +63,10 @@ pub class ModuleResolver:
     pub all_decl_modules: Vec[str]   # dotted path for each all_decls entry ("" = root)
     pub current_mod:      str        # dotted path of module currently being loaded
     pub parse_errors:     int        # total parse errors across all modules (0 = clean)
+    # First module that defined each non-pub top-level function (name -> file path).
+    # Unity build merges every module into one flat namespace, so a later module's
+    # private helper with the same name would silently resolve to the first one's.
+    pub fn_owner:         Map[str, str]
 
 extend ModuleResolver:
     pub def init() -> ModuleResolver:
@@ -74,6 +79,7 @@ extend ModuleResolver:
         r.all_decl_modules = Vec[str].init(1024)
         r.current_mod      = ""
         r.parse_errors     = 0
+        r.fn_owner         = Map[str, str].init(256)
         r.search_paths.push(".")
         r.search_paths.push("tauraro")
         r.search_paths.push("..")
@@ -228,6 +234,7 @@ extend ModuleResolver:
 
         mut lexer   = Lexer.init(source)
         mut tokens  = lexer.tokenize()
+        self._dedupe_private_fns(tokens, path, is_root, self._source_is_trusted(source))
         mut parser  = Parser.init(tokens, lexer.token_lines)
         parser.current_file = path
         parser.cols = lexer.token_cols
@@ -258,6 +265,96 @@ extend ModuleResolver:
                     self.all_decls.push(decl_ptr)
                     self.all_decl_modules.push(self.current_mod)
             i = i + 1
+
+    # Unity-build name hygiene. Scan `tokens` for non-pub top-level `def NAME(`.
+    # Each name is recorded against the first file defining it. In a later,
+    # non-root, non-core module, a private function whose name is already owned by
+    # another file is renamed to NAME__<file tag> (its definition and its call /
+    # function-value uses within this file; `.attr` accesses and method defs are
+    # left alone), so the two helpers no longer shadow each other.
+    pub def _dedupe_private_fns(self, tokens: Vec[Token], path: str, is_root: bool, trusted: bool):
+        mut exempt = is_root or trusted or self._contains(path, "core/") or self._contains(path, "core\\")
+        mut renames = Map[str, str].init(8)
+        mut depth = 0
+        mut i = 0
+        while i < tokens.len:
+            mut nxt = 0
+            match tokens.get(i):
+                case Token.Indent: depth = depth + 1
+                case Token.Dedent: depth = depth - 1
+                case Token.KwDef:
+                    if depth == 0 and i + 1 < tokens.len:
+                        mut is_pub = false
+                        if i > 0:
+                            match tokens.get(i - 1):
+                                case Token.KwPub: is_pub = true
+                                case _: pass
+                        if not is_pub:
+                            match tokens.get(i + 1):
+                                case Token.Ident(nm):
+                                    if nm != "main" and not nm.starts_with("_tr"):
+                                        if self.fn_owner.contains(nm):
+                                            if self.fn_owner.get(nm) != path and not exempt:
+                                                renames.insert(nm, nm + "__" + self._path_tag(path))
+                                        else:
+                                            self.fn_owner.insert(nm, path)
+                                case _: pass
+                case _: pass
+            i = i + 1
+        if renames.len() == 0: return
+        depth = 0
+        i = 0
+        while i < tokens.len:
+            mut tk = tokens.get(i)
+            match tk:
+                case Token.Indent: depth = depth + 1
+                case Token.Dedent: depth = depth - 1
+                case Token.Ident(nm):
+                    if renames.contains(nm):
+                        mut prev_dot = false
+                        mut prev_def = false
+                        mut prev_open = false
+                        if i > 0:
+                            match tokens.get(i - 1):
+                                case Token.Dot: prev_dot = true
+                                case Token.KwDef: prev_def = true
+                                case Token.LParen: prev_open = true
+                                case Token.Comma: prev_open = true
+                                case _: pass
+                        mut next_call = false
+                        mut next_arg_end = false
+                        if i + 1 < tokens.len:
+                            match tokens.get(i + 1):
+                                case Token.LParen: next_call = true
+                                case Token.Comma: next_arg_end = true
+                                case Token.RParen: next_arg_end = true
+                                case _: pass
+                        mut hit = false
+                        if not prev_dot:
+                            if prev_def:
+                                hit = depth == 0 and next_call
+                            elif next_call:
+                                hit = true
+                            elif prev_open and next_arg_end:
+                                hit = true
+                        if hit: tokens[i] = Token.Ident(renames.get(nm))
+                case _: pass
+            i = i + 1
+
+    # A C-identifier-safe tag for a file path (every non-alphanumeric becomes '_').
+    pub def _path_tag(self, path: str) -> str:
+        mut sb = StringBuilder.init(path.len() + 1)
+        mut i = 0
+        while i < path.len():
+            mut c = path.char_at(i)
+            if (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122):
+                sb.append_char(c)
+            else:
+                sb.append_char(95)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
 
     # True when `path` is under the trusted standard library (std/ or the bootstrap
     # core/ stdlib) — those modules are the audited unsafe core, exempt from [P-2].

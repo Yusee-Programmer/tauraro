@@ -1,0 +1,178 @@
+# std.encoding.bech32 -- Bech32 (BIP 173) and Bech32m (BIP 350) encoding.
+#
+# Encodes a human-readable part (hrp) plus arbitrary bytes as
+# "<hrp>1<data><6-char checksum>", as used by age keys (age1..., and
+# AGE-SECRET-KEY-1...) and Bitcoin segwit addresses. Decoding rejects
+# mixed case, bad checksums, characters outside the alphabet and non-zero
+# padding bits; the hrp comes back lower-cased. Unlike BIP 173 there is no
+# 90-character limit (age keys are longer than that would allow for some
+# uses); pass the limit yourself with decode_limited if you need it.
+#
+# Usage:
+#   from std.encoding.bech32 import Bech32
+#   mut s = Bech32.encode("age", key32)?
+#   mut d = Bech32.decode(s)?        # d.hrp, d.data
+#
+# Bytes are passed as `str` and may contain NULs.
+
+from std.core.string import StringBuilder
+
+pub const BECH32  = 1
+pub const BECH32M = 0x2bc830a3
+
+def _b32_charset() -> str:
+    return "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+def _b32_byte(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+def _b32_polymod_step(chk: int, v: int) -> int:
+    mut top = chk >> 25
+    mut c = ((chk & 0x1ffffff) << 5) ^ v
+    if (top & 1) != 0: c = c ^ 0x3b6a57b2
+    if (top & 2) != 0: c = c ^ 0x26508e6d
+    if (top & 4) != 0: c = c ^ 0x1ea119fa
+    if (top & 8) != 0: c = c ^ 0x3d4233dd
+    if (top & 16) != 0: c = c ^ 0x2a1462b3
+    return c
+
+def _b32_hrp_chk(hrp: str) -> int:
+    mut chk = 1
+    mut i = 0
+    while i < hrp.len():
+        chk = _b32_polymod_step(chk, _b32_byte(hrp, i) >> 5)
+        i = i + 1
+    chk = _b32_polymod_step(chk, 0)
+    i = 0
+    while i < hrp.len():
+        chk = _b32_polymod_step(chk, _b32_byte(hrp, i) & 31)
+        i = i + 1
+    return chk
+
+def _b32_rev(c: int) -> int:
+    mut cs = _b32_charset()
+    mut i = 0
+    while i < 32:
+        if _b32_byte(cs, i) == c: return i
+        i = i + 1
+    return -1
+
+# Result of Bech32.decode.
+pub class Bech32Data:
+    pub hrp:     str
+    pub data:    str
+    pub variant: int    # BECH32 or BECH32M
+
+pub class Bech32:
+    _dummy: int
+
+extend Bech32:
+    # Bech32 (BIP 173 checksum).
+    pub def encode(hrp: str, data: str) throws str -> str:
+        return Bech32.encode_variant(hrp, data, BECH32)?
+
+    # Bech32m (BIP 350 checksum).
+    pub def encode_m(hrp: str, data: str) throws str -> str:
+        return Bech32.encode_variant(hrp, data, BECH32M)?
+
+    pub def encode_variant(hrp: str, data: str, variant: int) throws str -> str:
+        if hrp.len() == 0: raise("bech32: empty human-readable part")
+        mut i = 0
+        while i < hrp.len():
+            mut c = _b32_byte(hrp, i)
+            if c < 33 or c > 126 or (c >= 65 and c <= 90): raise("bech32: hrp must be lower-case printable ASCII")
+            i = i + 1
+        mut cs = _b32_charset()
+        mut vals: List[int] = []
+        mut acc = 0
+        mut bits = 0
+        i = 0
+        while i < data.len():
+            acc = ((acc << 8) | _b32_byte(data, i)) & 0xfff
+            bits = bits + 8
+            while bits >= 5:
+                bits = bits - 5
+                vals.append((acc >> bits) & 31)
+            i = i + 1
+        if bits > 0: vals.append((acc << (5 - bits)) & 31)
+        mut chk = _b32_hrp_chk(hrp)
+        mut sb = StringBuilder.init(hrp.len() + len(vals) + 8)
+        sb.append(hrp)
+        sb.append("1")
+        i = 0
+        while i < len(vals):
+            chk = _b32_polymod_step(chk, vals[i])
+            sb.append_char(_b32_byte(cs, vals[i]))
+            i = i + 1
+        i = 0
+        while i < 6:
+            chk = _b32_polymod_step(chk, 0)
+            i = i + 1
+        chk = chk ^ variant
+        i = 0
+        while i < 6:
+            sb.append_char(_b32_byte(cs, (chk >> (5 * (5 - i))) & 31))
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Decode either variant (the variant is reported in the result).
+    pub def decode(s: str) throws str -> Bech32Data:
+        return Bech32.decode_limited(s, 0)?
+
+    # Same, rejecting strings longer than max_len characters (0 = no limit).
+    pub def decode_limited(s: str, max_len: int) throws str -> Bech32Data:
+        if max_len > 0 and s.len() > max_len: raise("bech32: string too long")
+        mut has_lower = false
+        mut has_upper = false
+        mut sep = -1
+        mut i = 0
+        while i < s.len():
+            mut c = _b32_byte(s, i)
+            if c < 33 or c > 126: raise("bech32: invalid character")
+            if c >= 97 and c <= 122: has_lower = true
+            if c >= 65 and c <= 90: has_upper = true
+            if c == 49: sep = i
+            i = i + 1
+        if has_lower and has_upper: raise("bech32: mixed case")
+        if sep < 1: raise("bech32: missing separator or empty hrp")
+        if s.len() - sep - 1 < 6: raise("bech32: too short for a checksum")
+        mut low = s.lower()
+        mut hrp = low.slice(0, sep)
+        mut chk = _b32_hrp_chk(hrp)
+        mut vals: List[int] = []
+        i = sep + 1
+        while i < low.len():
+            mut v = _b32_rev(_b32_byte(low, i))
+            if v < 0: raise("bech32: invalid data character")
+            chk = _b32_polymod_step(chk, v)
+            vals.append(v)
+            i = i + 1
+        mut variant = 0
+        if chk == BECH32: variant = BECH32
+        elif chk == BECH32M: variant = BECH32M
+        else: raise("bech32: bad checksum")
+        mut n = len(vals) - 6
+        mut sb = StringBuilder.init(n + 4)
+        mut acc = 0
+        mut bits = 0
+        i = 0
+        while i < n:
+            acc = ((acc << 5) | vals[i]) & 0xfff
+            bits = bits + 5
+            if bits >= 8:
+                bits = bits - 8
+                sb.append_char((acc >> bits) & 255)
+            i = i + 1
+        if bits >= 5 or (acc & ((1 << bits) - 1)) != 0:
+            sb.free()
+            raise("bech32: non-zero padding")
+        mut d = Bech32Data()
+        d.hrp = hrp
+        d.data = sb.to_owned()
+        d.variant = variant
+        sb.free()
+        return d

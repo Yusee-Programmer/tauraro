@@ -139,3 +139,18 @@ print(Wrap.indent("a\nb\nc", "> "))
 # > b
 # > c
 ```
+
+---
+
+## std.text.shlex — Shlex
+
+| Method | Description |
+|---|---|
+| `Shlex.split(s)? -> List[str]` | POSIX shell word splitting (quotes, escapes, `a'b c'` joining). Raises on unterminated quotes. |
+| `Shlex.split_comments(s)?` | Same, with `#` comments. |
+| `Shlex.quote(word)` / `Shlex.join(words)` | Quote for a POSIX shell (`'it'"'"'s'`). |
+| `Shlex.split_windows(cmdline)` | CommandLineToArgvW rules (backslash/quote rules, `""` inside quotes). |
+| `Shlex.quote_windows(word)` / `Shlex.join_windows(words)` | Build Windows command lines. |
+
+Follows `/bin/sh`: backslash-newline joins lines and `\$` inside double quotes becomes `$` (Python's `shlex`
+differs on both).

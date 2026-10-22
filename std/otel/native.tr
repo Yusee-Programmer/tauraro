@@ -1,0 +1,272 @@
+# tauraro-cpp-shim: otel_native.c
+#
+# std.otel.native -- internal bindings to std/otel/otel_native.c (wall clock,
+# per-thread context stack, the thread-safe export queue, process-wide slots)
+# plus the small string/JSON helpers every std.otel part shares. Not meant to
+# be called by user code.
+#
+# Byte buffers cross as (Pointer[char], length); outputs are allocated here
+# with _ot_alloc(n), filled by C, then adopted with _ot_take(p, n).
+
+from std.core.string import StringBuilder
+from std.string.str import Str
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+    def trc_otel_now_ns() -> int
+    def trc_otel_mono_ms() -> int
+    def trc_otel_sleep_ms(ms: int)
+    def trc_otel_fmt_double(v: float, out: Pointer[char]) -> int
+    def trc_otel_fallback_hex(out: Pointer[char], nbytes: int)
+
+    def trc_otel_ctx_push(s: Pointer[char], n: int) -> int
+    def trc_otel_ctx_pop(token: int) -> int
+    def trc_otel_ctx_depth() -> int
+    def trc_otel_ctx_top_len() -> int
+    def trc_otel_ctx_top_copy(out: Pointer[char])
+    def trc_otel_ctx_release()
+
+    def trc_otel_q_new(cap: int) -> Pointer[void]
+    def trc_otel_q_push(h: Pointer[void], s: Pointer[char], n: int, wake: int) -> int
+    def trc_otel_q_wait(h: Pointer[void], timeout_ms: int, min_items: int) -> int
+    def trc_otel_q_len(h: Pointer[void]) -> int
+    def trc_otel_q_head_len(h: Pointer[void]) -> int
+    def trc_otel_q_pop(h: Pointer[void], out: Pointer[char]) -> int
+    def trc_otel_q_flush_ticket(h: Pointer[void]) -> int
+    def trc_otel_q_request_flush(h: Pointer[void]) -> int
+    def trc_otel_q_mark_flushed(h: Pointer[void], ticket: int)
+    def trc_otel_q_wait_flushed(h: Pointer[void], ticket: int, timeout_ms: int) -> int
+    def trc_otel_q_close(h: Pointer[void])
+    def trc_otel_q_is_closed(h: Pointer[void]) -> int
+    def trc_otel_q_worker_exit(h: Pointer[void])
+    def trc_otel_q_dropped(h: Pointer[void]) -> int
+    def trc_otel_q_pushed(h: Pointer[void]) -> int
+    def trc_otel_q_free(h: Pointer[void])
+
+    def trc_otel_slot_set(i: int, p: Pointer[void], s: Pointer[char], n: int)
+    def trc_otel_slot_ptr(i: int) -> Pointer[void]
+    def trc_otel_slot_len(i: int) -> int
+    def trc_otel_slot_copy(i: int, out: Pointer[char], cap: int) -> int
+    def trc_otel_slot_push(i: int, s: Pointer[char], n: int, wake: int) -> int
+
+# Registry slot used by the std.log bridge: (log queue, scope+resource text).
+pub const OT_SLOT_LOGS = 0
+
+# ---------------------------------------------------------------- buffers
+
+pub def _ot_alloc(n: int) -> Pointer[char]:
+    mut p = _tr_c_malloc(n + 1)
+    unsafe: p.offset(0).write('\0')
+    return p
+
+pub def _ot_take(p: Pointer[char], n: int) -> str:
+    unsafe: p.offset(n).write('\0')
+    return _tr_str_wrap_len(p, n)
+
+# ---------------------------------------------------------------- clock
+
+# Wall-clock time in nanoseconds since the Unix epoch.
+pub def now_unix_nano() -> int:
+    return trc_otel_now_ns()
+
+# Monotonic milliseconds (for timers; not related to the wall clock).
+pub def mono_ms() -> int:
+    return trc_otel_mono_ms()
+
+pub def otel_sleep_ms(ms: int):
+    trc_otel_sleep_ms(ms)
+
+# ---------------------------------------------------------------- context stack
+
+pub def _ctx_push(enc: str) -> int:
+    mut p = enc as Pointer[char]
+    return trc_otel_ctx_push(p, enc.len())
+
+pub def _ctx_pop(token: int) -> int:
+    return trc_otel_ctx_pop(token)
+
+pub def _ctx_depth() -> int:
+    return trc_otel_ctx_depth()
+
+# Top entry of this thread's context stack, or "" when empty.
+pub def _ctx_top() -> str:
+    mut n = trc_otel_ctx_top_len()
+    if n < 0: return ""
+    mut p = _ot_alloc(n)
+    trc_otel_ctx_top_copy(p)
+    return _ot_take(p, n)
+
+# ---------------------------------------------------------------- queue
+
+pub def _q_push(h: Pointer[void], s: str, wake: int) -> int:
+    mut p = s as Pointer[char]
+    return trc_otel_q_push(h, p, s.len(), wake)
+
+# Pop the head item; "" when the queue is empty (items are never empty).
+pub def _q_pop(h: Pointer[void]) -> str:
+    mut n = trc_otel_q_head_len(h)
+    if n < 0: return ""
+    mut p = _ot_alloc(n)
+    mut got = trc_otel_q_pop(h, p)
+    if got < 0:
+        _tr_c_free(p)
+        return ""
+    return _ot_take(p, got)
+
+pub def _slot_str(i: int) -> str:
+    mut n = trc_otel_slot_len(i)
+    if n <= 0: return ""
+    mut p = _ot_alloc(n)
+    mut got = trc_otel_slot_copy(i, p, n)
+    return _ot_take(p, got)
+
+pub def _slot_set(i: int, h: Pointer[void], s: str):
+    mut p = s as Pointer[char]
+    trc_otel_slot_set(i, h, p, s.len())
+
+pub def _slot_push(i: int, s: str, wake: int) -> int:
+    mut p = s as Pointer[char]
+    return trc_otel_slot_push(i, p, s.len(), wake)
+
+# ---------------------------------------------------------------- JSON text
+
+def _hex_digit(v: int) -> int:
+    if v < 10: return 48 + v
+    return 87 + v
+
+# Append `s` as a JSON string literal (with quotes). Escapes '"', '\\' and
+# every control character below 0x20 (\n \r \t \b \f or \u00XX), as RFC 8259
+# requires; bytes >= 0x80 pass through (UTF-8).
+pub def json_str(sb: StringBuilder, s: str):
+    sb.append_char(34)
+    mut p = s as Pointer[char]
+    mut n = s.len()
+    mut i = 0
+    while i < n:
+        mut c = 0
+        unsafe: c = (p.offset(i).read() as int) & 255
+        if c == 34:
+            sb.append("\\\"")
+        elif c == 92:
+            sb.append("\\\\")
+        elif c == 10:
+            sb.append("\\n")
+        elif c == 13:
+            sb.append("\\r")
+        elif c == 9:
+            sb.append("\\t")
+        elif c == 8:
+            sb.append("\\b")
+        elif c == 12:
+            sb.append("\\f")
+        elif c < 32 or c == 127:
+            sb.append("\\u00")
+            sb.append_char(_hex_digit(c >> 4))
+            sb.append_char(_hex_digit(c & 15))
+        else:
+            sb.append_char(c)
+        i = i + 1
+    sb.append_char(34)
+
+# A double as JSON text. NaN/Infinity have no JSON number form; the proto3
+# JSON mapping writes them as the strings "NaN", "Infinity", "-Infinity".
+pub def json_double(sb: StringBuilder, v: float):
+    mut p = _ot_alloc(40)
+    mut n = trc_otel_fmt_double(v, p)
+    if n < 0:
+        _tr_c_free(p)
+        if v != v:
+            sb.append("\"NaN\"")
+        elif v > 0.0:
+            sb.append("\"Infinity\"")
+        else:
+            sb.append("\"-Infinity\"")
+        return
+    mut s = _ot_take(p, n)
+    sb.append(s)
+
+pub def double_text(v: float) -> str:
+    mut sb = StringBuilder.init(32)
+    json_double(sb, v)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# int64 fields (timestamps, counts, intValue) are JSON strings in the proto3
+# JSON mapping: "1700000000000000000".
+pub def json_i64(sb: StringBuilder, v: int):
+    sb.append_char(34)
+    sb.append_int(v)
+    sb.append_char(34)
+
+pub def json_key(sb: StringBuilder, k: str):
+    sb.append_char(34)
+    sb.append(k)
+    sb.append_char(34)
+    sb.append_char(58)
+
+# ---------------------------------------------------------------- hex / text
+
+def _hexval(c: int) -> int:
+    if c >= 48 and c <= 57: return c - 48
+    if c >= 97 and c <= 102: return c - 87
+    return -1
+
+# True when s is exactly n lower-case hex digits.
+pub def is_lower_hex(s: str, n: int) -> bool:
+    if s.len() != n: return false
+    mut p = s as Pointer[char]
+    mut i = 0
+    while i < n:
+        mut c = 0
+        unsafe: c = (p.offset(i).read() as int) & 255
+        if _hexval(c) < 0: return false
+        i = i + 1
+    return true
+
+# True when every character of s is '0'.
+pub def all_zero(s: str) -> bool:
+    mut p = s as Pointer[char]
+    mut n = s.len()
+    mut i = 0
+    while i < n:
+        mut c = 0
+        unsafe: c = (p.offset(i).read() as int) & 255
+        if c != 48: return false
+        i = i + 1
+    return true
+
+# Value of a hex string (at most 15 digits fit a non-negative int).
+pub def hex_value(s: str) -> int:
+    mut p = s as Pointer[char]
+    mut n = s.len()
+    mut v = 0
+    mut i = 0
+    while i < n:
+        mut c = 0
+        unsafe: c = (p.offset(i).read() as int) & 255
+        mut d = _hexval(c)
+        if d < 0: return -1
+        v = v * 16 + d
+        i = i + 1
+    return v
+
+# Byte at index i of s (0..255).
+pub def byte_at(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    mut c = 0
+    unsafe: c = (p.offset(i).read() as int) & 255
+    return c
+
+# s with ASCII spaces and tabs removed from both ends.
+pub def trim_ows(s: str) -> str:
+    mut n = s.len()
+    mut a = 0
+    while a < n and (byte_at(s, a) == 32 or byte_at(s, a) == 9): a = a + 1
+    mut b = n
+    while b > a and (byte_at(s, b - 1) == 32 or byte_at(s, b - 1) == 9): b = b - 1
+    if a == 0 and b == n: return s
+    return Str.slice(s, a, b)

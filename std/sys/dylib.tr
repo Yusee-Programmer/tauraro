@@ -1,0 +1,181 @@
+# std.sys.dylib -- load shared libraries at run time and call into them.
+# tauraro-cpp-shim: dylib_native.c
+#
+# dlopen/dlsym on Linux, the BSDs and macOS; LoadLibraryW/GetProcAddress on
+# Windows. Symbols are called through trampolines with exact prototypes, so
+# only these signatures are supported:
+#   call_int    f(i64/pointer x 0..8) -> i64     (C int/long/pointer/bool args)
+#   call_void   f(i64/pointer x 0..8)
+#   call_float  f(double x 0..6) -> double
+#   call_str    f(str x 0..4) -> str             (functions from `tauraroc --lib`)
+#   call_str_int f(str, i64 x 0..3) -> i64       (functions from `tauraroc --lib`)
+# Narrower C integer parameters (int, short, char) work through call_int on
+# x86-64 and AArch64; `float` (32-bit) parameters and struct arguments do not.
+#
+# Usage:
+#   from std.sys.dylib import DynLib, dylib_filename
+#   mut m = DynLib.open(dylib_filename("m"))?          # libm.so / libm.dylib / m.dll
+#   mut c = m.call_float("cbrt", [27.0])?              # 3.0
+#   m.close()
+
+extern "C":
+    def trc_dl_error() -> Pointer[char]
+    def trc_dl_open(path: Pointer[char], flags: int) -> int
+    def trc_dl_sym(h: int, name: Pointer[char]) -> int
+    def trc_dl_close(h: int) -> int
+    def trc_dl_platform() -> int
+    def trc_dl_call_i(fn_: int, n: int, args: Pointer[int]) -> int
+    def trc_dl_call_v(fn_: int, n: int, args: Pointer[int])
+    def trc_dl_call_d(fn_: int, n: int, args: Pointer[float]) -> float
+    def trc_dl_call_s(fn_: int, n: int, a: str, b: str, c: str, d: str) -> str
+    def trc_dl_call_si(fn_: int, n: int, s: str, a: int, b: int, c: int) -> int
+    def trc_dl_strlen(p: int) -> int
+    def trc_dl_memcpy(dst: Pointer[char], src: int, n: int)
+    def trc_dl_addr(p: Pointer[char]) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+# Open flags.
+pub const DL_LOCAL = 0       # symbols stay private to the library (default)
+pub const DL_GLOBAL = 1      # make the library's symbols available to libraries loaded later
+pub const DL_LAZY = 2        # resolve functions on first call (POSIX)
+
+# Copy a NUL-terminated C string at address p into a str ("" for 0).
+pub def dylib_read_cstr(p: int) -> str:
+    if p == 0: return ""
+    mut n = trc_dl_strlen(p)
+    mut buf = _tr_c_malloc(n + 1)
+    trc_dl_memcpy(buf, p, n)
+    unsafe: buf.offset(n).write('\0')
+    return _tr_str_wrap_len(buf, n)
+
+# Address of a str's bytes, to pass as a `const char*` argument through
+# call_int. Valid while `s` is alive and unchanged.
+pub def dylib_cstr_addr(s: str) -> int: return trc_dl_addr(s as Pointer[char])
+
+def _dl_err() -> str: return dylib_read_cstr(trc_dl_addr(trc_dl_error()))
+
+# Platform file name for a library base name: "libNAME.so", "libNAME.dylib" or "NAME.dll".
+pub def dylib_filename(name: str) -> str:
+    mut p = trc_dl_platform()
+    if p == 3: return name + ".dll"
+    if p == 2: return "lib" + name + ".dylib"
+    return "lib" + name + ".so"
+
+# The shared-library extension on this platform (".so", ".dylib", ".dll").
+pub def dylib_extension() -> str:
+    mut p = trc_dl_platform()
+    if p == 3: return ".dll"
+    if p == 2: return ".dylib"
+    return ".so"
+
+# Call a function pointer (from DynLib.symbol) with integer/pointer arguments.
+pub def dylib_call_int_ptr(fn_: int, args: List[int]) throws str -> int:
+    if fn_ == 0: raise("dylib: null function pointer")
+    if len(args) > 8: raise("dylib: at most 8 integer arguments")
+    mut ap = args as Pointer[int]
+    return trc_dl_call_i(fn_, len(args), ap)
+
+pub def dylib_call_float_ptr(fn_: int, args: List[float]) throws str -> float:
+    if fn_ == 0: raise("dylib: null function pointer")
+    if len(args) > 6: raise("dylib: at most 6 float arguments")
+    mut ap = args as Pointer[float]
+    return trc_dl_call_d(fn_, len(args), ap)
+
+pub class DynLib:
+    pub path:   str
+    pub handle: int
+
+extend DynLib:
+    # Load a library by path (or bare file name, searched the platform's way).
+    pub def open(path: str) throws str -> DynLib:
+        return DynLib.open_with(path, DL_LOCAL)?
+
+    pub def open_with(path: str, flags: int) throws str -> DynLib:
+        if path.len() == 0: raise("dylib: empty path")
+        mut h = trc_dl_open(path as Pointer[char], flags)
+        if h == 0: raise("dylib: " + _dl_err())
+        mut d = DynLib()
+        d.path = path
+        d.handle = h
+        return d
+
+    # The running program itself (POSIX only): its exported symbols and those
+    # of every library it loaded with global visibility, e.g. libc.
+    pub def self_process() throws str -> DynLib:
+        if trc_dl_platform() == 3: raise("dylib: self_process is not available on Windows")
+        mut h = trc_dl_open("" as Pointer[char], DL_LOCAL)
+        if h == 0: raise("dylib: " + _dl_err())
+        mut d = DynLib()
+        d.path = ""
+        d.handle = h
+        return d
+
+    pub def is_open(self) -> bool: return self.handle != 0
+
+    # Address of an exported symbol.
+    pub def symbol(self, name: str) throws str -> int:
+        if self.handle == 0: raise("dylib: library is closed")
+        mut p = trc_dl_sym(self.handle, name as Pointer[char])
+        if p == 0: raise("dylib: " + name + ": " + _dl_err())
+        return p
+
+    pub def has(self, name: str) -> bool:
+        if self.handle == 0: return false
+        return trc_dl_sym(self.handle, name as Pointer[char]) != 0
+
+    pub def call_int(self, name: str, args: List[int]) throws str -> int:
+        mut f = self.symbol(name)?
+        return dylib_call_int_ptr(f, args)?
+
+    pub def call_void(self, name: str, args: List[int]) throws str:
+        mut f = self.symbol(name)?
+        if len(args) > 8: raise("dylib: at most 8 integer arguments")
+        mut ap = args as Pointer[int]
+        trc_dl_call_v(f, len(args), ap)
+
+    pub def call_float(self, name: str, args: List[float]) throws str -> float:
+        mut f = self.symbol(name)?
+        return dylib_call_float_ptr(f, args)?
+
+    # A `str`-taking, `str`-returning function exported by a Tauraro library.
+    pub def call_str(self, name: str, args: List[str]) throws str -> str:
+        mut f = self.symbol(name)?
+        mut n = len(args)
+        if n > 4: raise("dylib: at most 4 str arguments")
+        mut a = ""
+        mut b = ""
+        mut c = ""
+        mut d = ""
+        if n > 0: a = args[0]
+        if n > 1: b = args[1]
+        if n > 2: c = args[2]
+        if n > 3: d = args[3]
+        mut r = trc_dl_call_s(f, n, a, b, c, d)
+        # copy: a literal returned by the library points into its own image,
+        # which disappears when the library is closed
+        return r.slice(0, r.len())
+
+    # f(s: str, ints...) -> int, exported by a Tauraro library.
+    pub def call_str_int(self, name: str, s: str, args: List[int]) throws str -> int:
+        mut f = self.symbol(name)?
+        mut n = len(args)
+        if n > 3: raise("dylib: at most 3 int arguments after the str")
+        mut a = 0
+        mut b = 0
+        mut c = 0
+        if n > 0: a = args[0]
+        if n > 1: b = args[1]
+        if n > 2: c = args[2]
+        return trc_dl_call_si(f, n, s, a, b, c)
+
+    # Contents of an exported NUL-terminated char array (`const char NAME[]`).
+    pub def read_cstr_symbol(self, name: str) throws str -> str:
+        mut p = self.symbol(name)?
+        return dylib_read_cstr(p)
+
+    # Unload. Function pointers from this library become invalid.
+    pub def close(self):
+        if self.handle != 0:
+            trc_dl_close(self.handle)
+            self.handle = 0

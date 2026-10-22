@@ -1,0 +1,49 @@
+# tauraro-cpp-shim: ogg_native.c
+#
+# std.audio.ogg_native -- internal bindings to std/audio/ogg_native.c (Ogg
+# container, Vorbis via stb_vorbis, Opus via the libopus shim opus_native.c).
+# Handles are opaque ints (the C side takes the pointer).
+
+from std.audio.opus_native import opus_get_version_string
+
+extern "C":
+    def trc_ogg_decode(data: Pointer[char], n: int, want: int) -> Pointer[char]
+    def trc_ogg_new(want: int) -> int
+    def trc_ogg_free(h: int)
+    def trc_ogg_feed(h: int, data: Pointer[char], n: int) -> int
+    def trc_ogg_finish(h: int) -> int
+    def trc_ogg_available(h: int) -> int
+    def trc_ogg_pull(h: int, out: Pointer[float], max: int) -> int
+    def trc_ogg_ready(h: int) -> int
+    def trc_ogg_ended(h: int) -> int
+    def trc_ogg_failed(h: int) -> int
+    def trc_ogg_codec(h: int) -> int
+    def trc_ogg_channels(h: int) -> int
+    def trc_ogg_rate(h: int) -> int
+    def trc_ogg_serial(h: int) -> int
+    def trc_ogg_pre_skip(h: int) -> int
+    def trc_ogg_gain_q8(h: int) -> int
+    def trc_ogg_family(h: int) -> int
+    def trc_ogg_bitrate(h: int) -> int
+    def trc_ogg_bad_pages(h: int) -> int
+    def trc_ogg_gaps(h: int) -> int
+    def trc_ogg_bad_packets(h: int) -> int
+    def trc_ogg_comment_count(h: int) -> int
+    def trc_ogg_comment_len(h: int, i: int) -> int
+    def trc_ogg_comment(h: int, i: int, out: Pointer[char], cap: int) -> int
+    def trc_ogg_stream_count(h: int) -> int
+    def trc_ogg_stream_serial(h: int, i: int) -> int
+    def trc_ogg_stream_codec(h: int, i: int, out: Pointer[char], cap: int) -> int
+    def trc_ogg_error(h: int, out: Pointer[char], cap: int) -> int
+    def trc_oggr_open(data: Pointer[char], n: int, want: int) -> int
+    def trc_oggr_total(h: int) -> int
+    def trc_oggr_tell(h: int) -> int
+    def trc_oggr_read(h: int, out: Pointer[float], max: int) -> int
+    def trc_oggr_seek(h: int, frame: int) -> int
+    def trc_ogg_raw(data: Pointer[char], n: int, serial: int) -> int
+    def trc_ogg_raw_free(h: int)
+    def trc_ogg_raw_bad(h: int) -> int
+    def trc_ogg_raw_pages(h: int) -> int
+    def trc_ogg_raw_page(h: int, i: int, field: int) -> int
+    def trc_ogg_raw_packets(h: int) -> int
+    def trc_ogg_raw_packet(h: int, i: int, field: int) -> int

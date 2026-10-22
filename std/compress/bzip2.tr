@@ -1,0 +1,205 @@
+# tauraro-cpp-shim: bzip2_native.c
+#
+# std.compress.bzip2 — bzip2 (.bz2) compression and decompression.
+#
+# Backed by libbzip2 1.0.8 (vendored in std/compress/vendor/bzip2, BSD-style
+# licence) compiled into bzip2_native.c: no external library, the same on
+# Linux, macOS and Windows. Block and stream CRCs are verified; concatenated
+# (multi-stream) files such as the output of `pbzip2` or `cat a.bz2 b.bz2`
+# decode to the concatenation of their contents.
+#
+# Usage:
+#   from std.compress.bzip2 import Bzip2, Bzip2Decoder, Bzip2Encoder
+#
+#   mut packed = Bzip2.compress(data, 9)?            # level 1..9 (block size x 100 KB)
+#   mut plain  = Bzip2.decompress(packed)?           # at most 1 GiB of output
+#   mut small  = Bzip2.decompress_max(packed, 4096)? # raises if more than 4096 bytes
+#
+#   # streaming: feed compressed chunks, get decompressed bytes back
+#   mut d = Bzip2Decoder.init(0)?                    # 0 = no output limit
+#   mut part = d.feed(chunk)?                        # any chunk size
+#   mut rest = d.finish()?                           # raises if the input was truncated
+#
+#   mut e = Bzip2Encoder.init(9)?
+#   mut a = e.feed(chunk)?                           # usually "" until a 900 KB block fills
+#   mut b = e.finish()?
+#
+# All strings are binary (length-tracked); embedded NUL bytes are preserved.
+
+from std.compress.common import codec_status_message, COMPRESS_DEFAULT_MAX_OUT
+
+extern "C":
+    def trc_bz2d_new(max_out: int) -> int
+    def trc_bz2d_feed(h: int, data: Pointer[char], n: int) -> int
+    def trc_bz2d_finish(h: int) -> int
+    def trc_bz2d_avail(h: int) -> int
+    def trc_bz2d_take(h: int, dst: Pointer[char])
+    def trc_bz2d_streams(h: int) -> int
+    def trc_bz2d_free(h: int)
+    def trc_bz2e_new(level: int) -> int
+    def trc_bz2e_feed(h: int, data: Pointer[char], n: int) -> int
+    def trc_bz2e_finish(h: int) -> int
+    def trc_bz2e_avail(h: int) -> int
+    def trc_bz2e_take(h: int, dst: Pointer[char])
+    def trc_bz2e_free(h: int)
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+# Incremental bzip2 decoder.
+pub class Bzip2Decoder:
+    pub handle: int
+    pub done: bool
+
+extend Bzip2Decoder:
+    # `max_out` bounds the total decompressed size (<= 0: unlimited).
+    pub def init(max_out: int) throws str -> Bzip2Decoder:
+        mut h = trc_bz2d_new(max_out)
+        if h == 0: raise("bzip2: out of memory")
+        mut d = Bzip2Decoder()
+        d.handle = h
+        d.done = false
+        return d
+
+    def _take(self) -> str:
+        mut n = trc_bz2d_avail(self.handle)
+        mut p = _tr_c_malloc(n + 1)
+        trc_bz2d_take(self.handle, p)
+        unsafe: p.offset(n).write('\0')
+        return _tr_str_wrap_len(p, n)
+
+    def _fail(self, st: int) -> str:
+        mut msg = codec_status_message("bzip2", st)
+        self.close()
+        return msg
+
+    # Decode a chunk of compressed input; returns the output it completed.
+    pub def feed(self, chunk: str) throws str -> str:
+        if self.handle == 0:
+            raise("bzip2: decoder is closed")
+        mut st = trc_bz2d_feed(self.handle, chunk as Pointer[char], chunk.len())
+        if st < 0:
+            mut msg = self._fail(st)
+            raise(msg)
+        return self._take()
+
+    # Signal end of input. Returns any remaining output and frees the decoder;
+    # raises when the last stream is incomplete.
+    pub def finish(self) throws str -> str:
+        if self.handle == 0:
+            raise("bzip2: decoder is closed")
+        mut st = trc_bz2d_finish(self.handle)
+        if st < 0:
+            mut msg = self._fail(st)
+            raise(msg)
+        mut out = self._take()
+        self.done = true
+        self.close()
+        return out
+
+    # Number of complete bzip2 streams decoded so far.
+    pub def streams(self) -> int:
+        if self.handle == 0: return 0
+        return trc_bz2d_streams(self.handle)
+
+    pub def close(self):
+        if self.handle != 0:
+            trc_bz2d_free(self.handle)
+            self.handle = 0
+
+# Incremental bzip2 encoder (one stream).
+pub class Bzip2Encoder:
+    pub handle: int
+
+extend Bzip2Encoder:
+    # `level` 1..9 selects the block size (100 KB .. 900 KB); 9 compresses best.
+    pub def init(level: int) throws str -> Bzip2Encoder:
+        mut h = trc_bz2e_new(level)
+        if h == 0: raise("bzip2: out of memory")
+        mut e = Bzip2Encoder()
+        e.handle = h
+        return e
+
+    def _take(self) -> str:
+        mut n = trc_bz2e_avail(self.handle)
+        mut p = _tr_c_malloc(n + 1)
+        trc_bz2e_take(self.handle, p)
+        unsafe: p.offset(n).write('\0')
+        return _tr_str_wrap_len(p, n)
+
+    # Compress a chunk; returns whatever compressed output is ready.
+    pub def feed(self, chunk: str) throws str -> str:
+        if self.handle == 0:
+            raise("bzip2: encoder is closed")
+        mut st = trc_bz2e_feed(self.handle, chunk as Pointer[char], chunk.len())
+        if st < 0:
+            mut msg = codec_status_message("bzip2", st)
+            self.close()
+            raise(msg)
+        return self._take()
+
+    # Flush the last block and the stream trailer; frees the encoder.
+    pub def finish(self) throws str -> str:
+        if self.handle == 0:
+            raise("bzip2: encoder is closed")
+        mut st = trc_bz2e_finish(self.handle)
+        if st < 0:
+            mut msg = codec_status_message("bzip2", st)
+            self.close()
+            raise(msg)
+        mut out = self._take()
+        self.close()
+        return out
+
+    pub def close(self):
+        if self.handle != 0:
+            trc_bz2e_free(self.handle)
+            self.handle = 0
+
+pub class Bzip2:
+    _dummy: int
+
+extend Bzip2:
+    # Compress `data` into one bzip2 stream. `level` 1..9 (clamped).
+    pub def compress(data: str, level: int) throws str -> str:
+        mut e = Bzip2Encoder.init(level)?
+        mut st = trc_bz2e_feed(e.handle, data as Pointer[char], data.len())
+        if st >= 0: st = trc_bz2e_finish(e.handle)
+        if st < 0:
+            mut msg = codec_status_message("bzip2", st)
+            e.close()
+            raise(msg)
+        mut out = e._take()
+        e.close()
+        return out
+
+    # Decompress one or more concatenated bzip2 streams (at most 1 GiB of output).
+    pub def decompress(data: str) throws str -> str:
+        return Bzip2.decompress_max(data, COMPRESS_DEFAULT_MAX_OUT)?
+
+    # Decompress with an explicit output limit (`max_out` <= 0: unlimited).
+    pub def decompress_max(data: str, max_out: int) throws str -> str:
+        mut d = Bzip2Decoder.init(max_out)?
+        mut st = trc_bz2d_feed(d.handle, data as Pointer[char], data.len())
+        if st >= 0: st = trc_bz2d_finish(d.handle)
+        if st < 0:
+            mut msg = codec_status_message("bzip2", st)
+            d.close()
+            raise(msg)
+        mut out = d._take()
+        d.close()
+        return out
+
+    # True when `data` starts with a bzip2 stream header ("BZh1".."BZh9").
+    pub def is_bzip2(data: str) -> bool:
+        if data.len() < 4: return false
+        mut p = data as Pointer[char]
+        mut b0 = 0
+        mut b1 = 0
+        mut b2 = 0
+        mut b3 = 0
+        unsafe:
+            b0 = p.offset(0).read() as int & 0xFF
+            b1 = p.offset(1).read() as int & 0xFF
+            b2 = p.offset(2).read() as int & 0xFF
+            b3 = p.offset(3).read() as int & 0xFF
+        return b0 == 66 and b1 == 90 and b2 == 104 and b3 >= 49 and b3 <= 57

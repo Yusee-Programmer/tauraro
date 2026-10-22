@@ -126,6 +126,108 @@ CEOF
     rm -rf "$libdir"
 fi
 
+# --- diagnostics that must stop compilation --------------------------------
+total=$((total + 1))
+echo "==> compile-time diagnostics"
+diagdir=$(mktemp -d)
+diagfail=""
+printf 'def main():\n    mut a = 1\n    mut a = 2\n    print(a)\n' > "$diagdir/redecl.tr"
+dout=$("$TAURAROC" "$diagdir/redecl.tr" -o "$diagdir/redecl" 2>&1)
+case "$dout" in *"[N-2] 'a' is already declared in this block"*) ;; *) diagfail="$diagfail [N-2 redeclaration]";; esac
+printf 'def main():\n    mut s = "x"\n    print(s.nope("y"))\n' > "$diagdir/strm.tr"
+dout=$("$TAURAROC" "$diagdir/strm.tr" -o "$diagdir/strm" 2>&1)
+case "$dout" in *"No method 'nope' found on type 'str'"*) ;; *) diagfail="$diagfail [unknown str method]";; esac
+printf 'def main():\n    mut a = 1\n    if a > 0:\n        mut a = 2\n        print(a)\n    print(a)\n' > "$diagdir/shadow.tr"
+dout=$("$TAURAROC" "$diagdir/shadow.tr" -o "$diagdir/shadow" 2>&1)
+case "$dout" in *"[N-2]"*) diagfail="$diagfail [inner-block shadowing rejected]";; esac
+if [ -n "$diagfail" ]; then
+    echo "  FAILED:$diagfail"
+    failed=$((failed + 1))
+    failed_files+=("diagnostics")
+fi
+rm -rf "$diagdir"
+
+# --- `tauraroc doc` -------------------------------------------------------
+total=$((total + 1))
+echo "==> doc generator"
+docdir=$(mktemp -d)
+cat > "$docdir/shapes.tr" <<'TREOF'
+# shapes -- geometry helpers
+#
+# Small module used to test the doc generator.
+
+pub const SIDES = 4   # sides of a square
+
+# A point in the plane.
+pub class Point:
+    pub x: float   # horizontal
+    pub y: float
+    _hidden: int
+
+extend Point:
+    # Distance from the origin.
+    pub def norm(self) -> float:
+        return self.x * self.x + self.y * self.y
+    pub def origin() -> Point: return Point()
+
+# Area of a w x h rectangle.
+pub def area(w: float,
+             h: float) -> float:
+    return w * h
+
+def private_helper() -> int: return 1
+TREOF
+dout=$("$TAURAROC" doc "$docdir/shapes.tr" 2>&1)
+"$TAURAROC" doc "$docdir/shapes.tr" -o "$docdir/html" --html >/dev/null 2>&1
+dfail=""
+for want in "shapes -- geometry helpers" "SIDES = 4" "sides of a square" "def area(w: float, h: float) -> float" \
+            "Area of a w x h rectangle." "class \`Point\`" "A point in the plane." "x: float" "horizontal" \
+            "def norm(self) -> float" "Distance from the origin." "def origin() -> Point"; do
+    case "$dout" in *"$want"*) ;; *) dfail="$dfail [$want]";; esac
+done
+case "$dout" in *private_helper*|*_hidden*) dfail="$dfail [private item listed]";; esac
+[ -f "$docdir/html/index.html" ] || dfail="$dfail [no index.html]"
+ls "$docdir/html/" 2>/dev/null | grep -q "shapes.html" || dfail="$dfail [no module page]"
+if [ -n "$dfail" ]; then
+    echo "  FAILED (missing:$dfail)"
+    failed=$((failed + 1))
+    failed_files+=("doc_generator")
+fi
+rm -rf "$docdir"
+
+# --- `tauraroc cov` (Linux + gcov) -----------------------------------------
+if [[ "$(uname -s)" == "Linux" ]] && command -v gcov >/dev/null 2>&1; then
+    total=$((total + 1))
+    echo "==> coverage"
+    covdir=$(mktemp -d)
+    cat > "$covdir/prog.tr" <<'TREOF'
+def classify(n: int) -> str:
+    if n < 0:
+        return "negative"
+    return "non-negative"
+
+def never_called() -> int:
+    return 42
+
+def main():
+    print(classify(5))
+TREOF
+    cout=$("$TAURAROC" cov "$covdir/prog.tr" --lcov "$covdir/out.info" 2>&1)
+    cfail=""
+    case "$cout" in *"non-negative"*) ;; *) cfail="$cfail [program output]";; esac
+    case "$cout" in *"prog.tr"*"3, 7"*) ;; *) cfail="$cfail [missing lines 3, 7]";; esac
+    grep -q "^DA:2,1$" "$covdir/out.info" 2>/dev/null || cfail="$cfail [DA:2,1]"
+    grep -q "^DA:3,0$" "$covdir/out.info" 2>/dev/null || cfail="$cfail [DA:3,0]"
+    grep -q "^DA:7,0$" "$covdir/out.info" 2>/dev/null || cfail="$cfail [DA:7,0]"
+    if [ -n "$cfail" ]; then
+        echo "  FAILED:$cfail"
+        echo "$cout" | tail -5
+        failed=$((failed + 1))
+        failed_files+=("coverage")
+    fi
+    rm -rf "$covdir"
+fi
+
 echo ""
 echo "==================================="
 echo "Test files: $total, failed: $failed"

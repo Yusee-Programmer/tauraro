@@ -1,0 +1,525 @@
+# std.otel.trace -- TracerProvider / Tracer / Span.
+#
+#   mut tp = TracerProvider.init(Resource.default_for("checkout"), Sampler.always_on())
+#   tp.add_batch_processor(Exporter.otlp_from_env(SIGNAL_TRACES), BatchConfig.defaults())
+#   mut tracer = tp.get_tracer("checkout.http", "1.0.0")
+#
+#   with tracer.start_as_current("GET /cart", SPAN_KIND_SERVER) as s:
+#       s.span.set_str("http.request.method", "GET")
+#       mut child = tracer.start_span("db.query")      # parent = current span
+#       child.add_event("rows", Attributes.new().int("count", 3))
+#       child.end()
+#   tp.shutdown()
+#
+# A span's parent is, in order: an explicit parent context
+# (start_span_with), else this thread's current context (std.otel.context),
+# else none (a root span with a new trace id). Ending a span encodes it as an
+# OTLP/JSON Span and hands it to every processor of its provider; a span that
+# the sampler did not sample is recorded (RECORD_ONLY) or dropped but never
+# exported. Calls on an ended span are ignored.
+
+from std.core.vec import Vec
+from std.core.map import Map
+from std.core.string import StringBuilder
+from std.otel.native import now_unix_nano, json_str, json_i64
+from std.otel.attr import Attributes
+from std.otel.context import SpanContext, Context, IdGenerator, TraceState, TRACE_FLAG_SAMPLED
+from std.otel.sampler import Sampler, SAMPLE_DROP, SAMPLE_RECORD_ONLY, SAMPLE_RECORD_AND_SAMPLE
+from std.otel.resource import Resource, otel_env_int
+from std.otel.exporter import Exporter, Pipeline, BatchConfig, SIGNAL_TRACES
+
+pub const SPAN_KIND_UNSPECIFIED = 0
+pub const SPAN_KIND_INTERNAL    = 1
+pub const SPAN_KIND_SERVER      = 2
+pub const SPAN_KIND_CLIENT      = 3
+pub const SPAN_KIND_PRODUCER    = 4
+pub const SPAN_KIND_CONSUMER    = 5
+
+pub const STATUS_UNSET = 0
+pub const STATUS_OK    = 1
+pub const STATUS_ERROR = 2
+
+# OTLP Span.flags bits: low byte = W3C trace flags, plus the "is the parent
+# remote" information (SPAN_FLAGS_CONTEXT_HAS_IS_REMOTE_MASK / _IS_REMOTE_MASK).
+pub const SPAN_FLAGS_HAS_IS_REMOTE = 256
+pub const SPAN_FLAGS_IS_REMOTE     = 512
+
+pub class SpanLimits:
+    pub attribute_count:    int
+    pub attribute_value_length: int
+    pub event_count:        int
+    pub link_count:         int
+    pub event_attribute_count: int
+    pub link_attribute_count:  int
+
+extend SpanLimits:
+    # Spec defaults: 128 attributes / events / links, unlimited value length.
+    pub def defaults() -> SpanLimits:
+        mut l = SpanLimits()
+        l.attribute_count = 128
+        l.attribute_value_length = -1
+        l.event_count = 128
+        l.link_count = 128
+        l.event_attribute_count = 128
+        l.link_attribute_count = 128
+        return l
+
+    # Defaults overridden by OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT,
+    # OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT (and OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT),
+    # OTEL_SPAN_EVENT_COUNT_LIMIT, OTEL_SPAN_LINK_COUNT_LIMIT,
+    # OTEL_EVENT_ATTRIBUTE_COUNT_LIMIT, OTEL_LINK_ATTRIBUTE_COUNT_LIMIT.
+    pub def from_env() -> SpanLimits:
+        mut l = SpanLimits.defaults()
+        mut gac = otel_env_int("OTEL_ATTRIBUTE_COUNT_LIMIT", 128)
+        l.attribute_count = otel_env_int("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", gac)
+        mut gvl = otel_env_int("OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT", -1)
+        l.attribute_value_length = otel_env_int("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", gvl)
+        l.event_count = otel_env_int("OTEL_SPAN_EVENT_COUNT_LIMIT", 128)
+        l.link_count = otel_env_int("OTEL_SPAN_LINK_COUNT_LIMIT", 128)
+        l.event_attribute_count = otel_env_int("OTEL_EVENT_ATTRIBUTE_COUNT_LIMIT", gac)
+        l.link_attribute_count = otel_env_int("OTEL_LINK_ATTRIBUTE_COUNT_LIMIT", gac)
+        return l
+
+pub class SpanEvent:
+    pub name:    str
+    pub time_ns: int
+    pub attrs:   Attributes
+
+pub class SpanLink:
+    pub ctx:   SpanContext
+    pub attrs: Attributes
+
+# Everything spans of one provider share: processors, limits.
+pub class TraceShared:
+    pub pipes:    Vec[Pipeline]
+    pub limits:   SpanLimits
+    pub ended:    int          # spans ended (recorded)
+    pub shutdown: bool
+
+pub class Span:
+    pub name:        str
+    pub kind:        int
+    pub ctx:         SpanContext
+    pub parent:      SpanContext          # invalid for a root span
+    pub start_ns:    int
+    pub end_ns:      int
+    pub attrs:       Attributes
+    pub events:      Vec[SpanEvent]
+    pub links:       Vec[SpanLink]
+    pub dropped_events: int
+    pub dropped_links:  int
+    pub status_code: int
+    pub status_msg:  str
+    pub recording:   bool
+    pub ended:       bool
+    pub scope_json:  str
+    pub _shared:     TraceShared
+
+extend Span:
+    # A span that records nothing (sampled out, or after shutdown).
+    pub def non_recording(ctx: SpanContext) -> Span:
+        mut s = Span()
+        s.name = ""
+        s.kind = SPAN_KIND_INTERNAL
+        s.ctx = ctx
+        s.parent = SpanContext.invalid()
+        s.start_ns = 0
+        s.end_ns = 0
+        s.attrs = Attributes.new()
+        s.events = Vec[SpanEvent].init(0)
+        s.links = Vec[SpanLink].init(0)
+        s.dropped_events = 0
+        s.dropped_links = 0
+        s.status_code = STATUS_UNSET
+        s.status_msg = ""
+        s.recording = false
+        s.ended = false
+        s.scope_json = ""
+        mut sh = TraceShared()
+        sh.pipes = Vec[Pipeline].init(0)
+        sh.limits = SpanLimits.defaults()
+        sh.ended = 0
+        sh.shutdown = true
+        s._shared = sh
+        return s
+
+    pub def context(self) -> SpanContext:
+        return self.ctx
+
+    pub def is_recording(self) -> bool:
+        return self.recording and not self.ended
+
+    pub def trace_id(self) -> str:
+        return self.ctx.trace_id
+
+    pub def span_id(self) -> str:
+        return self.ctx.span_id
+
+    pub def set_str(self, key: str, v: str) -> Span:
+        if self.is_recording(): self.attrs.str(key, v)
+        return self
+
+    pub def set_int(self, key: str, v: int) -> Span:
+        if self.is_recording(): self.attrs.int(key, v)
+        return self
+
+    pub def set_float(self, key: str, v: float) -> Span:
+        if self.is_recording(): self.attrs.float(key, v)
+        return self
+
+    pub def set_bool(self, key: str, v: bool) -> Span:
+        if self.is_recording(): self.attrs.bool(key, v)
+        return self
+
+    pub def set_attributes(self, a: Attributes) -> Span:
+        if self.is_recording(): self.attrs.merge(a)
+        return self
+
+    pub def update_name(self, name: str):
+        if self.is_recording(): self.name = name
+
+    pub def add_event(self, name: str, attrs: Attributes):
+        self.add_event_at(name, now_unix_nano(), attrs)
+
+    pub def add_event_at(self, name: str, time_ns: int, attrs: Attributes):
+        if not self.is_recording(): return
+        if self.events.len >= self._shared.limits.event_count:
+            self.dropped_events = self.dropped_events + 1
+            return
+        mut e = SpanEvent()
+        e.name = name
+        e.time_ns = time_ns
+        mut a = Attributes.with_limits(self._shared.limits.event_attribute_count, self._shared.limits.attribute_value_length)
+        a.merge(attrs)
+        e.attrs = a
+        self.events.push(e)
+
+    pub def add_link(self, ctx: SpanContext, attrs: Attributes):
+        if not self.is_recording() or not ctx.is_valid(): return
+        if self.links.len >= self._shared.limits.link_count:
+            self.dropped_links = self.dropped_links + 1
+            return
+        mut l = SpanLink()
+        l.ctx = ctx
+        mut a = Attributes.with_limits(self._shared.limits.link_attribute_count, self._shared.limits.attribute_value_length)
+        a.merge(attrs)
+        l.attrs = a
+        self.links.push(l)
+
+    # Record an error as an "exception" event (semantic conventions).
+    pub def record_exception(self, ex_type: str, message: str):
+        self.add_event("exception", Attributes.new().str("exception.type", ex_type).str("exception.message", message))
+
+    # Set the status. OK is final; UNSET never overrides; an ERROR keeps its
+    # description, OK/UNSET carry none.
+    pub def set_status(self, code: int, description: str):
+        if not self.is_recording(): return
+        if self.status_code == STATUS_OK: return
+        if code == STATUS_UNSET: return
+        self.status_code = code
+        if code == STATUS_ERROR: self.status_msg = description
+        else: self.status_msg = ""
+
+    pub def end(self):
+        self.end_at(now_unix_nano())
+
+    pub def end_at(self, end_ns: int):
+        if self.ended: return
+        self.ended = true
+        if not self.recording: return
+        self.end_ns = end_ns
+        if self.end_ns < self.start_ns: self.end_ns = self.start_ns
+        self._shared.ended = self._shared.ended + 1
+        if not self.ctx.is_sampled() or self._shared.shutdown: return
+        mut body = self.to_json()
+        mut item = self.scope_json + "\n" + body
+        mut i = 0
+        while i < self._shared.pipes.len:
+            mut p = self._shared.pipes.get(i)
+            p.emit(item)
+            i = i + 1
+
+    pub def duration_ns(self) -> int:
+        if not self.ended: return now_unix_nano() - self.start_ns
+        return self.end_ns - self.start_ns
+
+    # OTLP/JSON Span message.
+    pub def to_json(self) -> str:
+        mut sb = StringBuilder.init(512)
+        sb.append("{\"traceId\":\"")
+        sb.append(self.ctx.trace_id)
+        sb.append("\",\"spanId\":\"")
+        sb.append(self.ctx.span_id)
+        sb.append_char(34)
+        if self.ctx.trace_state.len() > 0:
+            sb.append(",\"traceState\":")
+            json_str(sb, self.ctx.trace_state)
+        if self.parent.is_valid():
+            sb.append(",\"parentSpanId\":\"")
+            sb.append(self.parent.span_id)
+            sb.append_char(34)
+        mut fl = (self.ctx.flags & 255) | SPAN_FLAGS_HAS_IS_REMOTE
+        if self.parent.is_valid() and self.parent.remote: fl = fl | SPAN_FLAGS_IS_REMOTE
+        sb.append(",\"flags\":")
+        sb.append_int(fl)
+        sb.append(",\"name\":")
+        json_str(sb, self.name)
+        sb.append(",\"kind\":")
+        sb.append_int(self.kind)
+        sb.append(",\"startTimeUnixNano\":")
+        json_i64(sb, self.start_ns)
+        sb.append(",\"endTimeUnixNano\":")
+        json_i64(sb, self.end_ns)
+        sb.append(",\"attributes\":")
+        self.attrs.write_json(sb)
+        if self.attrs.dropped > 0:
+            sb.append(",\"droppedAttributesCount\":")
+            sb.append_int(self.attrs.dropped)
+        sb.append(",\"events\":[")
+        mut i = 0
+        while i < self.events.len:
+            mut e = self.events.get(i)
+            if i > 0: sb.append_char(44)
+            sb.append("{\"timeUnixNano\":")
+            json_i64(sb, e.time_ns)
+            sb.append(",\"name\":")
+            json_str(sb, e.name)
+            sb.append(",\"attributes\":")
+            e.attrs.write_json(sb)
+            if e.attrs.dropped > 0:
+                sb.append(",\"droppedAttributesCount\":")
+                sb.append_int(e.attrs.dropped)
+            sb.append_char(125)
+            i = i + 1
+        sb.append_char(93)
+        if self.dropped_events > 0:
+            sb.append(",\"droppedEventsCount\":")
+            sb.append_int(self.dropped_events)
+        sb.append(",\"links\":[")
+        i = 0
+        while i < self.links.len:
+            mut l = self.links.get(i)
+            if i > 0: sb.append_char(44)
+            sb.append("{\"traceId\":\"")
+            sb.append(l.ctx.trace_id)
+            sb.append("\",\"spanId\":\"")
+            sb.append(l.ctx.span_id)
+            sb.append_char(34)
+            if l.ctx.trace_state.len() > 0:
+                sb.append(",\"traceState\":")
+                json_str(sb, l.ctx.trace_state)
+            sb.append(",\"attributes\":")
+            l.attrs.write_json(sb)
+            if l.attrs.dropped > 0:
+                sb.append(",\"droppedAttributesCount\":")
+                sb.append_int(l.attrs.dropped)
+            mut lf = (l.ctx.flags & 255) | SPAN_FLAGS_HAS_IS_REMOTE
+            if l.ctx.remote: lf = lf | SPAN_FLAGS_IS_REMOTE
+            sb.append(",\"flags\":")
+            sb.append_int(lf)
+            sb.append_char(125)
+            i = i + 1
+        sb.append_char(93)
+        if self.dropped_links > 0:
+            sb.append(",\"droppedLinksCount\":")
+            sb.append_int(self.dropped_links)
+        sb.append(",\"status\":{")
+        if self.status_code != STATUS_UNSET:
+            if self.status_msg.len() > 0:
+                sb.append("\"message\":")
+                json_str(sb, self.status_msg)
+                sb.append_char(44)
+            sb.append("\"code\":")
+            sb.append_int(self.status_code)
+        sb.append("}}")
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Context with this span as the active span (baggage from the current
+    # context is kept).
+    pub def as_context(self) -> Context:
+        return Context.current().set_span(self.ctx)
+
+    # `with span.activate() as sc:` -- make this span current for a block.
+    pub def activate(self) -> SpanScope:
+        return SpanScope.init(self, false)
+
+# Scope guard for a span made current; optionally ends the span on exit.
+pub class SpanScope:
+    pub span:     Span
+    pub token:    int
+    pub end_on_exit: bool
+
+extend SpanScope:
+    pub def init(span: Span, end_on_exit: bool) -> SpanScope:
+        mut s = SpanScope()
+        s.span = span
+        s.token = 0
+        s.end_on_exit = end_on_exit
+        return s
+
+    pub def __enter__(self) -> SpanScope:
+        self.token = self.span.as_context().attach()
+        return self
+
+    pub def __exit__(self, et: str, ev: str, tb: str) -> bool:
+        self.close()
+        return false
+
+    # Detach (and end, when owned). Idempotent.
+    pub def close(self):
+        if self.token > 0:
+            Context.detach(self.token)
+            self.token = 0
+        if self.end_on_exit: self.span.end()
+
+pub class Tracer:
+    pub name:       str
+    pub version:    str
+    pub scope_json: str
+    pub sampler:    Sampler
+    pub _shared:    TraceShared
+
+extend Tracer:
+    # Start a span whose parent is this thread's current span (if any).
+    pub def start_span(self, name: str) -> Span:
+        return self.start_span_with(name, SPAN_KIND_INTERNAL, Context.current(), Attributes.new(), 0)
+
+    pub def start_span_kind(self, name: str, kind: int) -> Span:
+        return self.start_span_with(name, kind, Context.current(), Attributes.new(), 0)
+
+    # A root span (ignores the current context).
+    pub def start_root_span(self, name: str, kind: int) -> Span:
+        return self.start_span_with(name, kind, Context.empty(), Attributes.new(), 0)
+
+    # Full control: explicit parent context, initial attributes (seen by the
+    # sampler's caller and recorded), start time (0 = now).
+    pub def start_span_with(self, name: str, kind: int, parent_ctx: Context, attrs: Attributes, start_ns: int) -> Span:
+        mut parent = parent_ctx.span
+        mut trace_id = ""
+        if parent.is_valid(): trace_id = parent.trace_id
+        else: trace_id = IdGenerator.trace_id()
+        mut span_id = IdGenerator.span_id()
+        mut decision = SAMPLE_DROP
+        if not self._shared.shutdown: decision = self.sampler.should_sample(parent, trace_id)
+        mut flags = 0
+        if parent.is_valid(): flags = parent.flags & 254
+        if decision == SAMPLE_RECORD_AND_SAMPLE: flags = flags | TRACE_FLAG_SAMPLED
+        mut ts = ""
+        if parent.is_valid(): ts = parent.trace_state
+        mut ctx = SpanContext.init(trace_id, span_id, flags, ts, false)
+        if decision == SAMPLE_DROP:
+            mut nr = Span.non_recording(ctx)
+            nr.parent = parent
+            return nr
+        mut s = Span()
+        s.name = name
+        s.kind = kind
+        s.ctx = ctx
+        s.parent = parent
+        if start_ns > 0: s.start_ns = start_ns
+        else: s.start_ns = now_unix_nano()
+        s.end_ns = 0
+        s.attrs = Attributes.with_limits(self._shared.limits.attribute_count, self._shared.limits.attribute_value_length)
+        s.attrs.merge(attrs)
+        s.events = Vec[SpanEvent].init(2)
+        s.links = Vec[SpanLink].init(0)
+        s.dropped_events = 0
+        s.dropped_links = 0
+        s.status_code = STATUS_UNSET
+        s.status_msg = ""
+        s.recording = true
+        s.ended = false
+        s.scope_json = self.scope_json
+        s._shared = self._shared
+        return s
+
+    # `with tracer.start_as_current("op", SPAN_KIND_INTERNAL) as sc:` --
+    # starts a child of the current span, makes it current, ends it on exit.
+    pub def start_as_current(self, name: str, kind: int) -> SpanScope:
+        mut s = self.start_span_kind(name, kind)
+        return SpanScope.init(s, true)
+
+pub class TracerProvider:
+    pub resource: Resource
+    pub sampler:  Sampler
+    pub _shared:  TraceShared
+    pub tracers:  Vec[Tracer]
+
+extend TracerProvider:
+    pub def init(resource: Resource, sampler: Sampler) -> TracerProvider:
+        mut tp = TracerProvider()
+        tp.resource = resource
+        tp.sampler = sampler
+        mut sh = TraceShared()
+        sh.pipes = Vec[Pipeline].init(2)
+        sh.limits = SpanLimits.from_env()
+        sh.ended = 0
+        sh.shutdown = false
+        tp._shared = sh
+        tp.tracers = Vec[Tracer].init(2)
+        return tp
+
+    pub def set_limits(self, limits: SpanLimits):
+        self._shared.limits = limits
+
+    # Export each ended span immediately on the calling thread.
+    pub def add_simple_processor(self, exporter: Exporter) -> Pipeline:
+        mut p = Pipeline.simple(SIGNAL_TRACES, self.resource.to_json(), exporter)
+        self._shared.pipes.push(p)
+        return p
+
+    # Queue ended spans for a background export thread.
+    pub def add_batch_processor(self, exporter: Exporter, cfg: BatchConfig) -> Pipeline:
+        mut p = Pipeline.batch(SIGNAL_TRACES, self.resource.to_json(), exporter, cfg)
+        self._shared.pipes.push(p)
+        return p
+
+    # Tracer for an instrumentation scope (cached per name+version).
+    pub def get_tracer(self, name: str, version: str) -> Tracer:
+        mut i = 0
+        while i < self.tracers.len:
+            mut t = self.tracers.get(i)
+            if t.name == name and t.version == version: return t
+            i = i + 1
+        mut t2 = Tracer()
+        t2.name = name
+        t2.version = version
+        mut sb = StringBuilder.init(64)
+        sb.append("{\"name\":")
+        json_str(sb, name)
+        if version.len() > 0:
+            sb.append(",\"version\":")
+            json_str(sb, version)
+        sb.append_char(125)
+        t2.scope_json = sb.to_owned()
+        sb.free()
+        t2.sampler = self.sampler
+        t2._shared = self._shared
+        self.tracers.push(t2)
+        return t2
+
+    pub def spans_ended(self) -> int:
+        return self._shared.ended
+
+    pub def force_flush(self, timeout_ms: int) -> bool:
+        mut ok = true
+        mut i = 0
+        while i < self._shared.pipes.len:
+            mut p = self._shared.pipes.get(i)
+            if not p.force_flush(timeout_ms): ok = false
+            i = i + 1
+        return ok
+
+    # Flush and stop every processor; later spans are non-recording.
+    pub def shutdown(self) -> bool:
+        if self._shared.shutdown: return true
+        self._shared.shutdown = true
+        mut ok = true
+        mut i = 0
+        while i < self._shared.pipes.len:
+            mut p = self._shared.pipes.get(i)
+            if not p.shutdown(30000): ok = false
+            i = i + 1
+        return ok

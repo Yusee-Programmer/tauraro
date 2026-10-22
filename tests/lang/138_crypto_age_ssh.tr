@@ -1,0 +1,665 @@
+# tests/lang/138_crypto_age_ssh.tr
+# std.crypto.scrypt (RFC 7914 vectors, PHC strings checked against Python's
+# hashlib.scrypt), std.encoding.bech32 (BIP 173/350 vectors), std.crypto.age
+# (the small non-post-quantum vectors of the C2SP/CCTV age testkit, embedded
+# below, plus round trips that were also decrypted by an independent
+# pyca/cryptography implementation) and std.crypto.ssh (keys and SSHSIG
+# signatures made by OpenSSH 10.2's ssh-keygen; signatures and keys written
+# here were checked with `ssh-keygen -Y verify` / `ssh-keygen -y`).
+# Corrupted inputs must raise, never crash.
+
+from std.test import TestRunner
+from std.crypto.native import _cn_hex, _cn_unhex
+from std.crypto.scrypt import Scrypt, ScryptParams, ScryptHash
+from std.encoding.bech32 import Bech32, Bech32Data, BECH32, BECH32M
+from std.crypto.age import Age, AgeIdentity, AgeRecipient, AgeEncryptor, AgeDecryptor, AGE_SCRYPT
+from std.crypto.ssh import SshKey, SshSig, SshAuthorizedKey
+from std.crypto.pk import PKey, CURVE_P256, KEY_EC_P256, KEY_ED25519
+from std.crypto.digest import Digest
+from std.io.file import read_file, write_file
+from std.string.str import Str
+
+def unhex(h: str) -> str:
+    mut r: Result[str, str] = _cn_unhex(h)
+    return r.ok
+
+def pattern(n: int) -> str:
+    mut acc = "The quick brown fox jumps over the lazy dog 0123456789\n"
+    while acc.len() < n:
+        acc = acc + acc
+    return acc.slice(0, n)
+
+# Replace byte i of s with (byte ^ x).
+def flip(s: str, i: int, x: int) -> str:
+    mut p = s as Pointer[char]
+    mut b = 0
+    unsafe: b = (p.offset(i).read() as int) & 255
+    mut one = unhex(_cn_hex(s.slice(i, i + 1)))
+    mut q = one as Pointer[char]
+    unsafe: q.offset(0).write(((b ^ x) & 255) as char)
+    return s.slice(0, i) + one + s.slice(i + 1, s.len())
+
+# ── scrypt ───────────────────────────────────────────────────────────────────
+def test_scrypt(t: TestRunner):
+    t.section("scrypt (RFC 7914 section 12)")
+    mut a: Result[str, str] = Scrypt.derive("", "", 16, 1, 1, 64)
+    t.assert_eq_str(_cn_hex(a.ok), "77d6576238657b203b19ca42c18a0497f16b4844e3074ae8dfdffa3fede21442fcd0069ded0948f8326a753a0fc81f17e8d3e0fb2e0d3628cf35e20c38d18906", "vector 1 (N=16, r=1, p=1)")
+    mut b: Result[str, str] = Scrypt.derive("password", "NaCl", 1024, 8, 16, 64)
+    t.assert_eq_str(_cn_hex(b.ok), "fdbabe1c9d3472007856e7190d01e9fe7c6ad7cbc8237830e77376634b3731622eaf30d92e22a3886ff109279d9830dac727afb94a83ee6d8360cbdfa2cc0640", "vector 2 (N=1024, r=8, p=16)")
+    mut c: Result[str, str] = Scrypt.derive("pleaseletmein", "SodiumChloride", 16384, 8, 1, 64)
+    t.assert_eq_str(_cn_hex(c.ok), "7023bdcb3afd7348461c06cd81fd38ebfda8fbba904f8e3ea9b543f6545da1f2d5432955613f0fcf62d49705242a9af9e61e85dc0d651e40dfcf017b45575887", "vector 3 (N=16384, r=8, p=1)")
+
+    t.section("scrypt parameter validation and memory cap")
+    mut e1: Result[str, str] = Scrypt.derive("", "", 15, 1, 1, 32)
+    t.assert_true(e1.is_err, "N not a power of two")
+    mut e2: Result[str, str] = Scrypt.derive("", "", 1, 1, 1, 32)
+    t.assert_true(e2.is_err, "N = 1")
+    mut e3: Result[str, str] = Scrypt.derive("", "", 16, 0, 1, 32)
+    t.assert_true(e3.is_err, "r = 0")
+    mut e4: Result[str, str] = Scrypt.derive("", "", 16, 1, 0, 32)
+    t.assert_true(e4.is_err, "p = 0")
+    mut e5: Result[str, str] = Scrypt.derive("", "", 16, 1, 1, 0)
+    t.assert_true(e5.is_err, "dklen = 0")
+    mut e6: Result[str, str] = Scrypt.derive("", "", 1 << 30, 8, 1, 32)
+    t.assert_true(e6.is_err and e6.err.contains("limit"), "1 TiB request refused by the default cap")
+    mut e7: Result[str, str] = Scrypt.derive_limited("", "", 1024, 8, 1, 32, 1000000)
+    t.assert_true(e7.is_err, "explicit cap below 1 MiB refuses N=1024, r=8")
+    mut e8: Result[str, str] = Scrypt.derive("", "", 1 << 20, 1, 1, 32)
+    t.assert_true(e8.is_err, "N >= 2^(16 r) is rejected")
+    t.assert_eq_int(Scrypt.memory_needed(1024, 8, 1), 128 * 8 * 1024 + 256 * 8 + 128 * 8, "memory_needed")
+
+    t.section("scrypt PHC strings")
+    t.assert_true(Scrypt.verify(scrypt_reference(), "password"), "verifies a hashlib.scrypt-made string")
+    t.assert_false(Scrypt.verify(scrypt_reference(), "Password"), "wrong password")
+    mut params = ScryptParams.init(10, 8, 1)
+    mut h: Result[str, str] = Scrypt.hash_with(params_pw(), params)
+    t.assert_true(h.ok.starts_with("$scrypt$ln=10,r=8,p=1$"), "hash format")
+    t.assert_true(Scrypt.verify(h.ok, params_pw()), "hash/verify round trip")
+    t.assert_false(Scrypt.needs_rehash(h.ok, params), "needs_rehash false for the same params")
+    t.assert_true(Scrypt.needs_rehash(h.ok, ScryptParams.default()), "needs_rehash true for new params")
+    mut d: Result[ScryptHash, str] = Scrypt.decode(h.ok)
+    t.assert_true(d.is_ok and d.ok.log_n == 10 and d.ok.salt.len() == 16 and d.ok.hash.len() == 32, "decode")
+    t.assert_false(Scrypt.verify("$scrypt$ln=10,r=8$AAAA$AAAAAAAAAAAA", "x"), "missing p")
+    t.assert_false(Scrypt.verify("$scrypt$ln=60,r=8,p=1$AAAA$AAAAAAAAAAAA", "x"), "huge ln")
+    t.assert_false(Scrypt.verify("$scrypt$ln=10,r=8,p=1$!!$AAAAAAAAAAAA", "x"), "bad base64")
+    t.assert_false(Scrypt.verify("$argon2id$v=19$m=8,t=1,p=1$AAAA$AAAA", "x"), "other algorithm")
+    t.assert_false(Scrypt.verify("", "x"), "empty string")
+
+def params_pw() -> str: return "correct horse battery staple"
+
+# ── bech32 ───────────────────────────────────────────────────────────────────
+def test_bech32(t: TestRunner):
+    t.section("Bech32 / Bech32m")
+    mut a: Result[Bech32Data, str] = Bech32.decode("A12UEL5L")
+    t.assert_true(a.is_ok and a.ok.hrp == "a" and a.ok.data.len() == 0 and a.ok.variant == BECH32, "BIP 173 A12UEL5L")
+    mut b: Result[Bech32Data, str] = Bech32.decode("abcdef1qpzry9x8gf2tvdw0s3jn54khce6mua7lmqqqxw")
+    t.assert_true(b.is_ok and b.ok.hrp == "abcdef", "BIP 173 full alphabet")
+    mut m: Result[Bech32Data, str] = Bech32.decode("a1lqfn3a")
+    t.assert_true(m.is_ok and m.ok.variant == BECH32M, "BIP 350 a1lqfn3a")
+    mut c: Result[Bech32Data, str] = Bech32.decode("A12uEL5L")
+    t.assert_true(c.is_err, "mixed case rejected")
+    mut d: Result[Bech32Data, str] = Bech32.decode("a12uel5m")
+    t.assert_true(d.is_err, "bad checksum rejected")
+    mut e: Result[Bech32Data, str] = Bech32.decode("1qzzfhee")
+    t.assert_true(e.is_err, "empty hrp rejected")
+    mut raw = unhex("00ff10")
+    mut enc: Result[str, str] = Bech32.encode("test", raw)
+    mut back: Result[Bech32Data, str] = Bech32.decode(enc.ok)
+    t.assert_eq_str(_cn_hex(back.ok.data), "00ff10", "encode/decode round trip with a NUL byte")
+
+# ── age ──────────────────────────────────────────────────────────────────────
+def age_category(err: str) -> str:
+    if err.starts_with("age: header:"): return "header failure"
+    if err.starts_with("age: no identity"): return "no match"
+    if err.starts_with("age: bad header MAC"): return "HMAC failure"
+    if err.starts_with("age: payload:"): return "payload failure"
+    if err.starts_with("age: armor:"): return "armor failure"
+    return "unexpected error: " + err
+
+# Run one CCTV vector; "" on success, else a description.
+def run_age_vector(rec: str) -> str:
+    mut f = Str.split_keep_empty(rec, "|")
+    mut name = f.get(0)
+    mut expect = f.get(1)
+    mut payload = f.get(2)
+    mut ids: List[AgeIdentity] = []
+    if f.get(3).len() > 0:
+        mut il = Str.split_keep_empty(f.get(3), ";")
+        mut i = 0
+        while i < il.len:
+            mut r: Result[AgeIdentity, str] = AgeIdentity.parse(il.get(i))
+            if r.is_err: return f"{name}: identity did not parse: {r.err}"
+            ids.append(r.ok)
+            i = i + 1
+    if f.get(4).len() > 0:
+        mut pl = Str.split_keep_empty(f.get(4), ";")
+        mut j = 0
+        while j < pl.len:
+            ids.append(AgeIdentity.passphrase(pl.get(j)))
+            j = j + 1
+    mut body = unhex(f.get(6))
+    mut got = "success"
+    mut out = ""
+    if f.get(5) == "yes":
+        mut ar: Result[str, str] = Age.dearmor(body)
+        if ar.is_err: got = age_category(ar.err)
+        else: body = ar.ok
+    if got == "success":
+        # Stream in small pieces, keeping whatever authenticated.
+        mut d = AgeDecryptor.init(ids)
+        mut ok = true
+        mut off = 0
+        while off < body.len() and ok:
+            mut e = off + 97
+            if e > body.len(): e = body.len()
+            mut r: Result[str, str] = d.update(body.slice(off, e))
+            if r.is_err:
+                got = age_category(r.err)
+                out = out + d.partial()
+                ok = false
+            else: out = out + r.ok
+            off = e
+        if ok:
+            mut fr: Result[str, str] = d.finish()
+            if fr.is_err: got = age_category(fr.err)
+            else: out = out + fr.ok
+        mut one: Result[str, str] = Age.decrypt_binary(body, ids)
+        mut got2 = "success"
+        if one.is_err: got2 = age_category(one.err)
+        if got2 != got: return f"{name}: streaming says {got}, one-shot says {got2}"
+    if got != expect: return f"{name}: expected {expect}, got {got}"
+    if payload.len() > 0 and (got == "success" or got == "payload failure"):
+        if Digest.sha256_hex(out) != payload: return f"{name}: released plaintext hash mismatch"
+    return ""
+
+def test_age_vectors(t: TestRunner):
+    t.section("age: C2SP/CCTV testkit vectors")
+    mut vs = age_vectors()
+    mut i = 0
+    mut fails = 0
+    while i < len(vs):
+        mut msg = run_age_vector(vs[i])
+        if msg.len() > 0:
+            print(msg)
+            fails = fails + 1
+        i = i + 1
+    t.assert_eq_int(fails, 0, f"all {len(vs)} embedded vectors behave as expected")
+    t.assert_gt_int(len(vs), 100, "vector set present")
+
+def one_rcpt(r: AgeRecipient) -> List[AgeRecipient]:
+    mut v: List[AgeRecipient] = []
+    v.append(r)
+    return v
+
+def one_id(i: AgeIdentity) -> List[AgeIdentity]:
+    mut v: List[AgeIdentity] = []
+    v.append(i)
+    return v
+
+def test_age_keys(t: TestRunner):
+    t.section("age: keys")
+    mut ir: Result[AgeIdentity, str] = AgeIdentity.parse("AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0")
+    t.assert_true(ir.is_ok, "parse a testkit identity")
+    mut rr: Result[AgeRecipient, str] = ir.ok.recipient()
+    t.assert_eq_str(rr.ok.to_string(), "age1xmwwc06ly3ee5rytxm9mflaz2u56jjj36s0mypdrwsvlul66mv4q47ryef", "recipient matches pyca/cryptography")
+    t.assert_eq_str(ir.ok.to_string(), "AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0", "identity round trip")
+    mut pr: Result[AgeRecipient, str] = AgeRecipient.parse("age1xmwwc06ly3ee5rytxm9mflaz2u56jjj36s0mypdrwsvlul66mv4q47ryef")
+    t.assert_true(pr.is_ok, "parse recipient")
+    mut bad1: Result[AgeRecipient, str] = AgeRecipient.parse("age1xmwwc06ly3ee5rytxm9mflaz2u56jjj36s0mypdrwsvlul66mv4q47ryeg")
+    t.assert_true(bad1.is_err, "recipient checksum")
+    mut bad2: Result[AgeRecipient, str] = AgeRecipient.parse("AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0")
+    t.assert_true(bad2.is_err, "identity is not a recipient")
+    mut bad3: Result[AgeIdentity, str] = AgeIdentity.parse("age1xmwwc06ly3ee5rytxm9mflaz2u56jjj36s0mypdrwsvlul66mv4q47ryef")
+    t.assert_true(bad3.is_err, "recipient is not an identity")
+    mut file = "# created: 2026\n# public key: age1...\n\nAGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0\n"
+    mut fl: Result[List[AgeIdentity], str] = AgeIdentity.parse_file(file)
+    t.assert_true(fl.is_ok and len(fl.ok) == 1, "identity file with comments")
+    mut g: Result[AgeIdentity, str] = AgeIdentity.generate()
+    mut gs = g.ok.to_string()
+    t.assert_true(gs.starts_with("AGE-SECRET-KEY-1") and gs.len() == 74, "generated identity format")
+    mut g2: Result[AgeIdentity, str] = AgeIdentity.parse(gs)
+    t.assert_eq_str(g2.ok.to_string(), gs, "generated identity parses back")
+
+def test_age_roundtrip(t: TestRunner):
+    t.section("age: encrypt / decrypt")
+    mut a: Result[AgeIdentity, str] = AgeIdentity.generate()
+    mut b: Result[AgeIdentity, str] = AgeIdentity.generate()
+    mut c: Result[AgeIdentity, str] = AgeIdentity.generate()
+    mut ra: Result[AgeRecipient, str] = a.ok.recipient()
+    mut rb: Result[AgeRecipient, str] = b.ok.recipient()
+    mut rs: List[AgeRecipient] = []
+    rs.append(ra.ok)
+    rs.append(rb.ok)
+    mut sizes = [0, 1, 65535, 65536, 65537, 200000]
+    mut i = 0
+    while i < len(sizes):
+        mut pt = pattern(sizes[i])
+        mut ct: Result[str, str] = Age.encrypt(pt, rs)
+        mut d1: Result[str, str] = Age.decrypt(ct.ok, one_id(b.ok))
+        t.assert_true(d1.is_ok and d1.ok == pt, f"{sizes[i]} bytes, second recipient decrypts")
+        mut d2: Result[str, str] = Age.decrypt(ct.ok, one_id(c.ok))
+        t.assert_true(d2.is_err and d2.err.starts_with("age: no identity"), f"{sizes[i]} bytes, other identity: no match")
+        i = i + 1
+    mut big = pattern(150000)
+    mut arm: Result[str, str] = Age.encrypt_armored(big, one_rcpt(ra.ok))
+    t.assert_true(arm.ok.starts_with("-----BEGIN AGE ENCRYPTED FILE-----\n") and Age.is_armored(arm.ok), "armored output")
+    mut da: Result[str, str] = Age.decrypt(arm.ok, one_id(a.ok))
+    t.assert_true(da.is_ok and da.ok == big, "armored round trip")
+    mut crlf = arm.ok.replace("\n", "\r\n")
+    mut dc: Result[str, str] = Age.decrypt("\n  " + crlf + "\n\n", one_id(a.ok))
+    t.assert_true(dc.is_ok and dc.ok == big, "armor with CRLF and surrounding whitespace")
+
+    mut pw: Result[str, str] = Age.encrypt(pattern(1000), one_rcpt(AgeRecipient.passphrase_with_work_factor("hunter2", 10)))
+    mut dp: Result[str, str] = Age.decrypt_passphrase(pw.ok, "hunter2")
+    t.assert_true(dp.is_ok and dp.ok == pattern(1000), "passphrase round trip")
+    mut dpw: Result[str, str] = Age.decrypt_passphrase(pw.ok, "hunter3")
+    t.assert_true(dpw.is_err and dpw.err.starts_with("age: no identity"), "wrong passphrase: no match")
+    mut low: Result[str, str] = Age.decrypt(pw.ok, one_id(AgeIdentity.passphrase_with_max_work_factor("hunter2", 9)))
+    t.assert_true(low.is_err and low.err.contains("work factor"), "work factor above the identity's limit")
+    mut mix: List[AgeRecipient] = []
+    mix.append(ra.ok)
+    mix.append(AgeRecipient.passphrase("x"))
+    mut em: Result[str, str] = Age.encrypt("x", mix)
+    t.assert_true(em.is_err, "passphrase recipient must be alone")
+    mut none_r: List[AgeRecipient] = []
+    mut en: Result[str, str] = Age.encrypt("x", none_r)
+    t.assert_true(en.is_err, "no recipients")
+
+    t.section("age: streaming")
+    mut data = pattern(300001)
+    mut er: Result[AgeEncryptor, str] = AgeEncryptor.init(rs)
+    mut enc = er.ok
+    mut ctb = ""
+    mut off = 0
+    mut step = 1
+    while off < data.len():
+        mut e = off + step
+        if e > data.len(): e = data.len()
+        mut u: Result[str, str] = enc.update(data.slice(off, e))
+        ctb = ctb + u.ok
+        off = e
+        step = step * 3 + 7
+    mut fin: Result[str, str] = enc.finish()
+    ctb = ctb + fin.ok
+    mut dd: Result[str, str] = Age.decrypt(ctb, one_id(a.ok))
+    t.assert_true(dd.is_ok and dd.ok == data, "AgeEncryptor output decrypts in one shot")
+    mut dec = AgeDecryptor.init(one_id(b.ok))
+    mut ptb = ""
+    off = 0
+    while off < ctb.len():
+        mut e = off + 70001
+        if e > ctb.len(): e = ctb.len()
+        mut u: Result[str, str] = dec.update(ctb.slice(off, e))
+        ptb = ptb + u.ok
+        off = e
+    mut df: Result[str, str] = dec.finish()
+    t.assert_true(df.is_ok and ptb + df.ok == data, "AgeDecryptor round trip")
+    mut trunc = AgeDecryptor.init(one_id(a.ok))
+    mut tu: Result[str, str] = trunc.update(ctb.slice(0, ctb.len() - 1000))
+    mut tf: Result[str, str] = trunc.finish()
+    t.assert_true(tu.is_ok and tf.is_err, "truncated stream fails at finish")
+
+    t.section("age: files")
+    mut dir = "build/tauraro_138_age"
+    mut src = dir + "_in.bin"
+    mut mid = dir + "_mid.age"
+    mut dst = dir + "_out.bin"
+    write_file(src, data)
+    mut ef: Result[bool, str] = age_file_enc(src, mid, rs)
+    t.assert_true(ef.is_ok, "encrypt_file")
+    mut df2: Result[bool, str] = age_file_dec(mid, dst, one_id(a.ok))
+    t.assert_true(df2.is_ok and read_file(dst) == data, "decrypt_file round trip")
+    mut df3: Result[bool, str] = age_file_dec(mid, dst, one_id(c.ok))
+    t.assert_true(df3.is_err, "decrypt_file with the wrong identity")
+
+def age_file_enc(a: str, b: str, rs: List[AgeRecipient]) throws str -> bool:
+    Age.encrypt_file(a, b, rs)?
+    return true
+
+def age_file_dec(a: str, b: str, ids: List[AgeIdentity]) throws str -> bool:
+    Age.decrypt_file(a, b, ids)?
+    return true
+
+def test_age_corrupt(t: TestRunner):
+    t.section("age: corrupted input never crashes")
+    mut id: Result[AgeIdentity, str] = AgeIdentity.generate()
+    mut r: Result[AgeRecipient, str] = id.ok.recipient()
+    mut pt = pattern(70000)
+    mut ct: Result[str, str] = Age.encrypt(pt, one_rcpt(r.ok))
+    mut good = ct.ok
+    mut ids = one_id(id.ok)
+    mut accepted = 0
+    mut i = 0
+    while i < good.len():
+        mut bad = flip(good, i, 1 + (i % 255))
+        mut d: Result[str, str] = Age.decrypt(bad, ids)
+        if d.is_ok: accepted = accepted + 1
+        if i < 300: i = i + 1
+        else: i = i + 997
+    t.assert_eq_int(accepted, 0, "every single-byte change is rejected")
+    mut cut = 0
+    mut cut_ok = 0
+    while cut < good.len():
+        mut d: Result[str, str] = Age.decrypt(good.slice(0, cut), ids)
+        if d.is_ok: cut_ok = cut_ok + 1
+        if cut < 300: cut = cut + 1
+        else: cut = cut + 4099
+    t.assert_eq_int(cut_ok, 0, "every truncation is rejected")
+    mut tail: Result[str, str] = Age.decrypt(good + "x", ids)
+    t.assert_true(tail.is_err, "trailing byte rejected")
+    mut arm = Age.armor(good)
+    mut aok = 0
+    mut j = 0
+    while j < arm.len():
+        mut d: Result[str, str] = Age.decrypt(flip(arm, j, 32), ids)
+        if d.is_ok: aok = aok + 1
+        if j < 200: j = j + 1
+        else: j = j + 1499
+    t.assert_eq_int(aok, 0, "corrupted armor rejected")
+    mut junk = ["", "age-encryption.org/v1", "age-encryption.org/v1\n", "age-encryption.org/v1\n---", "age-encryption.org/v1\n-> X25519\n--- AAAA\n", "-----BEGIN AGE ENCRYPTED FILE-----", "-----BEGIN AGE ENCRYPTED FILE-----\n-----END AGE ENCRYPTED FILE-----\n", "\0\0\0\0", "age-encryption.org/v1\n-> " + pattern(5000) + "\n"]
+    mut k = 0
+    mut jok = 0
+    while k < len(junk):
+        mut d: Result[str, str] = Age.decrypt(junk[k], ids)
+        if d.is_ok: jok = jok + 1
+        k = k + 1
+    t.assert_eq_int(jok, 0, "junk inputs rejected")
+
+# ── SSH ──────────────────────────────────────────────────────────────────────
+def test_ssh_keys(t: TestRunner):
+    t.section("ssh: ssh-keygen keys, fingerprints, signatures")
+    mut msg = "hello world\n"
+    mut fps = ssh_fingerprints()
+    mut i = 0
+    while i < len(fps):
+        mut f = Str.split_keep_empty(fps[i], "|")
+        mut n = f.get(0)
+        i = i + 1
+        mut pr: Result[SshKey, str] = SshKey.parse_public(ssh_file(n + ".pub"))
+        t.assert_true(pr.is_ok, f"{n}: public key parses")
+        if pr.is_err: continue
+        mut pk = pr.ok
+        t.assert_eq_str(pk.fingerprint_sha256(), f.get(2), f"{n}: SHA256 fingerprint")
+        t.assert_eq_str(pk.fingerprint_md5(), f.get(3), f"{n}: MD5 fingerprint")
+        t.assert_eq_str(f"{pk.bits()}", f.get(1), f"{n}: bits")
+        t.assert_eq_str(pk.public_line(), ssh_file(n + ".pub").trim(), f"{n}: public line round trip")
+        mut pw = ""
+        if n == "ed_enc" or n == "rsa_enc": pw = "hunter2"
+        if n == "p256_enc": pw = "pw"
+        mut kr: Result[SshKey, str] = SshKey.parse_private(ssh_file(n), pw)
+        t.assert_true(kr.is_ok and kr.ok.has_private and kr.ok.fingerprint_sha256() == f.get(2), f"{n}: private key parses and matches")
+        if kr.is_err:
+            print(kr.err)
+            continue
+        mut k = kr.ok
+        if pw.len() > 0:
+            mut wrong: Result[SshKey, str] = SshKey.parse_private(ssh_file(n), "wrong")
+            t.assert_true(wrong.is_err, f"{n}: wrong passphrase")
+            mut nopw: Result[SshKey, str] = SshKey.parse_private(ssh_file(n), "")
+            t.assert_true(nopw.is_err, f"{n}: missing passphrase")
+        if ssh_file(n + ".sig").len() > 0:
+            mut vr: Result[SshKey, str] = SshSig.verify(ssh_file(n + ".sig"), msg, "file")
+            t.assert_true(vr.is_ok and vr.ok.fingerprint_sha256() == f.get(2), f"{n}: ssh-keygen -Y sign signature verifies")
+            t.assert_false(SshSig.verify_with(ssh_file(n + ".sig"), msg, "email", pk), f"{n}: wrong namespace")
+            t.assert_false(SshSig.verify_with(ssh_file(n + ".sig"), "hello world", "file", pk), f"{n}: wrong message")
+        mut sr: Result[str, str] = SshSig.sign(k, msg, "file")
+        t.assert_true(sr.is_ok and SshSig.verify_with(sr.ok, msg, "file", pk), f"{n}: sign / verify")
+        mut raw: Result[str, str] = k.sign_ssh("abc")
+        t.assert_true(raw.is_ok and pk.verify_ssh("abc", raw.ok, false) and not pk.verify_ssh("abd", raw.ok, false), f"{n}: raw SSH signature")
+        mut p1: Result[str, str] = k.private_pem("", 16)
+        mut b1: Result[SshKey, str] = SshKey.parse_private(p1.ok, "")
+        t.assert_true(p1.ok.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----\n") and b1.is_ok and b1.ok.comment == k.comment, f"{n}: unencrypted write / read")
+        mut p2: Result[str, str] = k.private_pem("s3cret", 2)
+        mut b2: Result[SshKey, str] = SshKey.parse_private(p2.ok, "s3cret")
+        t.assert_true(b2.is_ok and b2.ok.fingerprint_sha256() == f.get(2), f"{n}: encrypted write / read")
+        mut b3: Result[SshKey, str] = SshKey.parse_private(p2.ok, "s3creT")
+        t.assert_true(b3.is_err, f"{n}: encrypted key with the wrong passphrase")
+
+def test_ssh_pkey(t: TestRunner):
+    t.section("ssh: PKey conversion and generation")
+    mut pr: Result[SshKey, str] = SshKey.parse_private(ssh_file("p256"), "")
+    mut kp: Result[PKey, str] = pr.ok.to_pkey()
+    t.assert_true(kp.is_ok and kp.ok.kind() == KEY_EC_P256 and kp.ok.has_private(), "ECDSA private -> PKey")
+    mut back: Result[SshKey, str] = SshKey.from_pkey(kp.ok, "x")
+    t.assert_true(back.is_ok and back.ok.has_private and back.ok.fingerprint_sha256() == pr.ok.fingerprint_sha256(), "PKey -> SshKey keeps the private key")
+    kp.ok.dispose()
+    mut rp: Result[SshKey, str] = SshKey.parse_private(ssh_file("rsa"), "")
+    mut rk: Result[PKey, str] = rp.ok.to_pkey()
+    t.assert_true(rk.is_ok and rk.ok.has_private() and rk.ok.bits() == 2048, "RSA private -> PKey (CRT exponents rebuilt)")
+    mut rpub: Result[SshKey, str] = SshKey.from_pkey(rk.ok, "rsa@test")
+    t.assert_eq_str(rpub.ok.public_line(), ssh_file("rsa.pub").trim(), "RSA PKey -> public line")
+    rk.ok.dispose()
+    mut ep: Result[SshKey, str] = SshKey.parse_public(ssh_file("ed.pub"))
+    mut ek: Result[PKey, str] = ep.ok.to_pkey()
+    t.assert_true(ek.is_ok and ek.ok.kind() == KEY_ED25519, "Ed25519 public -> PKey")
+    mut eb: Result[SshKey, str] = SshKey.from_pkey(ek.ok, "ed@test")
+    t.assert_eq_str(eb.ok.public_line(), ssh_file("ed.pub").trim(), "Ed25519 PKey -> public line")
+    ek.ok.dispose()
+    mut g: Result[SshKey, str] = SshKey.generate_ed25519("me@host")
+    mut gs: Result[str, str] = SshSig.sign(g.ok, "data", "git")
+    t.assert_true(SshSig.verify_with(gs.ok, "data", "git", g.ok.public_key()), "generated Ed25519 key signs")
+    mut ge: Result[SshKey, str] = SshKey.generate_ecdsa(CURVE_P256, "ec@host")
+    t.assert_true(ge.ok.key_type == "ecdsa-sha2-nistp256" and ge.ok.has_private, "generated ECDSA key")
+    mut ges: Result[str, str] = SshSig.sign(ge.ok, "data", "git")
+    t.assert_true(SshSig.verify_with(ges.ok, "data", "git", ge.ok), "generated ECDSA key signs")
+    t.assert_false(SshSig.verify_with(ges.ok, "data", "git", g.ok), "signature by a different key")
+
+def test_ssh_authorized(t: TestRunner):
+    t.section("ssh: authorized_keys")
+    mut ed = ssh_file("ed.pub").trim()
+    mut line = "command=\"echo \\\"hi\\\", there\",no-pty,from=\"10.0.0.0/8,192.168.1.*\" " + ed
+    mut ar: Result[SshAuthorizedKey, str] = SshAuthorizedKey.parse(line)
+    t.assert_true(ar.is_ok, "line with quoted options")
+    mut a = ar.ok
+    t.assert_eq_int(len(a.options), 3, "three options")
+    t.assert_eq_str(a.option("command"), "echo \"hi\", there", "command value unquoted")
+    t.assert_eq_str(a.option("from"), "10.0.0.0/8,192.168.1.*", "from value")
+    t.assert_true(a.has_option("no-pty") and not a.has_option("no-agent-forwarding"), "has_option")
+    t.assert_eq_str(a.key.comment, "ed@test", "comment")
+    mut plain: Result[SshAuthorizedKey, str] = SshAuthorizedKey.parse(ssh_file("rsa.pub"))
+    t.assert_true(plain.is_ok and len(plain.ok.options) == 0, "line without options")
+    mut file = "# keys\n\n" + ed + "\nbogus line here\nno-pty " + ssh_file("p256.pub") + "command=\"unterminated " + ed + "\n"
+    mut all = SshAuthorizedKey.parse_file(file)
+    t.assert_eq_int(len(all), 2, "parse_file keeps valid lines, skips bad ones")
+    mut bad: Result[SshAuthorizedKey, str] = SshAuthorizedKey.parse("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJO6mSBewktbL+Fs3S6AbDxQDhHG4Mvd1TW6+7/naA== x")
+    t.assert_true(bad.is_err, "truncated key blob")
+    mut mism: Result[SshKey, str] = SshKey.parse_public("ssh-rsa " + Str.split(ed, " ").get(1))
+    t.assert_true(mism.is_err, "type does not match blob")
+
+def test_ssh_corrupt(t: TestRunner):
+    t.section("ssh: corrupted input never crashes")
+    mut names = ["ed", "p256", "rsa", "ed_enc"]
+    mut accepted = 0
+    mut i = 0
+    while i < len(names):
+        mut pem = ssh_file(names[i])
+        mut pw = ""
+        if names[i] == "ed_enc": pw = "hunter2"
+        mut j = 36
+        while j < pem.len() - 36:
+            mut bad = flip(pem, j, 1)
+            mut r: Result[SshKey, str] = SshKey.parse_private(bad, pw)
+            if r.is_ok and r.ok.fingerprint_sha256() != SshKey.parse_private(pem, pw).ok.fingerprint_sha256(): accepted = accepted + 1
+            j = j + 7
+        i = i + 1
+    t.assert_eq_int(accepted, 0, "no corrupted private key yields a different key (comment bytes may change)")
+    mut sig = ssh_file("p256.sig")
+    mut pk: Result[SshKey, str] = SshKey.parse_public(ssh_file("p256.pub"))
+    mut sok = 0
+    mut k = 30
+    while k < sig.len() - 30:
+        if SshSig.verify_with(flip(sig, k, 2), "hello world\n", "file", pk.ok): sok = sok + 1
+        k = k + 3
+    t.assert_eq_int(sok, 0, "corrupted signatures rejected")
+    mut junk = ["", "ssh-ed25519", "ssh-ed25519 AAAA", "ssh-ed25519 !!!!", "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n"]
+    mut q = 0
+    mut jok = 0
+    while q < len(junk):
+        mut a: Result[SshKey, str] = SshKey.parse_public(junk[q])
+        mut b: Result[SshKey, str] = SshKey.parse_private(junk[q], "")
+        mut c: Result[SshKey, str] = SshSig.verify(junk[q], "x", "file")
+        if a.is_ok or b.is_ok or c.is_ok: jok = jok + 1
+        q = q + 1
+    t.assert_eq_int(jok, 0, "junk rejected")
+
+def main():
+    mut t = TestRunner.init("138_crypto_age_ssh")
+    test_scrypt(t)
+    test_bech32(t)
+    test_age_keys(t)
+    test_age_vectors(t)
+    test_age_roundtrip(t)
+    test_age_corrupt(t)
+    test_ssh_keys(t)
+    test_ssh_pkey(t)
+    test_ssh_authorized(t)
+    test_ssh_corrupt(t)
+    t.summary()
+
+# ── embedded data ────────────────────────────────────────────────────────────
+def ssh_file(name: str) -> str:
+    if name == "ed": return "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACCTupkgXsJLWy/hbN0ugGw8UA4RxuDL3dU1uvu/52gLSgAAAJD37iDT9+4g\n0wAAAAtzc2gtZWQyNTUxOQAAACCTupkgXsJLWy/hbN0ugGw8UA4RxuDL3dU1uvu/52gLSg\nAAAECp5/WTdiFk/YbbvcK3TNsBL/ELuZhfALzk2FC/66y0LJO6mSBewktbL+Fs3S6AbDxQ\nDhHG4Mvd1TW6+7/naAtKAAAAB2VkQHRlc3QBAgMEBQY=\n-----END OPENSSH PRIVATE KEY-----\n"
+    if name == "ed.pub": return "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJO6mSBewktbL+Fs3S6AbDxQDhHG4Mvd1TW6+7/naAtK ed@test\n"
+    if name == "ed.sig": return "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgk7qZIF7CS1sv4WzdLoBsPFAOEc\nbgy93VNbr7v+doC0oAAAAEZmlsZQAAAAAAAAAGc2hhNTEyAAAAUwAAAAtzc2gtZWQyNTUx\nOQAAAEDD/nE+hX+48B0SepIjc/aFnETGhjcwz0II7Q9D+Gj1jPH8BtavnAR3sKgpE02sgU\netfY9yiyzQUzin+VOJPB8I\n-----END SSH SIGNATURE-----\n"
+    if name == "p256": return "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAaAAAABNlY2RzYS\n1zaGEyLW5pc3RwMjU2AAAACG5pc3RwMjU2AAAAQQQSXTQbWuc53zVp4q1lWiZsEcwUlUsp\nur5XQ4s2MY8J2k9oVBBJ01VWTlhPgKr1it2GDTFpsVCSZA6XbgX9Jd+QAAAAqNYV2MPWFd\njDAAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBBJdNBta5znfNWni\nrWVaJmwRzBSVSym6vldDizYxjwnaT2hUEEnTVVZOWE+AqvWK3YYNMWmxUJJkDpduBf0l35\nAAAAAhAM4IL1aCkJIjfbEIpwCoilF7nO9Arof4Ce+BoWfCjeoPAAAACXAyNTZAdGVzdAEC\nAwQFBg==\n-----END OPENSSH PRIVATE KEY-----\n"
+    if name == "p256.pub": return "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBBJdNBta5znfNWnirWVaJmwRzBSVSym6vldDizYxjwnaT2hUEEnTVVZOWE+AqvWK3YYNMWmxUJJkDpduBf0l35A= p256@test\n"
+    if name == "p256.sig": return "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAAGgAAAATZWNkc2Etc2hhMi1uaXN0cDI1NgAAAAhuaXN0cDI1NgAAAE\nEEEl00G1rnOd81aeKtZVombBHMFJVLKbq+V0OLNjGPCdpPaFQQSdNVVk5YT4Cq9Yrdhg0x\nabFQkmQOl24F/SXfkAAAAARmaWxlAAAAAAAAAAZzaGE1MTIAAABlAAAAE2VjZHNhLXNoYT\nItbmlzdHAyNTYAAABKAAAAIQDM00S3ZQtx2CEh06cZE9PYqZnGpIvqmg1Ar5UybVpu0wAA\nACEA2rwmYqkx6Nulj39bymGSc9IuGbe97kuIsKFZrgtY+R0=\n-----END SSH SIGNATURE-----\n"
+    if name == "p384": return "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAiAAAABNlY2RzYS\n1zaGEyLW5pc3RwMzg0AAAACG5pc3RwMzg0AAAAYQRZRtIYD1Km/l9sB1FgvE1DUftQlhcC\nIOkULLhoW/Y0jkHYlbfG8HmitzuPiIIQJQLLI1pWkaWuKjmWiYJeq6IS1O/Vir1vd52vQF\nQTU/dOHylTseOrN/169bD7qTai0+IAAADYyz0Zpcs9GaUAAAATZWNkc2Etc2hhMi1uaXN0\ncDM4NAAAAAhuaXN0cDM4NAAAAGEEWUbSGA9Spv5fbAdRYLxNQ1H7UJYXAiDpFCy4aFv2NI\n5B2JW3xvB5orc7j4iCECUCyyNaVpGlrio5lomCXquiEtTv1Yq9b3edr0BUE1P3Th8pU7Hj\nqzf9evWw+6k2otPiAAAAMH1hz9MWNwIv9V7XdaRoNXUtTdTDAUGATQxMoA3rstbf+G60wT\nGMeSKUGbkdKThvAQAAAAlwMzg0QHRlc3QBAgMEBQYH\n-----END OPENSSH PRIVATE KEY-----\n"
+    if name == "p384.pub": return "ecdsa-sha2-nistp384 AAAAE2VjZHNhLXNoYTItbmlzdHAzODQAAAAIbmlzdHAzODQAAABhBFlG0hgPUqb+X2wHUWC8TUNR+1CWFwIg6RQsuGhb9jSOQdiVt8bweaK3O4+IghAlAssjWlaRpa4qOZaJgl6rohLU79WKvW93na9AVBNT904fKVOx46s3/Xr1sPupNqLT4g== p384@test\n"
+    if name == "p384.sig": return "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAAIgAAAATZWNkc2Etc2hhMi1uaXN0cDM4NAAAAAhuaXN0cDM4NAAAAG\nEEWUbSGA9Spv5fbAdRYLxNQ1H7UJYXAiDpFCy4aFv2NI5B2JW3xvB5orc7j4iCECUCyyNa\nVpGlrio5lomCXquiEtTv1Yq9b3edr0BUE1P3Th8pU7Hjqzf9evWw+6k2otPiAAAABGZpbG\nUAAAAAAAAABnNoYTUxMgAAAIQAAAATZWNkc2Etc2hhMi1uaXN0cDM4NAAAAGkAAAAxAPEV\nd/IsdY/LVFT5yMEkHgKbv3bR8IlSfNFH4A8mQB+UtXQyCl+gHfI3RxVpywA8mwAAADBjoT\nK9XsNr3MMhRuAc6hn5icqaFQTeE4zdYZeNrcAYBgIcEJSTI00IrtkEiD8q814=\n-----END SSH SIGNATURE-----\n"
+    if name == "rsa": return "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABFwAAAAdzc2gtcn\nNhAAAAAwEAAQAAAQEA34dA5JN5yl8PO3jAZUlrpCoILd616YXBNYW2tOewGnoVpUmjZcNM\nBk4lEm/qtuarzMUHUAb3H6EEHMJHjTsv/OIaoiHP6Es/po1+eXBqjhF4E5MVFCgpIPAE2G\nIpXnsioGU8juk8VqrPtYfK0+DMhMr2qGg7ml4KBycj3XjKJzYPVZDRB0nWpeUuT07WjzXi\nqHh07YdLC9a2fIxKJHpDQIubWpgLvAeFX1UrAxc7njnnOvN1FnAXy2oEW1Qma/viIgIZDR\n2XFm0Rt/eRt+jtmQF2bThmu3Q5bpioP277FfpNyZ7R+CPxNQvlsXouVPm77ZxX3CEcdoL5\nRvpBnsaZewAAA8ABAFzUAQBc1AAAAAdzc2gtcnNhAAABAQDfh0Dkk3nKXw87eMBlSWukKg\ngt3rXphcE1hba057AaehWlSaNlw0wGTiUSb+q25qvMxQdQBvcfoQQcwkeNOy/84hqiIc/o\nSz+mjX55cGqOEXgTkxUUKCkg8ATYYileeyKgZTyO6TxWqs+1h8rT4MyEyvaoaDuaXgoHJy\nPdeMonNg9VkNEHSdal5S5PTtaPNeKoeHTth0sL1rZ8jEokekNAi5tamAu8B4VfVSsDFzue\nOec683UWcBfLagRbVCZr++IiAhkNHZcWbRG395G36O2ZAXZtOGa7dDlumKg/bvsV+k3Jnt\nH4I/E1C+Wxei5U+bvtnFfcIRx2gvlG+kGexpl7AAAAAwEAAQAAAQAnGUn1EYTKrMEF1pPU\nw7hz4TRIDb5FKDPJEGgKkcJAh11U6aIOsVARhEbAyFnGf2fKrCYgze8ZFbmZ7DPG1PUKZ2\nRgOsjaqZrrH7HhPRQuYIjf56jWu0WicMlwLg9tat1+L+cdWlfHEx688pE8aYRsr/HgOEdA\ns7VOVf7UhQXbQKpTQ89KzWkmUUKV3sX3G/tNQpjeVVW23Y1RuuzsgS/HMqL9L0F6qVTEba\npDfNpCnujoQujOhvnoI3m0ssNRPuZORWZRce3Ukxya47/6589I8e/8iMsRA7pP9fDXmxKa\n72Iyx2e/t+nhYmUWWm1MPaVKu8UM1qVG+sn23M1DEpOlAAAAf2jvCXtpMpehKo9iP79I3r\n40/MeLx/1WsVE6R0cD7io17ffPqY7RQ4Ld+2YOwPxAF1Au35HaUs9mxzckHV7+ZJeolHWl\naDBKs8t/5YBBATA8PtekWiflLI3oszJxxxsH91f8wiC7raEwxrCUkdHHkKvUyVImb1NlNi\njZXhyMt1kAAACBAO/WbgaxrcjH5haWtRPUDS5kuZOpchL2WArIZL8XyXlNo+QmoaHXUSvj\ngqI5EEftSajQNtv2VkuVw5BiPlAEcR1GTz3Kp3kF92oefp2OsywNhCCA59VHWrgAiSbZHy\n4ZUgFDqTX42u3MUbaCuWZGfcixyPtmYqXsxTDn16Wa8sUfAAAAgQDul3acfvmAn/uzTbDG\n9zAb7zMrbmWid8sQQd3ETG8gkKtwJbh5Dvq4Q9aVUFmbezoPj6TegBlAhZyV+vkYoQqd+Y\n023i+zBFiNal3skJDmGKTDjN+tztaPEgaZeOTFZ7dQZOrSj+QMnUGuzZN9Q4jVtrz6ehsA\n0xmC+Oq11VBkJQAAAAhyc2FAdGVzdAECAwQ=\n-----END OPENSSH PRIVATE KEY-----\n"
+    if name == "rsa.pub": return "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDfh0Dkk3nKXw87eMBlSWukKggt3rXphcE1hba057AaehWlSaNlw0wGTiUSb+q25qvMxQdQBvcfoQQcwkeNOy/84hqiIc/oSz+mjX55cGqOEXgTkxUUKCkg8ATYYileeyKgZTyO6TxWqs+1h8rT4MyEyvaoaDuaXgoHJyPdeMonNg9VkNEHSdal5S5PTtaPNeKoeHTth0sL1rZ8jEokekNAi5tamAu8B4VfVSsDFzueOec683UWcBfLagRbVCZr++IiAhkNHZcWbRG395G36O2ZAXZtOGa7dDlumKg/bvsV+k3JntH4I/E1C+Wxei5U+bvtnFfcIRx2gvlG+kGexpl7 rsa@test\n"
+    if name == "rsa.sig": return "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAARcAAAAHc3NoLXJzYQAAAAMBAAEAAAEBAN+HQOSTecpfDzt4wGVJa6\nQqCC3etemFwTWFtrTnsBp6FaVJo2XDTAZOJRJv6rbmq8zFB1AG9x+hBBzCR407L/ziGqIh\nz+hLP6aNfnlwao4ReBOTFRQoKSDwBNhiKV57IqBlPI7pPFaqz7WHytPgzITK9qhoO5peCg\ncnI914yic2D1WQ0QdJ1qXlLk9O1o814qh4dO2HSwvWtnyMSiR6Q0CLm1qYC7wHhV9VKwMX\nO5455zrzdRZwF8tqBFtUJmv74iICGQ0dlxZtEbf3kbfo7ZkBdm04Zrt0OW6YqD9u+xX6Tc\nme0fgj8TUL5bF6LlT5u+2cV9whHHaC+Ub6QZ7GmXsAAAAEZmlsZQAAAAAAAAAGc2hhNTEy\nAAABFAAAAAxyc2Etc2hhMi01MTIAAAEAEakT/+5yW7HxWOjwXozfjBdmJydo7/3f5xTuc3\nlAlLMyriNaNiBNFDVSVD6isw48f91l6eJj4bMZ8kwt4gtA1NZnRuph2hv7p1b+FKwwOQ25\npjI0q4HT8AU7Fyf0pDyLcYKk7Vc3rXK3kzxK1AEPyac5eswKn62c+LN555HQ5n9sWwEb5c\n+l7UcPZg71uPHn911Hi9s8b4HAPEyDJ5fb+rXr1/9tQNYFRJU3gnPu1AO8UQh7BBVtQWvU\n2d7nIgSn4K+okfNh8vxfY0atQBgCeD7tcX+yvy2qmrws+W5XFqIlv8ZZvB5B1TLrce76DO\nqs/JkEE4oeK1/NpzZCTxQIpQ==\n-----END SSH SIGNATURE-----\n"
+    if name == "ed_enc": return "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABDAFco4tY\nW05wMdtFyDfMR8AAAABAAAAAEAAAAzAAAAC3NzaC1lZDI1NTE5AAAAIM1OtKhd/POx/fR8\ndEs/QdeJSaMHbnOrgmgI6m3mImTsAAAAkCtQLBgkqmCMog8wnWwj1lu02OMFbSvFoWBVl3\nStIN+4SC3QewTnWbejo6zvslq6h2YF1Or0YhpyrwDWpPXSpf7J2svDejGAwZBUl0CSv1au\ngtYNOzeNT+s1KVf6kBwbeu39qBO+LTSIL+LASHoohimtq7jQCQZWisLEAvDrdCvrZmN2NM\ndYyA91wPhP6QbXvw==\n-----END OPENSSH PRIVATE KEY-----\n"
+    if name == "ed_enc.pub": return "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM1OtKhd/POx/fR8dEs/QdeJSaMHbnOrgmgI6m3mImTs enc@test\n"
+    if name == "rsa_enc": return "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABCa47/WN3\nngTG1QXFIq1/8DAAAAAgAAAAEAAAEXAAAAB3NzaC1yc2EAAAADAQABAAABAQC334C7c+Dk\nr2t5C8gnPLrf3tJQEWZv/tJoERTJ18dGI3LJxLNbL/eKOs6f3wAkgub/svc6u9XjL+Vxb7\nt1YLB2qe/37qIoPf15X+1u2O/A4jUv8lLmc8hVwZSzPGDcbRK3PnB3PosvnlDcugGGUxsL\nmLC4xJaxJKHmM9NOVXiglxlRgLcNX8c9hzfwF9fQ3WCmOU15ZzhbJYvmcXE9mu30PG3wTZ\nZk7bWG7JeOW9g9GxsLoQAkLat86TtnBwUY+2jzZOYmmpvlj4dgyh7PH9hSW7kNU8WRuHrf\nygcHbDuZYwOjTblXyuTmDN5jT5j+BtzZzGV93x46njf4eBXwLy/1AAADwH4e9GA5QdeVAn\nAGxyw2TRUUMcXPdds75+sbJJcKsK8osItIWevIJCwVd5GsAWZDqb3+72lSIRVCDv4agK+y\nExyb7ZCWUvHBtUtKW60QMQHpF+2kyok6E3wq+NYlXv0ikUoGtqiv3oQadik4EepjMAXXF4\n0aSGRz2cjAgqtGjVNZS4TaKgGQKubbIfFWJzaLKTiuWvk056tuOMt6vIiqR14r9Ho9yrJT\ndqkDF5Qtseszee/JF2N83hTUQvgbmGNycQqXSC8jmlAD7aNizeZ6EajMJljRoOTGmBDpfP\nXK9eFAzc8keqaoYmzZl2v06x8IExF0rDqs3d/0x545gPhvFiGqvZDkDemutYbxnbQsApHM\nuXUvYcTBstV2KXGLcAjyQN4oQcYQTzWzELKxoUHmgPD05lrw+kmCEJw9teROvg51YGZ2b3\nme7aW7DXFxALRHozEsyFpLhWrx2sTFMFlLEi/QbnoxMiz9OH4uNl1j8b6eADS14p+yPaxV\nnemt1Ovfmq43OXJOKLN10tXH0Mg4ZgLkTTL5PRr+DMp2FY3fujdhtJP9CY4OwsQ6RTMU4N\nVXN2FyZaHW6yHqR3MJr1vEVhS1X+w0zZ/uUCtwgABbvI5w3vOBZrnIEl1E0Xv4KNqhZFWP\n+NmHRnAimNfk3pUnhXZRKx4taDGCCEFY72h21A5uMsYeNv4tQdzSfFqOzgRXvbA6uzZFIT\nhA3Dqqq9qjRZ+3nT7aspF7ZkiJqyg6dNvYlb5SHWSSsQgGrXxXbXL/jQZE0I+xyCZRGjem\nYXzlGS7uJE/VSjgLHI7UPF13/VfgjvKu1lrT1Dw1vjy6/oQsv9G0WQArR9uDjG+LRA5zAL\n5m5QaNgXbGkS3SjATLMNM3eAXkjpEguHxoE9OA+Dg99H7hI8y8n9kxETYUW5LDztpykoSY\ncju6U/KBBCOLbHTu/MprVC6+V6d5/Kf6cvSHuosneLJ4wgmXKmIQDdtPyeBGqdmWd1smCy\n3Ucx4GriImMygq7/R8GRh645UJROtFYPxKUuYQXkR1kSZtPQ6dFQPSpQLbozcFLMNLB2vW\nKQMFELVUNHM9Ab6fNLMJTxij0aCpRRPRNngNAC4vdnuyzjPZxOdDZm8tTB8UJRuiCbJvw1\nVNWqgQOaE/7aLNoquNE6wSjlviatPMnQG3Jke/gI6e1HG1DMe0Xxde1FzJ8cFFXt5NOfD6\nxtaVx0iOfY9/ddqf9A8R5/4J77TZxReUbBkzkRai26lqFF4LqhkZwLJJS0s+90GhgCZVAN\nblA4xc3w==\n-----END OPENSSH PRIVATE KEY-----\n"
+    if name == "rsa_enc.pub": return "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC334C7c+Dkr2t5C8gnPLrf3tJQEWZv/tJoERTJ18dGI3LJxLNbL/eKOs6f3wAkgub/svc6u9XjL+Vxb7t1YLB2qe/37qIoPf15X+1u2O/A4jUv8lLmc8hVwZSzPGDcbRK3PnB3PosvnlDcugGGUxsLmLC4xJaxJKHmM9NOVXiglxlRgLcNX8c9hzfwF9fQ3WCmOU15ZzhbJYvmcXE9mu30PG3wTZZk7bWG7JeOW9g9GxsLoQAkLat86TtnBwUY+2jzZOYmmpvlj4dgyh7PH9hSW7kNU8WRuHrfygcHbDuZYwOjTblXyuTmDN5jT5j+BtzZzGV93x46njf4eBXwLy/1 rsaenc@test\n"
+    if name == "p256_enc": return "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABCWPyvqXA\nULTRKbFDLfRk3tAAAAAwAAAAEAAABoAAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlz\ndHAyNTYAAABBBFJU0d2lgrLEU3d/82i8DNJubQIQMbGXTF/VdL+KURGY0xpkCUfWp99DYL\nNT8g3DcRPgFTXeKtZSKlOIFqlcVeEAAACgzGxzV4LoMjWawYnC2Ox/epi/RqHSawj3Qg38\nD+ecTLjDqMcsufCCOefwfwiEpo6tkaj1PA244LmbOsz17wn9VWp7BjFo95nrpLA/qZ2+UI\nr4HFMu1m9kE+L5FVhfI4MA+khWw6Sgv8PBM+qhsFcY03Ofm027jGiP7kl+kwwGhb5Jr5oS\nhpthYqwJ4uG0k1mjs+98duB77lEyUO213dqhmg==\n-----END OPENSSH PRIVATE KEY-----\n"
+    if name == "p256_enc.pub": return "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBFJU0d2lgrLEU3d/82i8DNJubQIQMbGXTF/VdL+KURGY0xpkCUfWp99DYLNT8g3DcRPgFTXeKtZSKlOIFqlcVeE= \n"
+    return ""
+
+def ssh_fingerprints() -> List[str]:
+    mut v: List[str] = []
+    v.append("ed|256|SHA256:EsoSNgPYXFtMnh5bmqxzubZ+H6zMo0LXjUHgpsNLgnI|MD5:7d:fd:5d:a4:8b:2d:69:9e:ea:f2:0e:4a:eb:2e:f5:28")
+    v.append("p256|256|SHA256:hLzyNulyOadPpDiSHCvRw/VcXaWmOsPHanKoJ9RA6a4|MD5:db:c1:53:21:e0:3f:2e:52:61:8c:ca:d1:29:38:5e:d1")
+    v.append("p384|384|SHA256:JQ/CL6XlSZ73+9VOfuS1OjH3sNpmlsgXnvgHiO7G4qM|MD5:96:8b:d4:1e:75:89:15:68:6c:a7:d8:0e:d7:51:d9:42")
+    v.append("rsa|2048|SHA256:tr4jR48tD9cgVC46N7xYeTNcde/xqUG49y1pa8QNC/Q|MD5:c0:50:6c:04:b3:49:03:a2:37:cc:f1:12:91:3f:d2:4c")
+    v.append("ed_enc|256|SHA256:C6u3YbSHFb+SUncDHbiVJ1ANK0iawCBLSgpzqRPUbsE|MD5:e5:83:56:4b:2f:d0:a9:54:66:a6:45:df:f9:14:d2:d0")
+    v.append("rsa_enc|2048|SHA256:Ei3aXEDwWKRMIzQd2jf9B8SgMFIb6v2+sKbKzympatU|MD5:10:7f:aa:b1:bf:70:ed:0c:07:e9:71:c8:9d:8e:d3:56")
+    v.append("p256_enc|256|SHA256:vn3WL9i9vWfYa8fZCVEo14/JClmFgkPOI9bOevsllv8|MD5:3c:b4:5c:8e:40:a6:12:ec:fc:e0:8c:1a:cf:9b:72:a2")
+    return v
+
+def scrypt_reference() -> str: return "$scrypt$ln=10,r=8,p=1$c2FsdHNhbHRzYWx0c2FsdA$BVMRKqdiVYikKAaPR1wucsKUKvw4TuPLkdEYtoSHas4"
+
+# 108 age test vectors from C2SP/CCTV age/testdata (0BSD/CC0), generated.
+def age_vectors() -> List[str]:
+    mut v: List[str] = []
+    v.append("armor_cr_between_padding|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d573265777777716f0a6d4e6c78597636674d4f4b79444e7a6769773d0d3d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_cr_in_body|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a795043380d44706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_cr_line_start|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a0d7950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_crlf|success|013f54400c82da08037759ada907a8b864e97de81c088a182062c4b5622fd2ab|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590d0a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720d0a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790d0a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530d0a7950433844706b73486f4d782b32593d0d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0d0a")
+    v.append("armor_double_crlf|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0d0d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_empty|header failure||||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_empty_last_line|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d5733626a346948530a595333575755745a4235774a714b674565386b70737030694f6e4432434e473444564b4243305a3753416343466238786477563943526176534545374f5531630a0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_empty_line_begin|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_empty_line_end|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_eol_between_padding|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d573265777777716f0a6d4e6c78597636674d4f4b79444e7a6769773d0a3d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_full_last_line|success|724a112a2cac139a4fca3ea0f799f2e5ccd1d0db46af654dee40567bff16ee33|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d5733626a346948530a595333575755745a4235774a714b674565386b70737030694f6e4432434e473444564b4243305a3753416343466238786477563943526176534545374f5531630a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_garbage_leading|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|676172626167650a2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_garbage_trailing|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a676172626167650a")
+    v.append("armor_header_crlf|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c33597844516f74506942594d6a55314d546b6756455670526a4235634846794b324a77646d4e780a5745353551315a4b6345773354335633554752576431424d4e30745252574a47524539445977304b61477068596b645964314e4d55546c6a4d314d32544863790a615374544d6c52314d6d5a706431464953484e73596b4a4f4e6b49304d555a4d5251304b4c53307449444a4c535564694e336c6c4d7a4a4e56335256645556570a563274504d3031514e6e46445245783654335a554f5864474d445a735a57784355306b4e437537505973664f6b62517a4a30356f31504c35453079335446762b0a3937367155736a777641365a4c4236444d66746d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_headers|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a486561646572733a206172650a4e6f743a20616c6c6f7765640a0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_invalid_character_header|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c2a57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_invalid_character_payload|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a2a50433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_long_line|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e423259334659546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b72557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a58457956306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170537950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_lowercase|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2061676520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442061676520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_no_end_line|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a")
+    v.append("armor_no_eol|success|013f54400c82da08037759ada907a8b864e97de81c088a182062c4b5622fd2ab|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d")
+    v.append("armor_no_match|no match||AGE-SECRET-KEY-143WN7DCXU4G8R5AXQSSYD9AEPYDNT3HXSLWSPK36CDU6E8M59SSSAGZ3KG||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f534268616e527851585a4552577457546e4979516a64360a5655393063544a745156465952464e4362453579566b46315453396b5332493163315130436b6856533352364d464979616a564362444a46556a6449614546610a636c565361577444526e42705357704f5954424c616b686a616d4a425231554b4c53307449484a7963465273646b744653334a4c4d305678614739505545706c0a5544464c525468504d57517959584a79556d56364e7a647464325672556d4d4b3364397930472b3871316666505130784a4a617449597a582f572b41654c76340a675333596555635658726539586f673d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_no_padding|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32590a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_not_canonical|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b325a3d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_pgp_checksum|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a3d796a45460a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_scrypt|success|013f54400c82da08037759ada907a8b864e97de81c088a182062c4b5622fd2ab||password|yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b49484e6a636e6c7764434279526a4176546e646962465649534652775a31466e0a556e426c4e554e5249444577436d6456616b563562555a4c54565a595555564c5a45314e534577794e47395a5a58687152544e5553554d77547a423652314e780a536a4a6856566b4b4c53307449456c5057476c5257564e30613239554d573132576c637964455a506356706b61464a57646d6f314f47566e51554a344c334e580a5a6c7052596d4d4b477a5847356f6664414e6f3677336d736e33517349663059576875655065317a6e52537361707051456b32345a74673d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_short_line|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852700a6232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e423259334659546e6c44566b707754446450645864510a5a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b72557a4a5564544a6d615864525345687a0a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a58457956306c4b593364495a316c6a4f45354a0a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170537950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_whitespace_begin|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d20424547494e2041474520454e435259505445442046494c45202d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_whitespace_end|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a2d2d2d2d2d20454e442041474520454e435259505445442046494c45202d2d2d2d2d0a")
+    v.append("armor_whitespace_eol|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f373376717053200a7950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_whitespace_last_line|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d200a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_whitespace_line_start|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a2056306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("armor_whitespace_outside|success|013f54400c82da08037759ada907a8b864e97de81c088a182062c4b5622fd2ab|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|0a0d202020090a2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a0a0d202020090a")
+    v.append("armor_wrong_type|armor failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e43525950544544204d4553534147452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e43525950544544204d4553534147452d2d2d2d2d0a")
+    v.append("armor_x25519|success|013f54400c82da08037759ada907a8b864e97de81c088a182062c4b5622fd2ab|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||yes|2d2d2d2d2d424547494e2041474520454e435259505445442046494c452d2d2d2d2d0a5957646c4c57567559334a35634852706232347562334a6e4c3359784369302b494667794e5455784f53425552576c474d486c7763584972596e4232593346590a546e6c44566b707754446450645864515a465a335545773353314646596b5a4554304e6a436d687159574a485748645454464535597a4e544e6b78334d6d6b720a557a4a5564544a6d615864525345687a62474a43546a5a434e4446475445554b4c53307449466435536e413552693835526b39616144646e536d526f5a5845790a56306c4b593364495a316c6a4f45354a566d677a5a47523361484a6a546d634b377339697838365274444d6e546d6a5538766b54544c644d572f3733767170530a7950433844706b73486f4d782b32593d0a2d2d2d2d2d454e442041474520454e435259505445442046494c452d2d2d2d2d0a")
+    v.append("empty|header failure||||no|")
+    v.append("header_crlf|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310d0a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630d0a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450d0a2d2d2d20324b49476237796533324d577455754556576b4f334d50367143444c7a4f765439774630366c656c4253490d0aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("hmac_bad|HMAC failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d20384d634533697839523334452f764c7251763379657073486a6f2f4c5868667332324162335579496e6d670aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("hmac_extra_space|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d202057794a7039462f39464f5a6837674a646865713257494a637748675963384e495668336464776872634e670aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("hmac_garbage|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2057794a7039462f39464f5a6837674a646865713257494a637748675963384e495668336464776872634e674141410aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("hmac_missing|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d200aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("hmac_no_space|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d57794a7039462f39464f5a6837674a646865713257494a637748675963384e495668336464776872634e670aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("hmac_not_canonical|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2057794a7039462f39464f5a6837674a646865713257494a637748675963384e495668336464776872634e680aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("hmac_trailing_space|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2057794a7039462f39464f5a6837674a646865713257494a637748675963384e495668336464776872634e67200aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("hmac_truncated|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2057794a700aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("scrypt|success|013f54400c82da08037759ada907a8b864e97de81c088a182062c4b5622fd2ab||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c55484854706751675270653543512031300a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a326155590a2d2d2d20494f5869515953746b6f54316d765a573274464f715a64685256766a353865674142782f7357665a5162630a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_and_x25519|header failure||AGE-SECRET-KEY-143WN7DCXU4G8R5AXQSSYD9AEPYDNT3HXSLWSPK36CDU6E8M59SSSAGZ3KG|password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e2058323535313920616a7471417644456b564e723242377a554f7471326d4151584453426c4e725641754d2f644b62357354340a552b684b6c4a34697377654a39504b4737706773636d4733635041534c67547737534f4270625a387832550a2d3e20736372797074203364397930472b3871316666505130784a4a617449512031300a666f5a6f6c78756852534c374947376f61522b343536497a6b4874767565376a346d556a683344423645490a2d2d2d207970345a306c56314c45646b6d312b754443755055562b3968495862504b7242584b512f663559303341730a02545e6bf4c6061c893e8f29eccd2c0b72b1cc466c9e062763cff41192829e9bb856b5")
+    v.append("scrypt_bad_tag|no match|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c55484854706751675270653543512031300a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a3261626b0a2d2d2d205372416f6b58493035616f6b3176656343416f43563867576a444a4448576a4a684f577a4d6b4d5752464d0a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_double|header failure|||password;hunter2|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c55484854706751675270653543512031300a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a326155590a2d3e2073637279707420477a5847356f6664414e6f3677336d736e33517349512031300a4f76654954757778616b76376b326f4c6e696f4e5946344268677a394b5a3336706230393877446f4176380a2d2d2d206135642b3441793165764a686f44736b497a75545a56396242674b6b34353733565a4e66756f574a4450450aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("scrypt_extra_argument|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c55484854706751675270653543512031302031300a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a326155590a2d2d2d20624431626f7944326d7242716c42592b73554b6e4d6f50624e565545517a30646931795753464d2f654d730a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_long_file_key|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c55484854706751675270653543512031300a6d533345795742615646536c433639424c6e547668366a70347830474e477a34666a766d372f49655a2f486a476b75664b6b4e32365a550a2d2d2d202b55344a36665873476c3141646b784c6a6f534a306c765547506a2f3358754e373236426d4b54776f6f550a1b35c6e687dd00da3ac379ac9f742c215b3b1d939bca94caadc10eed9dbcbb72bc49f5")
+    v.append("scrypt_no_match|no match|||wrong|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c55484854706751675270653543512031300a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a326155590a2d2d2d20494f5869515953746b6f54316d765a573274464f715a64685256766a353865674142782f7357665a5162630a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_not_canonical_body|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c55484854706751675270653543512031300a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a3261555a0a2d2d2d20477639564a514373634762624956676f31586d31414e55686e6f79534c71756b704c6b53477a482b63726b0a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_not_canonical_salt|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c55484854706751675270653543522031300a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a326155590a2d2d2d20494354413876694432447250626b746a7861536d345076676433444b47694a534c2f7664537472394d59730a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_salt_long|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c554848547067516752706535435273317875592031300a4a5037726f49346168415459424957696d544a61516969376b736d572f7a2b417130655356723948624c6f0a2d2d2d2070326941756e7546306655566b4e49376855744831425746466e363857644f6f676455654c6138346e45340a87dd00da3ac379ac9f742c21eecf62c730b276ffca0fe68e04e6a6379641ea3a8d8c12")
+    v.append("scrypt_salt_missing|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e207363727970742031300a57306d4d746879684e4a4f563364656243776b5163556c4e782f693653732f4130376151437247354763770a2d2d2d20315173506345624253796c6650346170616b4a717444424a4d7270643831725075534c544376645a7836450aac5d3f3706e55071d3a604204697b9090595c2f7f5dbaee80d7a018c2872058af3ce7c")
+    v.append("scrypt_salt_short|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c55484854706751672031300a5a4746322f4b4555766370674e33547830496c4c44706c6f6d62367a523849465645354133567a553167670a2d2d2d204c71333030634b6443336765765433504e4f722f726557797064664f58366f456d79666d4f6e4361417a6b0a4697b9091b35c6e687dd00da3ac379ace4634c8f8f2ee44e0f4f646c5fc72d81bd1711")
+    v.append("scrypt_uppercase|no match|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20536372797074207246302f4e77626c55484854706751675270653543512031300a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a326155590a2d2d2d20496e2f54634b503577444b503134737566463734706f505a6370614c5645436d66447430472b794d4973340a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_work_factor_23|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c55484854706751675270653543512032330a71573965567354304e56622f5673777477386b504978556e61596d6d3950783164596d71322b342b715a410a2d2d2d2033385470514d785152524e4d666d5959704258364444725078342f515935556d4a6e685079566f582f63770aac5d3f3706e55071d3a604204697b9090595c2f7f5dbaee80d7a018c2872058af3ce7c")
+    v.append("scrypt_work_factor_hex|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c5548485470675167527065354351203078610a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a326155590a2d2d2d205a6866766d367758676a42303655757534476446464b4f416b764c6b6f533936342b43436c70654853554d0a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_work_factor_leading_garbage|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c5548485470675167527065354351206161616131300a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a326155590a2d2d2d204c4c533979662b61616a3466734d736a705633416364424138496c69374b74426d6f5a7832426c7848384d0a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_work_factor_leading_plus|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c5548485470675167527065354351202b31300a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a326155590a2d2d2d20617343477a53485375354477553759356a2b6e5372546f684b6f464e6a6939754b2f33496b73586e43346b0a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_work_factor_leading_zero_decimal|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c5548485470675167527065354351203031300a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a326155590a2d2d2d2036683350342b7734795670306534326f7a554463442f7a6d4c55632f5432776c4b45526239357a66425a6f0a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_work_factor_leading_zero_octal|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c5548485470675167527065354351203031320a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a326155590a2d2d2d206f5175654d6b4a317159564841445535467834375a4130675649685942334d56714246616b65524a7748510a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_work_factor_missing|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c55484854706751675270653543510a3168716c616f4355706b677a59492b6f54533070314e786d397533466a69623852456a72777034306d52450a2d2d2d20306e614c614445574c396d3779374e7449784563384f6d78624e37324b795a7275636b4e5876316d39564d0a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_work_factor_negative|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c5548485470675167527065354351202d31300a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a326155590a2d2d2d203869324f5a35676c4d46466e6e4e796668504e395676764544734a7a772f5138583474682f6537726a43300a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_work_factor_overflow|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c554848547067516752706535435120393232333337323033363835343737353831380a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a326155590a2d2d2d20556f62534b4949686643736d5846322f38414b537676535a496b7a2f5933314970663759415249466342300a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_work_factor_trailing_garbage|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c5548485470675167527065354351206161616131300a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a326155590a2d2d2d204c4c533979662b61616a3466734d736a705633416364424138496c69374b74426d6f5a7832426c7848384d0a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_work_factor_wrong|no match|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c55484854706751675270653543512031300a3168716c616f4355706b677a59492b6f54533070314e786d397533466a69623852456a72777034306d52450a2d2d2d2069396c48694d4a79646b5843375863516b2f6a376c724a476d43667a492f4c3263664a714779366a5438490a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("scrypt_work_factor_zero|header failure|||password|no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20736372797074207246302f4e77626c554848547067516752706535435120300a67556a45796d464b4d565851454b644d4d484c32346f5965786a4533544943304f307a4753714a326155590a2d2d2d20612b5a776e79534667552b315a444f707335426134356d7a3950432f6d726b4f6c623036384666584d53380a1b35c6e687dd00da3ac379ac9f742c21fd185a1b9e3ded739d14ac6a9a50124db866d8")
+    v.append("stanza_bad_start|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d207374616e7a610a0a2d2d2d2076357745387562507849316379517965417753486e6c6a4d6836446b7a7658336941644b6764594a4638410aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("stanza_base64_padding|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d3e207374616e7a610a515546425155464251554642515546425155464251554642515546425155464251554642515546425155464251554642515546425155464251554642515546420a5155453d0a2d2d2d202f4230347a4a4578436c79762f3565416c3767337533454c73304355744d707136756a4e64466f473135730aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("stanza_empty_argument|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d3e207374616e7a612020617267756d656e740a0a2d2d2d207a4c38564b6376764c437a6452435873633934687949454b32546771724f7a52356e7639597634687363730aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("stanza_empty_body|success|013f54400c82da08037759ada907a8b864e97de81c088a182062c4b5622fd2ab|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d3e20656d7074790a0a2d2d2d202b4d32654546625853764a386a2b6757345474513870752f5070462f4a6a366e514c77693275503934746b0aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("stanza_empty_last_line|success|013f54400c82da08037759ada907a8b864e97de81c088a182062c4b5622fd2ab|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d3e207374616e7a610a515546425155464251554642515546425155464251554642515546425155464251554642515546425155464251554642515546425155464251554642515546420a515546425155464251554642515546425155464251554642515546425155464251554642515546425155464251554642515546425155464251554642515546420a0a2d2d2d20443055752f7768596a662f4377717a364d485252395435656d3036504c416a54434d63773861586479456b0aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("stanza_invalid_character|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d3e207374616e7a6120c3a80a0a2d2d2d20686e53436a4c7445424d6c33714d4a334b3654712f536b494c36565a5a317333596c39494f536a786779300aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("stanza_long_line|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d3e207374616e7a610a41414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141410a0a2d2d2d20555a72705a72463141312f6973556e5273787951466d755671454c5a534c6b747276676e314376496572380aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("stanza_missing_body|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d3e20656d7074790a2d2d2d204f615347675955422b5852307143436d653055777039474e4a585345674e70626b6e7533513971744c2b4d0aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("stanza_missing_final_line|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d3e207374616e7a610a414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141410a2d2d2d204f524d346a6f302b7466716435377654332b7055565a672f73487572447548464868586b4737532b5245340aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("stanza_multiple_short_lines|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d3e207374616e7a610a41414141414141414141414141414141414141414141414141414141414141410a41414141414141414141414141414141414141414141414141414141414141410a2d2d2d206270487a574f686a71666f5845677a4972446b37766f6d762f544c442b42467078756c322b6a365a5a75770aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("stanza_no_arguments|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d3e0a0a2d2d2d20495939596f4c7149614e4b554d32316d73344c3533394662584872473246486d45434a6945437751696d4d0aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("stanza_not_canonical|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d3e207374616e7a610a515546425155464251554642515546425155464251554642515546425155464251554642515546425155464251554642515546425155464251554642515546420a5155460a2d2d2d20336463426465754b7444624570782f6868634136714541522f6e695168324d4173727556505273483443490aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("stanza_spurious_cr|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d3e207374616e7a610a41414141414141414141414141414141414141414141414141414141414141410d414141414141414141414141414141414141414141414141414141414141410a2d2d2d206168796e473538424e494c6e6e637657503364504b5959757a76636e3858616a727a334c64734f66774a490aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("stanza_valid_characters|success|013f54400c82da08037759ada907a8b864e97de81c088a182062c4b5622fd2ab|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20212223242526272028292a2b2c2d2e2f2030313233343536372038393a3b3c3d3e3f2040414243444546472048494a4b4c4d4e4f0a0a2d3e2050515253545556572058595a5b5c5d5e5f2060616263646566672068696a6b6c6d6e6f2070717273747576772078797a7b7c7d7e0a0a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2071634e79366d416e38304a4b755850555737414e4a644f687a624f7456537349474d3132693542347678340aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("stream_bad_tag|payload failure|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2057794a7039462f39464f5a6837674a646865713257494a637748675963384e495668336464776872634e670aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb46")
+    v.append("stream_empty_payload|success|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2057794a7039462f39464f5a6837674a646865713257494a637748675963384e495668336464776872634e670aeecf62c7ce91b433274e68d4f2f9134cad2e4fcf3e528a4130deabef4336e555")
+    v.append("stream_missing_tag|payload failure|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2057794a7039462f39464f5a6837674a646865713257494a637748675963384e495668336464776872634e670aeecf62c7ce91b433274e68d4f2f9134cb74c5b")
+    v.append("stream_no_chunks|payload failure|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2057794a7039462f39464f5a6837674a646865713257494a637748675963384e495668336464776872634e670aeecf62c7ce91b433274e68d4f2f9134c")
+    v.append("stream_no_final|payload failure|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2057794a7039462f39464f5a6837674a646865713257494a637748675963384e495668336464776872634e670aeecf62c7ce91b433274e68d4f2f9134c00bd63686da84814caaa0129618ac20861")
+    v.append("stream_no_nonce|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2057794a7039462f39464f5a6837674a646865713257494a637748675963384e495668336464776872634e670a")
+    v.append("stream_short_chunk|payload failure|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2057794a7039462f39464f5a6837674a646865713257494a637748675963384e495668336464776872634e670aeecf62c7ce91b433274e68d4f2f9134c5b1de6e82e0e0cbdd323c877")
+    v.append("stream_short_nonce|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2057794a7039462f39464f5a6837674a646865713257494a637748675963384e495668336464776872634e670aeecf62c7ce91b433274e68d4")
+    v.append("stream_two_final_chunks_short|payload failure|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2057794a7039462f39464f5a6837674a646865713257494a637748675963384e495668336464776872634e670aeecf62c7ce91b433274e68d4f2f9134c0022220cc7ec670025a23d68bd3bdb8ed900052a72cd9750a6e2dfcbcef15226fe64")
+    v.append("version_unsupported|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76313233340a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2054762b68347833744e384f346b41576e6637446270536b6d4e6c786c79785356665937556f50466b686e6f0aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("x25519|success|013f54400c82da08037759ada907a8b864e97de81c088a182062c4b5622fd2ab|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d2057794a7039462f39464f5a6837674a646865713257494a637748675963384e495668336464776872634e670aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("x25519_bad_tag|no match||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e364234314645340a2d2d2d207a4f434870796e563061563770345236632b624f6170677071395474704667476759676851322b504958380aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("x25519_extra_argument|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f436320313233340a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d206c3745302f505150353448425a594b55753530356e316d755737456e694446714d7258674d68466d6569410aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("x25519_grease|success|013f54400c82da08037759ada907a8b864e97de81c088a182062c4b5622fd2ab|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e206772656173650a0a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d3e206772656173650a0a2d2d2d20514966414f454d743166474f66324650326d332b5477465174667932483373583359715541515241706b4d0aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("x25519_identity|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e2058323535313920414141414141414141414141414141414141414141414141414141414141414141414141414141414141410a5733452f4f43526d65395469545939374a6f4b33315a373161724e7572373757494964423930586e4e334d0a2d2d2d20506e653349504d4476426a37775262504d634e5669666670565a417838313474674d7870384177794d68730aac5d3f3706e55071d3a604204697b9090595c2f7f5dbaee80d7a018c2872058af3ce7c")
+    v.append("x25519_long_file_key|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a6e6c4f62476e304353413470786961473357366e4c6c61464675486d71572b62464336734a6d62734a397946657367536f6b314b3041490a2d2d2d204334394a6f332b6a3449366a574232746c645373316a5641586276306d4f54416e7764542b35764f6942670aeecf62c7ce91b433274e68d4f2f9134c63f728ade7f10d04d074ffc78f50b229807831")
+    v.append("x25519_long_share|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f4363410a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d205162457764576972636853333755554f5068377556646452694f61576a4677525570615134512b5a3152450aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("x25519_low_order|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e205832353531392058357956764b4e516a435378304c46566e49507657775245584d52594849364732434a4f336443664564630a3345304e7046616e732f6d30574c5746372b35345a42644e6a33697151717072614744466961526b7642410a2d2d2d20735877333237594d54312f554c58652b5a79524d624d59305a326a6e5748476749396a31776536795138410aac5d3f3706e55071d3a604204697b9090595c2f7f5dbaee80d7a018c2872058af3ce7c")
+    v.append("x25519_lowercase|no match||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20783235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d20415965565a4b3236326b694f394b524b555a4e456c644b527a5844473176504d5864577332664630694a590aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("x25519_multiple_recipients|success|013f54400c82da08037759ada907a8b864e97de81c088a182062c4b5622fd2ab|AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e2058323535313920616a7471417644456b564e723242377a554f7471326d4151584453426c4e725641754d2f644b62357354340a306576724b2f48515856735134596144652b3635396c354f517a76417a443279744c4748514c51697178670a2d3e205832353531392030714337753641624c7875776e4d387450464f575674575a6e2f5a5a65377a3767637350356b67413046490a59334f7a65764c6d3233567837504e396b33334639792b65726357652f62635a4a4c7168714133683430380a2d2d2d20383535704b626c517a5a336f6162446f777852445176536a2f786f34375a53683557546a6b6d4b304930550af0b818be0f355442399920ad8084964b6f95c36db35e4f59d8f89e3cf26f2d1fa54213")
+    v.append("x25519_no_match|no match||AGE-SECRET-KEY-143WN7DCXU4G8R5AXQSSYD9AEPYDNT3HXSLWSPK36CDU6E8M59SSSAGZ3KG||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e2058323535313920616a7471417644456b564e723242377a554f7471326d4151584453426c4e725641754d2f644b62357354340a48554b747a3052326a35426c324552374868415a725552696b43467069496a4e61304b6a48636a624147550a2d2d2d20727270546c764b454b724b334571686f4f504a6550314b45384f31643261727252657a37376d77656b52630adddf72d06fbcab57df3d0d312496ad218cd7fd6f8078bbf8812dd87947155eb7bd5e88")
+    v.append("x25519_not_canonical_body|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43630a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c460a2d2d2d20534759783141303854417874616d6e6643636c53626d6b35396b495a5759382f662b716d4d5876346739670aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("x25519_not_canonical_share|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139205445694630797071722b6270766371584e7943564a704c374f757750645677504c374b51456246444f43640a686a6162475877534c5139633353364c7732692b5332547532666977514848736c62424e36423431464c450a2d2d2d206e676f4b544544704a46306a5472443755414c4d7054796a5a43384f4e6548366b714376535943766d32670aeecf62c7ce91b433274e68d4f2f9134cb74c5bfef7beaa52c8f0bc0e992c1e8331fb66")
+    v.append("x25519_short_share|header failure||AGE-SECRET-KEY-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0||no|6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139206c376f346f545839583545332f4b4f44612f3743513043724139664b4d57736d39494a6a597a536c4a670a795547503561506f6236594a2b767a5266427444543944314b2f776d7968655a452f586c2f6d44534b41340a2d2d2d205a6e312f565274487044393348744958537631532b2b504f58654b6351463777312b687058684d6941626b0aac5d3f3706e55071d3a604204697b9090595c2f7f5dbaee80d7a018c2872058af3ce7c")
+    return v

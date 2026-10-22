@@ -1,0 +1,829 @@
+# tauraro-cpp-shim: tensor_native.c
+#
+# std.math.tensor -- n-dimensional float64 arrays with NumPy-style
+# broadcasting.
+#
+# A `Tensor` is a shape, element strides and an offset into shared storage.
+# reshape (of contiguous data), transpose/permute, slice, select,
+# expand_dims, squeeze and broadcast_to are VIEWS: they share storage, so
+# set() through a view is visible in the original (call copy() to detach).
+# Arithmetic broadcasts like NumPy: shapes are aligned on the right and a
+# dimension of 1 stretches to match. Results are fresh contiguous tensors.
+# Elementwise loops, reductions and matmul run in C (std/math/tensor_native.c).
+#
+# Usage:
+#   from std.math.tensor import Tensor
+#   mut a = Tensor.arange(0.0, 6.0, 1.0).reshape([2, 3])?    # [[0,1,2],[3,4,5]]
+#   mut b = Tensor.from_list([10.0, 20.0, 30.0], [3])?
+#   mut c = a.add(b)?                                         # broadcast over rows
+#   mut m = a.matmul(a.transpose())?                          # 2x2
+#   c.sum_axis(0, false)?.to_list()                           # [33, 45, 57] etc.
+#   print(m.to_str())
+
+from std.core.string import StringBuilder
+from std.math.linalg import Matrix, Vector
+
+extern "C":
+    def trc_t_binary(op: int, nd: int, shape: Pointer[int], out: Pointer[float], a: Pointer[float], aoff: int, ast: Pointer[int], b: Pointer[float], boff: int, bst: Pointer[int])
+    def trc_t_unary(op: int, nd: int, shape: Pointer[int], out: Pointer[float], a: Pointer[float], aoff: int, ast: Pointer[int], p: float)
+    def trc_t_reduce_all(op: int, nd: int, shape: Pointer[int], a: Pointer[float], aoff: int, ast: Pointer[int]) -> float
+    def trc_t_reduce_axis(op: int, nd: int, shape: Pointer[int], axis: int, out: Pointer[float], a: Pointer[float], aoff: int, ast: Pointer[int])
+    def trc_t_matmul(m: int, k: int, n: int, a: Pointer[float], aoff: int, ars: int, acs: int, b: Pointer[float], boff: int, brs: int, bcs: int, c: Pointer[float])
+
+# Binary op codes (match tensor_native.c)
+const _OP_ADD = 0
+const _OP_SUB = 1
+const _OP_MUL = 2
+const _OP_DIV = 3
+const _OP_POW = 4
+const _OP_MAX = 5
+const _OP_MIN = 6
+
+pub class TensorStorage:
+    pub buf: List[float]
+
+def _ts_new(n: int) -> TensorStorage:
+    mut s = TensorStorage()
+    s.buf = []
+    mut i = 0
+    while i < n:
+        s.buf.append(0.0)
+        i = i + 1
+    return s
+
+def _prod(shape: List[int]) -> int:
+    mut n = 1
+    mut i = 0
+    while i < len(shape):
+        n = n * shape[i]
+        i = i + 1
+    return n
+
+def _row_major(shape: List[int]) -> List[int]:
+    mut st: List[int] = []
+    mut i = 0
+    while i < len(shape):
+        st.append(0)
+        i = i + 1
+    mut acc = 1
+    mut d = len(shape) - 1
+    while d >= 0:
+        st[d] = acc
+        acc = acc * shape[d]
+        d = d - 1
+    return st
+
+def _copy_ints(xs: List[int]) -> List[int]:
+    mut out: List[int] = []
+    mut i = 0
+    while i < len(xs):
+        out.append(xs[i])
+        i = i + 1
+    return out
+
+def _shape_str(shape: List[int]) -> str:
+    mut sb = StringBuilder.init(32)
+    sb.append("(")
+    mut i = 0
+    while i < len(shape):
+        if i > 0: sb.append(", ")
+        sb.append_int(shape[i])
+        i = i + 1
+    if len(shape) == 1: sb.append(",")
+    sb.append(")")
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _fmt_num(v: float) -> str:
+    if v == floor(v) and fabs(v) < 1000000000000000.0:
+        mut iv = v as int
+        return f"{iv}."
+    mut s = f"{v}"
+    return s
+
+pub class Tensor:
+    pub store:   TensorStorage
+    pub shape:   List[int]
+    pub strides: List[int]
+    pub offset:  int
+
+extend Tensor:
+    # ── construction ─────────────────────────────────────────────────────
+    def _view(store: TensorStorage, shape: List[int], strides: List[int], offset: int) -> Tensor:
+        mut t = Tensor()
+        t.store = store
+        t.shape = shape
+        t.strides = strides
+        t.offset = offset
+        return t
+
+    def _fresh(shape: List[int]) -> Tensor:
+        mut sh = _copy_ints(shape)
+        return Tensor._view(_ts_new(_prod(sh)), sh, _row_major(sh), 0)
+
+    pub def zeros(shape: List[int]) -> Tensor: return Tensor._fresh(shape)
+
+    pub def full(shape: List[int], v: float) -> Tensor:
+        mut t = Tensor._fresh(shape)
+        mut i = 0
+        while i < len(t.store.buf):
+            t.store.buf[i] = v
+            i = i + 1
+        return t
+
+    pub def ones(shape: List[int]) -> Tensor: return Tensor.full(shape, 1.0)
+
+    pub def scalar(v: float) -> Tensor:
+        mut sh: List[int] = []
+        return Tensor.full(sh, v)
+
+    # Values in row-major order with the given shape.
+    pub def from_list(values: List[float], shape: List[int]) throws str -> Tensor:
+        if _prod(shape) != len(values):
+            raise(f"Tensor: {len(values)} values do not fill shape {_shape_str(shape)}")
+        mut t = Tensor._fresh(shape)
+        mut i = 0
+        while i < len(values):
+            t.store.buf[i] = values[i]
+            i = i + 1
+        return t
+
+    # 1-D tensor of the values.
+    pub def vector(values: List[float]) -> Tensor:
+        mut sh: List[int] = [len(values)]
+        mut r: Result[Tensor, str] = Tensor.from_list(values, sh)
+        return r.ok
+
+    # start, start+step, ... below stop.
+    pub def arange(start: float, stop: float, step: float) -> Tensor:
+        mut vals: List[float] = []
+        if step == 0.0: return Tensor.vector(vals)
+        mut x = start
+        mut k = 0
+        while (step > 0.0 and x < stop) or (step < 0.0 and x > stop):
+            vals.append(x)
+            k = k + 1
+            x = start + step * (k as float)
+        return Tensor.vector(vals)
+
+    # n evenly spaced values from a to b inclusive.
+    pub def linspace(a: float, b: float, n: int) -> Tensor:
+        mut vals: List[float] = []
+        mut i = 0
+        while i < n:
+            if n == 1: vals.append(a)
+            else: vals.append(a + (b - a) * (i as float) / ((n - 1) as float))
+            i = i + 1
+        return Tensor.vector(vals)
+
+    pub def eye(n: int) -> Tensor:
+        mut sh: List[int] = [n, n]
+        mut t = Tensor._fresh(sh)
+        mut i = 0
+        while i < n:
+            t.store.buf[i * n + i] = 1.0
+            i = i + 1
+        return t
+
+    # Uniform [0, 1) values from a seeded xorshift32 generator (two draws
+    # per value give 53 random bits). Same seed, same values.
+    pub def random_uniform(shape: List[int], seed: int) -> Tensor:
+        mut t = Tensor._fresh(shape)
+        mut s = (seed ^ 0x9E3779B9) & 0xFFFFFFFF
+        if s == 0: s = 0x2545F491
+        mut i = 0
+        while i < len(t.store.buf):
+            s = s ^ ((s << 13) & 0xFFFFFFFF)
+            s = s ^ (s >> 17)
+            s = s ^ ((s << 5) & 0xFFFFFFFF)
+            mut hi = s >> 5
+            s = s ^ ((s << 13) & 0xFFFFFFFF)
+            s = s ^ (s >> 17)
+            s = s ^ ((s << 5) & 0xFFFFFFFF)
+            mut lo = s >> 6
+            t.store.buf[i] = ((hi * 67108864 + lo) as float) / 9007199254740992.0
+            i = i + 1
+        return t
+
+    # Normal(mean, std) values (Box-Muller over random_uniform).
+    pub def random_normal(shape: List[int], mean: float, std: float, seed: int) -> Tensor:
+        mut n = _prod(shape)
+        mut u = Tensor.random_uniform([n + 1], seed)
+        mut t = Tensor._fresh(shape)
+        mut i = 0
+        while i < n:
+            mut u1 = u.store.buf[i]
+            if u1 < 0.000000000001: u1 = 0.000000000001
+            mut u2 = u.store.buf[(i + 1) % (n + 1)]
+            mut z = sqrt(-2.0 * log(u1)) * cos(6.283185307179586 * u2)
+            t.store.buf[i] = mean + std * z
+            i = i + 1
+        return t
+
+    pub def from_matrix(m: Matrix) -> Tensor:
+        mut sh: List[int] = [m.rows(), m.cols()]
+        mut t = Tensor._fresh(sh)
+        mut r = 0
+        while r < m.rows():
+            mut c = 0
+            while c < m.cols():
+                t.store.buf[r * m.cols() + c] = m.get(r, c)
+                c = c + 1
+            r = r + 1
+        return t
+
+    pub def from_vector(v: Vector) -> Tensor:
+        mut vals: List[float] = []
+        mut i = 0
+        while i < v.len():
+            vals.append(v.get(i))
+            i = i + 1
+        return Tensor.vector(vals)
+
+    # ── info ─────────────────────────────────────────────────────────────
+    pub def ndim(self) -> int: return len(self.shape)
+    pub def size(self) -> int: return _prod(self.shape)
+    pub def dim(self, axis: int) -> int:
+        mut a = axis
+        if a < 0: a = a + len(self.shape)
+        return self.shape[a]
+    pub def shape_str(self) -> str: return _shape_str(self.shape)
+
+    pub def is_contiguous(self) -> bool:
+        mut want = _row_major(self.shape)
+        mut i = 0
+        while i < len(self.shape):
+            if self.shape[i] > 1 and self.strides[i] != want[i]: return false
+            i = i + 1
+        return true
+
+    def _axis(self, axis: int) throws str -> int:
+        mut a = axis
+        if a < 0: a = a + len(self.shape)
+        if a < 0 or a >= len(self.shape): raise(f"Tensor: axis {axis} out of range for {_shape_str(self.shape)}")
+        return a
+
+    # ── element access ───────────────────────────────────────────────────
+    def _flat_of(self, idx: List[int]) throws str -> int:
+        if len(idx) != len(self.shape): raise(f"Tensor: index needs {len(self.shape)} coordinates")
+        mut off = self.offset
+        mut i = 0
+        while i < len(idx):
+            mut k = idx[i]
+            if k < 0: k = k + self.shape[i]
+            if k < 0 or k >= self.shape[i]: raise(f"Tensor: index {idx[i]} out of range for axis {i}")
+            off = off + k * self.strides[i]
+            i = i + 1
+        return off
+
+    pub def get(self, idx: List[int]) throws str -> float:
+        mut f = self._flat_of(idx)?
+        return self.store.buf[f]
+
+    pub def set(self, idx: List[int], v: float) throws str:
+        mut f = self._flat_of(idx)?
+        self.store.buf[f] = v
+
+    # The single value of a one-element tensor.
+    pub def item(self) throws str -> float:
+        if self.size() != 1: raise("Tensor: item() needs exactly one element")
+        return self.store.buf[self.offset]
+
+    # ── copies and views ─────────────────────────────────────────────────
+    def _map(self, op: int, p: float) -> Tensor:
+        mut out = Tensor._fresh(self.shape)
+        mut sp = self.shape as Pointer[int]
+        mut op_ = out.store.buf as Pointer[float]
+        mut ap = self.store.buf as Pointer[float]
+        mut stp = self.strides as Pointer[int]
+        trc_t_unary(op, len(self.shape), sp, op_, ap, self.offset, stp, p)
+        return out
+
+    # A contiguous copy (detached from shared storage).
+    pub def copy(self) -> Tensor: return self._map(0, 0.0)
+
+    pub def contiguous(self) -> Tensor:
+        if self.is_contiguous(): return self
+        return self.copy()
+
+    # Values in row-major order.
+    pub def to_list(self) -> List[float]:
+        mut c = self.contiguous()
+        mut out: List[float] = []
+        mut n = c.size()
+        mut i = 0
+        while i < n:
+            out.append(c.store.buf[c.offset + i])
+            i = i + 1
+        return out
+
+    # New shape with the same number of elements (one entry may be -1).
+    # A view when the data is contiguous, otherwise a copy.
+    pub def reshape(self, shape: List[int]) throws str -> Tensor:
+        mut sh = _copy_ints(shape)
+        mut neg = -1
+        mut known = 1
+        mut i = 0
+        while i < len(sh):
+            if sh[i] == -1:
+                if neg >= 0: raise("Tensor.reshape: only one dimension may be -1")
+                neg = i
+            else:
+                known = known * sh[i]
+            i = i + 1
+        if neg >= 0:
+            if known == 0 or self.size() % known != 0: raise(f"Tensor.reshape: cannot infer -1 for {_shape_str(shape)}")
+            sh[neg] = self.size() / known
+        if _prod(sh) != self.size(): raise(f"Tensor.reshape: {_shape_str(self.shape)} has {self.size()} elements, not {_prod(sh)}")
+        mut base = self.contiguous()
+        return Tensor._view(base.store, sh, _row_major(sh), base.offset)
+
+    pub def flatten(self) -> Tensor:
+        mut r: Result[Tensor, str] = self.reshape([-1])
+        return r.ok
+
+    # Reorder axes (a view).
+    pub def permute(self, axes: List[int]) throws str -> Tensor:
+        if len(axes) != len(self.shape): raise("Tensor.permute: need one entry per axis")
+        mut sh: List[int] = []
+        mut st: List[int] = []
+        mut used: List[bool] = []
+        mut i = 0
+        while i < len(axes):
+            used.append(false)
+            i = i + 1
+        i = 0
+        while i < len(axes):
+            mut a = self._axis(axes[i])?
+            if used[a]: raise("Tensor.permute: repeated axis")
+            used[a] = true
+            sh.append(self.shape[a])
+            st.append(self.strides[a])
+            i = i + 1
+        return Tensor._view(self.store, sh, st, self.offset)
+
+    # Reverse the axes (matrix transpose for 2-D).
+    pub def transpose(self) -> Tensor:
+        mut sh: List[int] = []
+        mut st: List[int] = []
+        mut i = len(self.shape) - 1
+        while i >= 0:
+            sh.append(self.shape[i])
+            st.append(self.strides[i])
+            i = i - 1
+        return Tensor._view(self.store, sh, st, self.offset)
+
+    # Elements start, start+step, ... below stop along `axis` (a view).
+    pub def slice(self, axis: int, start: int, stop: int, step: int) throws str -> Tensor:
+        mut a = self._axis(axis)?
+        if step <= 0: raise("Tensor.slice: step must be positive")
+        mut n = self.shape[a]
+        mut s0 = start
+        mut s1 = stop
+        if s0 < 0: s0 = s0 + n
+        if s1 < 0: s1 = s1 + n
+        if s0 < 0: s0 = 0
+        if s1 > n: s1 = n
+        mut cnt = 0
+        if s1 > s0: cnt = (s1 - s0 + step - 1) / step
+        mut sh = _copy_ints(self.shape)
+        mut st = _copy_ints(self.strides)
+        sh[a] = cnt
+        st[a] = self.strides[a] * step
+        return Tensor._view(self.store, sh, st, self.offset + s0 * self.strides[a])
+
+    # Fix one index along `axis`, dropping that axis (a view).
+    pub def select(self, axis: int, index: int) throws str -> Tensor:
+        mut a = self._axis(axis)?
+        mut k = index
+        if k < 0: k = k + self.shape[a]
+        if k < 0 or k >= self.shape[a]: raise("Tensor.select: index out of range")
+        mut sh: List[int] = []
+        mut st: List[int] = []
+        mut i = 0
+        while i < len(self.shape):
+            if i != a:
+                sh.append(self.shape[i])
+                st.append(self.strides[i])
+            i = i + 1
+        return Tensor._view(self.store, sh, st, self.offset + k * self.strides[a])
+
+    # Insert a length-1 axis.
+    pub def expand_dims(self, axis: int) -> Tensor:
+        mut a = axis
+        if a < 0: a = a + len(self.shape) + 1
+        if a < 0: a = 0
+        if a > len(self.shape): a = len(self.shape)
+        mut sh: List[int] = []
+        mut st: List[int] = []
+        mut i = 0
+        while i <= len(self.shape):
+            if i == a:
+                sh.append(1)
+                st.append(0)
+            if i < len(self.shape):
+                sh.append(self.shape[i])
+                st.append(self.strides[i])
+            i = i + 1
+        return Tensor._view(self.store, sh, st, self.offset)
+
+    # Drop all length-1 axes.
+    pub def squeeze(self) -> Tensor:
+        mut sh: List[int] = []
+        mut st: List[int] = []
+        mut i = 0
+        while i < len(self.shape):
+            if self.shape[i] != 1:
+                sh.append(self.shape[i])
+                st.append(self.strides[i])
+            i = i + 1
+        return Tensor._view(self.store, sh, st, self.offset)
+
+    # A view with `shape` (stride 0 along broadcast axes).
+    pub def broadcast_to(self, shape: List[int]) throws str -> Tensor:
+        mut nd = len(shape)
+        if nd < len(self.shape): raise("Tensor.broadcast_to: target has fewer dimensions")
+        mut st: List[int] = []
+        mut i = 0
+        while i < nd:
+            mut src = i - (nd - len(self.shape))
+            if src < 0:
+                st.append(0)
+            elif self.shape[src] == shape[i]:
+                st.append(self.strides[src])
+            elif self.shape[src] == 1:
+                st.append(0)
+            else:
+                raise(f"Tensor: cannot broadcast {_shape_str(self.shape)} to {_shape_str(shape)}")
+            i = i + 1
+        return Tensor._view(self.store, _copy_ints(shape), st, self.offset)
+
+    # ── broadcasting arithmetic ──────────────────────────────────────────
+    def _bshape(a: List[int], b: List[int]) throws str -> List[int]:
+        mut nd = len(a)
+        if len(b) > nd: nd = len(b)
+        mut out: List[int] = []
+        mut i = 0
+        while i < nd:
+            mut da = 1
+            mut db = 1
+            mut ia = i - (nd - len(a))
+            mut ib = i - (nd - len(b))
+            if ia >= 0: da = a[ia]
+            if ib >= 0: db = b[ib]
+            if da == db or db == 1: out.append(da)
+            elif da == 1: out.append(db)
+            else: raise(f"Tensor: shapes {_shape_str(a)} and {_shape_str(b)} do not broadcast")
+            i = i + 1
+        return out
+
+    def _binop(self, other: Tensor, op: int) throws str -> Tensor:
+        mut sh = Tensor._bshape(self.shape, other.shape)?
+        mut av = self.broadcast_to(sh)?
+        mut bv = other.broadcast_to(sh)?
+        mut out = Tensor._fresh(sh)
+        mut sp = sh as Pointer[int]
+        mut op_ = out.store.buf as Pointer[float]
+        mut ap = av.store.buf as Pointer[float]
+        mut ast = av.strides as Pointer[int]
+        mut bp = bv.store.buf as Pointer[float]
+        mut bst = bv.strides as Pointer[int]
+        trc_t_binary(op, len(sh), sp, op_, ap, av.offset, ast, bp, bv.offset, bst)
+        return out
+
+    pub def add(self, o: Tensor) throws str -> Tensor: return self._binop(o, _OP_ADD)?
+    pub def sub(self, o: Tensor) throws str -> Tensor: return self._binop(o, _OP_SUB)?
+    pub def mul(self, o: Tensor) throws str -> Tensor: return self._binop(o, _OP_MUL)?
+    pub def div(self, o: Tensor) throws str -> Tensor: return self._binop(o, _OP_DIV)?
+    pub def pow(self, o: Tensor) throws str -> Tensor: return self._binop(o, _OP_POW)?
+    pub def maximum(self, o: Tensor) throws str -> Tensor: return self._binop(o, _OP_MAX)?
+    pub def minimum(self, o: Tensor) throws str -> Tensor: return self._binop(o, _OP_MIN)?
+    pub def atan2(self, o: Tensor) throws str -> Tensor: return self._binop(o, 13)?
+    pub def fmod(self, o: Tensor) throws str -> Tensor: return self._binop(o, 14)?
+
+    # Comparisons give 1.0 / 0.0 masks.
+    pub def eq(self, o: Tensor) throws str -> Tensor: return self._binop(o, 7)?
+    pub def ne(self, o: Tensor) throws str -> Tensor: return self._binop(o, 8)?
+    pub def lt(self, o: Tensor) throws str -> Tensor: return self._binop(o, 9)?
+    pub def le(self, o: Tensor) throws str -> Tensor: return self._binop(o, 10)?
+    pub def gt(self, o: Tensor) throws str -> Tensor: return self._binop(o, 11)?
+    pub def ge(self, o: Tensor) throws str -> Tensor: return self._binop(o, 12)?
+    pub def logical_and(self, o: Tensor) throws str -> Tensor: return self._binop(o, 15)?
+    pub def logical_or(self, o: Tensor) throws str -> Tensor: return self._binop(o, 16)?
+
+    # Scalar forms.
+    pub def add_s(self, v: float) -> Tensor: return self._map(16, v)
+    pub def sub_s(self, v: float) -> Tensor: return self._map(29, v)
+    pub def mul_s(self, v: float) -> Tensor: return self._map(17, v)
+    pub def div_s(self, v: float) -> Tensor: return self._map(28, v)
+    pub def pow_s(self, v: float) -> Tensor: return self._map(18, v)
+    pub def rsub_s(self, v: float) -> Tensor: return self._map(19, v)
+    pub def rdiv_s(self, v: float) -> Tensor: return self._map(20, v)
+    pub def max_s(self, v: float) -> Tensor: return self._map(21, v)
+    pub def min_s(self, v: float) -> Tensor: return self._map(22, v)
+    pub def gt_s(self, v: float) -> Tensor: return self._map(23, v)
+    pub def lt_s(self, v: float) -> Tensor: return self._map(24, v)
+    pub def eq_s(self, v: float) -> Tensor: return self._map(25, v)
+    pub def clip(self, lo: float, hi: float) -> Tensor: return self._map(21, lo)._map(22, hi)
+
+    # Unary functions.
+    pub def neg(self) -> Tensor: return self._map(1, 0.0)
+    pub def abs(self) -> Tensor: return self._map(2, 0.0)
+    pub def sqrt(self) -> Tensor: return self._map(3, 0.0)
+    pub def exp(self) -> Tensor: return self._map(4, 0.0)
+    pub def log(self) -> Tensor: return self._map(5, 0.0)
+    pub def log2(self) -> Tensor: return self._map(31, 0.0)
+    pub def log10(self) -> Tensor: return self._map(32, 0.0)
+    pub def log1p(self) -> Tensor: return self._map(26, 0.0)
+    pub def expm1(self) -> Tensor: return self._map(27, 0.0)
+    pub def sin(self) -> Tensor: return self._map(6, 0.0)
+    pub def cos(self) -> Tensor: return self._map(7, 0.0)
+    pub def tan(self) -> Tensor: return self._map(8, 0.0)
+    pub def asin(self) -> Tensor: return self._map(34, 0.0)
+    pub def acos(self) -> Tensor: return self._map(35, 0.0)
+    pub def atan(self) -> Tensor: return self._map(36, 0.0)
+    pub def tanh(self) -> Tensor: return self._map(9, 0.0)
+    pub def relu(self) -> Tensor: return self._map(10, 0.0)
+    pub def leaky_relu(self, slope: float) -> Tensor: return self._map(33, slope)
+    pub def sigmoid(self) -> Tensor: return self._map(11, 0.0)
+    pub def floor(self) -> Tensor: return self._map(12, 0.0)
+    pub def ceil(self) -> Tensor: return self._map(13, 0.0)
+    pub def round(self) -> Tensor: return self._map(14, 0.0)
+    pub def square(self) -> Tensor: return self._map(15, 0.0)
+    pub def sign(self) -> Tensor: return self._map(30, 0.0)
+
+    # Apply any float -> float function (Tauraro-side loop).
+    pub def apply(self, f: def(float) -> float) -> Tensor:
+        mut out = self.copy()
+        mut i = 0
+        while i < len(out.store.buf):
+            out.store.buf[i] = f(out.store.buf[i])
+            i = i + 1
+        return out
+
+    # cond ? a : b, elementwise with broadcasting (cond nonzero = true).
+    pub def where(cond: Tensor, a: Tensor, b: Tensor) throws str -> Tensor:
+        mut m = cond.ne(Tensor.scalar(0.0))?
+        mut inv = m.rsub_s(1.0)
+        mut x = m.mul(a)?
+        mut y = inv.mul(b)?
+        return x.add(y)?
+
+    # ── reductions ───────────────────────────────────────────────────────
+    def _rall(self, op: int) -> float:
+        mut sp = self.shape as Pointer[int]
+        mut ap = self.store.buf as Pointer[float]
+        mut stp = self.strides as Pointer[int]
+        return trc_t_reduce_all(op, len(self.shape), sp, ap, self.offset, stp)
+
+    def _raxis(self, op: int, axis: int, keepdims: bool) throws str -> Tensor:
+        mut a = self._axis(axis)?
+        mut osh: List[int] = []
+        mut i = 0
+        while i < len(self.shape):
+            if i != a: osh.append(self.shape[i])
+            elif keepdims: osh.append(1)
+            i = i + 1
+        mut out = Tensor._fresh(osh)
+        mut sp = self.shape as Pointer[int]
+        mut op_ = out.store.buf as Pointer[float]
+        mut ap = self.store.buf as Pointer[float]
+        mut stp = self.strides as Pointer[int]
+        trc_t_reduce_axis(op, len(self.shape), sp, a, op_, ap, self.offset, stp)
+        return out
+
+    pub def sum(self) -> float: return self._rall(0)
+    pub def prod(self) -> float: return self._rall(1)
+    pub def max(self) -> float: return self._rall(2)
+    pub def min(self) -> float: return self._rall(3)
+    # Flat (row-major) index of the max / min.
+    pub def argmax(self) -> int: return self._rall(4) as int
+    pub def argmin(self) -> int: return self._rall(5) as int
+    pub def count_nonzero(self) -> int: return self._rall(7) as int
+
+    pub def mean(self) -> float:
+        if self.size() == 0: return 0.0
+        return self._rall(0) / (self.size() as float)
+
+    # Population variance / standard deviation (ddof = 0).
+    pub def var(self) -> float:
+        mut n = self.size()
+        if n == 0: return 0.0
+        mut m = self.mean()
+        mut ss = self._rall(6)
+        return ss / (n as float) - m * m
+
+    pub def std(self) -> float: return sqrt(self.var())
+
+    # Euclidean (Frobenius) norm.
+    pub def norm(self) -> float: return sqrt(self._rall(6))
+
+    pub def sum_axis(self, axis: int, keepdims: bool) throws str -> Tensor: return self._raxis(0, axis, keepdims)?
+    pub def prod_axis(self, axis: int, keepdims: bool) throws str -> Tensor: return self._raxis(1, axis, keepdims)?
+    pub def max_axis(self, axis: int, keepdims: bool) throws str -> Tensor: return self._raxis(2, axis, keepdims)?
+    pub def min_axis(self, axis: int, keepdims: bool) throws str -> Tensor: return self._raxis(3, axis, keepdims)?
+    pub def argmax_axis(self, axis: int, keepdims: bool) throws str -> Tensor: return self._raxis(4, axis, keepdims)?
+    pub def argmin_axis(self, axis: int, keepdims: bool) throws str -> Tensor: return self._raxis(5, axis, keepdims)?
+
+    pub def mean_axis(self, axis: int, keepdims: bool) throws str -> Tensor:
+        mut a = self._axis(axis)?
+        mut s = self._raxis(0, a, keepdims)?
+        return s.div_s(self.shape[a] as float)
+
+    # Numerically stable softmax along `axis`.
+    pub def softmax(self, axis: int) throws str -> Tensor:
+        mut mx = self.max_axis(axis, true)?
+        mut shifted = self.sub(mx)?
+        mut e = shifted.exp()
+        mut den = e.sum_axis(axis, true)?
+        return e.div(den)?
+
+    # ── linear algebra ───────────────────────────────────────────────────
+    # Matrix product. 2-D x 2-D, 1-D x 2-D, 2-D x 1-D, 1-D . 1-D (scalar
+    # tensor), and batches: leading dimensions broadcast (..., m, k) x (..., k, n).
+    pub def matmul(self, other: Tensor) throws str -> Tensor:
+        if self.ndim() == 0 or other.ndim() == 0: raise("Tensor.matmul: scalars are not allowed (use mul)")
+        mut a = self
+        mut b = other
+        mut a1 = a.ndim() == 1
+        mut b1 = b.ndim() == 1
+        if a1: a = a.expand_dims(0)
+        if b1: b = b.expand_dims(1)
+        mut m = a.shape[a.ndim() - 2]
+        mut k = a.shape[a.ndim() - 1]
+        mut k2 = b.shape[b.ndim() - 2]
+        mut n = b.shape[b.ndim() - 1]
+        if k != k2: raise(f"Tensor.matmul: inner dimensions differ ({a.shape_str()} x {b.shape_str()})")
+        # batch shape
+        mut abat: List[int] = []
+        mut bbat: List[int] = []
+        mut i = 0
+        while i < a.ndim() - 2:
+            abat.append(a.shape[i])
+            i = i + 1
+        i = 0
+        while i < b.ndim() - 2:
+            bbat.append(b.shape[i])
+            i = i + 1
+        mut batch = Tensor._bshape(abat, bbat)?
+        mut ash = _copy_ints(batch)
+        ash.append(m)
+        ash.append(k)
+        mut bsh = _copy_ints(batch)
+        bsh.append(k)
+        bsh.append(n)
+        mut av = a.broadcast_to(ash)?
+        mut bv = b.broadcast_to(bsh)?
+        mut osh = _copy_ints(batch)
+        osh.append(m)
+        osh.append(n)
+        mut out = Tensor._fresh(osh)
+        mut nb = _prod(batch)
+        mut bi = 0
+        mut ap = av.store.buf as Pointer[float]
+        mut bp = bv.store.buf as Pointer[float]
+        mut nd = len(batch)
+        while bi < nb:
+            # offsets of this batch element
+            mut rem = bi
+            mut ao = av.offset
+            mut bo = bv.offset
+            mut d = nd - 1
+            while d >= 0:
+                mut ix = rem % batch[d]
+                rem = rem / batch[d]
+                ao = ao + ix * av.strides[d]
+                bo = bo + ix * bv.strides[d]
+                d = d - 1
+            mut cp = out.store.buf as Pointer[float]
+            unsafe:
+                trc_t_matmul(m, k, n, ap, ao, av.strides[nd], av.strides[nd + 1], bp, bo, bv.strides[nd], bv.strides[nd + 1], cp.offset(bi * m * n))
+            bi = bi + 1
+        mut res = out
+        if a1 and b1:
+            mut sc: List[int] = []
+            res = res.reshape(sc)?
+        elif a1:
+            res = res.squeeze_axis(res.ndim() - 2)?
+        elif b1:
+            res = res.squeeze_axis(res.ndim() - 1)?
+        return res
+
+    # Remove one length-1 axis.
+    pub def squeeze_axis(self, axis: int) throws str -> Tensor:
+        mut a = self._axis(axis)?
+        if self.shape[a] != 1: raise("Tensor.squeeze_axis: axis length is not 1")
+        return self.select(a, 0)?
+
+    # Inner product of two 1-D tensors.
+    pub def dot(self, other: Tensor) throws str -> float:
+        if self.ndim() != 1 or other.ndim() != 1: raise("Tensor.dot: needs 1-D tensors")
+        if self.shape[0] != other.shape[0]: raise("Tensor.dot: lengths differ")
+        mut p = self.mul(other)?
+        return p.sum()
+
+    pub def outer(self, other: Tensor) throws str -> Tensor:
+        mut a = self.flatten().expand_dims(1)
+        mut b = other.flatten().expand_dims(0)
+        return a.mul(b)?
+
+    pub def to_matrix(self) throws str -> Matrix:
+        if self.ndim() != 2: raise("Tensor.to_matrix: needs a 2-D tensor")
+        mut m = Matrix.init(self.shape[0], self.shape[1])
+        mut r = 0
+        while r < self.shape[0]:
+            mut c = 0
+            while c < self.shape[1]:
+                m.set(r, c, self.store.buf[self.offset + r * self.strides[0] + c * self.strides[1]])
+                c = c + 1
+            r = r + 1
+        return m
+
+    # ── joining ──────────────────────────────────────────────────────────
+    # Join along an existing axis (shapes must match elsewhere).
+    pub def concat(parts: List[Tensor], axis: int) throws str -> Tensor:
+        if len(parts) == 0: raise("Tensor.concat: nothing to join")
+        mut first = parts[0]
+        mut a = first._axis(axis)?
+        mut osh = _copy_ints(first.shape)
+        mut total = 0
+        mut i = 0
+        while i < len(parts):
+            mut p = parts[i]
+            if p.ndim() != first.ndim(): raise("Tensor.concat: dimension counts differ")
+            mut d = 0
+            while d < p.ndim():
+                if d != a and p.shape[d] != first.shape[d]: raise("Tensor.concat: shapes differ off the join axis")
+                d = d + 1
+            total = total + p.shape[a]
+            i = i + 1
+        osh[a] = total
+        mut out = Tensor._fresh(osh)
+        mut at = 0
+        i = 0
+        while i < len(parts):
+            mut p2 = parts[i]
+            mut dst = out.slice(a, at, at + p2.shape[a], 1)?
+            mut src = p2.copy()
+            # write src into the dst view element by element (row-major)
+            mut flat = src.store.buf
+            mut nd = dst.ndim()
+            mut idx: List[int] = []
+            mut z = 0
+            while z < nd:
+                idx.append(0)
+                z = z + 1
+            mut cnt = 0
+            while cnt < len(flat):
+                mut off = dst.offset
+                mut d2 = 0
+                while d2 < nd:
+                    off = off + idx[d2] * dst.strides[d2]
+                    d2 = d2 + 1
+                out.store.buf[off] = flat[cnt]
+                cnt = cnt + 1
+                mut d3 = nd - 1
+                while d3 >= 0:
+                    idx[d3] = idx[d3] + 1
+                    if idx[d3] < dst.shape[d3]: break
+                    idx[d3] = 0
+                    d3 = d3 - 1
+            at = at + p2.shape[a]
+            i = i + 1
+        return out
+
+    # Join along a new axis.
+    pub def stack(parts: List[Tensor], axis: int) throws str -> Tensor:
+        mut ex: List[Tensor] = []
+        mut i = 0
+        while i < len(parts):
+            ex.append(parts[i].expand_dims(axis))
+            i = i + 1
+        return Tensor.concat(ex, axis)?
+
+    # ── formatting ───────────────────────────────────────────────────────
+    def _fmt_into(self, sb: StringBuilder, dim: int, off: int):
+        if dim == len(self.shape):
+            mut s = _fmt_num(self.store.buf[off])
+            sb.append(s)
+            return
+        sb.append("[")
+        mut i = 0
+        while i < self.shape[dim]:
+            if i > 0:
+                if dim == len(self.shape) - 1: sb.append(", ")
+                else: sb.append(",\n ")
+            self._fmt_into(sb, dim + 1, off + i * self.strides[dim])
+            i = i + 1
+        sb.append("]")
+
+    # Nested-bracket text, e.g. [[1., 2.],\n [3., 4.]].
+    pub def to_str(self) -> str:
+        mut sb = StringBuilder.init(64)
+        self._fmt_into(sb, 0, self.offset)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def __str__(self) -> str: return self.to_str()

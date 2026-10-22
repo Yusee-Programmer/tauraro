@@ -1,0 +1,206 @@
+# std.net.pop3 -- POP3 client (RFC 1939, CAPA RFC 2449, STLS RFC 2595,
+# AUTH PLAIN RFC 5034).
+#
+# Usage:
+#   from std.net.pop3 import Pop3Client
+#   mut c = Pop3Client.connect("pop.example.com", 995, true)?   # implicit TLS
+#   c.login("user", "secret")?
+#   mut st = c.stat()?                     # st.count, st.size
+#   mut msg = c.retr(1)?                   # full RFC 5322 message (dot-unstuffed)
+#   mut em = c.retr_email(1)?              # ... parsed (std.net.email)
+#   c.dele(1)?
+#   c.quit()
+#
+# Plaintext port 110: call starttls() before login. Errors (-ERR replies,
+# timeouts, TLS failures) raise with the server's text.
+
+from std.net.linestream import LineStream
+from std.net.tls import TlsOptions
+from std.crypto.hash import Hash
+from std.encoding.base64 import Base64
+from std.core.string import StringBuilder
+from std.net.email import EmailMessage
+
+pub class Pop3Stat:
+    pub count: int
+    pub size:  int
+
+# One LIST or UIDL entry.
+pub class Pop3Entry:
+    pub num:  int
+    pub size: int
+    pub uid:  str
+
+def _p3_int(s: str) -> int:
+    mut t = s.trim()
+    mut v = 0
+    mut i = 0
+    while i < t.len():
+        mut c = t.slice(i, i + 1)
+        if c < "0" or c > "9": break
+        v = v * 10 + int(c)
+        i = i + 1
+    return v
+
+pub class Pop3Client:
+    pub conn:      LineStream
+    pub greeting:  str
+    pub last_reply: str
+    _apop_stamp:   str
+
+extend Pop3Client:
+    pub def connect(host: str, port: int, tls: bool) throws str -> Pop3Client:
+        mut o = TlsOptions.default()
+        return Pop3Client.connect_with(host, port, tls, o)?
+
+    pub def connect_with(host: str, port: int, tls: bool, opts: TlsOptions) throws str -> Pop3Client:
+        mut c = Pop3Client()
+        c.conn = LineStream.connect_with(host, port, tls, opts)?
+        c.greeting = c._status()?
+        c._apop_stamp = ""
+        mut a = c.greeting.find("<")
+        mut b = c.greeting.find(">")
+        if a >= 0 and b > a: c._apop_stamp = c.greeting.slice(a, b + 1)
+        return c
+
+    # Read a status line; returns the text after +OK, raises on -ERR.
+    def _status(self) throws str -> str:
+        mut line = self.conn.read_line()?
+        self.last_reply = line
+        if line.starts_with("+OK"): return line.slice(3, line.len()).trim()
+        if line.starts_with("-ERR"):
+            mut msg = line.slice(4, line.len()).trim()
+            raise("POP3: " + msg)
+        raise("POP3: unexpected reply: " + line)
+
+    def _cmd(self, line: str) throws str -> str:
+        self.conn.write_line(line)?
+        return self._status()?
+
+    # Multi-line body after a +OK, dot-unstuffed, lines joined with CRLF.
+    def _multiline(self) throws str -> List[str]:
+        mut out: List[str] = []
+        while true:
+            mut line = self.conn.read_line()?
+            if line == ".": break
+            if line.starts_with(".."): line = line.slice(1, line.len())
+            out.append(line)
+        return out
+
+    # Capability names (CAPA). Empty if the server does not support CAPA.
+    pub def capabilities(self) throws str -> List[str]:
+        mut r: Result[str, str] = self._cmd("CAPA")
+        if r.is_err:
+            mut empty: List[str] = []
+            return empty
+        return self._multiline()?
+
+    # Upgrade a plaintext connection with STLS.
+    pub def starttls(self) throws str:
+        mut r = self._cmd("STLS")?
+        self.conn.start_tls()?
+
+    pub def login(self, user: str, password: str) throws str:
+        mut u = "USER " + user
+        self._cmd(u)?
+        mut p = "PASS " + password
+        self._cmd(p)?
+
+    # APOP (MD5 challenge-response; only when the greeting carried a timestamp).
+    pub def apop(self, user: str, password: str) throws str:
+        if self._apop_stamp.len() == 0: raise("POP3: server does not offer APOP")
+        mut seed = self._apop_stamp + password
+        mut digest = Hash.md5(seed)
+        mut cmd = "APOP " + user + " " + digest
+        self._cmd(cmd)?
+
+    # SASL PLAIN.
+    pub def auth_plain(self, user: str, password: str) throws str:
+        mut raw = "\0" + user + "\0" + password
+        mut b64 = Base64.encode(raw)
+        mut cmd = "AUTH PLAIN " + b64
+        self._cmd(cmd)?
+
+    pub def stat(self) throws str -> Pop3Stat:
+        mut t = self._cmd("STAT")?
+        mut parts = t.split(" ")
+        mut s = Pop3Stat()
+        s.count = 0
+        s.size = 0
+        if parts.len >= 1: s.count = _p3_int(parts.get(0))
+        if parts.len >= 2: s.size = _p3_int(parts.get(1))
+        return s
+
+    pub def list(self) throws str -> List[Pop3Entry]:
+        self._cmd("LIST")?
+        mut lines = self._multiline()?
+        mut out: List[Pop3Entry] = []
+        mut i = 0
+        while i < len(lines):
+            mut parts = lines[i].split(" ")
+            if parts.len >= 2:
+                mut e = Pop3Entry()
+                e.num = _p3_int(parts.get(0))
+                e.size = _p3_int(parts.get(1))
+                e.uid = ""
+                out.append(e)
+            i = i + 1
+        return out
+
+    pub def uidl(self) throws str -> List[Pop3Entry]:
+        self._cmd("UIDL")?
+        mut lines = self._multiline()?
+        mut out: List[Pop3Entry] = []
+        mut i = 0
+        while i < len(lines):
+            mut parts = lines[i].split(" ")
+            if parts.len >= 2:
+                mut e = Pop3Entry()
+                e.num = _p3_int(parts.get(0))
+                e.size = 0
+                e.uid = parts.get(1)
+                out.append(e)
+            i = i + 1
+        return out
+
+    def _join(lines: List[str]) -> str:
+        mut sb = StringBuilder.init(4096)
+        mut i = 0
+        while i < len(lines):
+            sb.append(lines[i])
+            sb.append("\r\n")
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # The whole message n.
+    pub def retr(self, n: int) throws str -> str:
+        mut cmd = f"RETR {n}"
+        self._cmd(cmd)?
+        mut lines = self._multiline()?
+        return Pop3Client._join(lines)
+
+    # retr parsed with std.net.email (headers, bodies, attachments).
+    pub def retr_email(self, n: int) throws str -> EmailMessage:
+        mut raw = self.retr(n)?
+        return EmailMessage.parse(raw)
+
+    # Headers plus the first `lines` body lines of message n.
+    pub def top(self, n: int, lines: int) throws str -> str:
+        mut cmd = f"TOP {n} {lines}"
+        self._cmd(cmd)?
+        mut ls = self._multiline()?
+        return Pop3Client._join(ls)
+
+    pub def dele(self, n: int) throws str:
+        mut cmd = f"DELE {n}"
+        self._cmd(cmd)?
+
+    pub def rset(self) throws str: self._cmd("RSET")?
+    pub def noop(self) throws str: self._cmd("NOOP")?
+
+    # QUIT (commits deletions) and close.
+    pub def quit(self):
+        mut r: Result[str, str] = self._cmd("QUIT")
+        self.conn.close()

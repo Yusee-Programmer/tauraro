@@ -1,0 +1,668 @@
+# std.crypto.csr -- key pairs with their DER/PEM encodings, PKCS#10
+# certificate signing requests (RFC 2986) and a small X.509 certificate
+# builder (self-signed or CA-signed). Pure Tauraro on top of std.crypto.der
+# and std.crypto.pk.
+#
+#   KeyPair      an RSA or EC (P-256 / P-384) private key plus its
+#                SubjectPublicKeyInfo, public components and PKCS#8 PEM
+#   Csr          build (subject CN + subjectAltName DNS / IP entries), parse,
+#                verify the self-signature
+#   CertBuilder  serial, subject / issuer, validity, SANs, CA flag, key usage,
+#                extended key usage, extra extensions; signs with a KeyPair
+#
+# Usage:
+#   from std.crypto.csr import KeyPair, Csr, CertBuilder
+#   from std.crypto.pk import CURVE_P256
+#   mut key = KeyPair.generate_ec(CURVE_P256)?
+#   mut csr_der = Csr.build(key, ["example.com", "www.example.com"])?
+#   mut csr = Csr.parse(csr_der)?        # csr.dns_names, csr.verify()
+#   mut b = CertBuilder.init()
+#   b.subject_cn("example.com")
+#   b.add_name("example.com")
+#   mut cert_der = b.self_signed(key)?   # or b.sign(subject_spki, issuer_key)
+#   key.private_pem()                    # "-----BEGIN PRIVATE KEY-----..."
+#
+# Limitations: RSA keys cannot be generated (load them from PEM / DER);
+# signatures use SHA-256 for RSA and P-256, SHA-384 for P-384; names are
+# DNS names or IP literals only (no e-mail / URI SANs).
+
+from std.core.string import StringBuilder
+from std.crypto.der import Der, DerReader, DerNode, der_byte, der_chr, der_be_bytes, DER_SEQUENCE, DER_INTEGER, DER_OID, DER_OCTET_STRING, DER_BIT_STRING, DER_UTF8, DER_PRINTABLE, DER_IA5, DER_BOOLEAN
+from std.crypto.pk import PKey, Pem, KEY_RSA, KEY_EC_P256, KEY_EC_P384, CURVE_P256, CURVE_P384, SIG_PKCS1
+from std.crypto.native import ALG_SHA256, ALG_SHA384, _cn_hex
+from std.crypto.random import SecureRandom
+from std.sys.time import Clock
+
+pub const OID_RSA = "1.2.840.113549.1.1.1"
+pub const OID_SHA256_RSA = "1.2.840.113549.1.1.11"
+pub const OID_EC_PUBLIC_KEY = "1.2.840.10045.2.1"
+pub const OID_P256 = "1.2.840.10045.3.1.7"
+pub const OID_P384 = "1.3.132.0.34"
+pub const OID_ECDSA_SHA256 = "1.2.840.10045.4.3.2"
+pub const OID_ECDSA_SHA384 = "1.2.840.10045.4.3.3"
+pub const OID_COMMON_NAME = "2.5.4.3"
+pub const OID_ORGANIZATION = "2.5.4.10"
+pub const OID_EXTENSION_REQUEST = "1.2.840.113549.1.9.14"
+pub const OID_SUBJECT_ALT_NAME = "2.5.29.17"
+pub const OID_BASIC_CONSTRAINTS = "2.5.29.19"
+pub const OID_KEY_USAGE = "2.5.29.15"
+pub const OID_EXT_KEY_USAGE = "2.5.29.37"
+pub const OID_SUBJECT_KEY_ID = "2.5.29.14"
+pub const OID_AUTHORITY_KEY_ID = "2.5.29.35"
+pub const OID_SERVER_AUTH = "1.3.6.1.5.5.7.3.1"
+pub const OID_CLIENT_AUTH = "1.3.6.1.5.5.7.3.2"
+
+# ─── IP literals ─────────────────────────────────────────────────────────────
+
+def _hexval(c: int) -> int:
+    if c >= 48 and c <= 57: return c - 48
+    if c >= 97 and c <= 102: return c - 87
+    if c >= 65 and c <= 70: return c - 55
+    return -1
+
+def _ipv4_bytes(s: str) -> str:
+    mut parts = s.split_exact(".")
+    if len(parts) != 4: return ""
+    mut sb = StringBuilder.init(4)
+    mut i = 0
+    while i < 4:
+        mut p = parts[i]
+        if p.len() == 0 or p.len() > 3:
+            sb.free()
+            return ""
+        mut v = 0
+        mut j = 0
+        while j < p.len():
+            mut c = der_byte(p, j)
+            if c < 48 or c > 57:
+                sb.free()
+                return ""
+            v = v * 10 + (c - 48)
+            j = j + 1
+        if v > 255:
+            sb.free()
+            return ""
+        sb.append_char(v)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _hex_group(g: str) -> int:
+    if g.len() == 0 or g.len() > 4: return -1
+    mut v = 0
+    mut i = 0
+    while i < g.len():
+        mut h = _hexval(der_byte(g, i))
+        if h < 0: return -1
+        v = v * 16 + h
+        i = i + 1
+    return v
+
+def _ipv6_bytes(s: str) -> str:
+    if s.find(":") < 0: return ""
+    mut head = s
+    mut tail = ""
+    mut has_gap = false
+    mut gap = s.find("::")
+    if gap >= 0:
+        has_gap = true
+        head = s.slice(0, gap)
+        tail = s.slice(gap + 2, s.len())
+        if tail.find("::") >= 0: return ""
+    mut groups: List[int] = []
+    mut tgroups: List[int] = []
+    if head.len() > 0:
+        mut hp = head.split_exact(":")
+        mut i = 0
+        while i < len(hp):
+            mut v = _hex_group(hp[i])
+            if v < 0: return ""
+            groups.append(v)
+            i = i + 1
+    if tail.len() > 0:
+        mut tp = tail.split_exact(":")
+        mut k = 0
+        while k < len(tp):
+            mut piece = tp[k]
+            if k == len(tp) - 1 and piece.find(".") >= 0:
+                mut v4 = _ipv4_bytes(piece)
+                if v4.len() != 4: return ""
+                tgroups.append(der_byte(v4, 0) * 256 + der_byte(v4, 1))
+                tgroups.append(der_byte(v4, 2) * 256 + der_byte(v4, 3))
+            else:
+                mut v = _hex_group(piece)
+                if v < 0: return ""
+                tgroups.append(v)
+            k = k + 1
+    mut total = len(groups) + len(tgroups)
+    if has_gap:
+        if total > 7: return ""
+    elif total != 8:
+        return ""
+    mut sb = StringBuilder.init(16)
+    mut a = 0
+    while a < len(groups):
+        sb.append_char(groups[a] >> 8)
+        sb.append_char(groups[a] & 255)
+        a = a + 1
+    mut z = 0
+    while z < 8 - total:
+        sb.append_char(0)
+        sb.append_char(0)
+        z = z + 1
+    mut b = 0
+    while b < len(tgroups):
+        sb.append_char(tgroups[b] >> 8)
+        sb.append_char(tgroups[b] & 255)
+        b = b + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# 4 or 16 bytes for an IPv4 / IPv6 literal, "" if `s` is not one.
+pub def ip_to_bytes(s: str) -> str:
+    mut v4 = _ipv4_bytes(s)
+    if v4.len() == 4: return v4
+    return _ipv6_bytes(s)
+
+pub def is_ip_literal(s: str) -> bool:
+    return ip_to_bytes(s).len() > 0
+
+# Text form of 4 / 16 address bytes (IPv6 in RFC 5952 form).
+pub def ip_to_text(b: str) -> str:
+    if b.len() == 4:
+        return f"{der_byte(b, 0)}.{der_byte(b, 1)}.{der_byte(b, 2)}.{der_byte(b, 3)}"
+    if b.len() != 16: return ""
+    mut g: List[int] = []
+    mut i = 0
+    while i < 8:
+        g.append(der_byte(b, 2 * i) * 256 + der_byte(b, 2 * i + 1))
+        i = i + 1
+    mut best = -1
+    mut best_len = 0
+    mut j = 0
+    while j < 8:
+        if g[j] == 0:
+            mut k = j
+            while k < 8 and g[k] == 0:
+                k = k + 1
+            if k - j > best_len and k - j >= 2:
+                best = j
+                best_len = k - j
+            j = k
+        else:
+            j = j + 1
+    mut sb = StringBuilder.init(40)
+    mut x = 0
+    while x < 8:
+        if x == best:
+            sb.append("::")
+            x = x + best_len
+        else:
+            if x > 0 and x != best + best_len: sb.append(":")
+            sb.append(_hex4(g[x]))
+            x = x + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _hex4(v: int) -> str:
+    mut digits = "0123456789abcdef"
+    mut sb = StringBuilder.init(4)
+    mut started = false
+    mut shift = 12
+    while shift >= 0:
+        mut d = (v >> shift) & 15
+        if d != 0 or started or shift == 0:
+            sb.append_char(der_byte(digits, d))
+            started = true
+        shift = shift - 4
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# ─── KeyPair ─────────────────────────────────────────────────────────────────
+
+pub class KeyPair:
+    pub pkey: PKey
+    pub kind: int          # KEY_RSA, KEY_EC_P256 or KEY_EC_P384
+    pub rsa_n: str         # RSA modulus (big-endian, no leading zeros)
+    pub rsa_e: str         # RSA public exponent
+    pub ec_x: str          # EC affine coordinates (32 / 48 bytes)
+    pub ec_y: str
+    pub pem: str           # private key PEM (as loaded, or PKCS#8 for generated keys)
+
+def _ec_curve_oid(kind: int) -> str:
+    if kind == KEY_EC_P384: return OID_P384
+    return OID_P256
+
+extend KeyPair:
+    def _fill_ec(k: KeyPair):
+        mut pt = k.pkey.public_bytes()
+        mut cl = (pt.len() - 1) / 2
+        k.ec_x = pt.slice(1, 1 + cl)
+        k.ec_y = pt.slice(1 + cl, pt.len())
+
+    # A fresh EC key on CURVE_P256 or CURVE_P384.
+    pub def generate_ec(curve: int) throws str -> KeyPair:
+        mut k = KeyPair()
+        k.pkey = PKey.generate_ec(curve)?
+        k.kind = k.pkey.kind()
+        k.rsa_n = ""
+        k.rsa_e = ""
+        KeyPair._fill_ec(k)
+        k.pem = ""
+        k.pem = k._ec_pkcs8_pem()?
+        return k
+
+    # Load a private key (PKCS#8 "PRIVATE KEY", "RSA PRIVATE KEY" or
+    # "EC PRIVATE KEY"); RSA and EC P-256 / P-384.
+    pub def from_pem(text: str) throws str -> KeyPair:
+        mut i = 0
+        while i < 16:
+            mut lab = Pem.label_of(text, i)
+            if lab.len() == 0: break
+            if lab == "PRIVATE KEY" or lab == "RSA PRIVATE KEY" or lab == "EC PRIVATE KEY":
+                mut der = Pem.decode_nth(text, "", i)?
+                mut k = KeyPair.from_der(der)?
+                k.pem = text
+                return k
+            if lab == "ENCRYPTED PRIVATE KEY": raise("KeyPair: encrypted keys are not supported")
+            i = i + 1
+        raise("KeyPair: no private key in the PEM text")
+
+    # Load a DER private key (PKCS#8, PKCS#1 RSA or SEC1 EC).
+    pub def from_der(der: str) throws str -> KeyPair:
+        mut k = KeyPair()
+        k.pkey = PKey.from_der(der)?
+        if not k.pkey.has_private(): raise("KeyPair: a private key is required")
+        k.kind = k.pkey.kind()
+        k.rsa_n = ""
+        k.rsa_e = ""
+        k.ec_x = ""
+        k.ec_y = ""
+        if k.kind == KEY_RSA:
+            mut ne = KeyPair._rsa_components(der)?
+            k.rsa_n = Der.uint_bytes(ne[0])
+            k.rsa_e = Der.uint_bytes(ne[1])
+            k.pem = Pem.encode(der, "PRIVATE KEY")
+            mut top = Der.parse(der)?
+            mut kids = Der.children(top)?
+            if len(kids) > 3: k.pem = Pem.encode(der, "RSA PRIVATE KEY")
+        elif k.kind == KEY_EC_P256 or k.kind == KEY_EC_P384:
+            KeyPair._fill_ec(k)
+            k.pem = ""
+            k.pem = k._ec_pkcs8_pem()?
+        else:
+            raise("KeyPair: unsupported key type (need RSA or EC P-256 / P-384)")
+        return k
+
+    # RSA private key from big-endian components (as in a JWK).
+    pub def rsa_from_components(n: str, e: str, d: str, p: str, q: str, dp: str, dq: str, qi: str) throws str -> KeyPair:
+        mut body = Der.integer(0) + Der.uint(n) + Der.uint(e) + Der.uint(d) + Der.uint(p) + Der.uint(q) + Der.uint(dp) + Der.uint(dq) + Der.uint(qi)
+        return KeyPair.from_der(Der.seq(body))?
+
+    # EC private key from its scalar.
+    pub def ec_from_scalar(curve: int, d: str) throws str -> KeyPair:
+        mut k = KeyPair()
+        k.pkey = PKey.ec_from_private(curve, d)?
+        k.kind = k.pkey.kind()
+        k.rsa_n = ""
+        k.rsa_e = ""
+        KeyPair._fill_ec(k)
+        k.pem = ""
+        k.pem = k._ec_pkcs8_pem()?
+        return k
+
+    # [n, e] INTEGER contents of a PKCS#8 or PKCS#1 RSA private key.
+    def _rsa_components(der: str) throws str -> List[str]:
+        mut top = Der.parse(der)?
+        mut kids = Der.children(top)?
+        if len(kids) == 3 and kids[1].tag == DER_SEQUENCE:
+            mut inner = Der.parse(kids[2].content)?
+            mut ik = Der.children(inner)?
+            if len(ik) < 3: raise("KeyPair: malformed RSA key")
+            return [ik[1].content, ik[2].content]
+        if len(kids) < 3: raise("KeyPair: malformed RSA key")
+        return [kids[1].content, kids[2].content]
+
+    def _ec_pkcs8_pem(self) throws str -> str:
+        mut d = self.pkey.ec_private_bytes()?
+        mut pt = "\x04" + self.ec_x + self.ec_y
+        mut sec1 = Der.seq(Der.integer(1) + Der.octets(d) + Der.ctx(1, Der.bits(pt)))
+        mut alg = Der.seq(Der.oid(OID_EC_PUBLIC_KEY) + Der.oid(_ec_curve_oid(self.kind)))
+        mut p8 = Der.seq(Der.integer(0) + alg + Der.octets(sec1))
+        return Pem.encode(p8, "PRIVATE KEY")
+
+    pub def is_rsa(self) -> bool: return self.kind == KEY_RSA
+
+    # The private key as PEM (PKCS#8 for EC keys; RSA keys as loaded).
+    pub def private_pem(self) -> str: return self.pem
+
+    # SubjectPublicKeyInfo DER.
+    pub def spki(self) -> str:
+        if self.kind == KEY_RSA:
+            mut rsa_pub = Der.seq(Der.uint(self.rsa_n) + Der.uint(self.rsa_e))
+            return Der.seq(Der.seq(Der.oid(OID_RSA) + Der.null_value()) + Der.bits(rsa_pub))
+        mut pt = "\x04" + self.ec_x + self.ec_y
+        return Der.seq(Der.seq(Der.oid(OID_EC_PUBLIC_KEY) + Der.oid(_ec_curve_oid(self.kind))) + Der.bits(pt))
+
+    pub def public_pem(self) -> str: return Pem.encode(self.spki(), "PUBLIC KEY")
+
+    # Hash used for signatures with this key.
+    pub def hash_alg(self) -> int:
+        if self.kind == KEY_EC_P384: return ALG_SHA384
+        return ALG_SHA256
+
+    # AlgorithmIdentifier DER of this key's X.509 / PKCS#10 signatures.
+    pub def sig_alg_der(self) -> str:
+        if self.kind == KEY_RSA: return Der.seq(Der.oid(OID_SHA256_RSA) + Der.null_value())
+        if self.kind == KEY_EC_P384: return Der.seq(Der.oid(OID_ECDSA_SHA384))
+        return Der.seq(Der.oid(OID_ECDSA_SHA256))
+
+    # Signature for X.509 / PKCS#10 (ECDSA DER-encoded, RSA PKCS#1 v1.5).
+    pub def sign_der(self, data: str) throws str -> str:
+        return self.pkey.sign(data, self.hash_alg(), SIG_PKCS1)?
+
+    # Signature in JWS form (ECDSA r||s, RSA PKCS#1 v1.5).
+    pub def sign_jose(self, data: str) throws str -> str:
+        if self.kind == KEY_RSA: return self.pkey.sign(data, ALG_SHA256, SIG_PKCS1)?
+        return self.pkey.sign_raw(data, self.hash_alg())?
+
+    pub def dispose(self): self.pkey.dispose()
+
+# ─── names and extensions ───────────────────────────────────────────────────
+
+# X.501 Name with a single commonName (UTF8String), or an empty Name for "".
+pub def name_der(common_name: str) -> str:
+    if common_name.len() == 0: return Der.seq("")
+    return Der.seq(Der.set_of(Der.seq(Der.oid(OID_COMMON_NAME) + Der.utf8(common_name))))
+
+# GeneralNames for a list of DNS names / IP literals.
+pub def general_names_der(names: List[str]) -> str:
+    mut sb = StringBuilder.init(64)
+    mut i = 0
+    while i < len(names):
+        mut ip = ip_to_bytes(names[i])
+        if ip.len() > 0: sb.append(Der.ctx_prim(7, ip))
+        else: sb.append(Der.ctx_prim(2, names[i]))
+        i = i + 1
+    mut body = sb.to_owned()
+    sb.free()
+    return Der.seq(body)
+
+# One Extension: SEQUENCE { OID, [critical BOOLEAN], OCTET STRING value }.
+pub def extension_der(oid: str, critical: bool, value_der: str) -> str:
+    mut crit = ""
+    if critical: crit = Der.boolean(true)
+    return Der.seq(Der.oid(oid) + crit + Der.octets(value_der))
+
+def _first_dns(names: List[str]) -> str:
+    mut i = 0
+    while i < len(names):
+        if not is_ip_literal(names[i]) and names[i].len() <= 64: return names[i]
+        i = i + 1
+    return ""
+
+# Text of a Name's commonName ("" if none).
+pub def name_common_name(name_der_bytes: str) throws str -> str:
+    mut n = Der.parse(name_der_bytes)?
+    mut rdns = Der.children(n)?
+    mut i = 0
+    while i < len(rdns):
+        mut atvs = Der.children(rdns[i])?
+        mut j = 0
+        while j < len(atvs):
+            mut parts = Der.children(atvs[j])?
+            if len(parts) == 2 and Der.oid_text(parts[0].content) == OID_COMMON_NAME: return parts[1].content
+            j = j + 1
+        i = i + 1
+    return ""
+
+# Parse GeneralNames content into DNS names and IP texts.
+def _parse_general_names(seq_der: str, dns: List[str], ips: List[str]) throws str:
+    mut n = Der.parse(seq_der)?
+    mut kids = Der.children(n)?
+    mut i = 0
+    while i < len(kids):
+        if kids[i].tag == 0x82: dns.append(kids[i].content)
+        elif kids[i].tag == 0x87: ips.append(ip_to_text(kids[i].content))
+        i = i + 1
+
+# ─── Csr ─────────────────────────────────────────────────────────────────────
+
+pub class Csr:
+    pub der: str
+    pub info_der: str            # CertificationRequestInfo (the signed part)
+    pub subject_der: str
+    pub common_name: str
+    pub dns_names: List[str]
+    pub ip_addresses: List[str]
+    pub public_key_der: str      # SubjectPublicKeyInfo
+    pub sig_alg_oid: str
+    pub signature: str
+
+extend Csr:
+    # A CSR for `names` (DNS names and/or IP literals) signed by `key`. The
+    # subject CN is the first DNS name of at most 64 characters (empty
+    # subject when there is none); every name goes into subjectAltName.
+    pub def build(key: KeyPair, names: List[str]) throws str -> str:
+        if len(names) == 0: raise("CSR: at least one name is required")
+        mut san = extension_der(OID_SUBJECT_ALT_NAME, false, general_names_der(names))
+        mut ext_req = Der.seq(Der.oid(OID_EXTENSION_REQUEST) + Der.set_of(Der.seq(san)))
+        mut info = Der.seq(Der.integer(0) + name_der(_first_dns(names)) + key.spki() + Der.ctx(0, ext_req))
+        mut sig = key.sign_der(info)?
+        return Der.seq(info + key.sig_alg_der() + Der.bits(sig))
+
+    pub def build_pem(key: KeyPair, names: List[str]) throws str -> str:
+        mut d = Csr.build(key, names)?
+        return Pem.encode(d, "CERTIFICATE REQUEST")
+
+    pub def from_pem(text: str) throws str -> Csr:
+        mut d = Pem.decode(text, "CERTIFICATE REQUEST")?
+        return Csr.parse(d)?
+
+    pub def parse(der: str) throws str -> Csr:
+        mut top = Der.parse(der)?
+        mut parts = Der.children(top)?
+        if len(parts) != 3: raise("CSR: malformed request")
+        mut c = Csr()
+        c.der = der
+        c.info_der = parts[0].raw
+        mut alg = Der.children(parts[1])?
+        if len(alg) < 1: raise("CSR: malformed signature algorithm")
+        c.sig_alg_oid = Der.oid_text(alg[0].content)
+        c.signature = Der.bit_bytes(parts[2].content)
+        mut info = Der.children(parts[0])?
+        if len(info) < 3: raise("CSR: malformed request info")
+        c.subject_der = info[1].raw
+        c.common_name = name_common_name(info[1].raw)?
+        c.public_key_der = info[2].raw
+        c.dns_names = []
+        c.ip_addresses = []
+        if len(info) > 3 and info[3].tag == 0xa0:
+            mut attrs = Der.children(info[3])?
+            mut i = 0
+            while i < len(attrs):
+                mut av = Der.children(attrs[i])?
+                if len(av) == 2 and Der.oid_text(av[0].content) == OID_EXTENSION_REQUEST:
+                    mut vals = Der.children(av[1])?
+                    if len(vals) > 0:
+                        mut exts = Der.children(vals[0])?
+                        mut j = 0
+                        while j < len(exts):
+                            mut e = Der.children(exts[j])?
+                            if len(e) >= 2 and Der.oid_text(e[0].content) == OID_SUBJECT_ALT_NAME:
+                                _parse_general_names(e[len(e) - 1].content, c.dns_names, c.ip_addresses)?
+                            j = j + 1
+                i = i + 1
+        return c
+
+    # True when the request is signed by its own public key.
+    pub def verify(self) -> bool:
+        mut r: Result[PKey, str] = PKey.from_der(self.public_key_der)
+        if r.is_err: return false
+        mut k = r.ok
+        mut ok = false
+        if self.sig_alg_oid == OID_SHA256_RSA: ok = k.verify(self.info_der, self.signature, ALG_SHA256, SIG_PKCS1)
+        elif self.sig_alg_oid == OID_ECDSA_SHA256: ok = k.verify(self.info_der, self.signature, ALG_SHA256, 0)
+        elif self.sig_alg_oid == OID_ECDSA_SHA384: ok = k.verify(self.info_der, self.signature, ALG_SHA384, 0)
+        k.dispose()
+        return ok
+
+    # Every requested name: DNS names, then IP addresses.
+    pub def names(self) -> List[str]:
+        mut out: List[str] = []
+        mut i = 0
+        while i < len(self.dns_names):
+            out.append(self.dns_names[i])
+            i = i + 1
+        mut j = 0
+        while j < len(self.ip_addresses):
+            out.append(self.ip_addresses[j])
+            j = j + 1
+        return out
+
+    pub def to_pem(self) -> str: return Pem.encode(self.der, "CERTIFICATE REQUEST")
+
+def _spki_is_rsa(spki: str) -> bool:
+    mut r: Result[DerNode, str] = Der.parse(spki)
+    if r.is_err: return false
+    mut k: Result[List[DerNode], str] = Der.children(r.ok)
+    if k.is_err or len(k.ok) < 1: return false
+    mut a: Result[List[DerNode], str] = Der.children(k.ok[0])
+    if a.is_err or len(a.ok) < 1: return false
+    return Der.oid_text(a.ok[0].content) == OID_RSA
+
+# ─── CertBuilder ─────────────────────────────────────────────────────────────
+
+pub class CertBuilder:
+    pub serial: str            # big-endian serial bytes (random 16 bytes by default)
+    pub subject: str           # Name DER
+    pub issuer: str            # Name DER ("" = same as subject)
+    pub not_before: int        # Unix seconds
+    pub not_after: int
+    pub names: List[str]       # subjectAltName entries (DNS names / IP literals)
+    pub is_ca: bool
+    pub path_len: int          # pathLenConstraint for CAs (-1 = none)
+    pub server_auth: bool      # add extendedKeyUsage serverAuth (leaf certificates)
+    pub extensions: List[str]  # extra Extension DERs (see extension_der)
+
+extend CertBuilder:
+    # Defaults: random serial, empty subject, valid from 1 hour ago for 90
+    # days, leaf certificate with serverAuth.
+    pub def init() -> CertBuilder:
+        mut b = CertBuilder()
+        mut r: Result[str, str] = SecureRandom.bytes(16)
+        mut s = "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10"
+        if r.is_ok: s = r.ok
+        b.serial = der_chr(der_byte(s, 0) & 0x7f | 0x01) + s.slice(1, s.len())
+        b.subject = name_der("")
+        b.issuer = ""
+        mut now = Clock.timestamp()
+        b.not_before = now - 3600
+        b.not_after = now + 90 * 86400
+        b.names = []
+        b.is_ca = false
+        b.path_len = -1
+        b.server_auth = true
+        b.extensions = []
+        return b
+
+    pub def subject_cn(self, cn: str): self.subject = name_der(cn)
+    pub def issuer_cn(self, cn: str): self.issuer = name_der(cn)
+    pub def add_name(self, name: str): self.names.append(name)
+    pub def validity(self, not_before: int, not_after: int):
+        self.not_before = not_before
+        self.not_after = not_after
+    pub def add_extension(self, oid: str, critical: bool, value_der: str):
+        self.extensions.append(extension_der(oid, critical, value_der))
+
+    def _tbs(self, spki: str, issuer_key: KeyPair) -> str:
+        mut iss = self.issuer
+        if iss.len() == 0: iss = self.subject
+        mut exts = StringBuilder.init(256)
+        if len(self.names) > 0:
+            exts.append(extension_der(OID_SUBJECT_ALT_NAME, self.subject.len() <= 2, general_names_der(self.names)))
+        if self.is_ca:
+            mut bc = Der.boolean(true)
+            if self.path_len >= 0: bc = bc + Der.integer(self.path_len)
+            exts.append(extension_der(OID_BASIC_CONSTRAINTS, true, Der.seq(bc)))
+            # keyCertSign | cRLSign: bits 5 and 6 -> 0x06, 1 unused bit
+            exts.append(extension_der(OID_KEY_USAGE, true, Der.tlv(DER_BIT_STRING, "\x01\x06")))
+        else:
+            # digitalSignature (bit 0), plus keyEncipherment (bit 2) for RSA
+            mut ku = "\x07\x80"
+            if _spki_is_rsa(spki): ku = "\x05\xa0"
+            exts.append(extension_der(OID_KEY_USAGE, true, Der.tlv(DER_BIT_STRING, ku)))
+            if self.server_auth: exts.append(extension_der(OID_EXT_KEY_USAGE, false, Der.seq(Der.oid(OID_SERVER_AUTH))))
+        mut i = 0
+        while i < len(self.extensions):
+            exts.append(self.extensions[i])
+            i = i + 1
+        mut ext_body = exts.to_owned()
+        exts.free()
+        mut validity = Der.seq(Der.time(self.not_before) + Der.time(self.not_after))
+        mut body = Der.ctx(0, Der.integer(2)) + Der.uint(self.serial) + issuer_key.sig_alg_der() + iss + validity + self.subject + spki
+        if ext_body.len() > 0: body = body + Der.ctx(3, Der.seq(ext_body))
+        return Der.seq(body)
+
+    # A certificate for `subject_spki` (SubjectPublicKeyInfo DER) signed by
+    # `issuer_key` (set `issuer` to the issuer's subject Name).
+    pub def sign(self, subject_spki: str, issuer_key: KeyPair) throws str -> str:
+        mut tbs = self._tbs(subject_spki, issuer_key)
+        mut sig = issuer_key.sign_der(tbs)?
+        return Der.seq(tbs + issuer_key.sig_alg_der() + Der.bits(sig))
+
+    # A self-signed certificate for `key` (issuer = subject).
+    pub def self_signed(self, key: KeyPair) throws str -> str:
+        self.issuer = ""
+        return self.sign(key.spki(), key)?
+
+pub class CertExtension:
+    pub found: bool
+    pub critical: bool
+    pub value: str          # extnValue: the DER inside the OCTET STRING
+
+def _ext(found: bool, critical: bool, value: str) -> CertExtension:
+    mut e = CertExtension()
+    e.found = found
+    e.critical = critical
+    e.value = value
+    return e
+
+# Extension `oid` of a certificate (found == false when absent).
+pub def cert_extension(cert_der: str, oid: str) throws str -> CertExtension:
+    mut top = Der.parse(cert_der)?
+    mut parts = Der.children(top)?
+    if len(parts) != 3: raise("X509: malformed certificate")
+    mut tbs = Der.children(parts[0])?
+    mut i = 0
+    while i < len(tbs):
+        if tbs[i].tag == 0xa3:
+            mut seqs = Der.children(tbs[i])?
+            if len(seqs) == 0: return _ext(false, false, "")
+            mut exts = Der.children(seqs[0])?
+            mut j = 0
+            while j < len(exts):
+                mut e = Der.children(exts[j])?
+                if len(e) >= 2 and Der.oid_text(e[0].content) == oid:
+                    mut crit = false
+                    if len(e) == 3 and e[1].tag == DER_BOOLEAN and der_byte(e[1].content, 0) != 0: crit = true
+                    return _ext(true, crit, e[len(e) - 1].content)
+                j = j + 1
+        i = i + 1
+    return _ext(false, false, "")
+
+# DNS names and IP texts in a certificate's subjectAltName.
+pub def cert_names(cert_der: str) throws str -> List[str]:
+    mut ext = cert_extension(cert_der, OID_SUBJECT_ALT_NAME)?
+    mut dns: List[str] = []
+    mut ips: List[str] = []
+    if ext.found: _parse_general_names(ext.value, dns, ips)?
+    mut j = 0
+    while j < len(ips):
+        dns.append(ips[j])
+        j = j + 1
+    return dns

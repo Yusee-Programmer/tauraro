@@ -195,3 +195,28 @@ extend CResult:
     # Release the output buffer. The CResult must not be used afterwards.
     pub def free(self):
         self.data.free()
+
+# ── native codec status codes ─────────────────────────────────────────────
+#
+# std.compress.bzip2 / xz / brotli run vendored C codecs through their
+# `*_native.c` shims; those report one of these status codes, turned into an
+# error message here (`codec` is the prefix, e.g. "bzip2").
+#
+#    1 complete   0 ok (more input expected)   -1 corrupt data   -2 out of memory
+#   -3 output exceeds max_out   -4 truncated input   -5 unsupported option
+#   -6 trailing data   -7 misuse (closed / finished)   -8 not this format
+
+pub def codec_status_message(codec: str, st: int) -> str:
+    if st == -1: return codec + ": corrupt or invalid compressed data"
+    if st == -2: return codec + ": out of memory"
+    if st == -3: return codec + ": decompressed data exceeds the max_out limit"
+    if st == -4: return codec + ": compressed data is truncated"
+    if st == -5: return codec + ": unsupported format option"
+    if st == -6: return codec + ": unexpected data after the end of the stream"
+    if st == -7: return codec + ": invalid use (stream already finished or closed)"
+    if st == -8: return codec + ": not " + codec + " data (bad header magic)"
+    return codec + ": error " + str(st)
+
+# Default decompression limit of the native codecs' one-shot helpers
+# (decompression-bomb protection): 1 GiB. Pass max_out <= 0 for no limit.
+pub const COMPRESS_DEFAULT_MAX_OUT = 1073741824

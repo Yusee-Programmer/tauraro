@@ -1,0 +1,101 @@
+# std.unicode.normalize -- Unicode normalization forms (UAX #15).
+#
+# NFC / NFD / NFKC / NFKD with full canonical and compatibility
+# decomposition, canonical ordering by combining class, canonical
+# composition (honouring the composition exclusions) and algorithmic Hangul
+# syllable (de)composition. Tables come from the Unicode Character Database
+# (see unicode_version()); the implementation passes every line of the
+# official NormalizationTest.txt.
+#
+# Each function first runs the UAX #15 quick check, so text that is already
+# in the requested form is returned without being rebuilt. Ill-formed UTF-8
+# is replaced by U+FFFD.
+#
+# Usage:
+#   from std.unicode.normalize import nfc, nfd, nfkc, is_normalized
+#   mut a = nfc(decomposed)         # "e" + U+0301 -> "é" (one code point, U+00E9)
+#   mut b = nfkc("ﬁ")               # "fi"
+#   if not is_normalized("NFC", s)?: s = nfc(s)
+
+from std.unicode.native import uni_transform, trc_uni_quick_check, trc_uni_ccc, UNI_OP_NFC, UNI_OP_NFD, UNI_OP_NFKC, UNI_OP_NFKD
+
+extern "C":
+    def trc_uni_version(dst: Pointer[char]) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+def _norm(op: int, s: str) -> str:
+    mut sp = s as Pointer[char]
+    if trc_uni_quick_check(op, sp, s.len()) == 0: return s
+    return uni_transform(op, s)
+
+# Canonical composition (NFC): the usual form for storage and interchange.
+pub def nfc(s: str) -> str: return _norm(UNI_OP_NFC, s)
+
+# Canonical decomposition (NFD).
+pub def nfd(s: str) -> str: return _norm(UNI_OP_NFD, s)
+
+# Compatibility composition (NFKC): folds ligatures, width variants,
+# superscripts, ... to their plain equivalents, then composes.
+pub def nfkc(s: str) -> str: return _norm(UNI_OP_NFKC, s)
+
+# Compatibility decomposition (NFKD).
+pub def nfkd(s: str) -> str: return _norm(UNI_OP_NFKD, s)
+
+def _form_op(form: str) throws str -> int:
+    mut f = form.upper()
+    if f == "NFC": return UNI_OP_NFC
+    if f == "NFD": return UNI_OP_NFD
+    if f == "NFKC": return UNI_OP_NFKC
+    if f == "NFKD": return UNI_OP_NFKD
+    raise("unicode: unknown normalization form '" + form + "' (use NFC, NFD, NFKC or NFKD)")
+    return 0
+
+# Normalize to the form named "NFC", "NFD", "NFKC" or "NFKD" (any case).
+pub def normalize(form: str, s: str) throws str -> str:
+    mut op = _form_op(form)?
+    return _norm(op, s)
+
+# True when `s` is already in the named form (quick check, then a full check
+# only for the "maybe" answer).
+pub def is_normalized(form: str, s: str) throws str -> bool:
+    mut op = _form_op(form)?
+    mut sp = s as Pointer[char]
+    mut qc = trc_uni_quick_check(op, sp, s.len())
+    if qc == 0: return true
+    if qc == 1: return false
+    return uni_transform(op, s) == s
+
+pub def is_nfc(s: str) -> bool:
+    mut sp = s as Pointer[char]
+    mut qc = trc_uni_quick_check(UNI_OP_NFC, sp, s.len())
+    if qc == 2: return uni_transform(UNI_OP_NFC, s) == s
+    return qc == 0
+
+pub def is_nfd(s: str) -> bool:
+    mut sp = s as Pointer[char]
+    return trc_uni_quick_check(UNI_OP_NFD, sp, s.len()) == 0
+
+pub def is_nfkc(s: str) -> bool:
+    mut sp = s as Pointer[char]
+    mut qc = trc_uni_quick_check(UNI_OP_NFKC, sp, s.len())
+    if qc == 2: return uni_transform(UNI_OP_NFKC, s) == s
+    return qc == 0
+
+pub def is_nfkd(s: str) -> bool:
+    mut sp = s as Pointer[char]
+    return trc_uni_quick_check(UNI_OP_NFKD, sp, s.len()) == 0
+
+# True when a and b are canonically equivalent (same NFD).
+pub def canonical_eq(a: str, b: str) -> bool:
+    if a == b: return true
+    return nfd(a) == nfd(b)
+
+# Canonical_Combining_Class of a code point (0 for starters).
+pub def combining_class(cp: int) -> int: return trc_uni_ccc(cp)
+
+# Version of the Unicode Character Database the tables were built from.
+pub def unicode_version() -> str:
+    mut buf = _tr_c_malloc(32)
+    mut n = trc_uni_version(buf)
+    return _tr_str_wrap_len(buf, n)

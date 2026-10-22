@@ -38,9 +38,7 @@ extend UdpSocket:
     # Send data to host:port.  Returns bytes sent or -1.
     pub def send_to(self, data: str, host: str, port: int) -> int:
         if not self.open: return -1
-        mut p = data as Pointer[char]
-        mut n = 0
-        while p.offset(n).read() as int != 0: n = n + 1
+        mut n = data.len()
         return _tr_udp_send_to(self.fd, data, n, host, port)
 
     # Receive a datagram (up to cap bytes).

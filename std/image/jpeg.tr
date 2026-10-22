@@ -1,0 +1,77 @@
+# std.image.jpeg -- JPEG decode and encode.
+#
+# decode_jpeg reads baseline and progressive JPEGs (any chroma subsampling,
+# restart markers, grayscale, YCbCr, RGB, CMYK/YCCK) into an RGBA8 Image;
+# its output matches libjpeg's to within a few levels (its chroma upsampling
+# differs slightly). Lossless, arithmetic-coded and 12-bit JPEGs are not
+# supported. The EXIF orientation is NOT applied automatically: read it with
+# jpeg_orientation and call std.image.ops.apply_orientation.
+#
+# encode_jpeg writes baseline JFIF with the standard (Annex K) tables:
+# quality 1-100, 4:2:0 chroma subsampling below quality 90 and 4:4:4 from
+# 90 up (encode_jpeg_opts chooses explicitly). Transparent pixels are
+# composited onto white.
+#
+# Usage:
+#   from std.image.jpeg import decode_jpeg, encode_jpeg, jpeg_orientation
+#   mut img = decode_jpeg(bytes, n)          # img.width == -1 on error
+#   mut (out, len_) = encode_jpeg(img, 85)
+
+from std.image.mod import Image
+from std.image.native import trc_jpeg_decode, trc_img_free, trc_img_ok, trc_img_orientation, trc_jpeg_encode
+from std.image.native import _im_frame, _im_bad, _im_err, _im_take_buf
+
+# Decode; returns an Image with width == -1 on malformed or unsupported input.
+pub def decode_jpeg(data: str, len_: int) -> Image:
+    mut dp = data as Pointer[char]
+    mut h = trc_jpeg_decode(dp, len_)
+    if (h as usize) == (0 as usize): return _im_bad()
+    if trc_img_ok(h) != 1:
+        trc_img_free(h)
+        return _im_bad()
+    mut img = _im_frame(h, 0)
+    trc_img_free(h)
+    return img
+
+# Decode, raising with the reason on failure.
+pub def decode_jpeg_checked(data: str, len_: int) throws str -> Image:
+    mut dp = data as Pointer[char]
+    mut h = trc_jpeg_decode(dp, len_)
+    if (h as usize) == (0 as usize): raise("JPEG: out of memory")
+    if trc_img_ok(h) != 1:
+        mut e = _im_err(h)
+        trc_img_free(h)
+        raise(e)
+    mut img = _im_frame(h, 0)
+    trc_img_free(h)
+    return img
+
+# EXIF orientation tag (1..8; 1 = upright, also when absent).
+pub def jpeg_orientation(data: str, len_: int) -> int:
+    mut dp = data as Pointer[char]
+    mut h = trc_jpeg_decode(dp, len_)
+    if (h as usize) == (0 as usize): return 1
+    mut o = trc_img_orientation(h)
+    trc_img_free(h)
+    if o < 1: o = 1
+    return o
+
+# Encode with the given quality (1-100). Returns (bytes, length); length 0 on failure.
+pub def encode_jpeg(img: Image, quality: int) -> (str, int):
+    mut sub = 1
+    if quality >= 90: sub = 0
+    return encode_jpeg_opts(img, quality, sub == 1, false)
+
+# subsample: 4:2:0 chroma when true, 4:4:4 when false. gray: one-channel JPEG.
+pub def encode_jpeg_opts(img: Image, quality: int, subsample: bool, gray: bool) -> (str, int):
+    mut lenbox = [0]
+    mut lp = lenbox as Pointer[int]
+    mut s = 0
+    if subsample: s = 1
+    mut g = 0
+    if gray: g = 1
+    mut p = trc_jpeg_encode(img.pixels.data, img.width, img.height, quality, s, g, lp)
+    if (p as usize) == (0 as usize): return ("", 0)
+    mut n = lenbox[0]
+    mut out = _im_take_buf(p, n)
+    return (out, n)

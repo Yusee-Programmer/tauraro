@@ -1,0 +1,678 @@
+# tauraro-cpp-shim: proxy_native.c
+#
+# std.net.proxy -- SOCKS5 / SOCKS4(a) and HTTP CONNECT proxy clients, proxy
+# URLs, and NO_PROXY / *_PROXY environment handling.
+#
+# Every connect function returns a connected, blocking `TcpStream` whose
+# bytes go straight to the target, so it can carry plain HTTP or be handed
+# to TLS:
+#
+#   from std.net.proxy import Proxy, ProxyUrl
+#   from std.net.tls import TlsStream, TlsOptions
+#   mut px = ProxyUrl.parse("socks5h://user:pw@127.0.0.1:1080")?
+#   mut tcp = Proxy.connect(px, "example.com", 443, 10000)?
+#   mut tls = TlsStream.wrap_fd(tcp.fd, "example.com", TlsOptions.default())?
+#
+# Proxy URL schemes
+#   socks5://   SOCKS5 (RFC 1928); the client resolves the target (IPv4 only,
+#               through the system resolver), so the proxy sees an address
+#   socks5h://  SOCKS5 with the target name sent to the proxy (remote DNS)
+#   socks4://   SOCKS4 (IPv4, local DNS); socks4a:// sends the name
+#   http://     HTTP/1.1 CONNECT tunnel (RFC 9110 9.3.6); for plain http
+#               targets std.net.client instead sends absolute-form requests
+# user:password in the URL (percent-decoded) are used for SOCKS5
+# username/password auth (RFC 1929), the SOCKS4 user id, or a
+# "Proxy-Authorization: Basic" header. Default port: 1080 (80 for http://).
+# https:// proxies (TLS to the proxy itself) are not supported.
+#
+# NoProxy.parse("localhost,.internal,10.0.0.0/8,[::1],example.com:8080")
+# matches host names on label boundaries (".x.com" and "x.com" both match
+# x.com and its subdomains), "*" matches everything, IPv4 / IPv6 addresses
+# exactly or by CIDR prefix, and a ":port" suffix restricts an entry to one
+# port. ProxyEnv reads http_proxy / HTTP_PROXY, https_proxy / HTTPS_PROXY,
+# all_proxy / ALL_PROXY and no_proxy / NO_PROXY (lower case wins).
+
+from std.net.tcp import TcpStream
+from std.net.dns import Dns
+from std.net.url import Url
+from std.encoding.base64 import Base64
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free
+from std.sys.time import Clock
+from std.sys.env import Env
+from std.core.string import StringBuilder
+
+extern "C":
+    def trc_px_connect(host: Pointer[char], hostlen: int, port: int, timeout_ms: int) -> int
+    def trc_px_wait_readable(fd: int, ms: int) -> int
+    def trc_px_recv(fd: int, buf: Pointer[char], cap: int) -> int
+    def trc_px_send(fd: int, buf: Pointer[char], n: int) -> int
+    def trc_px_close(fd: int)
+
+# ─── byte helpers ────────────────────────────────────────────────────────────
+
+def _px_bytes(v: List[int]) -> str:
+    mut n = v.len()
+    mut p = _cn_alloc(n)
+    mut i = 0
+    while i < n:
+        unsafe: p.offset(i).write((v[i] & 255) as char)
+        i = i + 1
+    return _cn_take(p, n)
+
+def _px_byte(s: str, i: int) -> int:
+    mut v = 0
+    mut p = s as Pointer[char]
+    unsafe: v = (p.offset(i).read() as int) & 255
+    return v
+
+def _px_lower(s: str) -> str:
+    return s.to_lower()
+
+# Decimal text -> int, or -1.
+def _px_num(s: str) -> int:
+    if s.len() == 0 or s.len() > 9: return -1
+    mut v = 0
+    mut i = 0
+    while i < s.len():
+        mut c = _px_byte(s, i)
+        if c < 48 or c > 57: return -1
+        v = v * 10 + (c - 48)
+        i = i + 1
+    return v
+
+# Parse dotted-quad IPv4 into 4 bytes; "" if not an IPv4 literal.
+pub def parse_ipv4(s: str) -> str:
+    mut parts = s.split_exact(".")
+    if parts.len() != 4: return ""
+    mut out: List[int] = []
+    for p in parts:
+        mut v = _px_num(p)
+        if v < 0 or v > 255 or p.len() > 3: return ""
+        out.append(v)
+    return _px_bytes(out)
+
+def _px_hexval(c: int) -> int:
+    if c >= 48 and c <= 57: return c - 48
+    if c >= 97 and c <= 102: return c - 87
+    if c >= 65 and c <= 70: return c - 55
+    return -1
+
+# Parse an IPv6 literal (optional [brackets], "::" compression, embedded
+# IPv4 tail) into 16 bytes; "" if it is not one.
+pub def parse_ipv6(s_in: str) -> str:
+    mut s = s_in
+    if s.starts_with("[") and s.ends_with("]"): s = s.slice(1, s.len() - 1)
+    mut pct = s.find("%")
+    if pct >= 0: s = s.slice(0, pct)
+    if s.find(":") < 0: return ""
+    mut head: List[int] = []
+    mut tail: List[int] = []
+    mut dbl = s.find("::")
+    mut left = s
+    mut right = ""
+    mut has_dbl = dbl >= 0
+    if has_dbl:
+        left = s.slice(0, dbl)
+        right = s.slice(dbl + 2, s.len())
+        if right.find("::") >= 0: return ""
+    mut groups_l: List[str] = []
+    if left.len() > 0: groups_l = left.split_exact(":")
+    mut groups_r: List[str] = []
+    if right.len() > 0: groups_r = right.split_exact(":")
+    mut gi = 0
+    while gi < groups_l.len() + groups_r.len():
+        mut in_left = gi < groups_l.len()
+        mut g = ""
+        if in_left: g = groups_l[gi]
+        else: g = groups_r[gi - groups_l.len()]
+        mut is_last = gi == groups_l.len() + groups_r.len() - 1
+        mut dst_bytes: List[int] = []
+        if g.find(".") >= 0:
+            if not is_last: return ""
+            mut v4 = parse_ipv4(g)
+            if v4.len() != 4: return ""
+            mut k = 0
+            while k < 4:
+                dst_bytes.append(_px_byte(v4, k))
+                k = k + 1
+        else:
+            if g.len() == 0 or g.len() > 4: return ""
+            mut v = 0
+            mut ci = 0
+            while ci < g.len():
+                mut h = _px_hexval(_px_byte(g, ci))
+                if h < 0: return ""
+                v = v * 16 + h
+                ci = ci + 1
+            dst_bytes.append(v >> 8)
+            dst_bytes.append(v & 255)
+        for b in dst_bytes:
+            if in_left: head.append(b)
+            else: tail.append(b)
+        gi = gi + 1
+    mut total = head.len() + tail.len()
+    if has_dbl:
+        if total > 14: return ""
+    elif total != 16:
+        return ""
+    mut outb: List[int] = []
+    for b in head:
+        outb.append(b)
+    mut z = 0
+    while z < 16 - total:
+        outb.append(0)
+        z = z + 1
+    for b in tail:
+        outb.append(b)
+    return _px_bytes(outb)
+
+# "Basic base64(user:password)" for Proxy-Authorization / Authorization.
+pub def basic_credentials(user: str, password: str) -> str:
+    mut cred = user + ":" + password
+    mut enc = Base64.encode(cred)
+    return "Basic " + enc
+
+# ─── deadline-bounded socket I/O on a TcpStream ──────────────────────────────
+
+def _px_left(deadline: int) -> int:
+    mut left = deadline - Clock.now_ms()
+    if left < 1: left = 1
+    return left
+
+def _px_send(s: TcpStream, data: str) throws str:
+    mut dp = data as Pointer[char]
+    if trc_px_send(s.fd, dp, data.len()) != 0: raise("proxy: send failed")
+
+# Exactly n bytes (raises on EOF / timeout).
+def _px_read_exact(s: TcpStream, n: int, deadline: int, what: str) throws str -> str:
+    mut buf = _cn_alloc(n)
+    mut got = 0
+    while got < n:
+        if Clock.now_ms() >= deadline:
+            _cn_free(buf)
+            raise(f"{what}: timed out")
+        mut w = trc_px_wait_readable(s.fd, _px_left(deadline))
+        if w == 0: continue
+        if w < 0:
+            _cn_free(buf)
+            raise(f"{what}: socket error")
+        mut r = 0
+        unsafe: r = trc_px_recv(s.fd, buf.offset(got), n - got)
+        if r <= 0:
+            _cn_free(buf)
+            raise(f"{what}: connection closed by the proxy")
+        got = got + r
+    return _cn_take(buf, n)
+
+# Read an HTTP response head (through the blank line), one byte at a time so
+# nothing after it is consumed.
+def _px_read_head(s: TcpStream, deadline: int) throws str -> str:
+    mut sb = StringBuilder.init(256)
+    mut n = 0
+    mut last4 = 0
+    while true:
+        mut b = _px_read_exact(s, 1, deadline, "HTTP proxy")?
+        mut c = _px_byte(b, 0)
+        sb.append_char(c)
+        n = n + 1
+        last4 = ((last4 << 8) | c) & 0xFFFFFFFF
+        if last4 == 0x0D0A0D0A: break
+        if n > 16384:
+            sb.free()
+            raise("HTTP proxy: response header too large")
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _px_tcp(host: str, port: int, timeout_ms: int) throws str -> TcpStream:
+    mut hp = host as Pointer[char]
+    mut fd = trc_px_connect(hp, host.len(), port, timeout_ms)
+    if fd == -1: raise(f"proxy: cannot resolve {host}")
+    if fd == -3: raise(f"proxy: timed out connecting to {host}:{port}")
+    if fd < 0: raise(f"proxy: cannot connect to {host}:{port}")
+    mut s = TcpStream()
+    s.fd = fd
+    s.connected = true
+    s.nonblocking = false
+    s._wb = false
+    s.host = host
+    s.port = port
+    return s
+
+def _px_strip_brackets(h: str) -> str:
+    if h.starts_with("[") and h.ends_with("]"): return h.slice(1, h.len() - 1)
+    return h
+
+# ─── ProxyUrl ────────────────────────────────────────────────────────────────
+
+pub class ProxyUrl:
+    pub scheme:   str     # socks5, socks5h, socks4, socks4a, http
+    pub host:     str     # without IPv6 brackets
+    pub port:     int
+    pub user:     str
+    pub password: str
+    pub has_auth: bool
+
+extend ProxyUrl:
+    # Parse "scheme://[user[:password]@]host[:port][/]". A URL without a
+    # scheme is taken as http:// (as curl does).
+    pub def parse(url_in: str) throws str -> ProxyUrl:
+        mut url = url_in.strip()
+        if url.len() == 0: raise("proxy: empty proxy URL")
+        mut p = ProxyUrl()
+        p.user = ""
+        p.password = ""
+        p.has_auth = false
+        mut sep = url.find("://")
+        mut rest = url
+        p.scheme = "http"
+        if sep >= 0:
+            p.scheme = _px_lower(url.slice(0, sep))
+            rest = url.slice(sep + 3, url.len())
+        if p.scheme == "socks": p.scheme = "socks5"
+        if p.scheme == "https": raise("proxy: https:// proxies (TLS to the proxy) are not supported")
+        if p.scheme != "http" and p.scheme != "socks5" and p.scheme != "socks5h" and p.scheme != "socks4" and p.scheme != "socks4a":
+            raise(f"proxy: unsupported proxy scheme '{p.scheme}'")
+        mut slash = rest.find("/")
+        if slash >= 0: rest = rest.slice(0, slash)
+        mut at = -1
+        mut i = 0
+        while i < rest.len():
+            if _px_byte(rest, i) == 64: at = i
+            i = i + 1
+        if at >= 0:
+            mut info = rest.slice(0, at)
+            rest = rest.slice(at + 1, rest.len())
+            mut colon = info.find(":")
+            p.has_auth = true
+            if colon >= 0:
+                mut u = info.slice(0, colon)
+                mut pw = info.slice(colon + 1, info.len())
+                p.user = Url.decode_component(u)
+                p.password = Url.decode_component(pw)
+            else:
+                p.user = Url.decode_component(info)
+        mut hostpart = rest
+        mut portpart = ""
+        if rest.starts_with("["):
+            mut close = rest.find("]")
+            if close < 0: raise("proxy: bad IPv6 literal in proxy URL")
+            hostpart = rest.slice(1, close)
+            mut after = rest.slice(close + 1, rest.len())
+            if after.starts_with(":"): portpart = after.slice(1, after.len())
+            elif after.len() > 0: raise("proxy: bad proxy URL")
+        else:
+            mut c2 = rest.find(":")
+            if c2 >= 0:
+                hostpart = rest.slice(0, c2)
+                portpart = rest.slice(c2 + 1, rest.len())
+        if hostpart.len() == 0: raise("proxy: proxy URL has no host")
+        p.host = hostpart
+        p.port = 1080
+        if p.scheme == "http": p.port = 80
+        if portpart.len() > 0:
+            mut pv = _px_num(portpart)
+            if pv <= 0 or pv > 65535: raise("proxy: bad port in proxy URL")
+            p.port = pv
+        return p
+
+    pub def is_socks(self) -> bool: return self.scheme.starts_with("socks")
+    pub def is_http(self) -> bool: return self.scheme == "http"
+
+    # The URL without credentials (safe to log).
+    pub def display(self) -> str:
+        mut h = self.host
+        if h.find(":") >= 0: h = "[" + h + "]"
+        return f"{self.scheme}://{h}:{self.port}"
+
+    # "Basic ..." for this proxy's credentials ("" without any).
+    pub def basic_auth(self) -> str:
+        if not self.has_auth: return ""
+        return basic_credentials(self.user, self.password)
+
+# ─── SOCKS5 (RFC 1928 / RFC 1929) ────────────────────────────────────────────
+
+def _socks5_reply_text(code: int) -> str:
+    if code == 1: return "general SOCKS server failure"
+    if code == 2: return "connection not allowed by ruleset"
+    if code == 3: return "network unreachable"
+    if code == 4: return "host unreachable"
+    if code == 5: return "connection refused"
+    if code == 6: return "TTL expired"
+    if code == 7: return "command not supported"
+    if code == 8: return "address type not supported"
+    return f"error code {code}"
+
+pub class Socks5:
+    _dummy: int
+
+extend Socks5:
+    # CONNECT to host:port through the SOCKS5 proxy at proxy_host:proxy_port.
+    # `host` may be a name, an IPv4 address or an IPv6 address. Names are
+    # sent to the proxy when remote_dns is true, else resolved locally
+    # (IPv4). user/password ("" = none) select RFC 1929 authentication.
+    pub def connect(proxy_host: str, proxy_port: int, host: str, port: int, user: str, password: str, remote_dns: bool, timeout_ms: int) throws str -> TcpStream:
+        mut tmo = timeout_ms
+        if tmo <= 0: tmo = 30000
+        mut deadline = Clock.now_ms() + tmo
+        if port <= 0 or port > 65535: raise("SOCKS5: bad target port")
+        mut target = _px_strip_brackets(host)
+        mut addr = parse_ipv4(target)
+        mut atyp = 1
+        if addr.len() == 0:
+            addr = parse_ipv6(target)
+            atyp = 4
+        if addr.len() == 0:
+            if remote_dns:
+                if target.len() == 0 or target.len() > 255: raise("SOCKS5: host name too long")
+                atyp = 3
+                addr = target
+            else:
+                mut ip = Dns.resolve(target)
+                addr = parse_ipv4(ip)
+                atyp = 1
+                if addr.len() != 4: raise(f"SOCKS5: cannot resolve {target}")
+        mut s = _px_tcp(proxy_host, proxy_port, tmo)?
+        mut r: Result[bool, str] = Socks5._handshake(s, addr, atyp, port, user, password, deadline)
+        if r.is_err:
+            s.close()
+            raise(r.err)
+        return s
+
+    def _handshake(s: TcpStream, addr: str, atyp: int, port: int, user: str, password: str, deadline: int) throws str -> bool:
+        mut want_auth = user.len() > 0 or password.len() > 0
+        mut greet: List[int] = [5, 1, 0]
+        if want_auth: greet = [5, 2, 0, 2]
+        mut gb = _px_bytes(greet)
+        _px_send(s, gb)?
+        mut sel = _px_read_exact(s, 2, deadline, "SOCKS5")?
+        if _px_byte(sel, 0) != 5: raise("SOCKS5: the proxy is not a SOCKS5 server")
+        mut method = _px_byte(sel, 1)
+        if method == 255: raise("SOCKS5: the proxy accepted none of our authentication methods")
+        if method == 2:
+            if not want_auth: raise("SOCKS5: the proxy requires authentication")
+            if user.len() > 255 or password.len() > 255: raise("SOCKS5: user name or password longer than 255 bytes")
+            mut ul: List[int] = [1, user.len()]
+            mut ub = _px_bytes(ul)
+            mut pl: List[int] = [password.len()]
+            mut pb = _px_bytes(pl)
+            mut msg = ub + user + pb + password
+            _px_send(s, msg)?
+            mut ar = _px_read_exact(s, 2, deadline, "SOCKS5")?
+            if _px_byte(ar, 1) != 0: raise("SOCKS5: authentication failed (bad user name or password)")
+        elif method != 0:
+            raise(f"SOCKS5: the proxy chose an unsupported method {method}")
+        mut req: List[int] = [5, 1, 0, atyp]
+        if atyp == 3: req.append(addr.len())
+        mut rb = _px_bytes(req)
+        mut pt: List[int] = [(port >> 8) & 255, port & 255]
+        mut ptb = _px_bytes(pt)
+        mut full = rb + addr + ptb
+        _px_send(s, full)?
+        mut head = _px_read_exact(s, 4, deadline, "SOCKS5")?
+        if _px_byte(head, 0) != 5: raise("SOCKS5: malformed reply")
+        mut rep = _px_byte(head, 1)
+        if rep != 0:
+            mut why = _socks5_reply_text(rep)
+            raise("SOCKS5: " + why)
+        mut bt = _px_byte(head, 3)
+        mut skip = 0
+        if bt == 1: skip = 4
+        elif bt == 4: skip = 16
+        elif bt == 3:
+            mut lb = _px_read_exact(s, 1, deadline, "SOCKS5")?
+            skip = _px_byte(lb, 0)
+        else: raise("SOCKS5: malformed reply address")
+        mut rest = _px_read_exact(s, skip + 2, deadline, "SOCKS5")?
+        return true
+
+# ─── SOCKS4 / SOCKS4a ────────────────────────────────────────────────────────
+
+pub class Socks4:
+    _dummy: int
+
+extend Socks4:
+    # CONNECT via SOCKS4 (IPv4 targets; names resolved locally) or, with
+    # remote_dns, SOCKS4a (the name is sent to the proxy).
+    pub def connect(proxy_host: str, proxy_port: int, host: str, port: int, user_id: str, remote_dns: bool, timeout_ms: int) throws str -> TcpStream:
+        mut tmo = timeout_ms
+        if tmo <= 0: tmo = 30000
+        mut deadline = Clock.now_ms() + tmo
+        mut ip = parse_ipv4(host)
+        mut name = ""
+        if ip.len() == 0:
+            if parse_ipv6(host).len() > 0: raise("SOCKS4: IPv6 targets are not supported")
+            if remote_dns:
+                mut v4a: List[int] = [0, 0, 0, 1]
+                ip = _px_bytes(v4a)
+                name = host
+            else:
+                mut res = Dns.resolve(host)
+                ip = parse_ipv4(res)
+                if ip.len() != 4: raise(f"SOCKS4: cannot resolve {host}")
+        mut s = _px_tcp(proxy_host, proxy_port, tmo)?
+        mut hdr: List[int] = [4, 1, (port >> 8) & 255, port & 255]
+        mut hb = _px_bytes(hdr)
+        mut zl: List[int] = [0]
+        mut z = _px_bytes(zl)
+        mut msg = hb + ip + user_id + z
+        if name.len() > 0: msg = msg + name + z
+        mut sr: Result[bool, str] = Socks4._exchange(s, msg, deadline)
+        if sr.is_err:
+            s.close()
+            raise(sr.err)
+        return s
+
+    def _exchange(s: TcpStream, msg: str, deadline: int) throws str -> bool:
+        _px_send(s, msg)?
+        mut rep = _px_read_exact(s, 8, deadline, "SOCKS4")?
+        mut code = _px_byte(rep, 1)
+        if code == 0x5A: return true
+        if code == 0x5B: raise("SOCKS4: request rejected or failed")
+        if code == 0x5C or code == 0x5D: raise("SOCKS4: rejected (identd check failed)")
+        raise("SOCKS4: malformed reply")
+
+# ─── HTTP CONNECT ────────────────────────────────────────────────────────────
+
+pub class HttpTunnel:
+    _dummy: int
+
+extend HttpTunnel:
+    # Open a CONNECT tunnel to host:port through the HTTP proxy.
+    # `proxy_auth` is a full Proxy-Authorization value ("" = none), e.g.
+    # basic_credentials(user, pw).
+    pub def connect(proxy_host: str, proxy_port: int, host: str, port: int, proxy_auth: str, timeout_ms: int) throws str -> TcpStream:
+        mut tmo = timeout_ms
+        if tmo <= 0: tmo = 30000
+        mut deadline = Clock.now_ms() + tmo
+        mut h = _px_strip_brackets(host)
+        if h.find(":") >= 0: h = "[" + h + "]"
+        if h.find("\r") >= 0 or h.find("\n") >= 0 or h.find(" ") >= 0: raise("HTTP proxy: invalid target host")
+        mut authority = f"{h}:{port}"
+        mut req = "CONNECT " + authority + " HTTP/1.1\r\nHost: " + authority + "\r\n"
+        if proxy_auth.len() > 0:
+            if proxy_auth.find("\r") >= 0 or proxy_auth.find("\n") >= 0: raise("HTTP proxy: invalid credentials")
+            req = req + "Proxy-Authorization: " + proxy_auth + "\r\n"
+        req = req + "User-Agent: tauraro-http/1.0\r\n\r\n"
+        mut s = _px_tcp(proxy_host, proxy_port, tmo)?
+        mut r: Result[bool, str] = HttpTunnel._exchange(s, req, deadline)
+        if r.is_err:
+            s.close()
+            raise(r.err)
+        return s
+
+    def _exchange(s: TcpStream, req: str, deadline: int) throws str -> bool:
+        _px_send(s, req)?
+        mut head = _px_read_head(s, deadline)?
+        mut nl = head.find("\r\n")
+        mut first = head.slice(0, nl)
+        if not first.starts_with("HTTP/1."): raise("HTTP proxy: malformed response")
+        mut sp = first.find(" ")
+        mut code = _px_num(first.slice(sp + 1, sp + 4))
+        if code >= 200 and code < 300: return true
+        if code == 407: raise("HTTP proxy: proxy authentication required (407)")
+        mut reason = first.slice(sp + 1, first.len())
+        raise("HTTP proxy: CONNECT refused: " + reason)
+
+# ─── dispatch ────────────────────────────────────────────────────────────────
+
+pub class Proxy:
+    _dummy: int
+
+extend Proxy:
+    # A stream to host:port through `px` (any supported scheme). For http://
+    # proxies this is a CONNECT tunnel.
+    pub def connect(px: ProxyUrl, host: str, port: int, timeout_ms: int) throws str -> TcpStream:
+        if px.scheme == "socks5" or px.scheme == "socks5h":
+            mut s5 = Socks5.connect(px.host, px.port, host, port, px.user, px.password, px.scheme == "socks5h", timeout_ms)?
+            return s5
+        if px.scheme == "socks4" or px.scheme == "socks4a":
+            mut s4 = Socks4.connect(px.host, px.port, host, port, px.user, px.scheme == "socks4a", timeout_ms)?
+            return s4
+        mut auth = px.basic_auth()
+        mut t = HttpTunnel.connect(px.host, px.port, host, port, auth, timeout_ms)?
+        return t
+
+    # A plain TCP connection to the proxy itself (for absolute-form HTTP).
+    pub def connect_direct(px: ProxyUrl, timeout_ms: int) throws str -> TcpStream:
+        mut s = _px_tcp(px.host, px.port, timeout_ms)?
+        return s
+
+# ─── NO_PROXY ────────────────────────────────────────────────────────────────
+
+pub class NoProxyRule:
+    pub kind:   int      # 0 any host, 1 host suffix, 2 IP / CIDR
+    pub name:   str      # lower-case host (kind 1)
+    pub addr:   str      # 4 or 16 raw bytes (kind 2)
+    pub bits:   int      # prefix length (kind 2)
+    pub port:   int      # 0 = any port
+
+pub class NoProxy:
+    pub rules: List[NoProxyRule]
+
+def _np_prefix_eq(a: str, b: str, bits: int) -> bool:
+    if a.len() != b.len(): return false
+    mut full = bits / 8
+    mut i = 0
+    while i < full:
+        if _px_byte(a, i) != _px_byte(b, i): return false
+        i = i + 1
+    mut rem = bits % 8
+    if rem == 0: return true
+    mut mask = (0xFF << (8 - rem)) & 0xFF
+    return (_px_byte(a, full) & mask) == (_px_byte(b, full) & mask)
+
+extend NoProxy:
+    pub def empty() -> NoProxy:
+        mut n = NoProxy()
+        n.rules = []
+        return n
+
+    # Parse a comma / space separated NO_PROXY list.
+    pub def parse(spec: str) -> NoProxy:
+        mut n = NoProxy.empty()
+        mut items = spec.split(", \t")
+        for raw in items:
+            mut it = raw.strip().to_lower()
+            if it.len() == 0: continue
+            mut r = NoProxyRule()
+            r.kind = 1
+            r.name = ""
+            r.addr = ""
+            r.bits = 0
+            r.port = 0
+            if it == "*":
+                r.kind = 0
+                n.rules.append(r)
+                continue
+            mut body = it
+            # optional :port (not for bare IPv6, which has several colons)
+            if body.starts_with("["):
+                mut close = body.find("]")
+                if close > 0:
+                    mut after = body.slice(close + 1, body.len())
+                    if after.starts_with(":"): r.port = _px_num(after.slice(1, after.len()))
+                    body = body.slice(1, close)
+            else:
+                mut colon = body.find(":")
+                if colon >= 0 and body.slice(colon + 1, body.len()).find(":") < 0:
+                    r.port = _px_num(body.slice(colon + 1, body.len()))
+                    body = body.slice(0, colon)
+            if r.port < 0: continue
+            mut bits = -1
+            mut slash = body.find("/")
+            if slash >= 0:
+                bits = _px_num(body.slice(slash + 1, body.len()))
+                body = body.slice(0, slash)
+                if bits < 0: continue
+            mut a4 = parse_ipv4(body)
+            mut a6 = ""
+            if a4.len() == 0: a6 = parse_ipv6(body)
+            if a4.len() == 4:
+                r.kind = 2
+                r.addr = a4
+                r.bits = 32
+                if bits >= 0 and bits <= 32: r.bits = bits
+            elif a6.len() == 16:
+                r.kind = 2
+                r.addr = a6
+                r.bits = 128
+                if bits >= 0 and bits <= 128: r.bits = bits
+            else:
+                if bits >= 0: continue
+                if body.starts_with("*."): body = body.slice(2, body.len())
+                if body.starts_with("."): body = body.slice(1, body.len())
+                if body.len() == 0: continue
+                r.name = body
+            n.rules.append(r)
+        return n
+
+    # Whether a request to host:port should bypass the proxy.
+    pub def matches(self, host_in: str, port: int) -> bool:
+        mut host = _px_strip_brackets(host_in.to_lower())
+        if host.ends_with("."): host = host.slice(0, host.len() - 1)
+        mut a = parse_ipv4(host)
+        if a.len() == 0: a = parse_ipv6(host)
+        for r in self.rules:
+            if r.port > 0 and r.port != port: continue
+            if r.kind == 0: return true
+            if r.kind == 2:
+                if a.len() == r.addr.len() and _np_prefix_eq(a, r.addr, r.bits): return true
+            elif r.kind == 1:
+                if host == r.name: return true
+                if host.ends_with("." + r.name): return true
+        return false
+
+# ─── environment ─────────────────────────────────────────────────────────────
+
+pub class ProxyEnv:
+    pub http_proxy:  str
+    pub https_proxy: str
+    pub all_proxy:   str
+    pub no_proxy:    NoProxy
+    pub no_proxy_text: str
+
+def _px_env2(e: Env, lower: str, upper: str) -> str:
+    mut v = e.get_var(lower)
+    if v.len() > 0: return v
+    return e.get_var(upper)
+
+extend ProxyEnv:
+    # Snapshot the proxy variables of the current process.
+    pub def from_env() -> ProxyEnv:
+        mut e = Env.init()
+        mut p = ProxyEnv()
+        p.http_proxy = _px_env2(e, "http_proxy", "HTTP_PROXY")
+        p.https_proxy = _px_env2(e, "https_proxy", "HTTPS_PROXY")
+        p.all_proxy = _px_env2(e, "all_proxy", "ALL_PROXY")
+        p.no_proxy_text = _px_env2(e, "no_proxy", "NO_PROXY")
+        p.no_proxy = NoProxy.parse(p.no_proxy_text)
+        return p
+
+    # The proxy URL to use for scheme://host:port ("" = connect directly).
+    pub def proxy_for(self, scheme: str, host: str, port: int) -> str:
+        if self.no_proxy.matches(host, port): return ""
+        mut sc = scheme.to_lower()
+        if sc == "https" and self.https_proxy.len() > 0: return self.https_proxy
+        if sc == "http" and self.http_proxy.len() > 0: return self.http_proxy
+        return self.all_proxy

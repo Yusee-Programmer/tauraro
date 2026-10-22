@@ -1,0 +1,528 @@
+# std.otel.exporter -- exporters, OTLP/HTTP JSON envelopes and the simple /
+# batch processing pipelines shared by traces, metrics and logs.
+#
+# Exporters (one class, chosen by constructor):
+#   Exporter.otlp_http(endpoint)   POST OTLP/JSON to endpoint (full URL, e.g.
+#                                  http://collector:4318/v1/traces)
+#   Exporter.otlp_from_env(SIGNAL_TRACES)
+#                                  OTEL_EXPORTER_OTLP_{TRACES_}ENDPOINT,
+#                                  _HEADERS, _TIMEOUT
+#   Exporter.noop()                discard everything
+#   Exporter.console()             print each payload (debugging)
+#   Exporter.memory()              keep payloads; read with take_payloads()
+#   Exporter.callback(fn)          hand each payload to `fn(str) -> bool`
+#
+# Pipelines: a SIMPLE pipeline exports every item synchronously on the caller's
+# thread. A BATCH pipeline (BatchConfig) pushes encoded items onto a bounded
+# thread-safe queue that a background thread drains: it exports when
+# max_export_batch_size items are waiting, every schedule_delay_ms, on
+# force_flush() and on shutdown(). A full queue drops new items (counted).
+#
+# Items are pre-encoded OTLP/JSON fragments: "<scope json>\n<item json>". The
+# exporter groups items by scope into one ExportTraceServiceRequest /
+# ExportMetricsServiceRequest / ExportLogsServiceRequest per batch.
+
+from std.core.vec import Vec
+from std.core.map import Map
+from std.core.string import StringBuilder
+from std.string.str import Str
+from std.net.client import HttpSession, ClientRequest, HttpReply
+from std.otel.native import _q_push, _q_pop, trc_otel_q_new, trc_otel_q_wait, trc_otel_q_len, trc_otel_q_flush_ticket, trc_otel_q_request_flush, trc_otel_q_mark_flushed, trc_otel_q_wait_flushed, trc_otel_q_close, trc_otel_q_is_closed, trc_otel_q_worker_exit, trc_otel_q_dropped, trc_otel_q_free, trc_otel_q_pushed, otel_sleep_ms, mono_ms
+from std.otel.resource import otel_env, otel_env_int, parse_header_list
+from std.otel.native import trim_ows
+
+pub const SIGNAL_TRACES  = 0
+pub const SIGNAL_METRICS = 1
+pub const SIGNAL_LOGS    = 2
+
+pub const EXPORTER_NONE     = 0
+pub const EXPORTER_OTLP     = 1
+pub const EXPORTER_CONSOLE  = 2
+pub const EXPORTER_MEMORY   = 3
+pub const EXPORTER_CALLBACK = 4
+
+pub def signal_path(signal: int) -> str:
+    if signal == SIGNAL_METRICS: return "v1/metrics"
+    if signal == SIGNAL_LOGS: return "v1/logs"
+    return "v1/traces"
+
+def _signal_env(signal: int) -> str:
+    if signal == SIGNAL_METRICS: return "METRICS"
+    if signal == SIGNAL_LOGS: return "LOGS"
+    return "TRACES"
+
+def _noop_payload(p: str) -> bool:
+    return true
+
+# ---------------------------------------------------------------- envelopes
+
+# Build the OTLP/JSON export request for one batch of "<scope>\n<item>" items.
+pub def build_payload(signal: int, resource_json: str, items: Vec[str]) -> str:
+    mut outer = "resourceSpans"
+    mut mid = "scopeSpans"
+    mut inner = "spans"
+    if signal == SIGNAL_METRICS:
+        outer = "resourceMetrics"
+        mid = "scopeMetrics"
+        inner = "metrics"
+    elif signal == SIGNAL_LOGS:
+        outer = "resourceLogs"
+        mid = "scopeLogs"
+        inner = "logRecords"
+    # group by scope, keeping first-seen order
+    mut scopes = Vec[str].init(2)
+    mut item_scope = Vec[int].init(items.len)
+    mut bodies = Vec[str].init(items.len)
+    mut idx = Map[str, int].init(4)
+    mut i = 0
+    while i < items.len:
+        mut it = items.get(i)
+        i = i + 1
+        mut nl = Str.index_of(it, "\n")
+        if nl < 0: continue
+        mut scope = Str.slice(it, 0, nl)
+        bodies.push(Str.slice(it, nl + 1, it.len()))
+        if idx.contains(scope):
+            item_scope.push(idx.get(scope))
+        else:
+            idx.insert(scope, scopes.len)
+            item_scope.push(scopes.len)
+            scopes.push(scope)
+    mut sb = StringBuilder.init(1024)
+    sb.append("{\"")
+    sb.append(outer)
+    sb.append("\":[{\"resource\":")
+    sb.append(resource_json)
+    sb.append(",\"")
+    sb.append(mid)
+    sb.append("\":[")
+    mut j = 0
+    while j < scopes.len:
+        if j > 0: sb.append_char(44)
+        sb.append("{\"scope\":")
+        sb.append(scopes.get(j))
+        sb.append(",\"")
+        sb.append(inner)
+        sb.append("\":[")
+        mut first = true
+        mut k = 0
+        while k < bodies.len:
+            if item_scope.get(k) == j:
+                if not first: sb.append_char(44)
+                sb.append(bodies.get(k))
+                first = false
+            k = k + 1
+        sb.append("]}")
+        j = j + 1
+    sb.append("]}]}")
+    mut out = sb.to_owned()
+    sb.free()
+    idx.free()
+    return out
+
+# ---------------------------------------------------------------- Exporter
+
+# Sendable by audit: a batch pipeline gives its worker thread a private
+# clone(), so no Exporter object is ever touched by two threads; the memory
+# store is a C queue with its own lock; counters are atomics.
+pub class Exporter implements Sendable, UnsafeSendable:
+    pub kind:       int
+    pub endpoint:   str
+    pub hdr_names:  Vec[str]
+    pub hdr_values: Vec[str]
+    pub timeout_ms: int
+    pub max_retries: int
+    pub retry_base_ms: int
+    pub store:      Pointer[void]       # EXPORTER_MEMORY payload queue
+    pub has_store:  bool
+    pub cb:         def(str) -> bool
+    pub exported:   Atomic[int]         # successful export calls
+    pub failed:     Atomic[int]         # failed export calls
+    pub last_status: Atomic[int]        # last HTTP status (0 = transport error)
+    pub last_error: str
+
+extend Exporter:
+    def _mk(kind: int) -> Exporter:
+        mut e = Exporter()
+        e.kind = kind
+        e.endpoint = ""
+        e.hdr_names = Vec[str].init(2)
+        e.hdr_values = Vec[str].init(2)
+        e.timeout_ms = 10000
+        e.max_retries = 2
+        e.retry_base_ms = 100
+        e.has_store = false
+        e.cb = _noop_payload
+        e.exported = Atomic.new(0)
+        e.failed = Atomic.new(0)
+        e.last_status = Atomic.new(0)
+        e.last_error = ""
+        return e
+
+    pub def noop() -> Exporter:
+        return Exporter._mk(EXPORTER_NONE)
+
+    # OTLP/HTTP with JSON bodies, POSTed to `endpoint` as given.
+    pub def otlp_http(endpoint: str) -> Exporter:
+        mut e = Exporter._mk(EXPORTER_OTLP)
+        e.endpoint = endpoint
+        return e
+
+    # Endpoint from OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT (used as-is) or
+    # OTEL_EXPORTER_OTLP_ENDPOINT + "/v1/<signal>" (default
+    # http://localhost:4318); headers from OTEL_EXPORTER_OTLP_HEADERS and the
+    # per-signal variant; timeout from OTEL_EXPORTER_OTLP_(<SIGNAL>_)TIMEOUT.
+    pub def otlp_from_env(signal: int) -> Exporter:
+        mut sig = _signal_env(signal)
+        mut ep = trim_ows(otel_env("OTEL_EXPORTER_OTLP_" + sig + "_ENDPOINT"))
+        if ep.len() == 0:
+            mut base = trim_ows(otel_env("OTEL_EXPORTER_OTLP_ENDPOINT"))
+            if base.len() == 0: base = "http://localhost:4318"
+            if not base.ends_with("/"): base = base + "/"
+            ep = base + signal_path(signal)
+        mut e = Exporter.otlp_http(ep)
+        parse_header_list(otel_env("OTEL_EXPORTER_OTLP_HEADERS"), e.hdr_names, e.hdr_values)
+        parse_header_list(otel_env("OTEL_EXPORTER_OTLP_" + sig + "_HEADERS"), e.hdr_names, e.hdr_values)
+        e.timeout_ms = otel_env_int("OTEL_EXPORTER_OTLP_TIMEOUT", 10000)
+        e.timeout_ms = otel_env_int("OTEL_EXPORTER_OTLP_" + sig + "_TIMEOUT", e.timeout_ms)
+        return e
+
+    pub def console() -> Exporter:
+        return Exporter._mk(EXPORTER_CONSOLE)
+
+    pub def memory() -> Exporter:
+        mut e = Exporter._mk(EXPORTER_MEMORY)
+        e.store = trc_otel_q_new(1000000)
+        e.has_store = true
+        return e
+
+    pub def callback(fn: def(str) -> bool) -> Exporter:
+        mut e = Exporter._mk(EXPORTER_CALLBACK)
+        e.cb = fn
+        return e
+
+    # Extra HTTP header sent with every OTLP request (e.g. an API key).
+    pub def with_header(self, name: str, value: str) -> Exporter:
+        self.hdr_names.push(name)
+        self.hdr_values.push(value)
+        return self
+
+    pub def with_timeout(self, ms: int) -> Exporter:
+        self.timeout_ms = ms
+        return self
+
+    # Retries for 429/502/503/504 and transport errors (default 2), with
+    # exponential backoff starting at base_ms, all within the timeout.
+    pub def with_retries(self, n: int, base_ms: int) -> Exporter:
+        self.max_retries = n
+        self.retry_base_ms = base_ms
+        return self
+
+    # A private copy for a worker thread (shares only the memory store and
+    # the atomic counters' values are not shared -- see stats()).
+    pub def clone(self) -> Exporter:
+        mut e = Exporter._mk(self.kind)
+        e.endpoint = self.endpoint + ""
+        mut i = 0
+        while i < self.hdr_names.len:
+            e.hdr_names.push(self.hdr_names.get(i) + "")
+            e.hdr_values.push(self.hdr_values.get(i) + "")
+            i = i + 1
+        e.timeout_ms = self.timeout_ms
+        e.max_retries = self.max_retries
+        e.retry_base_ms = self.retry_base_ms
+        e.store = self.store
+        e.has_store = self.has_store
+        e.cb = self.cb
+        return e
+
+    # Pop every payload a memory exporter has received so far.
+    pub def take_payloads(self) -> Vec[str]:
+        mut out = Vec[str].init(4)
+        if not self.has_store: return out
+        mut p = _q_pop(self.store)
+        while p.len() > 0:
+            out.push(p)
+            p = _q_pop(self.store)
+        return out
+
+    # Export one payload; true on success.
+    pub def export(self, signal: int, payload: str) -> bool:
+        mut ok = true
+        if self.kind == EXPORTER_OTLP:
+            ok = self._post(signal, payload)
+        elif self.kind == EXPORTER_CONSOLE:
+            print("[otel " + signal_path(signal) + "] " + payload)
+        elif self.kind == EXPORTER_MEMORY:
+            ok = _q_push(self.store, payload, 0) == 0
+        elif self.kind == EXPORTER_CALLBACK:
+            ok = self.cb(payload)
+        if ok: self.exported.add(1)
+        else: self.failed.add(1)
+        return ok
+
+    def _post(self, signal: int, payload: str) -> bool:
+        mut deadline = mono_ms() + self.timeout_ms
+        mut attempt = 0
+        mut backoff = self.retry_base_ms
+        while true:
+            mut s = HttpSession.init()
+            s.set_timeout(self.timeout_ms)
+            mut left = deadline - mono_ms()
+            if left < 1: left = 1
+            s.set_total_timeout(left)
+            s.set_follow_redirects(false)
+            mut req = ClientRequest.init("POST", self.endpoint)
+            req.body = payload
+            req.content_type = "application/json"
+            mut i = 0
+            while i < self.hdr_names.len:
+                req.header(self.hdr_names.get(i), self.hdr_values.get(i))
+                i = i + 1
+            mut r = s.send(req)
+            self.last_status.store(r.status)
+            if r.error == "" and r.status >= 200 and r.status < 300:
+                self.last_error = ""
+                return true
+            if r.error != "": self.last_error = r.error
+            else: self.last_error = "HTTP " + str(r.status)
+            mut retryable = r.error != "" or r.status == 429 or r.status == 502 or r.status == 503 or r.status == 504
+            if not retryable or attempt >= self.max_retries: return false
+            if mono_ms() + backoff >= deadline: return false
+            otel_sleep_ms(backoff)
+            backoff = backoff * 2
+            attempt = attempt + 1
+        return false
+
+    # Release a memory exporter's store (after every pipeline using it shut down).
+    pub def close(self):
+        if self.has_store:
+            trc_otel_q_free(self.store)
+            self.has_store = false
+
+# ---------------------------------------------------------------- batching
+
+pub class BatchConfig:
+    pub max_queue_size:        int
+    pub max_export_batch_size: int
+    pub schedule_delay_ms:     int
+    pub export_timeout_ms:     int
+
+extend BatchConfig:
+    # Spec defaults: 2048 / 512 / 5000 ms / 30000 ms.
+    pub def defaults() -> BatchConfig:
+        mut c = BatchConfig()
+        c.max_queue_size = 2048
+        c.max_export_batch_size = 512
+        c.schedule_delay_ms = 5000
+        c.export_timeout_ms = 30000
+        return c
+
+    # Defaults overridden by OTEL_BSP_MAX_QUEUE_SIZE, OTEL_BSP_MAX_EXPORT_BATCH_SIZE,
+    # OTEL_BSP_SCHEDULE_DELAY, OTEL_BSP_EXPORT_TIMEOUT (or OTEL_BLRP_* for logs).
+    pub def from_env(prefix: str) -> BatchConfig:
+        mut c = BatchConfig.defaults()
+        c.max_queue_size = otel_env_int(prefix + "_MAX_QUEUE_SIZE", c.max_queue_size)
+        c.max_export_batch_size = otel_env_int(prefix + "_MAX_EXPORT_BATCH_SIZE", c.max_export_batch_size)
+        c.schedule_delay_ms = otel_env_int(prefix + "_SCHEDULE_DELAY", c.schedule_delay_ms)
+        c.export_timeout_ms = otel_env_int(prefix + "_EXPORT_TIMEOUT", c.export_timeout_ms)
+        c.normalize()
+        return c
+
+    pub def init(max_queue: int, max_batch: int, delay_ms: int, timeout_ms: int) -> BatchConfig:
+        mut c = BatchConfig()
+        c.max_queue_size = max_queue
+        c.max_export_batch_size = max_batch
+        c.schedule_delay_ms = delay_ms
+        c.export_timeout_ms = timeout_ms
+        c.normalize()
+        return c
+
+    pub def normalize(self):
+        if self.max_queue_size < 1: self.max_queue_size = 1
+        if self.max_export_batch_size < 1: self.max_export_batch_size = 1
+        if self.max_export_batch_size > self.max_queue_size: self.max_export_batch_size = self.max_queue_size
+        if self.schedule_delay_ms < 1: self.schedule_delay_ms = 1
+        if self.export_timeout_ms < 1: self.export_timeout_ms = 1
+
+# State shared with the worker thread. After spawn, the main thread touches
+# only `q` (through the C queue's own lock) and the atomics; every other
+# field belongs to the worker.
+pub class BatchState implements Sendable, UnsafeSendable:
+    pub q:            Pointer[void]
+    pub signal:       int
+    pub resource_json: str
+    pub max_batch:    int
+    pub delay_ms:     int
+    pub timeout_ms:   int
+    pub exporter:     Exporter
+    pub batches:      Atomic[int]     # export calls made
+    pub exported:     Atomic[int]     # items exported successfully
+    pub failed_items: Atomic[int]     # items in failed exports
+
+pub def _batch_worker(st: Shared[BatchState]):
+    mut q = st.q
+    mut ex = st.exporter
+    while true:
+        trc_otel_q_wait(q, st.delay_ms, st.max_batch)
+        mut ticket = trc_otel_q_flush_ticket(q)
+        mut closed = trc_otel_q_is_closed(q) != 0
+        while trc_otel_q_len(q) > 0:
+            mut items = Vec[str].init(st.max_batch)
+            while items.len < st.max_batch:
+                mut it = _q_pop(q)
+                if it.len() == 0: break
+                items.push(it)
+            if items.len == 0: break
+            mut payload = build_payload(st.signal, st.resource_json, items)
+            st.batches.add(1)
+            if ex.export(st.signal, payload):
+                st.exported.add(items.len)
+            else:
+                st.failed_items.add(items.len)
+        trc_otel_q_mark_flushed(q, ticket)
+        if closed: break
+    trc_otel_q_worker_exit(q)
+
+pub const PIPE_SIMPLE = 0
+pub const PIPE_BATCH  = 1
+
+# One processor: exporter + simple or batch delivery.
+pub class Pipeline:
+    pub kind:          int
+    pub signal:        int
+    pub resource_json: str
+    pub exporter:      Exporter
+    pub config:        BatchConfig
+    pub state:         Shared[BatchState]
+    pub _thread:       Thread
+    pub running:       bool
+    pub items_simple:  int
+    pub failed_simple: int
+    pub _dropped_final: int
+
+extend Pipeline:
+    pub def simple(signal: int, resource_json: str, exporter: Exporter) -> Pipeline:
+        mut p = Pipeline()
+        p.kind = PIPE_SIMPLE
+        p.signal = signal
+        p.resource_json = resource_json
+        p.exporter = exporter
+        p.config = BatchConfig.defaults()
+        p.running = true
+        p.items_simple = 0
+        p.failed_simple = 0
+        p._dropped_final = 0
+        return p
+
+    pub def batch(signal: int, resource_json: str, exporter: Exporter, cfg: BatchConfig) -> Pipeline:
+        mut p = Pipeline()
+        p.kind = PIPE_BATCH
+        p.signal = signal
+        p.resource_json = resource_json
+        p.exporter = exporter
+        cfg.normalize()
+        p.config = cfg
+        p.items_simple = 0
+        p.failed_simple = 0
+        p._dropped_final = 0
+        shared st = BatchState()
+        st.q = trc_otel_q_new(cfg.max_queue_size)
+        st.signal = signal
+        st.resource_json = resource_json + ""
+        st.max_batch = cfg.max_export_batch_size
+        st.delay_ms = cfg.schedule_delay_ms
+        st.timeout_ms = cfg.export_timeout_ms
+        mut wex = exporter.clone()
+        if wex.timeout_ms > cfg.export_timeout_ms: wex.timeout_ms = cfg.export_timeout_ms
+        st.exporter = wex
+        st.batches = Atomic.new(0)
+        st.exported = Atomic.new(0)
+        st.failed_items = Atomic.new(0)
+        p.state = st.clone()
+        # Spawn into a local first: `field = Thread.spawn(...)` is not seen by
+        # the compiler's spawn-wrapper prescan (undeclared _tr_spawn_wrap_*).
+        mut t: Thread = Thread.spawn(_batch_worker, st)
+        p._thread = t
+        p.running = true
+        return p
+
+    pub def is_batch(self) -> bool:
+        return self.kind == PIPE_BATCH
+
+    # Queue handle of a batch pipeline (for the log bridge).
+    pub def queue(self) -> Pointer[void]:
+        return self.state.q
+
+    # Deliver one "<scope>\n<item>" item. Returns false when it was dropped
+    # (queue full, pipeline shut down) or a simple export failed.
+    pub def emit(self, item: str) -> bool:
+        if not self.running: return false
+        if self.kind == PIPE_SIMPLE:
+            mut items = Vec[str].init(1)
+            items.push(item)
+            mut payload = build_payload(self.signal, self.resource_json, items)
+            if self.exporter.export(self.signal, payload):
+                self.items_simple = self.items_simple + 1
+                return true
+            self.failed_simple = self.failed_simple + 1
+            return false
+        return _q_push(self.state.q, item, self.config.max_export_batch_size) == 0
+
+    # Several items as ONE export (simple) or queued (batch).
+    pub def emit_all(self, items: Vec[str]) -> bool:
+        if not self.running: return false
+        if items.len == 0: return true
+        if self.kind == PIPE_SIMPLE:
+            mut payload = build_payload(self.signal, self.resource_json, items)
+            if self.exporter.export(self.signal, payload):
+                self.items_simple = self.items_simple + items.len
+                return true
+            self.failed_simple = self.failed_simple + items.len
+            return false
+        mut ok = true
+        mut i = 0
+        while i < items.len:
+            if _q_push(self.state.q, items.get(i), self.config.max_export_batch_size) != 0: ok = false
+            i = i + 1
+        return ok
+
+    # Export everything queued so far; waits up to timeout_ms. True when the
+    # worker confirmed the flush.
+    pub def force_flush(self, timeout_ms: int) -> bool:
+        if self.kind == PIPE_SIMPLE or not self.running: return true
+        mut t = trc_otel_q_request_flush(self.state.q)
+        return trc_otel_q_wait_flushed(self.state.q, t, timeout_ms) != 0
+
+    # Flush, stop the worker and release the queue. Idempotent.
+    pub def shutdown(self, timeout_ms: int) -> bool:
+        if not self.running: return true
+        self.running = false
+        if self.kind == PIPE_SIMPLE: return true
+        mut t = trc_otel_q_request_flush(self.state.q)
+        mut ok = trc_otel_q_wait_flushed(self.state.q, t, timeout_ms) != 0
+        trc_otel_q_close(self.state.q)
+        self._thread.join()
+        self._dropped_final = trc_otel_q_dropped(self.state.q)
+        trc_otel_q_free(self.state.q)
+        return ok
+
+    # Items dropped because the queue was full.
+    pub def dropped(self) -> int:
+        if self.kind == PIPE_SIMPLE: return 0
+        if not self.running: return self._dropped_final
+        return trc_otel_q_dropped(self.state.q)
+
+    # Items handed to the exporter successfully.
+    pub def exported_items(self) -> int:
+        if self.kind == PIPE_SIMPLE: return self.items_simple
+        return self.state.exported.load()
+
+    pub def failed_items(self) -> int:
+        if self.kind == PIPE_SIMPLE: return self.failed_simple
+        return self.state.failed_items.load()
+
+    # Export calls (batches) made so far.
+    pub def batches(self) -> int:
+        if self.kind == PIPE_SIMPLE: return self.items_simple + self.failed_simple
+        return self.state.batches.load()

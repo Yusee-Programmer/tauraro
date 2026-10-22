@@ -1,0 +1,557 @@
+# tests/lang/139_xlsx.tr
+# std.encoding.xlsx: cell references, date serials, reading workbooks made by
+# openpyxl 3.1.5 (fixture_a) and an Excel-style hand-built package
+# (fixture_b: cached formula values, shared formulas, rich text with
+# phonetic runs, inline strings, 1904 dates, rows / cells without r=, x:
+# namespace prefixes), writing workbooks and reading them back, and the
+# deflated ZIP entries going through the built-in DEFLATE codec.
+
+from std.test import TestRunner
+from std.core.string import StringBuilder
+from std.encoding.base64 import Base64
+from std.encoding.xlsx import Workbook, Worksheet, Cell, CellStyle, CellRange, TextRun, XlsxDate
+from std.encoding.xlsx import xlsx_col_name, xlsx_col_index, xlsx_ref, xlsx_ref_row, xlsx_ref_col, xlsx_ref_valid
+from std.encoding.xlsx import xlsx_date_serial, xlsx_is_date_format, xlsx_num_str, xlsx_shift_formula, xlsx_unescape_ooxml
+from std.encoding.xlsx import XLSX_EMPTY, XLSX_STRING, XLSX_NUMBER, XLSX_BOOL, XLSX_ERROR, XLSX_DATE
+from std.encoding.xlsx_xml import xlsx_xml_well_formed
+from std.io.archive import ZipReader
+from std.io.file import File
+from std.sys.fs import Fs
+from std.sys.datetime import DateTime, TimeZone
+
+def fixture_a() -> str:
+    mut sb = StringBuilder.init(16384)
+    sb.append("UEsDBBQAAAAIAIgwUF1Gx01IlQAAAM0AAAAQAAAAZG9jUHJvcHMvYXBwLnhtbE3PTQvCMAwG4L9SdreZih6kDkQ9ip68zy51hbYp")
+    sb.append("bYT67+0EP255ecgboi6JIia2mEXxLuRtMzLHDUDWI/o+y8qhiqHke64x3YGMsRoPpB8eA8OibdeAhTEMOMzit7Dp1C5GZ3XPlkJ3")
+    sb.append("sjpRJsPiWDQ6sScfq9wcChDneiU+ixNLOZcrBf+LU8sVU57mym/8ZAW/B7oXUEsDBBQAAAAIAIgwUF2vlWIj+gAAAOkBAAARAAAA")
+    sb.append("ZG9jUHJvcHMvY29yZS54bWylkdFKwzAUhl+l9L49SacVQhcQZVcKggPFu5CcbcGmDckZ7d7ettu6Db3zMuf/zpc/pNJe6DbgW2g9")
+    sb.append("BrIYk97VTRTaL9MdkRcAUe/QqZgPRDOEmzY4RcMxbMEr/a22CAVjJTgkZRQpGIWZn43pSWn0rPT7UE8CowFrdNhQBJ5zuLCEwcU/")
+    sb.append("F6ZkJvtoZ6rrurxbTNzQiMPn68v7VD6zTSTVaExlZbTQARW1QY4v8oe+ruBqOAJkqUa5sj3tAyaPU36cVadmRxxNMtwv6OBxmZ6T")
+    sb.append("j8XT83qVyoIVZcZZxss1uxfsTvCHr9F0s38RutbYjf2H8SyQFfz6VfkDUEsDBBQAAAAIAIgwUF2ZXJwjEAYAAJwnAAATAAAAeGwv")
+    sb.append("dGhlbWUvdGhlbWUxLnhtbO1aW3PaOBR+76/QeGf2bQvGNoG2tBNzaXbbtJmE7U4fhRFYjWx5ZJGEf79HNhDLlg3tkk26mzwELOn7")
+    sb.append("zkVH5+g4efPuLmLohoiU8nhg2S/b1ru3L97gVzIkEUEwGaev8MAKpUxetVppAMM4fckTEsPcgosIS3gUy9Zc4FsaLyPW6rTb3VaE")
+    sb.append("aWyhGEdkYH1eLGhA0FRRWm9fILTlHzP4FctUjWWjARNXQSa5iLTy+WzF/NrePmXP6TodMoFuMBtYIH/Ob6fkTlqI4VTCxMBqZz9W")
+    sb.append("a8fR0kiAgsl9lAW6Sfaj0xUIMg07Op1YznZ89sTtn4zK2nQ0bRrg4/F4OLbL0otwHATgUbuewp30bL+kQQm0o2nQZNj22q6RpqqN")
+    sb.append("U0/T933f65tonAqNW0/Ta3fd046Jxq3QeA2+8U+Hw66JxqvQdOtpJif9rmuk6RZoQkbj63oSFbXlQNMgAFhwdtbM0gOWXin6dZQa")
+    sb.append("2R273UFc8FjuOYkR/sbFBNZp0hmWNEZynZAFDgA3xNFMUHyvQbaK4MKS0lyQ1s8ptVAaCJrIgfVHgiHF3K/99Ze7yaQzep19Os5r")
+    sb.append("lH9pqwGn7bubz5P8c+jkn6eT101CznC8LAnx+yNbYYcnbjsTcjocZ0J8z/b2kaUlMs/v+QrrTjxnH1aWsF3Pz+SejHIju932WH32")
+    sb.append("T0duI9epwLMi15RGJEWfyC265BE4tUkNMhM/CJ2GmGpQHAKkCTGWoYb4tMasEeATfbe+CMjfjYj3q2+aPVehWEnahPgQRhrinHPm")
+    sb.append("c9Fs+welRtH2Vbzco5dYFQGXGN80qjUsxdZ4lcDxrZw8HRMSzZQLBkGGlyQmEqk5fk1IE/4rpdr+nNNA8JQvJPpKkY9psyOndCbN")
+    sb.append("6DMawUavG3WHaNI8ev4F+Zw1ChyRGx0CZxuzRiGEabvwHq8kjpqtwhErQj5iGTYacrUWgbZxqYRgWhLG0XhO0rQR/FmsNZM+YMjs")
+    sb.append("zZF1ztaRDhGSXjdCPmLOi5ARvx6GOEqa7aJxWAT9nl7DScHogstm/bh+htUzbCyO90fUF0rkDyanP+kyNAejmlkJvYRWap+qhzQ+")
+    sb.append("qB4yCgXxuR4+5Xp4CjeWxrxQroJ7Af/R2jfCq/iCwDl/Ln3Ppe+59D2h0rc3I31nwdOLW95GblvE+64x2tc0LihjV3LNyMdUr5Mp")
+    sb.append("2DmfwOz9aD6e8e362SSEr5pZLSMWkEuBs0EkuPyLyvAqxAnoZFslCctU02U3ihKeQhtu6VP1SpXX5a+5KLg8W+Tpr6F0PizP+Txf")
+    sb.append("57TNCzNDt3JL6raUvrUmOEr0scxwTh7LDDtnPJIdtnegHTX79l125COlMFOXQ7gaQr4Dbbqd3Do4npiRuQrTUpBvw/npxXga4jnZ")
+    sb.append("BLl9mFdt59jR0fvnwVGwo+88lh3HiPKiIe6hhpjPw0OHeXtfmGeVxlA0FG1srCQsRrdguNfxLBTgZGAtoAeDr1EC8lJVYDFbxgMr")
+    sb.append("kKJ8TIxF6HDnl1xf49GS49umZbVuryl3GW0iUjnCaZgTZ6vK3mWxwVUdz1Vb8rC+aj20FU7P/lmtyJ8MEU4WCxJIY5QXpkqi8xlT")
+    sb.append("vucrScRVOL9FM7YSlxi84+bHcU5TuBJ2tg8CMrm7Oal6ZTFnpvLfLQwJLFuIWRLiTV3t1eebnK56Inb6l3fBYPL9cMlHD+U751/0")
+    sb.append("XUOufvbd4/pukztITJx5xREBdEUCI5UcBhYXMuRQ7pKQBhMBzZTJRPACgmSmHICY+gu98gy5KRXOrT45f0Usg4ZOXtIlEhSKsAwF")
+    sb.append("IRdy4+/vk2p3jNf6LIFthFQyZNUXykOJwT0zckPYVCXzrtomC4Xb4lTNuxq+JmBLw3punS0n/9te1D20Fz1G86OZ4B6zh3OberjC")
+    sb.append("Raz/WNYe+TLfOXDbOt4DXuYTLEOkfsF9ioqAEativrqvT/klnDu0e/GBIJv81tuk9t3gDHzUq1qlZCsRP0sHfB+SBmOMW/Q0X48U")
+    sb.append("Yq2msa3G2jEMeYBY8wyhZjjfh0WaGjPVi6w5jQpvQdVA5T/b1A1o9g00HJEFXjGZtjaj5E4KPNz+7w2wwsSO4e2LvwFQSwMEFAAA")
+    sb.append("AAgAiDBQXfTTcaNsAwAASQkAABgAAAB4bC93b3Jrc2hlZXRzL3NoZWV0MS54bWyNVkuO4zYQvQqj2QUY62f5B1nAuDuDNJAJGtNI")
+    sb.append("z5qWKYtoSlRIyu7OKneYRTbZZhEgt8hNsphzpEjKtHpABdHC5qfqvcciWcX8zMWTrAlR6LlhrdwGtVLdJgxlWZMGyxnvSAszFRcN")
+    sb.append("VtAVx1B2guCDcWpYmETRImwwbYMiN2P3osh5rxhtyb1Asm8aLF52hPHzNoiDy8BHeqyVGQiLvMNH8kDUTx04QDd0OAfakFZS3iJB")
+    sb.append("qm3wLt58l0TGxZg8UnKWozbSq9lz/qQ7d4dtEAUavCXo+aFj1PK9XJuKdz+QSt0QxrbBLgkQLhU9kXvw2AZ7rhRvjE5QrbCCsUrw")
+    sb.append("X0hrBRBGwBqkdcYcsAZbz6TF0lz/MT24Ww1W0zsdsJ+HtQfX2Oj1jduXILw32wRR3GNJbjj7RA+q3garAB1IhXumPvLz92QIfWYA")
+    sb.append("S86k+UVnaxyvZjBT9hIkDf5A3dDW/uPny66F1tUQ32KFi1zwMxJ6GgB1w8i3kd4GtNVH4kEJmKXgp4ofcUPyUAGS7ofl4LWbsn/E")
+    sb.append("rPc53FiaxLjZ3QlBitOTOD3JBHJHfTougEV+KtJZPI+zdbLI0my1Xq7TPDxZ21dUaYB0bNPoEkEXbachndBAW+UTkY5EzBM/69yB")
+    sb.append("zyfA4VIwH7q13xv0yA+eOfBsAvzgFZ6ZTXklP0ujxSxbpskiXcG39hMuHOFiihAuo49yYSjnryiTdeynWTqa5QSNov7zuTQ02Ygm")
+    sb.append("miXLaJWOPj/nynGuJjh1ou0Z9tFq56rYpd/CKaiA1d7BrxjWjmE9wUCE8KFbc2KW8+b27jGMvvGvIY6u1zuauk+l90hoe6k3eBy5")
+    sb.append("OMkmiEZ5ZCol1H//yRhH//z6GX357Y8vv//lpfV7Q30xVW8jO1xCFoayJok4QQg6BvUMWShhDIWuRnt0wsxlPzOkbxY7jC0nIBFp")
+    sb.append("r2ZO3+v1ujy1i8ep5208y8jbaOmPUuK2w5RG/6HCX225RQhHqRv3ir+nTBHhSq1RASttiDiaeiRRyft2SGZu1Nrf6tJsA3O1L/L6")
+    sb.append("pSMC5DyN2/apsRH/57HBq4qW5JaXPbwElH1tCMKwrp6ypp0MBr1ALjYUar64Oww7NCbXT4wPWBxpKxGDOgxvg9kSrrCw6dl2oIab")
+    sb.append("7bX12DRreOoQoQ1gvuJcuY5mcK+n4l9QSwMEFAAAAAgAiDBQXWJ7jwedAAAACAEAACMAAAB4bC93b3Jrc2hlZXRzL19yZWxzL3No")
+    sb.append("ZWV0MS54bWwucmVsc43PQQrCMBAF0KuEHKBTXbiQtitddOFGeoEhmTahaRImqdTbGxChgguXnw/v85s7Ocw2+GRsTGJbnE+tNDnH")
+    sb.append("M0BShhZMVYjkSzMGXjCXyBNEVDNOBMe6PgHvDdk1e1MMz0j/iGEcraJLUOtCPv+AwRSJnfWzFAPyRPnNpuJmXBk5VJoesH3qW9Bl")
+    sb.append("+bplYo9Oil63knt9kAK6Br6Ody9QSwMEFAAAAAgAiDBQXbFh9TQvAQAA/wEAABgAAAB4bC93b3Jrc2hlZXRzL3NoZWV0Mi54bWxN")
+    sb.append("UdtqwzAM/ZXgD6jTwS6UJNB2jO1hUDq2PbuJkpjaVmarzfb3k53eHox1ZJ1zJLkY0e9DD0DZrzUulKInGhZShroHq8IMB3D80qK3")
+    sb.append("ihj6TobBg2oSyRp5l+cP0irtRFWk3MZXBR7IaAcbn4WDtcr/rcDgWIq5OCe2uuspJWRVDKqDD6DPgQkM5UWn0RZc0OgyD20plvPF")
+    sb.append("cmKkii8NY7iJszjMDnEfwVtTijz2BAZqihKKryOswZioxJ38nETF1TQyb+Oz/Euan9vbqQBrNN+6ob4UTyJroFUHQ1scX+E00/21")
+    sb.append("xWdFqio8jpmPw1ZFHYNoyYVxZcdqXsgjW9Z8uO5sPhHjYt6V77QLmYGWOfnskeX95DQBwiEtcodEaFPY8weBjwX83iLSBcRJL39e")
+    sb.append("/QNQSwMEFAAAAAgAiDBQXSgy2mwUAQAA0gEAABgAAAB4bC93b3Jrc2hlZXRzL3NoZWV0My54bWxNUctuwyAQ/BWLDwhOpT4U2ZbS")
+    sb.append("VFV7qBSlanvG8dpGAZbCum7/voBjJydmdneGWShGdCffA1D2q5XxJeuJ7IZzf+xBC79CCyZ0WnRaUKCu4946EE0SacVv8vyOayEN")
+    sb.append("q4pU27uqwIGUNLB3mR+0Fu7vERSOJVuzuXCQXU+pwKvCig7egT5sEATKF59GajBeoskctCXbrjfbSZEmPiWM/gpncZka8RTJa1Oy")
+    sb.append("PGYCBUeKFiIcP7ADpaJTSPJ9NmWXS6PyGs/2z2n/EK8WHnaovmRDfckeWNZAKwZFBxxf4LzT7SXikyAx+0047vomXCeNzxS0YT5f")
+    sb.append("3QeFm8QTIbTpbWokQp1gH94cXBwI/RaRFhLDL99Y/QNQSwMEFAAAAAgAiDBQXaEsx5kcAwAAbg4AAA0AAAB4bC9zdHlsZXMueG1s")
+    sb.append("3Vffb9owEP5XIkt7bENIm5KKIG2RkCZtU6X2oa8GO8Saf2SJ6aB//XxxCIFyrJvGy4Ig9p2/7767nB0xbexW8seScxtslNRNRkpr")
+    sb.append("q/swbJYlV7S5NhXXzlOYWlHrpvUqbKqaU9YASMlwPBoloaJCk9lUr9Vc2SZYmrW2GbnpTYG/fWYZiZIbEni63DCeka27rpS6Yiwo")
+    sb.append("75W6bxoShCeBtxgQAySHAMZCpUKAYYC7Q8DoevShXRp2mc2mhdH7BMfEGxwXVTx4oTIjOZViUYsWVlAl5Nbbx61laaSpA+tq6+ij")
+    sb.append("1tS8+gVRN4XCd1xKaFN7AT6M/110gNYjhhNPX68WTvtoPh+5awhvb5CEkLJPIibeMJtW1Fpe67mbeFBrfevrxk/byiWxquk2Gt+S")
+    sb.append("9yMaIwWDoKt8KNcL9jwDbM/a3pz4hakZrw+egTfNppIXFvC1WJXtwJoKbgtjrVEwYoKujKY+vx3sAN7uiIzYUiy/kwG4szPqGt83")
+    sb.append("XI/vBk7bkkv5CAufi15g5ARuikGbjaDJdD90WXVDT9NNIMCQzpMPeO/+jrcSL8Z+WrucdDv/sTaWP9S8EJt2vin2AjD66LL0A/Xj")
+    sb.append("Ib0LS6tKbj9KsdKK++K+O+JsSne4oDS1eHXRYOe0zUKCnzWtnvjG7rZSuCmOFHYn1+Uq3B1Ylwswji6dwN0/DxB2bT/YXAdbq7cG")
+    sb.append("cAZn5Buc33LAsVgLaYXuZqVgjOu3O8zxW7pw78KDAG4V4wVdS/vUOzOyH3/lTKxV2q96gMS6VfvxF+iwKNmf0C6Y0IxvOMu7qTsD")
+    sb.append("jw7D/uw+ds3bC3GhqMHpeioWSoiiwIGgPA6N9T/mNcHz8k5U4eS0a4KjJjjK40668vaDxkJQqbuQlNM0jpMELW+en5aRozVMEvgi")
+    sb.append("hKhCwKCxINqfVv5MA5xpm9/0BvqUz7YNmvKZFkVTPlN5cCE1BEyaIg2AxgIM+lDQjgIRSCxoNQQVx/CcUYXoNj/jSlPUBU2KdG+S")
+    sb.append("YIVK4IM8L3QTxXGaIi5wIjLiGHXBhj3jQmWAENQVx/5FevQ+C3fvuXD/D3P2C1BLAwQUAAAACACIMFBdt0frisAAAAAWAgAACwAA")
+    sb.append("AF9yZWxzLy5yZWxznZJLbgIxDECvEmVfTKnEAjGs2LBDiAu4ieejmcSRY8T09o3YwCBoEUv/np4trw80oHYcc9ulbMYwxFzZVjWt")
+    sb.append("ALJrKWCecaJYKjVLQC2hNJDQ9dgQLObzJcgtw27Wt0xz/En0CpHrunO0ZXcKFPUB+K7DmiNKQ1rZcYAzS//N3M8K1Jqdr6zs/Kc1")
+    sb.append("8KbM8/UgkKJHRXAs9JGkTIt2lK8+nt2+pPOlY2K0eN/o//PQqBQ9+b+dMKWJ0tdFCSZvsPkFUEsDBBQAAAAIAIgwUF1olc4ZiAEA")
+    sb.append("ABUDAAAPAAAAeGwvd29ya2Jvb2sueG1sjVLvT9wwDP1XuugkvtG78kPa6XrSNjZAQhuCia8obVxqkcRV4uOAv35Oe70VISE+JX72")
+    sb.append("e/ZzstpSeKyIHrNnZ31chlK1zN0yz2PdgtPxkDrwkmsoOM0ShoecmgZrOKN648BzXsznp3kAqxnJxxa7qAa1z2jFLoA2sQVgZwcp")
+    sb.append("p9Gr9Wqc7Dpk+TQihjp1SmhC7hC28X9BCrMnjFihRX4pVX+3oDKHHh2+ginVXGWxpe0FBXwlz9re1oGsLdViSNxBYKzfwbdpzL+6")
+    sb.append("ij3CurpJnkt1OhfBBkPkvqLX1zLkE0jxEG2YfqFlCGea4TzQpkP/0MuIjXzio1/FeGZeOyiVcHSaQJBLM0zDIjPxFpYoiXBpBsEp")
+    sb.append("+QKNAT+hF3t6u0vt2cU79k/X8cuEfPRB76PBzOjAQIMezG/ReRvtpO+frXeH9/u16EpHkbOUFj/2k90NUybb64NUdvBl9m22WM6+")
+    sb.append("zxbFKp/ort9E0lOEavk+6ej3VhyfLL7KS22s/SHYH39F2uwfYfxB639QSwMEFAAAAAgAiDBQXQsIXQa8AAAAHwMAABoAAAB4bC9f")
+    sb.append("cmVscy93b3JrYm9vay54bWwucmVsc82TOQ6DMBBFr2L5AAxLkiKCVGloIy5gwbCIxZZnosDtg6AASynSoKSy/lh+/xXj+IGd4kYP")
+    sb.append("VDeGxNh3AyWyZjZXAMpr7BV52uAw35Ta9ornaCswKm9VhRD6/gXsniFv8Z4pssngN0Rdlk2Od50/exz4Axhe2rZUI7IUmbIVciJh")
+    sb.append("7LYxwXIE3kyWIi0SadMikAJ+bRQ6RuEfGEWOUXSkEfHUIW06a3b6T0f28/wWt/olrkN3Uc6LBDj/4fYGUEsDBBQAAAAIAIgwUF3b")
+    sb.append("+86PJAEAAOkEAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbM1Uy07DMBD8lcjXKnEpEgfU9AJcoQd+wCSbxopf8m5L+vdsEhoJVFqq")
+    sb.append("INFLrHhnZ8Y7spev+wCYtNY4zEVNFO6lxKIGqzDzARxXKh+tIv6NGxlU0agNyMV8ficL7wgcpdRxiNXyESq1NZQ8tbyN2rtcRDAo")
+    sb.append("kocB2GnlQoVgdKGI63Lnym8q6adCxp09BmsdcMYAkcijEn3pR4VD48sOYtQlJGsV6VlZhsnWSKS9AcxOcxxx6atKF1D6Ymu5JcMQ")
+    sb.append("QZVYA5A12UA6OyNNPGQYvjeTDfQ0JxUZuo4+IKcW4XK9QyxddxqYCCLpM4ccJZl78gmhS7yE8rfiPOF3H5s+E5T9Mn3MX3Me+S81")
+    sb.append("srgWI7f/aeTN++avb163ZlZpNxqQ/Qu3+gBQSwECFAMUAAAACACIMFBdRsdNSJUAAADNAAAAEAAAAAAAAAAAAAAAgAEAAAAAZG9j")
+    sb.append("UHJvcHMvYXBwLnhtbFBLAQIUAxQAAAAIAIgwUF2vlWIj+gAAAOkBAAARAAAAAAAAAAAAAACAAcMAAABkb2NQcm9wcy9jb3JlLnht")
+    sb.append("bFBLAQIUAxQAAAAIAIgwUF2ZXJwjEAYAAJwnAAATAAAAAAAAAAAAAACAAewBAAB4bC90aGVtZS90aGVtZTEueG1sUEsBAhQDFAAA")
+    sb.append("AAgAiDBQXfTTcaNsAwAASQkAABgAAAAAAAAAAAAAAICBLQgAAHhsL3dvcmtzaGVldHMvc2hlZXQxLnhtbFBLAQIUAxQAAAAIAIgw")
+    sb.append("UF1ie48HnQAAAAgBAAAjAAAAAAAAAAAAAACAAc8LAAB4bC93b3Jrc2hlZXRzL19yZWxzL3NoZWV0MS54bWwucmVsc1BLAQIUAxQA")
+    sb.append("AAAIAIgwUF2xYfU0LwEAAP8BAAAYAAAAAAAAAAAAAACAga0MAAB4bC93b3Jrc2hlZXRzL3NoZWV0Mi54bWxQSwECFAMUAAAACACI")
+    sb.append("MFBdKDLabBQBAADSAQAAGAAAAAAAAAAAAAAAgIESDgAAeGwvd29ya3NoZWV0cy9zaGVldDMueG1sUEsBAhQDFAAAAAgAiDBQXaEs")
+    sb.append("x5kcAwAAbg4AAA0AAAAAAAAAAAAAAIABXA8AAHhsL3N0eWxlcy54bWxQSwECFAMUAAAACACIMFBdt0frisAAAAAWAgAACwAAAAAA")
+    sb.append("AAAAAAAAgAGjEgAAX3JlbHMvLnJlbHNQSwECFAMUAAAACACIMFBdaJXOGYgBAAAVAwAADwAAAAAAAAAAAAAAgAGMEwAAeGwvd29y")
+    sb.append("a2Jvb2sueG1sUEsBAhQDFAAAAAgAiDBQXQsIXQa8AAAAHwMAABoAAAAAAAAAAAAAAIABQRUAAHhsL19yZWxzL3dvcmtib29rLnht")
+    sb.append("bC5yZWxzUEsBAhQDFAAAAAgAiDBQXdv7zo8kAQAA6QQAABMAAAAAAAAAAAAAAIABNRYAAFtDb250ZW50X1R5cGVzXS54bWxQSwUG")
+    sb.append("AAAAAAwADAAbAwAAihcAAAAA")
+    mut s = sb.to_owned()
+    sb.free()
+    return Base64.decode(s)
+
+def fixture_b() -> str:
+    mut sb = StringBuilder.init(16384)
+    sb.append("UEsDBBQAAAAIAIgwUF3lf5MkHQEAALgDAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbMVTS0sDMRC++ytCrqVJ24OI7G4PPo4qWH/A")
+    sb.append("mMx2Q/Mik9b235tuq4hUi7DgaUi+JwlTzbfOsg0mMsHXfComnKFXQRu/rPnL4n58xRll8Bps8FjzHRKfNxfVYheRWBF7qnmXc7yW")
+    sb.append("klSHDkiEiL4gbUgOcjmmpYygVrBEOZtMLqUKPqPP47z34E11iy2sbWZ323J9KJLQEmc3B+I+q+YQozUKcsHlxutvKeNjgijKnkOd")
+    sb.append("iTQqBC5PJuyRnwOOusfyMsloZE+Q8gO4wpJbK99CWr2GsBK/m5xoGdrWKNRBrV2RCIoJQVOHmJ0V/RQOjB+dz+/JJPsxHbjIp/8f")
+    sb.append("e8z+qQflnUUa+jd603PJHSTUzzmVfRm8wFfvjx6yX7zmHVBLAwQUAAAACACIMFBdDTiQSKQAAAAXAQAACwAAAF9yZWxzLy5yZWxz")
+    sb.append("jc89DsIwDAXgq0TeqQsDQqhpF4TUFZUDhNT9UZs4SgKU25ORIgZGy+99lotqMbN4kA8jWwnbLAdBVnM72l7CtTlvDlCVxYVmFVMi")
+    sb.append("DKMLIlVskDDE6I6IQQ9kVMjYkU2bjr1RMY2+R6f0pHrCXZ7v0X8asDZF3UrwdbsF0bwc/WNz142aTqzvhmz8ceIrkWTle4oScJnx")
+    sb.append("yX66MU9ZUgHLAlcflm9QSwMEFAAAAAgAiDBQXTS+1gvrAAAAmQEAAA8AAAB4bC93b3JrYm9vay54bWyNkMFuwyAMhl8F+b6SRtO0")
+    sb.append("RSE9bJrWWw/d7i44DWqAyLC2e/uRdFFz3AnbfPx8UG+urhdn4miDV7BeFSDI62CsPyr43L8/PMOmqS+BT4cQTiLTPiroUhoqKaPu")
+    sb.append("yGFchYF83mkDO0y55aOMAxOa2BEl18uyKJ6kQ+vhllDxfzJC21pNb0F/O/LpFsLUY8qusbNDhLvZjoXBROuX4jE/A2RTj9MvS5d4")
+    sb.append("h8ZWoE72THs8/HFyAU6+8yo8OlLwir0GMU22ZjwjuLK54K2Zzi/ZHVNrr2QWfJnrlM0U5F/++bDGkF9ElJPCfK+cTZtfUEsDBBQA")
+    sb.append("AAAIAIgwUF1J63DX2AAAALQCAAAaAAAAeGwvX3JlbHMvd29ya2Jvb2sueG1sLnJlbHO1ksFOwzAMhl8l8p26LQghtGyXCWlXtj1A")
+    sb.append("lLpNtTaJ7MC2tycaAjo0TRzGybITf/938GxxGAf1Tix98BqqogRF3oam952G7ebl7gkW89krDSblH+L6KCqveNHgUorPiGIdjUaK")
+    sb.append("EMnnlzbwaFJuucNo7M50hHVZPiJPGXDOVKtGA6+aCtTmGOkv7NC2vaVlsG8j+XQhAveBd+KIUoYa7ihp+B4JnkpVZCrgZZn6n2Xw")
+    sb.append("MOBvofqa0P0thSQdB5Ifm8/+WvzDTeOdYWrWifOhTS2m4y8ZPDu/+QdQSwMEFAAAAAgAiDBQXVlYErhwAQAAYwMAAA0AAAB4bC9z")
+    sb.append("dHlsZXMueG1srVPbSsQwEP2VEMS3btqlu6jbdoWVgi++qCC4PmTb9AK51DRdtn69k6buRQUF7cucmcw5OTOh0XInONoy3dZKxjiY")
+    sb.append("+Bgxmam8lmWMHx9S7wIvk6g1PWf3FWMGQb9sY1wZ01wR0mYVE7SdqIZJOCmUFtRAqkvSNprRvLUkwcnU9+dE0FriJJKdSIVpUaY6")
+    sb.append("aWI83ZeQC7c5OJmHGDm5lcpZjJ/PvNC/fMnXnhBi7fXwLa4x+ZY6O6Wev3bKLG5o7wDyJ75vmWQ0kkSFkgc/AXYFGPsNbSmHSjBc")
+    sb.append("RAVz+YryeqPrQcN1DsEK1ZyfDGYLSdRQY5iWKSRoxA99A9akkszJDH0/dJea9sF0dkQYAty7UTqHRzwewZWSiLPCAEHXZWWjUQ2x")
+    sb.append("h8YoASCvaakk5VbygzECkM0Y50/FXjYE2V1xtGrfLlruIXgZoVNwCflECsLfsBBtGt7fdWLDdDo8ph3ri9b8X8VmfxIj47oAHX6Y")
+    sb.append("5B1QSwMEFAAAAAgAiDBQXWe5DP0cAQAAoQEAABQAAAB4bC9zaGFyZWRTdHJpbmdzLnhtbE1Q22rDMAz9FeNB31YnHYzRJi6jW1lf")
+    sb.append("tjC65+ImamPwbbYSyr5+crvRCl840uHoSNXyZA0bISbtXc3LacEZuNZ32h1r/rVd3z/xpaxSQkZEl2reI4a5EKntwao09QEcVQ4+")
+    sb.append("WoUE41GkEEF1qQdAa8SsKB6FVdpx1vrBYc0fOBuc/h5g9Y+pgZYVyg2CrQTKSmScb6TT0LMXhH/YqAyZnHFCrTc+snjc13xNUVDk")
+    sb.append("dFx7hxfec9TK5Jw4S6D8hO6iHs/C55HmKagWak6eE8QRuGTKdSwYcnwlNz1L1Cgvh76SZ7Xm7eP9dbtZ/bGaXlah9w5Qt01kB7Kx")
+    sb.append("6TJX3IyD0mgH5e5Ebl92k7uyWOTEjE2UDQtmfYTr/IK2Ln8BUEsDBBQAAAAIAIgwUF2Hyt+nyQEAAE8EAAAYAAAAeGwvd29ya3No")
+    sb.append("ZWV0cy9zaGVldDEueG1sfZTNjpswFIX3fQrXHWXRUWJjIJ0S4xE/GqnrTrunYBJUMJHtZvL4NXZCgqeqlEXsc33ud8wF+nweenDi")
+    sb.append("UnWjSGGwwRBwUY9NJ/Yp/PH6sn6Cz4y+jfK3OnCugSkXKoUHrY8JQqo+8KFSm/HIhVHaUQ6VNku5R+ooedXYQ0OPCMZbNFSdgIw2")
+    sb.append("3cDF1A9I3qYwC5JyCxGjtrasdMU+UDm+AWl4THk9/ckCCHQKlVmfGKboxCiqL1p+rwVLrbjXyKwh43/rQuYuxHn4DabtlmXks3Fo")
+    sb.append("rZNXUdgK2+lQSd5AF60gSRFBoLoUYmjOPz5kD+Qxv7pEnktJHKyWth88w1U1HHfZtf58B7ZMEM4JQpfAu4Y8dAnCWwLiJQj9BI4a")
+    sb.append("WdDQAw0t6K+L6WqvdxNau3wAS8RoRowcogeQR9aTW88AXe0+ld9+IvzRg43+B7v1YJ1xJ/pO8O/2bjvFqGZuB6x6vVNTBIq0OTZp")
+    sb.append("7+njmT42zdxgvh9Ep7khimKM8Sb2wF2Fe0jEV8vYkjZOxSRaY7ImX18DkmBsfv+4WXPSm/rloDvfrSPyz6PbG0cHLve84H2vQD3+")
+    sb.append("EdpFnHcvr+qXJH+abhndys1i/jqwv1BLAwQUAAAACACIMFBdyj865ScBAAD9AQAAGAAAAHhsL3dvcmtzaGVldHMvc2hlZXQyLnht")
+    sb.append("bFVR207DMAz9lcjva7qOAZqWTmKAQOJtXJ5D667RmqRKzFr4epKwje0p8fG52MlyNeqO7dF5ZY2AaZYDQ1PZWpmtgLfXx8ktrMrl")
+    sb.append("uBis2/kWkVgQGL8YBbRE/YJzX7Wopc9sjyb0Guu0pFC6Lfe9Q1knme54kefXXEtlIBom9F3h4C8qFoM+rd3F4rkWkCd2Lw2ycdN3")
+    sb.append("igQUwL4P1xkwsv0LNrTGrhOwvgLmSRIKaJz9QQO8XPIz/8sqZVe2O55MK5P8tQwLBq9B1dSGdymymzmw6suT1R8H7GB9lCfTe0ky")
+    sb.append("Fs4OzCWnNg580j6h2kZkmraqIucukAKiTKcMbsiljkqWVIYHjBmUkiIYA0/SdZHI+3KazR8ms9jcHyk8DfG/7t9k/Owny19QSwEC")
+    sb.append("FAMUAAAACACIMFBd5X+TJB0BAAC4AwAAEwAAAAAAAAAAAAAAgAEAAAAAW0NvbnRlbnRfVHlwZXNdLnhtbFBLAQIUAxQAAAAIAIgw")
+    sb.append("UF0NOJBIpAAAABcBAAALAAAAAAAAAAAAAACAAU4BAABfcmVscy8ucmVsc1BLAQIUAxQAAAAIAIgwUF00vtYL6wAAAJkBAAAPAAAA")
+    sb.append("AAAAAAAAAACAARsCAAB4bC93b3JrYm9vay54bWxQSwECFAMUAAAACACIMFBdSetw19gAAAC0AgAAGgAAAAAAAAAAAAAAgAEzAwAA")
+    sb.append("eGwvX3JlbHMvd29ya2Jvb2sueG1sLnJlbHNQSwECFAMUAAAACACIMFBdWVgSuHABAABjAwAADQAAAAAAAAAAAAAAgAFDBAAAeGwv")
+    sb.append("c3R5bGVzLnhtbFBLAQIUAxQAAAAIAIgwUF1nuQz9HAEAAKEBAAAUAAAAAAAAAAAAAACAAd4FAAB4bC9zaGFyZWRTdHJpbmdzLnht")
+    sb.append("bFBLAQIUAxQAAAAIAIgwUF2Hyt+nyQEAAE8EAAAYAAAAAAAAAAAAAACAASwHAAB4bC93b3Jrc2hlZXRzL3NoZWV0MS54bWxQSwEC")
+    sb.append("FAMUAAAACACIMFBdyj865ScBAAD9AQAAGAAAAAAAAAAAAAAAgAErCQAAeGwvd29ya3NoZWV0cy9zaGVldDIueG1sUEsFBgAAAAAI")
+    sb.append("AAgACAIAAIgKAAAAAA==")
+    mut s = sb.to_owned()
+    sb.free()
+    return Base64.decode(s)
+
+def test_refs(t: TestRunner):
+    t.section("cell references")
+    t.assert_eq_str(xlsx_col_name(1), "A", "col 1")
+    t.assert_eq_str(xlsx_col_name(26), "Z", "col 26")
+    t.assert_eq_str(xlsx_col_name(27), "AA", "col 27")
+    t.assert_eq_str(xlsx_col_name(16384), "XFD", "last column")
+    t.assert_eq_int(xlsx_col_index("XFD"), 16384, "XFD")
+    t.assert_eq_int(xlsx_col_index("ab"), 28, "lower case letters")
+    t.assert_eq_int(xlsx_col_index("XFE"), 0, "past the last column")
+    t.assert_eq_str(xlsx_ref(3, 2), "B3", "ref B3")
+    t.assert_eq_int(xlsx_ref_row("$C$17"), 17, "absolute row")
+    t.assert_eq_int(xlsx_ref_col("$C$17"), 3, "absolute col")
+    t.assert_false(xlsx_ref_valid("A0"), "row 0 invalid")
+    t.assert_false(xlsx_ref_valid("B"), "no row")
+    t.assert_false(xlsx_ref_valid("A1B"), "trailing garbage")
+    t.assert_false(xlsx_ref_valid("A1048577"), "past the last row")
+    mut r: Result[CellRange, str] = CellRange.parse("C10:A1")
+    t.assert_true(r.is_ok, "range parses")
+    if r.is_ok:
+        t.assert_eq_str(r.ok.to_string(), "A1:C10", "range normalised")
+        t.assert_eq_str(r.ok.to_abs_string(), "$A$1:$C$10", "absolute form")
+        t.assert_eq_int(r.ok.row_count(), 10, "rows")
+        t.assert_eq_int(r.ok.col_count(), 3, "cols")
+        t.assert_true(r.ok.contains(5, 2), "contains B5")
+        t.assert_false(r.ok.contains(11, 1), "not A11")
+    mut one: Result[CellRange, str] = CellRange.parse("B2")
+    t.assert_true(one.is_ok and one.ok.to_string() == "B2", "single-cell range")
+    mut bad: Result[CellRange, str] = CellRange.parse("A1:")
+    t.assert_true(bad.is_err, "bad range rejected")
+    t.assert_eq_str(xlsx_shift_formula("SUM(A1:$B$2)+LOG10(C3)", 2, 1), "SUM(B3:$B$2)+LOG10(D5)", "shift relative refs, keep absolute and names")
+    t.assert_eq_str(xlsx_shift_formula("'My Sheet'!D4&\"A1\"", 1, 0), "'My Sheet'!D5&\"A1\"", "sheet refs move, strings do not")
+    t.assert_eq_str(xlsx_shift_formula("A1*2", -1, 0), "#REF!*2", "shift off the sheet")
+
+def test_dates(t: TestRunner):
+    t.section("date serials and formats")
+    t.assert_eq_float(xlsx_date_serial(2024, 1, 15, 0, 0, 0, false), 45306.0, 0.0, "2024-01-15")
+    t.assert_eq_float(xlsx_date_serial(1900, 1, 1, 0, 0, 0, false), 1.0, 0.0, "1900-01-01 is 1")
+    t.assert_eq_float(xlsx_date_serial(1900, 2, 28, 0, 0, 0, false), 59.0, 0.0, "1900-02-28 is 59")
+    t.assert_eq_float(xlsx_date_serial(1900, 3, 1, 0, 0, 0, false), 61.0, 0.0, "1900-03-01 is 61 (phantom leap day)")
+    t.assert_eq_float(xlsx_date_serial(1904, 1, 2, 12, 0, 0, true), 1.5, 0.0, "1904 system")
+    mut d = XlsxDate.from_serial(45291.57326388889, false)
+    t.assert_eq_str(d.date_string() + " " + d.time_string(), "2023-12-31 13:45:30", "serial to date and time")
+    mut d2 = XlsxDate.from_serial(61.0, false)
+    t.assert_eq_str(d2.date_string(), "1900-03-01", "serial 61")
+    mut d3 = XlsxDate.from_serial(0.0, true)
+    t.assert_eq_str(d3.date_string(), "1904-01-01", "1904 epoch")
+    mut d4 = XlsxDate.from_serial(0.99999999, false)
+    t.assert_eq_str(d4.time_string(), "00:00:00", "rounds up to midnight")
+    t.assert_eq_str(d4.date_string(), "1900-01-01", "and the next day")
+    t.assert_true(xlsx_is_date_format("yyyy-mm-dd"), "yyyy-mm-dd")
+    t.assert_true(xlsx_is_date_format("[$-409]d\\-mmm\\-yyyy;@"), "locale-tagged date")
+    t.assert_true(xlsx_is_date_format("[h]:mm:ss"), "elapsed time")
+    t.assert_true(xlsx_is_date_format("h:mm AM/PM"), "12-hour time")
+    t.assert_false(xlsx_is_date_format("0.00%"), "percent")
+    t.assert_false(xlsx_is_date_format("\"Day\" 0.00"), "quoted text is not a date")
+    t.assert_false(xlsx_is_date_format("[Red]#,##0"), "colour section")
+    t.assert_false(xlsx_is_date_format("0.00E+00"), "scientific")
+    t.assert_false(xlsx_is_date_format("General"), "General")
+    t.assert_eq_str(xlsx_num_str(42.0), "42", "integral float")
+    t.assert_eq_str(xlsx_num_str(0.1), "0.1", "shortest 0.1")
+    t.assert_eq_str(xlsx_num_str(1.0 / 3.0), "0.3333333333333333", "round-trip digits")
+    t.assert_eq_str(xlsx_num_str(-2.5), "-2.5", "negative")
+    t.assert_eq_str(xlsx_unescape_ooxml("a_x000D_b_x005F_x"), "a\rb_x", "_xHHHH_ escapes")
+
+def test_openpyxl(t: TestRunner) throws str:
+    t.section("read a workbook written by openpyxl")
+    mut data = fixture_a()
+    t.assert_eq_int(data.len(), 6843, "fixture decoded")
+    mut z = ZipReader.open(data, data.len())
+    t.assert_true(z.ok, "zip directory")
+    mut si = z.find_entry("xl/worksheets/sheet1.xml")
+    t.assert_true(si >= 0 and z.entries.get(si).method == 8, "entries are deflated")
+    mut sx = z.read_entry(si)
+    t.assert_true(sx.len() == z.entries.get(si).usize and xlsx_xml_well_formed(sx), "deflated entry inflates (built-in codec)")
+    mut wb = Workbook.from_bytes(data)?
+    t.assert_eq_int(wb.sheet_count(), 3, "three sheets")
+    mut names = wb.sheet_names()
+    t.assert_eq_str(names[0] + "," + names[1] + "," + names[2], "Data,Hidden,Empty", "sheet names")
+    t.assert_eq_str(wb.title, "Fixture A", "docProps title")
+    t.assert_false(wb.date1904, "1900 date system")
+    mut hid = wb.sheet("Hidden")?
+    t.assert_true(hid.is_hidden() and hid.state == "hidden", "hidden sheet")
+    mut ws = wb.sheet("data")?
+    t.assert_eq_str(ws.name, "Data", "case-insensitive lookup")
+    t.assert_eq_str(ws.cell("A1").display(), "Name", "A1")
+    mut b2 = ws.cell("B2")
+    t.assert_true(b2.is_number(), "B2 is a number")
+    t.assert_eq_float(b2.as_float(), 3.141592653589793, 0.0, "B2 exact")
+    t.assert_eq_int(ws.cell("B3").as_int(), 42, "B3 int")
+    mut b4 = ws.cell("B4")
+    t.assert_true(b4.is_bool() and not b4.as_bool(), "B4 FALSE")
+    mut b5 = ws.cell("B5")
+    t.assert_true(b5.is_date(), "datetime cell is a date")
+    t.assert_eq_str(b5.display(), "2024-01-15 13:45:30", "datetime value")
+    mut dt = b5.as_datetime()
+    t.assert_true(dt.year == 2024 and dt.month == 1 and dt.day == 15 and dt.hour == 13 and dt.minute == 45 and dt.second == 30, "as_datetime")
+    t.assert_eq_str(ws.cell("B6").display(), "2023-12-31", "custom date format dd/mm/yyyy")
+    t.assert_eq_str(ws.number_format("B6"), "dd/mm/yyyy", "number format code")
+    t.assert_eq_str(ws.cell("B7").display(), "06:30:00", "time of day")
+    mut b8 = ws.cell("B8")
+    t.assert_true(b8.has_formula() and b8.formula == "B3*2" and b8.is_empty(), "formula without a cached value")
+    mut b9 = ws.cell("B9")
+    t.assert_true(b9.is_error() and b9.display() == "#DIV/0!", "error cell")
+    t.assert_true(ws.cell("B10").is_number() and ws.number_format("B10") == "0.0%", "percent stays a number")
+    t.assert_eq_str(ws.cell("A11").display(), "héllo – 日本", "UTF-8 text")
+    mut b11 = ws.cell("B11")
+    t.assert_true(b11.rich and b11.display() == "plain bold end", "rich text concatenated")
+    mut runs = ws.rich_runs("B11")
+    t.assert_eq_int(runs.len(), 3, "three runs")
+    if runs.len() == 3:
+        t.assert_true(runs[1].text == "bold" and runs[1].bold and not runs[0].bold, "bold run")
+    t.assert_eq_float(ws.cell("B12").as_float(), -1.5e-7, 0.0, "small negative")
+    t.assert_eq_str(ws.cell("E20").display(), "far", "sparse cell")
+    t.assert_true(ws.cell("C3").is_empty(), "missing cell is empty")
+    t.assert_eq_int(ws.max_row(), 20, "max_row")
+    t.assert_eq_int(ws.max_col(), 5, "max_col")
+    t.assert_eq_str(ws.dimension, "A1:E20", "dimension")
+    t.assert_eq_str(ws.merged_range_at(2, 5), "D1:E2", "merged cells")
+    t.assert_eq_float(ws.column_width(1), 18.5, 0.0, "column width")
+    t.assert_eq_float(ws.column_width(2), 0.0, 0.0, "default width")
+    t.assert_eq_float(ws.row_height(3), 30.0, 0.0, "row height")
+    t.assert_true(ws.freeze_rows == 1 and ws.freeze_cols == 1, "freeze panes B2")
+    t.assert_eq_str(ws.auto_filter, "A1:B12", "auto filter")
+    t.assert_eq_str(ws.link_at("A2").target, "https://tauraro.dev/x", "hyperlink")
+    mut a1 = ws.style_of("A1")
+    t.assert_true(a1.bold and a1.italic and a1.font_color == "00FF0000", "font style")
+    mut c1 = ws.style_of("C1")
+    t.assert_true(c1.fill_color == "0000FF00" and c1.border_left == "thick" and c1.border_bottom == "dashed", "fill and borders")
+    t.assert_true(c1.h_align == "right" and c1.wrap, "alignment")
+    mut rows = ws.rows()
+    t.assert_eq_int(rows.len(), 20, "rows()")
+    # (bound to locals: rows[0].len() on a List[List[T]] miscompiles)
+    mut row0 = rows[0]
+    t.assert_eq_int(row0.len(), 5, "row width")
+    mut row2 = rows[2]
+    t.assert_eq_str(row2[1].display(), "42", "rows()[2][1]")
+    mut csv = ws.to_csv()
+    t.assert_starts_with(csv, "Name,Value,,,\r\npi,3.141592653589793,,,\r\n", "to_csv")
+    t.assert_ends_with(csv, ",,,,far\r\n", "to_csv last row")
+    mut empty = wb.sheet("Empty")?
+    t.assert_true(empty.max_row() == 0 and empty.to_csv() == "", "empty sheet")
+
+def test_excel_style(t: TestRunner) throws str:
+    t.section("read an Excel-style package")
+    mut wb = Workbook.from_bytes(fixture_b())?
+    t.assert_true(wb.date1904, "1904 date system")
+    t.assert_eq_int(wb.active, 1, "active tab")
+    mut ws = wb.sheet_at(0)?
+    t.assert_eq_str(ws.name, "Calc", "first sheet")
+    mut b1 = ws.cell("B1")
+    t.assert_eq_str(b1.display(), "Red and plain", "rich text without the phonetic run")
+    mut runs = ws.rich_runs("B1")
+    t.assert_true(runs.len() == 2 and runs[0].bold and runs[0].color == "FFFF0000" and runs[0].font == "Arial" and runs[0].size == 12.0, "run properties")
+    t.assert_eq_str(ws.cell("C1").display(), "line1\r\nline2 & more", "_x000D_ and character references")
+    mut b2 = ws.cell("B2")
+    t.assert_true(b2.formula == "A2*2" and b2.is_number() and b2.as_int() == 20, "formula with cached value")
+    t.assert_eq_str(ws.cell("C2").formula, "A2+$A$2+B2", "shared formula master")
+    t.assert_eq_str(ws.cell("C3").formula, "A3+$A$2+B3", "shared formula expanded")
+    t.assert_eq_str(ws.cell("C4").formula, "A4+$A$2+B4", "shared formula expanded again")
+    t.assert_eq_int(ws.cell("C4").as_int(), 46, "shared formula cached value")
+    mut d2 = ws.cell("D2")
+    t.assert_true(d2.is_string() and d2.display() == "x10" and d2.formula == "\"x\"&A2", "string formula result")
+    t.assert_true(ws.cell("D3").is_bool() and ws.cell("D3").as_bool(), "boolean formula result")
+    mut b4 = ws.cell("B4")
+    t.assert_true(b4.is_error() and b4.display() == "#DIV/0!" and b4.formula == "1/0", "error formula result")
+    t.assert_eq_str(ws.cell("D4").display(), "inline <s>", "inline string")
+    t.assert_eq_str(ws.cell("A5").display(), "1904-01-01", "built-in date format 14, 1904 epoch")
+    t.assert_eq_str(ws.cell("B5").display(), "2027-03-16 12:00:00", "custom date format in 1904")
+    t.assert_true(ws.cell("C5").is_number(), "quoted Day text is not a date")
+    t.assert_eq_str(ws.cell("D5").display(), "2024-02-29 12:00:00", "t=d ISO date")
+    t.assert_eq_str(ws.cell("A6").display() + ws.cell("B6").display() + ws.cell("D6").display(), "124", "cells without r=")
+    t.assert_eq_str(ws.merged[0], "A7:B8", "merge")
+    mut p = wb.sheet("Prefixed")?
+    t.assert_eq_str(p.state, "veryHidden", "veryHidden")
+    t.assert_eq_str(p.cell("B2").display(), "pre", "x: prefixed elements")
+    t.assert_eq_float(p.cell("C2").as_float(), 0.0015, 0.0, "exponent number")
+    t.assert_true(p.freeze_rows == 3 and p.freeze_cols == 2, "frozen pane")
+    t.assert_true(p.column_width(3) == 12.75 and p.column_width(5) == 0.0, "column range width")
+    t.assert_eq_float(p.row_height(2), 25.0, 0.0, "row height")
+
+def build_book() throws str -> Workbook:
+    mut wb = Workbook.init()
+    wb.title = "Report & <Summary>"
+    mut ws = wb.add_sheet("Sales Q1")?
+    ws.set_str("A1", "Item")?
+    ws.set_str("B1", "Qty")?
+    ws.set_str("C1", "Price")?
+    ws.set_str("D1", "When")?
+    ws.set_str("E1", "Total")?
+    mut hdr = CellStyle.init()
+    hdr.bold = true
+    hdr.fill_color = "#DDEBF7"
+    hdr.set_border("thin")
+    hdr.border_color = "333333"
+    hdr.h_align = "center"
+    ws.set_range_style("A1:E1", hdr)?
+    mut money = CellStyle.init()
+    money.num_fmt = "#,##0.00"
+    mut r = 2
+    while r <= 4:
+        mut nm = f"item {r - 1}"
+        ws.set_str_at(r, 1, nm)
+        ws.set_int_at(r, 2, r * 3)
+        ws.set_float_at(r, 3, (r as float) * 1.25)
+        ws.set_style_at(r, 3, money)
+        ws.set_date_at(r, 4, 2024, r, 10)
+        mut f = f"=B{r}*C{r}"
+        ws.set_formula_at(r, 5, f)
+        r = r + 1
+    ws.set_bool("A6", true)?
+    ws.set_error("B6", "#N/A")?
+    mut wrap = CellStyle.init()
+    wrap.wrap = true
+    wrap.v_align = "top"
+    wrap.italic = true
+    wrap.font_name = "Arial"
+    wrap.font_size = 9.0
+    wrap.font_color = "FF0000"
+    ws.set_str("A7", "  two\nlines & <tags> _x0041_ \x01")?
+    ws.set_style("A7", wrap)?
+    mut dt = DateTime.in_zone(2024, 7, 4, 18, 30, 15, TimeZone.utc())
+    ws.set_datetime("D7", dt)?
+    mut pct = CellStyle.init()
+    pct.num_fmt = "0.0%"
+    ws.set_float("C7", 0.375)?
+    ws.set_style("C7", pct)?
+    mut dfmt = CellStyle.init()
+    dfmt.num_fmt = "dd mmm yyyy"
+    ws.set_date("D8", 1999, 12, 31)?
+    ws.set_style("D8", dfmt)?
+    ws.set_column_width(1, 24.0)
+    ws.set_columns_width(2, 3, 11.5)
+    ws.set_row_height(1, 22.5)
+    ws.freeze_panes("B2")?
+    ws.merge("A10:C11")?
+    ws.set_str("A10", "merged")?
+    ws.set_auto_filter("A1:E4")?
+    ws.add_link("A2", "https://example.com/?q=1&r=2")?
+    ws.add_internal_link("A3", "'Other sheet'!B2")?
+    ws.set_str("Z30", "sparse")?
+    mut o = wb.add_sheet("Other sheet")?
+    o.set_str("B2", "Item")?
+    o.set_float("A1", 1.0 / 3.0)?
+    o.state = "hidden"
+    mut e = wb.add_sheet("Notes")?
+    e.set_str("A1", "1904?")?
+    wb.active = 2
+    return wb
+
+def test_write(t: TestRunner) throws str:
+    t.section("write and read back")
+    mut wb = build_book()?
+    mut data = wb.to_bytes()?
+    mut z = ZipReader.open(data, data.len())
+    t.assert_true(z.ok, "output is a ZIP archive")
+    t.assert_eq_str(z.entry_name(0), "[Content_Types].xml", "content types first")
+    mut parts = ["[Content_Types].xml", "_rels/.rels", "docProps/core.xml", "docProps/app.xml", "xl/workbook.xml", "xl/_rels/workbook.xml.rels", "xl/styles.xml", "xl/sharedStrings.xml", "xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml", "xl/worksheets/sheet3.xml", "xl/worksheets/_rels/sheet1.xml.rels"]
+    mut all_ok = true
+    for p in parts:
+        mut i = z.find_entry(p)
+        if i < 0:
+            all_ok = false
+            t.assert_true(false, "missing part " + p)
+        else:
+            mut x = z.read_entry(i)
+            if not xlsx_xml_well_formed(x):
+                all_ok = false
+                t.assert_true(false, "malformed XML in " + p)
+    t.assert_true(all_ok, "all parts present and well-formed")
+    mut s1 = z.read_entry(z.find_entry("xl/worksheets/sheet1.xml"))
+    t.assert_contains(s1, "<pane xSplit=\"1\" ySplit=\"1\" topLeftCell=\"B2\" activePane=\"bottomRight\" state=\"frozen\"/>", "freeze pane XML")
+    t.assert_contains(s1, "<c r=\"E2\"><f>B2*C2</f></c>", "formula XML")
+    t.assert_contains(s1, "<mergeCell ref=\"A10:C11\"/>", "merge XML")
+    mut sw = z.read_entry(z.find_entry("xl/workbook.xml"))
+    t.assert_contains(sw, "<definedName name=\"_xlnm._FilterDatabase\" localSheetId=\"0\" hidden=\"1\">'Sales Q1'!$A$1:$E$4</definedName>", "filter database name")
+    t.assert_contains(sw, "state=\"hidden\"", "hidden sheet")
+    mut rels = z.read_entry(z.find_entry("xl/worksheets/_rels/sheet1.xml.rels"))
+    t.assert_contains(rels, "Target=\"https://example.com/?q=1&amp;r=2\" TargetMode=\"External\"", "hyperlink relationship")
+
+    mut back = Workbook.from_bytes(data)?
+    t.assert_eq_int(back.sheet_count(), 3, "sheets read back")
+    t.assert_eq_str(back.title, "Report & <Summary>", "title round trip")
+    t.assert_eq_int(back.active, 2, "active sheet")
+    mut ws = back.sheet("Sales Q1")?
+    t.assert_eq_str(ws.cell("A1").display(), "Item", "header")
+    t.assert_eq_int(ws.cell("B4").as_int(), 12, "int")
+    t.assert_eq_float(ws.cell("C3").as_float(), 3.75, 0.0, "float")
+    t.assert_true(ws.cell("D2").is_date() and ws.cell("D2").display() == "2024-02-10", "date gets a date format")
+    t.assert_eq_str(ws.number_format("D2"), "yyyy-mm-dd", "default date format")
+    t.assert_eq_str(ws.cell("D7").display(), "2024-07-04 18:30:15", "datetime")
+    t.assert_eq_str(ws.number_format("D7"), "yyyy-mm-dd hh:mm:ss", "default datetime format")
+    t.assert_true(ws.cell("D8").is_date() and ws.number_format("D8") == "dd mmm yyyy" and ws.cell("D8").display() == "1999-12-31", "custom date format")
+    t.assert_eq_str(ws.cell("E3").formula, "B3*C3", "formula")
+    t.assert_true(ws.cell("A6").is_bool() and ws.cell("A6").as_bool(), "bool")
+    t.assert_true(ws.cell("B6").is_error() and ws.cell("B6").display() == "#N/A", "error")
+    t.assert_eq_str(ws.cell("A7").display(), "  two\nlines & <tags> _x0041_ \x01", "escaping round trip")
+    mut st = ws.style_of("A7")
+    t.assert_true(st.wrap and st.v_align == "top" and st.italic and st.font_name == "Arial" and st.font_size == 9.0 and st.font_color == "FFFF0000", "wrap / font style")
+    mut h = ws.style_of("C1")
+    t.assert_true(h.bold and h.fill_color == "FFDDEBF7" and h.border_top == "thin" and h.border_color == "FF333333" and h.h_align == "center", "header style")
+    t.assert_eq_str(ws.number_format("C2"), "#,##0.00", "built-in number format by code")
+    t.assert_eq_str(ws.number_format("C7"), "0.0%", "custom number format")
+    t.assert_eq_float(ws.column_width(1), 24.0, 0.0, "width A")
+    t.assert_eq_float(ws.column_width(3), 11.5, 0.0, "width C")
+    t.assert_eq_float(ws.row_height(1), 22.5, 0.0, "row height")
+    t.assert_true(ws.freeze_rows == 1 and ws.freeze_cols == 1, "freeze")
+    t.assert_eq_str(ws.merged_range_at(11, 2), "A10:C11", "merged")
+    t.assert_eq_str(ws.auto_filter, "A1:E4", "filter")
+    t.assert_eq_str(ws.link_at("A2").target, "https://example.com/?q=1&r=2", "external link")
+    t.assert_eq_str(ws.link_at("A3").location, "'Other sheet'!B2", "internal link")
+    t.assert_eq_str(ws.cell("Z30").display(), "sparse", "sparse cell")
+    mut o = back.sheet("Other sheet")?
+    t.assert_true(o.is_hidden(), "hidden")
+    t.assert_eq_float(o.cell("A1").as_float(), 1.0 / 3.0, 0.0, "full float precision")
+
+    # save to disk, reopen, and re-save what was read
+    mut path = "build/tauraro_139_xlsx.xlsx"
+    wb.save(path)?
+    mut disk = Workbook.open(path)?
+    mut dws = disk.sheet("Sales Q1")?
+    t.assert_eq_str(dws.to_csv(), ws.to_csv(), "file and in-memory copies agree")
+    mut again = disk.to_bytes()?
+    mut third = Workbook.from_bytes(again)?
+    mut tws = third.sheet("Sales Q1")?
+    t.assert_eq_str(tws.to_csv(), ws.to_csv(), "read-modify-write keeps values")
+    t.assert_true(tws.style_of("C1").bold and tws.number_format("D8") == "dd mmm yyyy", "and styles")
+    Fs.delete(path)
+
+    # the openpyxl workbook re-saved
+    mut fa = Workbook.from_bytes(fixture_a())?
+    mut fa2 = Workbook.from_bytes(fa.to_bytes()?)?
+    mut s_a = fa.sheet("Data")?
+    mut s_b = fa2.sheet("Data")?
+    t.assert_eq_str(s_b.to_csv(), s_a.to_csv(), "openpyxl workbook survives a re-save")
+    t.assert_true(s_b.cell("B5").is_date() and s_b.style_of("A1").bold and s_b.link_at("A2").target == "https://tauraro.dev/x", "dates, styles and links survive")
+
+    # 1904 workbook
+    mut w4 = Workbook.init()
+    w4.date1904 = true
+    mut s4 = w4.add_sheet("D")?
+    s4.set_date("A1", 2000, 1, 1)?
+    mut b4 = Workbook.from_bytes(w4.to_bytes()?)?
+    mut r4 = b4.sheet("D")?
+    t.assert_true(b4.date1904 and r4.cell("A1").display() == "2000-01-01" and r4.cell("A1").num == 35064.0, "1904 dates")
+
+def test_errors(t: TestRunner):
+    t.section("errors")
+    mut wb = Workbook.init()
+    mut e1: Result[Worksheet, str] = wb.add_sheet("bad/name")
+    t.assert_true(e1.is_err, "forbidden character")
+    mut e2: Result[Worksheet, str] = wb.add_sheet("")
+    t.assert_true(e2.is_err, "empty name")
+    mut ok: Result[Worksheet, str] = wb.add_sheet("One")
+    t.assert_true(ok.is_ok, "valid name")
+    mut e3: Result[Worksheet, str] = wb.add_sheet("ONE")
+    t.assert_true(e3.is_err, "duplicate (ignoring case)")
+    mut e4: Result[Worksheet, str] = wb.sheet("Two")
+    t.assert_true(e4.is_err and e4.err.contains("no sheet"), "missing sheet")
+    if ok.is_ok:
+        mut ws = ok.ok
+        mut e5: Result[void, str] = ws.set_str("1A", "x")
+        t.assert_true(e5.is_err, "invalid reference")
+        mut m1: Result[void, str] = ws.merge("A1:B2")
+        mut m2: Result[void, str] = ws.merge("B2:C3")
+        t.assert_true(m1.is_ok and m2.is_err, "overlapping merges rejected")
+        t.assert_true(ws.cell("nonsense").is_empty(), "cell() on a bad reference is empty")
+    mut g: Result[Workbook, str] = Workbook.from_bytes("not a zip file at all")
+    t.assert_true(g.is_err, "garbage rejected")
+    mut z: Result[Workbook, str] = Workbook.from_bytes(fixture_a().slice(0, 3000))
+    t.assert_true(z.is_err, "truncated archive rejected")
+    mut nf: Result[Workbook, str] = Workbook.open("/nonexistent/x.xlsx")
+    t.assert_true(nf.is_err, "missing file")
+    mut empty = Workbook.init()
+    mut eb: Result[str, str] = empty.to_bytes()
+    t.assert_true(eb.is_err, "no sheets")
+
+def main():
+    mut t = TestRunner.init("139_xlsx")
+    test_refs(t)
+    test_dates(t)
+    mut a: Result[void, str] = test_openpyxl(t)
+    if a.is_err: t.assert_true(false, "openpyxl fixture: " + a.err)
+    mut b: Result[void, str] = test_excel_style(t)
+    if b.is_err: t.assert_true(false, "Excel-style fixture: " + b.err)
+    mut c: Result[void, str] = test_write(t)
+    if c.is_err: t.assert_true(false, "write: " + c.err)
+    test_errors(t)
+    t.summary()

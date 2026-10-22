@@ -1,8 +1,7 @@
 # std.net.smtp — Outbound SMTP client (RFC 5321 subset).
 #
-# Built entirely on std.net.tcp (TcpStream) and the same OpenSSL TLS primitive
-# std.net.https uses (_tr_tls_connect/_tr_tls_send/_tr_tls_recv/_tr_tls_close)
-# — no new runtime C code.
+# Built on std.net.tcp (TcpStream) and std.net.tls (the built-in TLS 1.3
+# client, which verifies the server certificate and host name).
 #
 # Supports:
 #   - Plaintext SMTP (port 25/587) and implicit TLS (port 465, "smtps").
@@ -10,8 +9,7 @@
 #   - MAIL FROM / RCPT TO (multiple recipients) / DATA with RFC 5321
 #     dot-stuffing of body lines that start with '.'.
 #   - AUTH LOGIN and AUTH PLAIN (base64-encoded per RFC 4954 / SASL).
-#   - STARTTLS is advertised-and-requested but NOT upgraded in place — see the
-#     "LIMITATIONS" note below.
+#   - STARTTLS (RFC 3207): starttls() upgrades the existing connection in place.
 #
 # Usage:
 #   from std.net.smtp import SmtpClient
@@ -27,20 +25,23 @@
 #   client.ehlo("myhost")
 #   ...
 #
-# LIMITATIONS (v1):
-#   - STARTTLS-upgrade-on-an-existing-plaintext-connection is NOT implemented.
-#     std/net/https.tr's TLS primitive (_tr_tls_connect) only knows how to
-#     open a FRESH TLS connection (hostname -> new fd -> TLS handshake); the
-#     runtime has no "wrap an already-connected fd in TLS" client-side
-#     function (only a server-side equivalent, _tr_tls_accept, exists, for
-#     TLS-terminating servers). So `starttls()` here sends the STARTTLS
-#     command and reads the server's 220 response (useful for servers that
-#     require it before accepting AUTH), but the connection itself stays
-#     plaintext afterwards — do not rely on it for confidentiality. For a
-#     real security boundary use connect_tls() (implicit TLS, port 465)
-#     instead, which is fully functional (fresh TLS from the first byte).
-#   - No MIME multipart / attachment support — send_mail() sends a single
-#     text/plain body (headers + blank line + body).
+# STARTTLS (e.g. port 587):
+#   mut client = SmtpClient.connect("smtp.example.com", 587)
+#   client.ehlo("myhost")
+#   mut r = client.starttls()        # 220 + TLS handshake; check client.use_tls
+#   client.ehlo("myhost")            # capabilities must be re-read after TLS
+#
+# TLS is TLS 1.3 only (see std.net.tls); servers limited to TLS 1.2 fail the
+# handshake and the error is reported in last_text.
+#
+# MIME messages (multipart, HTML, attachments, non-ASCII headers) are built
+# with std.net.email and sent with send_message():
+#   mut m = EmailMessage.init()
+#   m.set_from("Me <me@example.com>"); m.add_to("you@example.com")
+#   m.add_bcc("archive@example.com")       # envelope only
+#   m.set_subject("Report"); m.set_text("See attached."); m.attach("r.pdf", pdf)
+#   client.send_message(m)                 # MAIL FROM / RCPT TO each / DATA
+# send_mail() remains the one-call plain-text shortcut.
 #
 # ── Wire framing rules this module gets right ────────────────────────────────
 #   - SMTP replies can span multiple lines: all but the last line of a
@@ -57,13 +58,11 @@ from std.encoding.base64 import Base64
 from std.core.string import StringBuilder
 from std.string.str import Str
 from std.sys.time import Clock
+from std.net.tls import TlsStream, TlsOptions
+from std.net.email import EmailMessage
 
 extern "C":
     def _tr_c_free(ptr: Pointer[char])
-    def _tr_tls_connect(host: str, port: int) -> Pointer[char]
-    def _tr_tls_send(handle: Pointer[char], data: str) -> int
-    def _tr_tls_recv(handle: Pointer[char], cap: int) -> str
-    def _tr_tls_close(handle: Pointer[char])
 
 # ─── SmtpResponse ───────────────────────────────────────────────────────────
 # One parsed (possibly multi-line) SMTP reply: the 3-digit code plus the full
@@ -91,9 +90,11 @@ pub class SmtpClient:
     pub host:      str
     pub port:      int
     pub connected: bool
-    pub use_tls:   bool          # true when this connection is TLS (implicit TLS)
-    pub _tls:      Pointer[char] # non-null when use_tls
-    pub _stream:   TcpStream     # valid when not use_tls
+    pub use_tls:   bool          # true once the connection is TLS (implicit or STARTTLS)
+    pub _tls:      TlsStream     # valid when use_tls
+    pub _stream:   TcpStream     # valid for plaintext and STARTTLS connections
+    pub _plain:    bool          # true when _stream holds the underlying socket
+    pub tls_opts:  TlsOptions
     pub last_code: int
     pub last_text: str
     pub _caps:     str           # raw EHLO capability text (for supports_starttls/auth)
@@ -109,7 +110,8 @@ extend SmtpClient:
         c.host      = host
         c.port      = port
         c.use_tls   = false
-        c._tls      = 0 as Pointer[char]
+        c._plain    = true
+        c.tls_opts  = TlsOptions.default()
         c._stream   = TcpStream.connect(host, port)
         c.connected = c._stream.connected
         c.last_code = 0
@@ -122,16 +124,27 @@ extend SmtpClient:
             c.last_text = greeting.text
         return c
 
-    # Connect over implicit TLS (typical for port 465).
+    # Connect over implicit TLS (typical for port 465), verifying the server.
     pub def connect_tls(host: str, port: int) -> SmtpClient:
+        mut o = TlsOptions.default()
+        return SmtpClient.connect_tls_with(host, port, o)
+
+    pub def connect_tls_with(host: str, port: int, opts: TlsOptions) -> SmtpClient:
         mut c = SmtpClient()
         c.host      = host
         c.port      = port
         c.use_tls   = true
-        c._tls      = _tr_tls_connect(host, port)
-        c.connected = (c._tls as usize) != 0
+        c._plain    = false
+        c.tls_opts  = opts
+        c.connected = false
         c.last_code = 0
         c.last_text = ""
+        mut r: Result[TlsStream, str] = TlsStream.connect_with(host, port, opts)
+        if r.is_ok:
+            c._tls = r.ok
+            c.connected = true
+        else:
+            c.last_text = r.err
         c._caps     = ""
         c._rbuf     = ""
         if c.connected:
@@ -144,13 +157,19 @@ extend SmtpClient:
 
     def _raw_send(self, data: str):
         if self.use_tls:
-            _tr_tls_send(self._tls, data)
+            mut r: Result[bool, str] = SmtpClient._tls_write(self._tls, data)
         else:
             self._stream.send(data)
 
+    def _tls_write(t: TlsStream, data: str) throws str -> bool:
+        t.write(data)?
+        return true
+
     def _raw_recv(self, cap: int) -> str:
         if self.use_tls:
-            return _tr_tls_recv(self._tls, cap)
+            mut r: Result[str, str] = self._tls.read(cap)
+            if r.is_err: return ""
+            return r.ok
         return self._stream.recv(cap)
 
     # Send one command line, CRLF-terminated (callers pass the command WITHOUT
@@ -248,16 +267,29 @@ extend SmtpClient:
     pub def supports_auth(self) -> bool:
         return Str.contains(self._caps, "AUTH")
 
-    # Send STARTTLS and read the server's 220 confirmation. See the
-    # LIMITATIONS note at the top of this file: this does NOT actually
-    # upgrade the socket to TLS (the runtime has no client-side "wrap an
-    # existing fd" TLS primitive) — it only performs the command/response
-    # handshake step. Returns false immediately (no command sent) if the
-    # server never advertised STARTTLS in its EHLO capabilities.
+    # Send STARTTLS, and on the server's 220 run the TLS handshake on the same
+    # socket (verified with self.tls_opts). On success `use_tls` becomes true
+    # and the EHLO capabilities are cleared: call ehlo() again (RFC 3207).
+    # A failed handshake returns code 0 with the TLS error as text and leaves
+    # the client disconnected. Returns code 0 without sending anything if the
+    # server did not advertise STARTTLS.
     pub def starttls(self) -> SmtpResponse:
+        if self.use_tls: return SmtpResponse.init(0, "already using TLS")
         if not self.supports_starttls():
             return SmtpResponse.init(0, "STARTTLS not advertised by server")
-        return self._cmd("STARTTLS")
+        mut r = self._cmd("STARTTLS")
+        if r.code != 220: return r
+        self._rbuf = ""          # anything buffered before the handshake is discarded
+        mut t: Result[TlsStream, str] = TlsStream.wrap_fd(self._stream.fd, self.host, self.tls_opts)
+        if t.is_err:
+            self.close()
+            self.last_code = 0
+            self.last_text = t.err
+            return SmtpResponse.init(0, t.err)
+        self._tls = t.ok
+        self.use_tls = true
+        self._caps = ""
+        return r
 
     # ── AUTH ─────────────────────────────────────────────────────────────────
 
@@ -302,27 +334,91 @@ extend SmtpClient:
 
     # Translate a '\n'-delimited message body into CRLF-terminated, dot-stuffed
     # wire bytes, ending with the "\r\n.\r\n" end-of-data marker.
-    def _build_dot_stuffed(body: str) -> str:
-        mut sb    = StringBuilder.init(Str.len(body) + 16)
-        mut lines = Str.split(body, "\n")
-        mut n     = len(lines)
-        mut i     = 0
-        while i < n:
-            mut line = lines[i]
-            # Strip a trailing '\r' if the source already had CRLF endings,
-            # so we don't double up when we append our own "\r\n" below.
-            mut llen = Str.len(line)
-            if llen > 0 and Str.char_at(line, llen - 1) == 13:
-                line = Str.slice(line, 0, llen - 1)
-            if Str.len(line) > 0 and Str.char_at(line, 0) == 46:
-                sb.append_char(46)   # dot-stuff: prepend an extra '.'
-            sb.append(line)
+    #
+    # Lines are walked by hand rather than with Str.split, which drops empty
+    # pieces (that silently removed every blank line, including the one that
+    # separates the headers from the body).
+    pub def _build_dot_stuffed(body: str) -> str:
+        mut n  = body.len()
+        mut sb = StringBuilder.init(n + n / 32 + 16)
+        mut p  = body as Pointer[char]
+        mut st = 0
+        while st < n:
+            mut e = st
+            while e < n:
+                mut ch = 0
+                unsafe: ch = (p.offset(e).read() as int) & 255
+                if ch == 10: break
+                e = e + 1
+            mut le = e
+            if le > st:
+                mut last = 0
+                unsafe: last = (p.offset(le - 1).read() as int) & 255
+                # Strip a trailing '\r' if the source already had CRLF endings,
+                # so we don't double up when we append our own "\r\n" below.
+                if last == 13: le = le - 1
+            if le > st:
+                mut first = 0
+                unsafe: first = (p.offset(st).read() as int) & 255
+                if first == 46: sb.append_char(46)   # dot-stuff: prepend an extra '.'
+                mut line = body.slice(st, le)
+                sb.append(line)
             sb.append("\r\n")
-            i = i + 1
+            st = e + 1
         sb.append(".\r\n")
         mut out = sb.to_owned()
         sb.free()
         return out
+
+    pub def supports(self, extension: str) -> bool:
+        mut lines = self._caps.split("\n")
+        mut want = extension.upper()
+        mut i = 0
+        while i < len(lines):
+            mut l = lines[i].strip().upper()
+            if l == want or l.starts_with(want + " "): return true
+            i = i + 1
+        return false
+
+    # Send a std.net.email message: the envelope sender is its Sender/From
+    # address and the recipients are To + Cc + Bcc (Bcc is never written into
+    # the data). Stops at the first failing reply and returns it.
+    pub def send_message(self, msg: EmailMessage) -> SmtpResponse:
+        mut rc = msg.recipients()
+        return self.send_message_to(msg, msg.envelope_from(), rc)
+
+    # send_message with an explicit envelope (e.g. VERP or a forwarding hop).
+    # MAIL FROM gets SMTPUTF8 when an envelope address is not ASCII and
+    # BODY=8BITMIME when the data has 8-bit bytes (if the server offers them).
+    pub def send_message_to(self, msg: EmailMessage, envelope_from: str, rcpts: List[str]) -> SmtpResponse:
+        if len(rcpts) == 0: return SmtpResponse.init(0, "send_message: no recipients")
+        mut wire = msg.to_string()
+        mut cmd = "MAIL FROM:<" + envelope_from + ">"
+        mut utf8 = not SmtpClient._ascii(envelope_from)
+        mut i = 0
+        while i < len(rcpts):
+            if not SmtpClient._ascii(rcpts[i]): utf8 = true
+            i = i + 1
+        if not SmtpClient._ascii(wire) and self.supports("8BITMIME"): cmd = cmd + " BODY=8BITMIME"
+        if utf8 and self.supports("SMTPUTF8"): cmd = cmd + " SMTPUTF8"
+        mut r = self._cmd(cmd)
+        if r.is_error(): return r
+        i = 0
+        while i < len(rcpts):
+            mut rr = self.rcpt_to(rcpts[i])
+            if rr.is_error(): return rr
+            i = i + 1
+        return self.data(wire)
+
+    def _ascii(s: str) -> bool:
+        mut p = s as Pointer[char]
+        mut i = 0
+        while i < s.len():
+            mut c = 0
+            unsafe: c = (p.offset(i).read() as int) & 255
+            if c >= 128: return false
+            i = i + 1
+        return true
 
     pub def rset(self) -> SmtpResponse:
         return self._cmd("RSET")
@@ -337,9 +433,8 @@ extend SmtpClient:
 
     pub def close(self):
         if self.use_tls:
-            if (self._tls as usize) != 0:
-                _tr_tls_close(self._tls)
-                self._tls = 0 as Pointer[char]
+            self._tls.close()
+            if self._plain: self._stream.close()
         else:
             self._stream.close()
         self.connected = false

@@ -1,0 +1,251 @@
+# std.collections.skiplist -- an ordered map built on a skip list.
+#
+# `SkipList[K, V]` keeps keys sorted (any type with `<` and `==`: int, float,
+# str). insert / get / remove are O(log n) expected; iteration, range
+# queries and floor/ceiling lookups follow the bottom level in order.
+# Levels come from a fixed-seed xorshift generator, so runs are
+# reproducible.
+#
+# Nodes live in parallel arrays and are addressed by index (no per-node heap
+# objects); removed slots are reused.
+#
+# Usage:
+#   from std.collections.skiplist import SkipList
+#   mut s = SkipList[int, str].init()
+#   s.insert(30, "c"); s.insert(10, "a"); s.insert(20, "b")
+#   s.keys()                       # [10, 20, 30]
+#   s.get(20, "")                  # "b"
+#   s.range_keys(15, 31)           # [20, 30]   (lo <= k < hi)
+#   s.floor_key(25, -1)            # 20
+
+# Maximum tower height (24 levels; p = 1/4 per level). Written as a literal
+# below: module constants are not visible inside monomorphized generic code.
+
+pub class SkipList[K, V]:
+    pub keys_:   List[K]
+    pub vals_:   List[V]
+    pub levels:  List[int]      # level count of each node (0 = free slot)
+    pub nexts:   List[int]      # node * 24 + level -> next node, -1 = end
+    pub head:    List[int]      # head pointers per level
+    pub free:    List[int]
+    pub level:   int            # current top level count
+    pub count:   int
+    pub rng:     int
+
+extend SkipList[K, V]:
+    pub def init() -> SkipList[K, V]:
+        mut s = SkipList[K, V]()
+        s.keys_ = []
+        s.vals_ = []
+        s.levels = []
+        s.nexts = []
+        s.head = []
+        s.free = []
+        mut i = 0
+        while i < 24:
+            s.head.append(-1)
+            i = i + 1
+        s.level = 1
+        s.count = 0
+        s.rng = 0x2545F491
+        return s
+
+    def _rand_level(self) -> int:
+        mut lv = 1
+        while lv < 24:
+            mut x = self.rng
+            x = x ^ ((x << 13) & 0xFFFFFFFF)
+            x = x ^ (x >> 17)
+            x = x ^ ((x << 5) & 0xFFFFFFFF)
+            self.rng = x & 0xFFFFFFFF
+            if (self.rng & 3) != 0: break      # p = 1/4
+            lv = lv + 1
+        return lv
+
+    def _next(self, node: int, lv: int) -> int:
+        if node < 0: return self.head[lv]
+        return self.nexts[node * 24 + lv]
+
+    def _set_next(self, node: int, lv: int, to: int):
+        if node < 0:
+            self.head[lv] = to
+        else:
+            self.nexts[node * 24 + lv] = to
+
+    def _alloc(self, k: K, v: V, lv: int) -> int:
+        mut idx = 0
+        if len(self.free) > 0:
+            idx = self.free[len(self.free) - 1]
+            self.free.pop()
+            self.keys_[idx] = k
+            self.vals_[idx] = v
+            self.levels[idx] = lv
+        else:
+            idx = len(self.keys_)
+            self.keys_.append(k)
+            self.vals_.append(v)
+            self.levels.append(lv)
+            mut j = 0
+            while j < 24:
+                self.nexts.append(-1)
+                j = j + 1
+        mut j2 = 0
+        while j2 < 24:
+            self.nexts[idx * 24 + j2] = -1
+            j2 = j2 + 1
+        return idx
+
+    # Node index of the last node with key < k at each level (-1 = head).
+    def _preds(self, k: K) -> List[int]:
+        mut update: List[int] = []
+        mut i = 0
+        while i < 24:
+            update.append(-1)
+            i = i + 1
+        mut cur = -1
+        mut lv = self.level - 1
+        while lv >= 0:
+            mut nx = self._next(cur, lv)
+            while nx >= 0 and self.keys_[nx] < k:
+                cur = nx
+                nx = self._next(cur, lv)
+            update[lv] = cur
+            lv = lv - 1
+        return update
+
+    # Insert or replace. Returns true when the key was new.
+    pub def insert(self, k: K, v: V) -> bool:
+        mut update = self._preds(k)
+        mut cand = self._next(update[0], 0)
+        if cand >= 0 and self.keys_[cand] == k:
+            self.vals_[cand] = v
+            return false
+        mut lv = self._rand_level()
+        if lv > self.level:
+            mut i = self.level
+            while i < lv:
+                update[i] = -1
+                i = i + 1
+            self.level = lv
+        mut node = self._alloc(k, v, lv)
+        mut l2 = 0
+        while l2 < lv:
+            self._set_next(node, l2, self._next(update[l2], l2))
+            self._set_next(update[l2], l2, node)
+            l2 = l2 + 1
+        self.count = self.count + 1
+        return true
+
+    def _find(self, k: K) -> int:
+        mut update = self._preds(k)
+        mut cand = self._next(update[0], 0)
+        if cand >= 0 and self.keys_[cand] == k: return cand
+        return -1
+
+    pub def contains(self, k: K) -> bool: return self._find(k) >= 0
+
+    # Value for k, or `missing`.
+    pub def get(self, k: K, missing: V) -> V:
+        mut n = self._find(k)
+        if n < 0: return missing
+        return self.vals_[n]
+
+    # Remove k; true if it was present.
+    pub def remove(self, k: K) -> bool:
+        mut update = self._preds(k)
+        mut node = self._next(update[0], 0)
+        if node < 0 or not (self.keys_[node] == k): return false
+        mut lv = 0
+        while lv < self.levels[node]:
+            if self._next(update[lv], lv) == node:
+                self._set_next(update[lv], lv, self._next(node, lv))
+            lv = lv + 1
+        self.levels[node] = 0
+        self.free.append(node)
+        while self.level > 1 and self.head[self.level - 1] < 0:
+            self.level = self.level - 1
+        self.count = self.count - 1
+        return true
+
+    pub def len(self) -> int: return self.count
+    pub def is_empty(self) -> bool: return self.count == 0
+
+    pub def clear(self):
+        self.keys_ = []
+        self.vals_ = []
+        self.levels = []
+        self.nexts = []
+        self.free = []
+        mut i = 0
+        while i < 24:
+            self.head[i] = -1
+            i = i + 1
+        self.level = 1
+        self.count = 0
+
+    # Keys in ascending order.
+    pub def keys(self) -> List[K]:
+        mut out: List[K] = []
+        mut n = self.head[0]
+        while n >= 0:
+            out.append(self.keys_[n])
+            n = self.nexts[n * 24]
+        return out
+
+    pub def values(self) -> List[V]:
+        mut out: List[V] = []
+        mut n = self.head[0]
+        while n >= 0:
+            out.append(self.vals_[n])
+            n = self.nexts[n * 24]
+        return out
+
+    pub def first_key(self, missing: K) -> K:
+        if self.head[0] < 0: return missing
+        return self.keys_[self.head[0]]
+
+    pub def last_key(self, missing: K) -> K:
+        mut cur = -1
+        mut lv = self.level - 1
+        while lv >= 0:
+            mut nx = self._next(cur, lv)
+            while nx >= 0:
+                cur = nx
+                nx = self._next(cur, lv)
+            lv = lv - 1
+        if cur < 0: return missing
+        return self.keys_[cur]
+
+    # Largest key <= k, or `missing`.
+    pub def floor_key(self, k: K, missing: K) -> K:
+        mut update = self._preds(k)
+        mut cand = self._next(update[0], 0)
+        if cand >= 0 and self.keys_[cand] == k: return k
+        if update[0] < 0: return missing
+        return self.keys_[update[0]]
+
+    # Smallest key >= k, or `missing`.
+    pub def ceiling_key(self, k: K, missing: K) -> K:
+        mut update = self._preds(k)
+        mut cand = self._next(update[0], 0)
+        if cand < 0: return missing
+        return self.keys_[cand]
+
+    # Keys with lo <= key < hi, ascending.
+    pub def range_keys(self, lo: K, hi: K) -> List[K]:
+        mut out: List[K] = []
+        mut update = self._preds(lo)
+        mut n = self._next(update[0], 0)
+        while n >= 0 and self.keys_[n] < hi:
+            out.append(self.keys_[n])
+            n = self.nexts[n * 24]
+        return out
+
+    pub def range_values(self, lo: K, hi: K) -> List[V]:
+        mut out: List[V] = []
+        mut update = self._preds(lo)
+        mut n = self._next(update[0], 0)
+        while n >= 0 and self.keys_[n] < hi:
+            out.append(self.vals_[n])
+            n = self.nexts[n * 24]
+        return out

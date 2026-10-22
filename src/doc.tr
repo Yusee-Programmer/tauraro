@@ -1,0 +1,484 @@
+# src/doc.tr -- `tauraroc doc`: API documentation from source.
+#
+# Collects the public API of each module -- `pub const`, `pub def`, `pub class`
+# (with its `pub` fields and the methods of its `extend` blocks), `pub enum`,
+# `pub interface` -- together with the `#` comment block directly above each
+# item and the module's leading comment, and renders Markdown or HTML.
+# Signatures are taken verbatim from the source, so they read exactly as
+# written.
+
+from std.core.io import read_file, write_file, file_exists
+from core.vec import Vec
+from core.string import StringBuilder
+
+extern "C":
+    def _tr_is_windows() -> bool
+
+pub class DocItem:
+    pub kind:  str     # const, def, class, field, method, static, enum, variant, interface
+    pub name:  str
+    pub sig:   str
+    pub doc:   str
+    pub owner: str     # class / enum / interface the item belongs to
+
+pub class DocModule:
+    pub name:  str
+    pub path:  str
+    pub doc:   str
+    pub items: Vec[DocItem]
+
+def _indent_of(line: str) -> int:
+    mut i = 0
+    while i < line.len() and line.slice(i, i + 1) == " ": i = i + 1
+    return i
+
+# Text of a `#` comment line ("" for a bare "#").
+def _comment_text(line: str) -> str:
+    mut t = line.trim()
+    if t.starts_with("# "): return t.slice(2, t.len())
+    if t.starts_with("#"): return t.slice(1, t.len())
+    return t
+
+def _bracket_depth(s: str) -> int:
+    mut d = 0
+    mut i = 0
+    mut in_str = false
+    while i < s.len():
+        mut c = s.slice(i, i + 1)
+        if c == "\"": in_str = not in_str
+        elif not in_str:
+            if c == "(" or c == "[": d = d + 1
+            elif c == ")" or c == "]": d = d - 1
+            elif c == "#": break
+        i = i + 1
+    return d
+
+# Strip "pub " and the block colon (and a one-line body after it).
+def _signature(decl: str) -> str:
+    mut s = decl.trim()
+    if s.starts_with("pub "): s = s.slice(4, s.len())
+    mut d = 0
+    mut i = 0
+    mut in_str = false
+    while i < s.len():
+        mut c = s.slice(i, i + 1)
+        if c == "\"": in_str = not in_str
+        elif not in_str:
+            if c == "(" or c == "[": d = d + 1
+            elif c == ")" or c == "]": d = d - 1
+            elif c == ":" and d == 0:
+                # a ':' at depth 0 ends the signature, unless it is a type annotation
+                # (`def` params are inside parentheses, so any depth-0 ':' is the block colon)
+                return s.slice(0, i).trim()
+        i = i + 1
+    return s
+
+def _first_word_after(s: str, kw: str) -> str:
+    mut t = s.trim()
+    if t.starts_with("pub "): t = t.slice(4, t.len())
+    if not t.starts_with(kw + " "): return ""
+    t = t.slice(kw.len() + 1, t.len()).trim()
+    mut i = 0
+    while i < t.len():
+        mut c = t.slice(i, i + 1)
+        if c == "(" or c == ":" or c == "[" or c == " " or c == "=": break
+        i = i + 1
+    return t.slice(0, i)
+
+def _join_doc(lines: Vec[str]) -> str:
+    mut sb = StringBuilder.init(256)
+    mut i = 0
+    while i < lines.len:
+        if i > 0: sb.append("\n")
+        sb.append(lines.get(i))
+        i = i + 1
+    return sb.to_string().as_str().trim()
+
+def _new_item(kind: str, name: str, sig: str, doc: str, owner: str) -> DocItem:
+    mut it = DocItem()
+    it.kind = kind
+    it.name = name
+    it.sig = sig
+    it.doc = doc
+    it.owner = owner
+    return it
+
+# Module name from a path: "std/net/http.tr" -> "std.net.http", ".../mod.tr" -> package.
+pub def doc_module_name(path: str) -> str:
+    mut p = path.replace("\\", "/")
+    while p.starts_with("./"): p = p.slice(2, p.len())
+    # a path outside the project: name the module after its std/ part or its file
+    if p.starts_with("/") or (p.len() > 1 and p.slice(1, 2) == ":"):
+        mut at = p.find("/std/")
+        if at >= 0: p = p.slice(at + 1, p.len())
+        else:
+            mut k = p.len() - 1
+            while k >= 0 and p.slice(k, k + 1) != "/": k = k - 1
+            p = p.slice(k + 1, p.len())
+    if p.ends_with(".tr"): p = p.slice(0, p.len() - 3)
+    if p.ends_with("/mod"): p = p.slice(0, p.len() - 4)
+    return p.replace("/", ".")
+
+# Lines of `text`, keeping empty ones (split() drops empty parts).
+def _doc_lines(text: str) -> Vec[str]:
+    mut out: Vec[str] = Vec[str].init(256)
+    mut start = 0
+    mut i = 0
+    mut n = text.len()
+    mut p = text as Pointer[char]
+    while i < n:
+        mut c = 0
+        unsafe: c = p.offset(i).read() as int
+        if c == 10:
+            out.push(text.slice(start, i))
+            start = i + 1
+        i = i + 1
+    if start < n: out.push(text.slice(start, n))
+    return out
+
+pub def doc_parse(path: str, text: str) -> DocModule:
+    mut m = DocModule()
+    m.path = path
+    m.name = doc_module_name(path)
+    m.items = Vec[DocItem].init(32)
+    mut lines = _doc_lines(text)
+    mut n = lines.len
+    # leading module comment (pragmas excluded)
+    mut head: Vec[str] = Vec[str].init(16)
+    mut i = 0
+    mut ended_by_blank = false
+    while i < n:
+        mut t = lines.get(i).trim()
+        if t.starts_with("#"):
+            mut ct = _comment_text(t)
+            if not ct.starts_with("tauraro-") and not ct.starts_with("!"): head.push(ct)
+            i = i + 1
+        elif t == "":
+            if head.len > 0:
+                ended_by_blank = true
+                break
+            i = i + 1
+        else:
+            break
+    # a comment running straight into code documents that code, not the module
+    if not ended_by_blank:
+        head.clear()
+        i = 0
+    m.doc = _join_doc(head)
+    # a module comment immediately followed by a declaration documents the module, not the item
+    mut skip_until = i
+    mut pending: Vec[str] = Vec[str].init(8)
+    mut pending_indent = -1
+    mut scope_kind = ""        # "class", "extend", "enum", "interface" for indented members
+    mut scope_name = ""
+    mut scope_indent = -1
+    i = 0
+    while i < n:
+        mut raw = lines.get(i).replace("\r", "")
+        mut t = raw.trim()
+        mut ind = _indent_of(raw)
+        if t == "":
+            pending.clear()
+            i = i + 1
+            continue
+        if t.starts_with("#"):
+            if i >= skip_until:
+                if pending.len == 0 or pending_indent != ind:
+                    pending.clear()
+                    pending_indent = ind
+                pending.push(_comment_text(t))
+            i = i + 1
+            continue
+        if scope_indent >= 0 and ind <= scope_indent:
+            scope_kind = ""
+            scope_name = ""
+            scope_indent = -1
+        # join continuation lines of a multi-line declaration
+        mut decl = t
+        mut j = i
+        while _bracket_depth(decl) > 0 and j + 1 < n:
+            j = j + 1
+            decl = decl + " " + lines.get(j).trim()
+        mut doc = _join_doc(pending)
+        pending.clear()
+        if ind == 0:
+            if decl.starts_with("pub def "):
+                m.items.push(_new_item("def", _first_word_after(decl, "def"), _signature(decl), doc, ""))
+            elif decl.starts_with("pub const "):
+                mut cs = decl.slice(4, decl.len())
+                mut hash = cs.find("  #")
+                if hash > 0:
+                    if doc == "": doc = cs.slice(hash + 3, cs.len()).trim()
+                    cs = cs.slice(0, hash).trim()
+                m.items.push(_new_item("const", _first_word_after(decl, "const"), cs, doc, ""))
+            elif decl.starts_with("pub class "):
+                mut cn = _first_word_after(decl, "class")
+                m.items.push(_new_item("class", cn, _signature(decl), doc, ""))
+                scope_kind = "class"
+                scope_name = cn
+                scope_indent = 0
+            elif decl.starts_with("pub enum "):
+                mut en = _first_word_after(decl, "enum")
+                m.items.push(_new_item("enum", en, _signature(decl), doc, ""))
+                scope_kind = "enum"
+                scope_name = en
+                scope_indent = 0
+            elif decl.starts_with("pub interface "):
+                mut inn = _first_word_after(decl, "interface")
+                m.items.push(_new_item("interface", inn, _signature(decl), doc, ""))
+                scope_kind = "interface"
+                scope_name = inn
+                scope_indent = 0
+            elif decl.starts_with("extend "):
+                mut xn = _first_word_after(decl, "extend")
+                scope_kind = "extend"
+                scope_name = xn
+                scope_indent = 0
+        elif scope_kind != "":
+            if (scope_kind == "extend" or scope_kind == "interface") and decl.starts_with("pub def "):
+                mut sig = _signature(decl)
+                mut kind = "method"
+                if sig.find("(self") < 0: kind = "static"
+                m.items.push(_new_item(kind, _first_word_after(decl, "def"), sig, doc, scope_name))
+            elif scope_kind == "interface" and decl.starts_with("def "):
+                m.items.push(_new_item("method", _first_word_after(decl, "def"), _signature(decl), doc, scope_name))
+            elif scope_kind == "class" and decl.starts_with("pub ") and not decl.starts_with("pub def "):
+                mut f = decl.slice(4, decl.len())
+                mut fdoc = doc
+                mut hash = f.find("#")
+                if hash > 0:
+                    if fdoc == "": fdoc = f.slice(hash + 1, f.len()).trim()
+                    f = f.slice(0, hash).trim()
+                mut colon = f.find(":")
+                mut fname = f
+                if colon > 0: fname = f.slice(0, colon).trim()
+                m.items.push(_new_item("field", fname, f, fdoc, scope_name))
+            elif scope_kind == "enum" and not decl.starts_with("def ") and not decl.starts_with("pub def "):
+                mut v = decl
+                mut vdoc = doc
+                mut hash2 = v.find("#")
+                if hash2 > 0:
+                    if vdoc == "": vdoc = v.slice(hash2 + 1, v.len()).trim()
+                    v = v.slice(0, hash2).trim()
+                mut vn = v
+                mut po = v.find("(")
+                if po > 0: vn = v.slice(0, po)
+                m.items.push(_new_item("variant", vn.trim(), v, vdoc, scope_name))
+        i = j + 1
+    return m
+
+# ── rendering ───────────────────────────────────────────────────────────────
+
+def _has_kind(m: DocModule, kind: str, owner: str) -> bool:
+    mut i = 0
+    while i < m.items.len:
+        mut it = m.items.get(i)
+        if it.kind == kind and it.owner == owner: return true
+        i = i + 1
+    return false
+
+def _md_cell(s: str) -> str:
+    return s.replace("|", "\\|").replace("\n", " ")
+
+def _md_members(sb: StringBuilder, m: DocModule, owner: str):
+    if _has_kind(m, "field", owner) or _has_kind(m, "variant", owner):
+        sb.append("\n| Member | Description |\n|---|---|\n")
+        mut i = 0
+        while i < m.items.len:
+            mut it = m.items.get(i)
+            if it.owner == owner and (it.kind == "field" or it.kind == "variant"):
+                sb.append("| `" + _md_cell(it.sig) + "` | " + _md_cell(it.doc) + " |\n")
+            i = i + 1
+    mut j = 0
+    while j < m.items.len:
+        mut mt = m.items.get(j)
+        if mt.owner == owner and (mt.kind == "method" or mt.kind == "static"):
+            sb.append("\n#### `" + owner + "." + mt.name + "`\n\n```tauraro\n" + mt.sig + "\n```\n")
+            if mt.doc != "": sb.append("\n" + mt.doc + "\n")
+        j = j + 1
+
+pub def doc_markdown(m: DocModule) -> str:
+    mut sb = StringBuilder.init(4096)
+    sb.append("# " + m.name + "\n\n")
+    sb.append("`" + m.path + "`\n\n")
+    if m.doc != "": sb.append("```text\n" + m.doc + "\n```\n\n")
+    if _has_kind(m, "const", ""):
+        sb.append("## Constants\n\n| Constant | Description |\n|---|---|\n")
+        mut i = 0
+        while i < m.items.len:
+            mut it = m.items.get(i)
+            if it.kind == "const": sb.append("| `" + _md_cell(it.sig) + "` | " + _md_cell(it.doc) + " |\n")
+            i = i + 1
+        sb.append("\n")
+    if _has_kind(m, "def", ""):
+        sb.append("## Functions\n")
+        mut i2 = 0
+        while i2 < m.items.len:
+            mut it2 = m.items.get(i2)
+            if it2.kind == "def":
+                sb.append("\n### `" + it2.name + "`\n\n```tauraro\n" + it2.sig + "\n```\n")
+                if it2.doc != "": sb.append("\n" + it2.doc + "\n")
+            i2 = i2 + 1
+        sb.append("\n")
+    mut k = 0
+    while k < m.items.len:
+        mut c = m.items.get(k)
+        if c.kind == "class" or c.kind == "enum" or c.kind == "interface":
+            sb.append("## " + c.kind + " `" + c.name + "`\n\n```tauraro\n" + c.sig + "\n```\n")
+            if c.doc != "": sb.append("\n" + c.doc + "\n")
+            _md_members(sb, m, c.name)
+            sb.append("\n")
+        k = k + 1
+    return sb.to_string().as_str()
+
+def _html_esc(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+
+def _html_doc(s: str) -> str:
+    if s == "": return ""
+    return "<pre class=\"doc\">" + _html_esc(s) + "</pre>\n"
+
+def _html_anchor(s: str) -> str: return s.replace(".", "-")
+
+pub def doc_html(m: DocModule) -> str:
+    mut sb = StringBuilder.init(8192)
+    sb.append("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
+    sb.append("<title>" + _html_esc(m.name) + "</title>\n<style>" + doc_css() + "</style></head><body><main>\n")
+    sb.append("<p><a href=\"index.html\">Index</a></p>\n<h1>" + _html_esc(m.name) + "</h1>\n<p class=\"path\">" + _html_esc(m.path) + "</p>\n")
+    sb.append(_html_doc(m.doc))
+    if _has_kind(m, "const", ""):
+        sb.append("<h2>Constants</h2>\n<table>\n")
+        mut i = 0
+        while i < m.items.len:
+            mut it = m.items.get(i)
+            if it.kind == "const": sb.append("<tr><td><code>" + _html_esc(it.sig) + "</code></td><td>" + _html_esc(it.doc) + "</td></tr>\n")
+            i = i + 1
+        sb.append("</table>\n")
+    if _has_kind(m, "def", ""):
+        sb.append("<h2>Functions</h2>\n")
+        mut i2 = 0
+        while i2 < m.items.len:
+            mut it2 = m.items.get(i2)
+            if it2.kind == "def":
+                sb.append("<h3 id=\"" + _html_anchor(it2.name) + "\">" + _html_esc(it2.name) + "</h3>\n<pre class=\"sig\">" + _html_esc(it2.sig) + "</pre>\n" + _html_doc(it2.doc))
+            i2 = i2 + 1
+    mut k = 0
+    while k < m.items.len:
+        mut c = m.items.get(k)
+        if c.kind == "class" or c.kind == "enum" or c.kind == "interface":
+            sb.append("<h2 id=\"" + _html_anchor(c.name) + "\">" + c.kind + " " + _html_esc(c.name) + "</h2>\n<pre class=\"sig\">" + _html_esc(c.sig) + "</pre>\n" + _html_doc(c.doc))
+            if _has_kind(m, "field", c.name) or _has_kind(m, "variant", c.name):
+                sb.append("<table>\n")
+                mut f = 0
+                while f < m.items.len:
+                    mut fi = m.items.get(f)
+                    if fi.owner == c.name and (fi.kind == "field" or fi.kind == "variant"):
+                        sb.append("<tr><td><code>" + _html_esc(fi.sig) + "</code></td><td>" + _html_esc(fi.doc) + "</td></tr>\n")
+                    f = f + 1
+                sb.append("</table>\n")
+            mut q = 0
+            while q < m.items.len:
+                mut mt = m.items.get(q)
+                if mt.owner == c.name and (mt.kind == "method" or mt.kind == "static"):
+                    sb.append("<h4 id=\"" + _html_anchor(c.name + "." + mt.name) + "\">" + _html_esc(c.name + "." + mt.name) + "</h4>\n<pre class=\"sig\">" + _html_esc(mt.sig) + "</pre>\n" + _html_doc(mt.doc))
+                q = q + 1
+        k = k + 1
+    sb.append("</main></body></html>\n")
+    return sb.to_string().as_str()
+
+pub def doc_css() -> str:
+    return ":root{--bg:#fff;--fg:#1b1f24;--muted:#57606a;--code:#f3f4f6;--line:#d8dee4;--link:#0b62c4}@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--fg:#e6e8eb;--muted:#9aa3ad;--code:#1a1e24;--line:#2b313a;--link:#6cb0ff}}body{background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,sans-serif;margin:0}main{max-width:900px;margin:0 auto;padding:24px 16px}a{color:var(--link)}pre,code{font:14px/1.45 ui-monospace,Menlo,Consolas,monospace}pre{background:var(--code);padding:10px 12px;border-radius:6px;overflow-x:auto}pre.doc{background:none;padding:0 0 0 2px;white-space:pre-wrap}.path{color:var(--muted)}table{border-collapse:collapse;width:100%}td{border-top:1px solid var(--line);padding:6px 8px;vertical-align:top}h2{border-bottom:1px solid var(--line);padding-bottom:4px;margin-top:2em}"
+
+pub def doc_index_markdown(mods: Vec[DocModule]) -> str:
+    mut sb = StringBuilder.init(2048)
+    sb.append("# API reference\n\n| Module | Summary |\n|---|---|\n")
+    mut i = 0
+    while i < mods.len:
+        mut m = mods.get(i)
+        sb.append("| [`" + m.name + "`](" + m.name + ".md) | " + _md_cell(_summary(m.doc)) + " |\n")
+        i = i + 1
+    return sb.to_string().as_str()
+
+pub def doc_index_html(mods: Vec[DocModule]) -> str:
+    mut sb = StringBuilder.init(4096)
+    sb.append("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>API reference</title>\n<style>" + doc_css() + "</style></head><body><main>\n<h1>API reference</h1>\n<table>\n")
+    mut i = 0
+    while i < mods.len:
+        mut m = mods.get(i)
+        sb.append("<tr><td><a href=\"" + m.name + ".html\"><code>" + _html_esc(m.name) + "</code></a></td><td>" + _html_esc(_summary(m.doc)) + "</td></tr>\n")
+        i = i + 1
+    sb.append("</table>\n</main></body></html>\n")
+    return sb.to_string().as_str()
+
+# First sentence-ish line of a module comment, without a leading "std.x -- ".
+def _summary(doc: str) -> str:
+    mut first = doc
+    mut nl = doc.find("\n")
+    if nl >= 0: first = doc.slice(0, nl)
+    mut dash = first.find(" -- ")
+    if dash >= 0: first = first.slice(dash + 4, first.len())
+    else:
+        mut em = first.find(" — ")
+        if em >= 0: first = first.slice(em + 5, first.len())
+    return first.trim()
+
+# Expand directories into their .tr files (sorted by the shell's listing).
+def _doc_expand(path: str) -> Vec[str]:
+    mut out: Vec[str] = Vec[str].init(16)
+    if path.ends_with(".tr"):
+        out.push(path)
+        return out
+    mut tmp = "_tr_doc_list.txt"
+    if _tr_is_windows():
+        _tr_system("dir /b /s /o:n \"" + path.replace("/", "\\") + "\\*.tr\" > " + tmp + " 2>nul")
+    else:
+        _tr_system("find \"" + path + "\" -name '*.tr' -type f | LC_ALL=C sort > " + tmp + " 2>/dev/null")
+    if file_exists(tmp):
+        mut lines = read_file(tmp).split("\n")
+        mut i = 0
+        while i < lines.len:
+            mut l = lines.get(i).trim().replace("\\", "/")
+            if l.ends_with(".tr"): out.push(l)
+            i = i + 1
+        if _tr_is_windows(): _tr_system("del /Q " + tmp + " 2>nul >nul")
+        else: _tr_system("rm -f " + tmp)
+    return out
+
+# `tauraroc doc <file-or-dir>... [-o DIR] [--html]`: with -o, one page per
+# module plus an index; without, Markdown on stdout.
+pub def run_doc(inputs: Vec[str], out_dir: str, html: bool) -> int:
+    mut mods: Vec[DocModule] = Vec[DocModule].init(16)
+    mut i = 0
+    while i < inputs.len:
+        mut files = _doc_expand(inputs.get(i))
+        if files.len == 0:
+            print("error: no .tr files in " + inputs.get(i))
+            return 1
+        mut k = 0
+        while k < files.len:
+            mut f = files.get(k)
+            if not file_exists(f):
+                print("error: cannot read " + f)
+                return 1
+            mods.push(doc_parse(f, read_file(f)))
+            k = k + 1
+        i = i + 1
+    if out_dir == "":
+        mut j = 0
+        while j < mods.len:
+            if j > 0: print("\n---\n")
+            print(doc_markdown(mods.get(j)))
+            j = j + 1
+        return 0
+    if _tr_is_windows(): _tr_system("mkdir \"" + out_dir.replace("/", "\\") + "\" 2>nul")
+    else: _tr_system("mkdir -p \"" + out_dir + "\"")
+    mut j2 = 0
+    while j2 < mods.len:
+        mut m = mods.get(j2)
+        if html: write_file(out_dir + "/" + m.name + ".html", doc_html(m))
+        else: write_file(out_dir + "/" + m.name + ".md", doc_markdown(m))
+        j2 = j2 + 1
+    if html: write_file(out_dir + "/index.html", doc_index_html(mods))
+    else: write_file(out_dir + "/README.md", doc_index_markdown(mods))
+    print("doc: " + str(mods.len) + " module(s) written to " + out_dir)
+    return 0

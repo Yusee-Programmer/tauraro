@@ -1,9 +1,11 @@
-# std.crypto.jwt — JSON Web Tokens (RFC 7519), HS256 variant only.
+# std.crypto.jwt — JSON Web Tokens (RFC 7519).
 #
-# HMAC-SHA256 signing only — no RSA/ECDSA ("RS256"/"ES256" etc.) or
-# "alg":"none" support. Asymmetric JWT algorithms are out of scope for
-# this module (no public-key crypto primitives exist yet in std.crypto);
-# HS256 is the common single-shared-secret case.
+# Two APIs live here:
+#   * Jwt.encode / Jwt.decode -- the original HS256-only shared-secret API
+#     with Dict[str, str] claims (described below, unchanged);
+#   * Jwt.sign_jwk / verify_jwk / verify_jwks -- JWK-based tokens with every
+#     algorithm std.crypto.jwk implements (RS/PS/ES/EdDSA/HS) and exp / nbf /
+#     iat / aud / iss checks with leeway (see the section at the end).
 #
 # Claims are `Dict[str, str]` (string-valued claims only) — the simplest
 # contract that covers the common case (sub, iss, exp-as-string, custom
@@ -60,6 +62,9 @@ from std.encoding.base64 import Base64
 from std.encoding.json import Json, JsonWriter
 from std.crypto.hmac import Hmac
 from std.core.string import StringBuilder
+from std.crypto.jwk import Jwk, JwkSet, Jws, JwsParts
+from std.encoding.json import JsonDoc, JsonRef
+from std.sys.time import Clock
 
 extern "C":
     def _tr_strlen(s: str) -> int
@@ -298,3 +303,196 @@ extend Jwt:
             diff = diff | (ab ^ bb)
             i = i + 1
         return diff == 0
+
+# ─── Asymmetric / JWK-based JWTs (RFC 7519 + RFC 7515 + RFC 7517) ────────────
+#
+# Jwt.sign_jwk / Jwt.verify_jwk / Jwt.verify_jwks work with std.crypto.jwk
+# keys and every JWS algorithm that module implements (HS256/384/512,
+# RS256/384/512, PS256/384/512, ES256/384, EdDSA). Claims are the payload's
+# JSON text; the verified result (`JwtClaims`) has typed accessors. The
+# algorithm is taken from the header only after it has been checked against
+# `JwtOptions.algorithms` and the key's type, so "alg" confusion (none, or an
+# RSA public key used as an HMAC secret) cannot select a weaker check.
+#
+#   mut opts = JwtOptions.init()
+#   opts.issuer = "https://issuer.example"
+#   opts.audience = "my-client"
+#   opts.algorithms.append("RS256")
+#   mut claims = Jwt.verify_jwks(token, jwks, opts)?
+#   print(claims.subject(), claims.get_int("exp"))
+
+
+# Registered-claim checks applied after the signature has been verified.
+pub class JwtOptions:
+    pub issuer:      str         # required "iss" ("" = not checked)
+    pub audience:    str         # must appear in "aud" ("" = not checked)
+    pub subject:     str         # required "sub" ("" = not checked)
+    pub algorithms:  List[str]   # accepted "alg" values ([] = any the key supports)
+    pub leeway:      int         # clock skew allowance in seconds (default 60)
+    pub now:         int         # Unix time to check against (0 = the clock)
+    pub require_exp: bool        # reject tokens without "exp" (default true)
+    pub typ:         str         # required header "typ", case-insensitive ("" = any)
+    pub max_age:     int         # reject when now - iat exceeds this (0 = off)
+
+extend JwtOptions:
+    pub def init() -> JwtOptions:
+        mut o = JwtOptions()
+        o.issuer = ""
+        o.audience = ""
+        o.subject = ""
+        o.algorithms = []
+        o.leeway = 60
+        o.now = 0
+        o.require_exp = true
+        o.typ = ""
+        o.max_age = 0
+        return o
+
+# A verified token's header and claims.
+pub class JwtClaims:
+    pub header_json:  str
+    pub payload_json: str
+    pub alg:          str
+    pub kid:          str
+    pub doc:          JsonDoc
+
+extend JwtClaims:
+    pub def root(self) -> JsonRef:
+        return self.doc.root()
+
+    pub def has(self, name: str) -> bool:
+        return self.doc.root().obj_has(name)
+
+    # String claim ("" when absent or not a string).
+    pub def get_str(self, name: str) -> str:
+        mut v = self.doc.root().obj_get(name)
+        if v.exists() and v.is_str(): return v.get_str()
+        return ""
+
+    # Integer claim (floats are truncated; 0 when absent).
+    pub def get_int(self, name: str) -> int:
+        mut v = self.doc.root().obj_get(name)
+        if not v.exists(): return 0
+        if v.is_int(): return v.get_int()
+        if v.is_float(): return v.get_float() as int
+        return 0
+
+    pub def get_bool(self, name: str) -> bool:
+        mut v = self.doc.root().obj_get(name)
+        return v.exists() and v.is_bool() and v.get_bool()
+
+    # The claim's JSON text ("" when absent).
+    pub def get_json(self, name: str) -> str:
+        mut v = self.doc.root().obj_get(name)
+        if not v.exists(): return ""
+        return v.to_str()
+
+    pub def issuer(self) -> str: return self.get_str("iss")
+    pub def subject(self) -> str: return self.get_str("sub")
+    pub def expires_at(self) -> int: return self.get_int("exp")
+
+    # "aud" as a list (a single string becomes a one-element list).
+    pub def audiences(self) -> List[str]:
+        mut out: List[str] = []
+        mut v = self.doc.root().obj_get("aud")
+        if not v.exists(): return out
+        if v.is_str():
+            mut s = v.get_str()
+            out.append(s)
+            return out
+        if v.is_array():
+            mut i = 0
+            while i < v.array_len():
+                mut el = v.array_get(i)
+                if el.is_str():
+                    mut es = el.get_str()
+                    out.append(es)
+                i = i + 1
+        return out
+
+def _jwt_numeric(r: JsonRef, name: str, present: Pointer[bool]) throws str -> int:
+    mut v = r.obj_get(name)
+    if not v.exists():
+        unsafe: present.write(false)
+        return 0
+    unsafe: present.write(true)
+    if v.is_int(): return v.get_int()
+    if v.is_float(): return v.get_float() as int
+    raise(f"JWT: claim '{name}' is not a number")
+
+extend Jwt:
+    # Sign `claims_json` (a JSON object) as a JWT with `key` and `alg`. The
+    # header carries "typ":"JWT" and the key's "kid" when it has one.
+    pub def sign_jwk(claims_json: str, key: Jwk, alg: str) throws str -> str:
+        return Jws.sign(claims_json, key, alg, "JWT")?
+
+    # Verify with a single key, then check the registered claims.
+    pub def verify_jwk(token: str, key: Jwk, opts: JwtOptions) throws str -> JwtClaims:
+        mut parts = Jws.verify(token, key, opts.algorithms)?
+        mut c = Jwt._check_claims(parts, opts)?
+        return c
+
+    # Verify against a JWK Set (key chosen by "kid" and "alg").
+    pub def verify_jwks(token: str, keys: JwkSet, opts: JwtOptions) throws str -> JwtClaims:
+        mut parts = Jws.verify_set(token, keys, opts.algorithms)?
+        mut c = Jwt._check_claims(parts, opts)?
+        return c
+
+    # Header and claims WITHOUT any verification (for routing / debugging
+    # only -- never trust the result).
+    pub def decode_unverified(token: str) throws str -> JwtClaims:
+        mut parts = Jws.decode_unverified(token)?
+        mut c = JwtClaims()
+        c.header_json = parts.header_json
+        c.payload_json = parts.payload
+        c.alg = parts.alg
+        c.kid = parts.kid
+        c.doc = Json.parse(parts.payload)
+        return c
+
+    def _check_claims(parts: JwsParts, opts: JwtOptions) throws str -> JwtClaims:
+        if opts.typ.len() > 0:
+            mut want_typ = opts.typ.to_lower()
+            mut got_typ = parts.typ.to_lower()
+            if got_typ != want_typ and got_typ != "application/" + want_typ:
+                raise(f"JWT: unexpected typ '{parts.typ}'")
+        mut c = JwtClaims()
+        c.header_json = parts.header_json
+        c.payload_json = parts.payload
+        c.alg = parts.alg
+        c.kid = parts.kid
+        c.doc = Json.parse(parts.payload)
+        mut root = c.doc.root()
+        if not root.is_object(): raise("JWT: claims are not a JSON object")
+        mut now = opts.now
+        if now == 0: now = Clock.timestamp()
+        mut lw = opts.leeway
+        if lw < 0: lw = 0
+        mut present = [false]
+        mut pp = present as Pointer[bool]
+        mut exp = _jwt_numeric(root, "exp", pp)?
+        if present[0]:
+            if now - lw >= exp: raise("JWT: token has expired")
+        elif opts.require_exp:
+            raise("JWT: token has no 'exp' claim")
+        mut nbf = _jwt_numeric(root, "nbf", pp)?
+        if present[0] and now + lw < nbf: raise("JWT: token is not valid yet (nbf)")
+        mut iat = _jwt_numeric(root, "iat", pp)?
+        if present[0]:
+            if iat > now + lw: raise("JWT: token was issued in the future (iat)")
+            if opts.max_age > 0 and now - iat > opts.max_age + lw: raise("JWT: token is too old (iat + max_age)")
+        elif opts.max_age > 0:
+            raise("JWT: token has no 'iat' claim")
+        if opts.issuer.len() > 0:
+            mut iss = c.get_str("iss")
+            if iss != opts.issuer: raise(f"JWT: unexpected issuer '{iss}'")
+        if opts.subject.len() > 0:
+            mut sub = c.get_str("sub")
+            if sub != opts.subject: raise("JWT: unexpected subject")
+        if opts.audience.len() > 0:
+            mut auds = c.audiences()
+            mut found = false
+            for a in auds:
+                if a == opts.audience: found = true
+            if not found: raise("JWT: token is not intended for this audience")
+        return c

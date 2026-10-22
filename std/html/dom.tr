@@ -1,0 +1,3157 @@
+# std.html.dom -- HTML document tree, HTML5 tree builder, serializer and
+# CSS selector engine (re-exported by std.html).
+#
+# Storage: an HtmlDocument owns every node as a record in one list (node 0
+# is the document node); an HtmlNode is a small handle {doc, id}. Handles
+# keep their document alive, the document holds no handles, so the tree has
+# no reference cycles and needs no Weak pointers. Compare nodes with
+# `a.same(b)` (or by `.id`), not `==`.
+#
+# Tree construction implements the WHATWG insertion modes (initial ...
+# after after frameset) with the stack of open elements, the list of active
+# formatting elements (Noah's Ark clause, reconstruction, the adoption
+# agency algorithm for misnested <b>/<i>/<a>...), implied end tags, scopes,
+# foster parenting of misplaced table content, the quirks-mode <p>/<table>
+# rule, <select> in tables, frameset, and foreign content (SVG / MathML
+# with the tag/attribute case fixes, integration points and breakout tags).
+# It never fails: every input produces a tree.
+#
+# Simplifications: <template> is an ordinary element (its children are
+# parsed as body content, there is no separate content fragment);
+# scripting is treated as disabled (so <noscript> content is parsed as
+# markup); there is no encoding sniffing (input is UTF-8 text).
+
+from std.core.string import StringBuilder
+from std.html.entities import html_escape_text_to, html_escape_attr_to, html_put_utf8
+from std.html.tokenizer import HtmlTokenizer, HtmlToken, html_token, HTML_TOK_DOCTYPE, HTML_TOK_START, HTML_TOK_END, HTML_TOK_COMMENT, HTML_TOK_CHARS, HTML_TOK_EOF, HTML_TS_DATA, HTML_TS_RCDATA, HTML_TS_RAWTEXT, HTML_TS_SCRIPT, HTML_TS_PLAINTEXT
+
+# Node kinds (DOM nodeType numbers).
+pub const HTML_ELEMENT = 1
+pub const HTML_TEXT = 3
+pub const HTML_COMMENT = 8
+pub const HTML_DOCUMENT = 9
+pub const HTML_DOCTYPE = 10
+
+# Element namespaces.
+pub const HTML_NS_HTML = 0
+pub const HTML_NS_SVG = 1
+pub const HTML_NS_MATH = 2
+
+class _HN:
+    pub kind: int
+    pub ns: int
+    pub tag: str
+    pub data: str
+    pub pub_id: str
+    pub sys_id: str
+    pub parent: int
+    pub first: int
+    pub last: int
+    pub prev: int
+    pub next: int
+    pub an: List[str]
+    pub av: List[str]
+
+pub class HtmlDocument:
+    pub nodes: List[_HN]
+    pub quirks: bool
+
+pub class HtmlNode:
+    pub doc: HtmlDocument
+    pub id: int
+
+pub class HtmlAttr:
+    pub name: str
+    pub value: str
+
+# ─── small helpers ──────────────────────────────────────────────────────────
+
+def _db(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe: return (p.offset(i).read() as int) & 255
+
+def _ws(c: int) -> bool:
+    return c == 32 or c == 10 or c == 9 or c == 12 or c == 13
+
+def _all_ws(s: str) -> bool:
+    mut i = 0
+    mut n = s.len()
+    while i < n:
+        if not _ws(_db(s, i)): return false
+        i = i + 1
+    return true
+
+def _ws_prefix(s: str) -> int:
+    mut i = 0
+    mut n = s.len()
+    while i < n and _ws(_db(s, i)): i = i + 1
+    return i
+
+# Is `w` one of the space-separated words of `set` (which starts and ends
+# with a space)? No allocation.
+pub def _inset(set: str, w: str) -> bool:
+    mut n = set.len()
+    mut m = w.len()
+    if m == 0: return false
+    mut i = 1
+    while i + m < n:
+        if _db(set, i - 1) == 32 and _db(set, i + m) == 32:
+            mut k = 0
+            mut ok = true
+            while k < m:
+                if _db(set, i + k) != _db(w, k):
+                    ok = false
+                    break
+                k = k + 1
+            if ok: return true
+        i = i + 1
+    return false
+
+pub def _ascii_lower(s: str) -> str:
+    mut n = s.len()
+    mut i = 0
+    mut need = false
+    while i < n:
+        mut c = _db(s, i)
+        if c >= 65 and c <= 90:
+            need = true
+            break
+        i = i + 1
+    if not need: return s
+    mut sb = StringBuilder.init(n + 1)
+    i = 0
+    while i < n:
+        mut c = _db(s, i)
+        if c >= 65 and c <= 90: c = c + 32
+        sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _strip_ws(s: str) -> str:
+    mut a = 0
+    mut b = s.len()
+    while a < b and _ws(_db(s, a)): a = a + 1
+    while b > a and _ws(_db(s, b - 1)): b = b - 1
+    if a == 0 and b == s.len(): return s
+    return s.slice(a, b)
+
+# Collapse runs of ASCII whitespace to one space and trim.
+pub def html_collapse_ws(s: str) -> str:
+    mut n = s.len()
+    mut sb = StringBuilder.init(n + 1)
+    mut i = 0
+    mut pending = false
+    while i < n:
+        mut c = _db(s, i)
+        if _ws(c):
+            if sb.len() > 0: pending = true
+        else:
+            if pending: sb.append_char(32)
+            pending = false
+            sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+pub def _split_ws(s: str) -> List[str]:
+    mut out: List[str] = []
+    mut n = s.len()
+    mut i = 0
+    while i < n:
+        while i < n and _ws(_db(s, i)): i = i + 1
+        mut st = i
+        while i < n and not _ws(_db(s, i)): i = i + 1
+        if i > st:
+            mut w = s.slice(st, i)
+            out.append(w)
+    return out
+
+const _VOID = " area base basefont bgsound br col embed frame hr img input keygen link meta param source track wbr "
+const _RAWTEXT_PARENTS = " style script xmp iframe noembed noframes plaintext "
+
+# ─── document storage ───────────────────────────────────────────────────────
+
+extend HtmlDocument:
+    # An empty document (just the document node).
+    pub def empty() -> HtmlDocument:
+        mut d = HtmlDocument()
+        mut l: List[_HN] = []
+        d.nodes = l
+        d.quirks = false
+        d._new_node(HTML_DOCUMENT, 0, "#document", "")
+        return d
+
+    pub def _new_node(self, kind: int, ns: int, tag: str, data: str) -> int:
+        mut n = _HN()
+        n.kind = kind
+        n.ns = ns
+        n.tag = tag
+        n.data = data
+        n.pub_id = ""
+        n.sys_id = ""
+        n.parent = -1
+        n.first = -1
+        n.last = -1
+        n.prev = -1
+        n.next = -1
+        mut a: List[str] = []
+        mut b: List[str] = []
+        n.an = a
+        n.av = b
+        self.nodes.append(n)
+        return len(self.nodes) - 1
+
+    pub def _detach(self, c: int):
+        mut p = self.nodes[c].parent
+        if p < 0: return
+        mut pv = self.nodes[c].prev
+        mut nx = self.nodes[c].next
+        if pv >= 0: self.nodes[pv].next = nx
+        else: self.nodes[p].first = nx
+        if nx >= 0: self.nodes[nx].prev = pv
+        else: self.nodes[p].last = pv
+        self.nodes[c].parent = -1
+        self.nodes[c].prev = -1
+        self.nodes[c].next = -1
+
+    # Insert c into p before ref (ref == -1: append).
+    pub def _insert(self, p: int, c: int, ref: int):
+        self._detach(c)
+        self.nodes[c].parent = p
+        if ref < 0:
+            mut lst = self.nodes[p].last
+            self.nodes[c].prev = lst
+            self.nodes[c].next = -1
+            if lst >= 0: self.nodes[lst].next = c
+            else: self.nodes[p].first = c
+            self.nodes[p].last = c
+        else:
+            mut pv = self.nodes[ref].prev
+            self.nodes[c].prev = pv
+            self.nodes[c].next = ref
+            self.nodes[ref].prev = c
+            if pv >= 0: self.nodes[pv].next = c
+            else: self.nodes[p].first = c
+
+    pub def _append(self, p: int, c: int):
+        self._insert(p, c, -1)
+
+    pub def _attr(self, id: int, name: str) -> str:
+        mut i = 0
+        while i < len(self.nodes[id].an):
+            if self.nodes[id].an[i] == name:
+                mut v = self.nodes[id].av[i]
+                return v
+            i = i + 1
+        return ""
+
+    pub def _attr_index(self, id: int, name: str) -> int:
+        mut i = 0
+        while i < len(self.nodes[id].an):
+            if self.nodes[id].an[i] == name: return i
+            i = i + 1
+        return -1
+
+    pub def _set_attr(self, id: int, name: str, value: str):
+        mut k = self._attr_index(id, name)
+        if k >= 0:
+            self.nodes[id].av[k] = value
+        else:
+            self.nodes[id].an.append(name)
+            self.nodes[id].av.append(value)
+
+    pub def node(self, id: int) -> HtmlNode:
+        mut h = HtmlNode()
+        h.doc = self
+        h.id = id
+        return h
+
+    # The document node (id 0): root of select(), text(), children() ...
+    pub def document(self) -> HtmlNode:
+        return self.node(0)
+
+    def _first_child_el(self, p: int, tag: str) -> int:
+        if p < 0: return -1
+        mut c = self.nodes[p].first
+        while c >= 0:
+            if self.nodes[c].kind == HTML_ELEMENT and self.nodes[c].ns == 0 and self.nodes[c].tag == tag: return c
+            c = self.nodes[c].next
+        return -1
+
+    def _root_el(self) -> int:
+        mut c = self.nodes[0].first
+        while c >= 0:
+            if self.nodes[c].kind == HTML_ELEMENT: return c
+            c = self.nodes[c].next
+        return -1
+
+    # The <html> element (a null node for an empty document).
+    pub def root(self) -> HtmlNode:
+        return self.node(self._root_el())
+
+    pub def head(self) -> HtmlNode:
+        return self.node(self._first_child_el(self._root_el(), "head"))
+
+    pub def body(self) -> HtmlNode:
+        mut r = self._root_el()
+        mut b = self._first_child_el(r, "body")
+        if b < 0: b = self._first_child_el(r, "frameset")
+        return self.node(b)
+
+    # The doctype node, or a null node.
+    pub def doctype(self) -> HtmlNode:
+        mut c = self.nodes[0].first
+        while c >= 0:
+            if self.nodes[c].kind == HTML_DOCTYPE: return self.node(c)
+            c = self.nodes[c].next
+        return self.node(-1)
+
+    # Text of the first <title>, whitespace-collapsed.
+    pub def title(self) -> str:
+        mut t = self.document().select_one("title")
+        if t.is_null(): return ""
+        mut raw = t.text()
+        return html_collapse_ws(raw)
+
+    pub def select(self, css: str) -> List[HtmlNode]:
+        return self.document().select(css)
+
+    pub def select_one(self, css: str) -> HtmlNode:
+        return self.document().select_one(css)
+
+    # Serialize the whole document (doctype, comments, <html>...).
+    pub def to_html(self) -> str:
+        return self.document().inner_html()
+
+    # Create detached nodes (attach them with append_child / insert_before).
+    pub def create_element(self, tag: str) -> HtmlNode:
+        mut low = _ascii_lower(tag)
+        return self.node(self._new_node(HTML_ELEMENT, 0, low, ""))
+
+    pub def create_text(self, text: str) -> HtmlNode:
+        return self.node(self._new_node(HTML_TEXT, 0, "#text", text))
+
+    pub def create_comment(self, text: str) -> HtmlNode:
+        return self.node(self._new_node(HTML_COMMENT, 0, "#comment", text))
+
+    # The tree in the html5lib-tests format ("#document\n|  <html>\n...").
+    pub def debug_tree(self) -> str:
+        mut sb = StringBuilder.init(256)
+        sb.append("#document")
+        mut c = self.nodes[0].first
+        while c >= 0:
+            self._dump(sb, c, 1)
+            c = self.nodes[c].next
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    def _dump_attr_name(self, ns: int, name: str) -> str:
+        if ns == 0: return name
+        if name == "xmlns": return "xmlns xmlns"
+        if name == "xmlns:xlink": return "xmlns xlink"
+        if name.starts_with("xlink:") and _inset(" xlink:actuate xlink:arcrole xlink:href xlink:role xlink:show xlink:title xlink:type ", name):
+            mut rest = name.slice(6, name.len())
+            return "xlink " + rest
+        if name == "xml:lang": return "xml lang"
+        if name == "xml:space": return "xml space"
+        return name
+
+    def _dump(self, sb: StringBuilder, id: int, depth: int):
+        sb.append("\n|")
+        mut d = 0
+        while d < depth:
+            sb.append("  ")
+            d = d + 1
+        mut k = self.nodes[id].kind
+        if k == HTML_TEXT:
+            sb.append("\"")
+            sb.append(self.nodes[id].data)
+            sb.append("\"")
+        elif k == HTML_COMMENT:
+            sb.append("<!-- ")
+            sb.append(self.nodes[id].data)
+            sb.append(" -->")
+        elif k == HTML_DOCTYPE:
+            sb.append("<!DOCTYPE ")
+            sb.append(self.nodes[id].data)
+            if self.nodes[id].pub_id.len() > 0 or self.nodes[id].sys_id.len() > 0:
+                sb.append(" \"")
+                sb.append(self.nodes[id].pub_id)
+                sb.append("\" \"")
+                sb.append(self.nodes[id].sys_id)
+                sb.append("\"")
+            sb.append(">")
+        else:
+            sb.append("<")
+            mut ns = self.nodes[id].ns
+            if ns == 1: sb.append("svg ")
+            elif ns == 2: sb.append("math ")
+            sb.append(self.nodes[id].tag)
+            sb.append(">")
+            # attributes, sorted by displayed name
+            mut names: List[str] = []
+            mut vals: List[str] = []
+            mut i = 0
+            while i < len(self.nodes[id].an):
+                mut dn = self._dump_attr_name(ns, self.nodes[id].an[i])
+                mut v = self.nodes[id].av[i]
+                mut j = len(names)
+                names.append(dn)
+                vals.append(v)
+                while j > 0 and names[j - 1] > dn:
+                    names[j] = names[j - 1]
+                    vals[j] = vals[j - 1]
+                    j = j - 1
+                names[j] = dn
+                vals[j] = v
+                i = i + 1
+            i = 0
+            while i < len(names):
+                sb.append("\n|")
+                d = 0
+                while d < depth + 1:
+                    sb.append("  ")
+                    d = d + 1
+                sb.append(names[i])
+                sb.append("=\"")
+                sb.append(vals[i])
+                sb.append("\"")
+                i = i + 1
+        mut c = self.nodes[id].first
+        while c >= 0:
+            self._dump(sb, c, depth + 1)
+            c = self.nodes[c].next
+
+    # ── serialization ──────────────────────────────────────────────────────
+
+    pub def _ser(self, sb: StringBuilder, id: int):
+        mut k = self.nodes[id].kind
+        if k == HTML_TEXT:
+            mut p = self.nodes[id].parent
+            if p >= 0 and self.nodes[p].kind == HTML_ELEMENT and self.nodes[p].ns == 0 and _inset(_RAWTEXT_PARENTS, self.nodes[p].tag):
+                sb.append(self.nodes[id].data)
+            else:
+                html_escape_text_to(sb, self.nodes[id].data)
+            return
+        if k == HTML_COMMENT:
+            sb.append("<!--")
+            sb.append(self.nodes[id].data)
+            sb.append("-->")
+            return
+        if k == HTML_DOCTYPE:
+            sb.append("<!DOCTYPE ")
+            sb.append(self.nodes[id].data)
+            sb.append(">")
+            return
+        if k == HTML_DOCUMENT:
+            self._ser_children(sb, id)
+            return
+        mut tag = self.nodes[id].tag
+        sb.append("<")
+        sb.append(tag)
+        mut i = 0
+        while i < len(self.nodes[id].an):
+            sb.append(" ")
+            sb.append(self.nodes[id].an[i])
+            sb.append("=\"")
+            html_escape_attr_to(sb, self.nodes[id].av[i])
+            sb.append("\"")
+            i = i + 1
+        sb.append(">")
+        mut is_html = self.nodes[id].ns == 0
+        if is_html and _inset(_VOID, tag): return
+        if is_html and (tag == "pre" or tag == "textarea" or tag == "listing"):
+            mut f = self.nodes[id].first
+            if f >= 0 and self.nodes[f].kind == HTML_TEXT and self.nodes[f].data.starts_with("\n"):
+                sb.append("\n")
+        self._ser_children(sb, id)
+        sb.append("</")
+        sb.append(tag)
+        sb.append(">")
+
+    pub def _ser_children(self, sb: StringBuilder, id: int):
+        mut c = self.nodes[id].first
+        while c >= 0:
+            self._ser(sb, c)
+            c = self.nodes[c].next
+
+    pub def _text_into(self, sb: StringBuilder, id: int):
+        mut k = self.nodes[id].kind
+        if k == HTML_TEXT:
+            sb.append(self.nodes[id].data)
+            return
+        if k != HTML_ELEMENT and k != HTML_DOCUMENT: return
+        mut c = self.nodes[id].first
+        while c >= 0:
+            self._text_into(sb, c)
+            c = self.nodes[c].next
+
+    # Element descendants of id in document order (id itself excluded).
+    pub def _descendants(self, id: int, out: List[int]):
+        mut c = self.nodes[id].first
+        while c >= 0:
+            if self.nodes[c].kind == HTML_ELEMENT:
+                out.append(c)
+            if self.nodes[c].first >= 0:
+                self._descendants(c, out)
+            c = self.nodes[c].next
+
+    pub def _clone(self, src_doc: HtmlDocument, sid: int, deep: bool) -> int:
+        mut s = src_doc.nodes[sid]
+        mut nid = self._new_node(s.kind, s.ns, s.tag, s.data)
+        self.nodes[nid].pub_id = s.pub_id
+        self.nodes[nid].sys_id = s.sys_id
+        mut i = 0
+        while i < len(s.an):
+            self.nodes[nid].an.append(s.an[i])
+            self.nodes[nid].av.append(s.av[i])
+            i = i + 1
+        if deep:
+            mut c = s.first
+            while c >= 0:
+                mut cc = self._clone(src_doc, c, true)
+                self._append(nid, cc)
+                c = src_doc.nodes[c].next
+        return nid
+
+# ─── node handles ───────────────────────────────────────────────────────────
+
+extend HtmlNode:
+    # A handle that refers to no node (returned on misses: parent of the
+    # document, select_one with no match, ...). Every accessor is safe on it.
+    pub def is_null(self) -> bool:
+        return self.id < 0
+
+    pub def same(self, other: HtmlNode) -> bool:
+        return self.id == other.id
+
+    pub def kind(self) -> int:
+        if self.id < 0: return 0
+        return self.doc.nodes[self.id].kind
+
+    pub def is_element(self) -> bool:
+        return self.kind() == HTML_ELEMENT
+
+    pub def is_text(self) -> bool:
+        return self.kind() == HTML_TEXT
+
+    pub def is_comment(self) -> bool:
+        return self.kind() == HTML_COMMENT
+
+    pub def is_doctype(self) -> bool:
+        return self.kind() == HTML_DOCTYPE
+
+    pub def is_document(self) -> bool:
+        return self.kind() == HTML_DOCUMENT
+
+    # Lowercase tag name ("div"; SVG keeps its camelCase: "foreignObject");
+    # "" for non-elements.
+    pub def tag(self) -> str:
+        if self.kind() != HTML_ELEMENT: return ""
+        return self.doc.nodes[self.id].tag
+
+    # "html", "svg" or "math" for elements, "" otherwise.
+    pub def namespace(self) -> str:
+        if self.kind() != HTML_ELEMENT: return ""
+        mut ns = self.doc.nodes[self.id].ns
+        if ns == 1: return "svg"
+        if ns == 2: return "math"
+        return "html"
+
+    # Text / comment content, or the doctype name.
+    pub def data(self) -> str:
+        mut k = self.kind()
+        if k == HTML_TEXT or k == HTML_COMMENT or k == HTML_DOCTYPE: return self.doc.nodes[self.id].data
+        return ""
+
+    pub def set_data(self, s: str):
+        mut k = self.kind()
+        if k == HTML_TEXT or k == HTML_COMMENT: self.doc.nodes[self.id].data = s
+
+    pub def doctype_public_id(self) -> str:
+        if self.kind() != HTML_DOCTYPE: return ""
+        return self.doc.nodes[self.id].pub_id
+
+    pub def doctype_system_id(self) -> str:
+        if self.kind() != HTML_DOCTYPE: return ""
+        return self.doc.nodes[self.id].sys_id
+
+    # ── attributes ─────────────────────────────────────────────────────────
+
+    # Attribute value ("" when absent; names are lowercase).
+    pub def attr(self, name: str) -> str:
+        if self.kind() != HTML_ELEMENT: return ""
+        return self.doc._attr(self.id, name)
+
+    pub def has_attr(self, name: str) -> bool:
+        if self.kind() != HTML_ELEMENT: return false
+        return self.doc._attr_index(self.id, name) >= 0
+
+    pub def attrs(self) -> List[HtmlAttr]:
+        mut out: List[HtmlAttr] = []
+        if self.kind() != HTML_ELEMENT: return out
+        mut i = 0
+        while i < len(self.doc.nodes[self.id].an):
+            mut a = HtmlAttr()
+            a.name = self.doc.nodes[self.id].an[i]
+            a.value = self.doc.nodes[self.id].av[i]
+            out.append(a)
+            i = i + 1
+        return out
+
+    pub def attr_names(self) -> List[str]:
+        mut out: List[str] = []
+        if self.kind() != HTML_ELEMENT: return out
+        mut i = 0
+        while i < len(self.doc.nodes[self.id].an):
+            out.append(self.doc.nodes[self.id].an[i])
+            i = i + 1
+        return out
+
+    pub def set_attr(self, name: str, value: str):
+        if self.kind() != HTML_ELEMENT: return
+        self.doc._set_attr(self.id, name, value)
+
+    pub def remove_attr(self, name: str):
+        if self.kind() != HTML_ELEMENT: return
+        mut k = self.doc._attr_index(self.id, name)
+        if k < 0: return
+        self.doc.nodes[self.id].an.remove(k)
+        self.doc.nodes[self.id].av.remove(k)
+
+    pub def element_id(self) -> str:
+        return self.attr("id")
+
+    pub def classes(self) -> List[str]:
+        mut c = self.attr("class")
+        return _split_ws(c)
+
+    pub def has_class(self, name: str) -> bool:
+        mut c = self.attr("class")
+        if c.find(name) < 0: return false
+        mut parts = _split_ws(c)
+        mut i = 0
+        while i < len(parts):
+            if parts[i] == name: return true
+            i = i + 1
+        return false
+
+    # ── navigation ─────────────────────────────────────────────────────────
+
+    pub def parent(self) -> HtmlNode:
+        if self.id < 0: return self.doc.node(-1)
+        return self.doc.node(self.doc.nodes[self.id].parent)
+
+    pub def first_child(self) -> HtmlNode:
+        if self.id < 0: return self.doc.node(-1)
+        return self.doc.node(self.doc.nodes[self.id].first)
+
+    pub def last_child(self) -> HtmlNode:
+        if self.id < 0: return self.doc.node(-1)
+        return self.doc.node(self.doc.nodes[self.id].last)
+
+    pub def next_sibling(self) -> HtmlNode:
+        if self.id < 0: return self.doc.node(-1)
+        return self.doc.node(self.doc.nodes[self.id].next)
+
+    pub def prev_sibling(self) -> HtmlNode:
+        if self.id < 0: return self.doc.node(-1)
+        return self.doc.node(self.doc.nodes[self.id].prev)
+
+    pub def next_element(self) -> HtmlNode:
+        if self.id < 0: return self.doc.node(-1)
+        mut c = self.doc.nodes[self.id].next
+        while c >= 0 and self.doc.nodes[c].kind != HTML_ELEMENT: c = self.doc.nodes[c].next
+        return self.doc.node(c)
+
+    pub def prev_element(self) -> HtmlNode:
+        if self.id < 0: return self.doc.node(-1)
+        mut c = self.doc.nodes[self.id].prev
+        while c >= 0 and self.doc.nodes[c].kind != HTML_ELEMENT: c = self.doc.nodes[c].prev
+        return self.doc.node(c)
+
+    # All child nodes (elements, text, comments).
+    pub def children(self) -> List[HtmlNode]:
+        mut out: List[HtmlNode] = []
+        if self.id < 0: return out
+        mut c = self.doc.nodes[self.id].first
+        while c >= 0:
+            out.append(self.doc.node(c))
+            c = self.doc.nodes[c].next
+        return out
+
+    # Element children only.
+    pub def child_elements(self) -> List[HtmlNode]:
+        mut out: List[HtmlNode] = []
+        if self.id < 0: return out
+        mut c = self.doc.nodes[self.id].first
+        while c >= 0:
+            if self.doc.nodes[c].kind == HTML_ELEMENT: out.append(self.doc.node(c))
+            c = self.doc.nodes[c].next
+        return out
+
+    # All element descendants in document order.
+    pub def descendants(self) -> List[HtmlNode]:
+        mut out: List[HtmlNode] = []
+        if self.id < 0: return out
+        mut ids: List[int] = []
+        self.doc._descendants(self.id, ids)
+        mut i = 0
+        while i < len(ids):
+            out.append(self.doc.node(ids[i]))
+            i = i + 1
+        return out
+
+    # Descendant elements with the given tag name (case-insensitive).
+    pub def find_all(self, tag: str) -> List[HtmlNode]:
+        mut out: List[HtmlNode] = []
+        if self.id < 0: return out
+        mut low = _ascii_lower(tag)
+        mut ids: List[int] = []
+        self.doc._descendants(self.id, ids)
+        mut i = 0
+        while i < len(ids):
+            mut t = self.doc.nodes[ids[i]].tag
+            if t == low or _ascii_lower(t) == low: out.append(self.doc.node(ids[i]))
+            i = i + 1
+        return out
+
+    pub def find(self, tag: str) -> HtmlNode:
+        mut all = self.find_all(tag)
+        if len(all) == 0: return self.doc.node(-1)
+        mut first = all[0]
+        return first
+
+    # Nearest ancestor-or-self element matching a selector (null if none).
+    pub def closest(self, css: str) -> HtmlNode:
+        mut sel = HtmlSelector.parse_lenient(css)
+        mut c = self.id
+        while c >= 0:
+            if self.doc.nodes[c].kind == HTML_ELEMENT and sel._matches(self.doc, c): return self.doc.node(c)
+            c = self.doc.nodes[c].parent
+        return self.doc.node(-1)
+
+    # ── content ────────────────────────────────────────────────────────────
+
+    # Concatenated text of all descendant text nodes (the DOM textContent).
+    pub def text(self) -> str:
+        if self.id < 0: return ""
+        mut sb = StringBuilder.init(64)
+        self.doc._text_into(sb, self.id)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # text() with whitespace runs collapsed to single spaces and trimmed.
+    pub def normalized_text(self) -> str:
+        mut raw = self.text()
+        return html_collapse_ws(raw)
+
+    # text(normalize) -- `text(true)` is normalized_text().
+    pub def text_ws(self, normalize: bool) -> str:
+        if normalize: return self.normalized_text()
+        return self.text()
+
+    pub def inner_html(self) -> str:
+        if self.id < 0: return ""
+        mut sb = StringBuilder.init(256)
+        self.doc._ser_children(sb, self.id)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def outer_html(self) -> str:
+        if self.id < 0: return ""
+        mut sb = StringBuilder.init(256)
+        self.doc._ser(sb, self.id)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # ── mutation ───────────────────────────────────────────────────────────
+
+    # Append child (moving it if attached elsewhere). Both must belong to
+    # the same document.
+    pub def append_child(self, child: HtmlNode):
+        if self.id < 0 or child.id < 0 or child.id == self.id: return
+        self.doc._append(self.id, child.id)
+
+    # Insert child before ref (a child of this node; null ref appends).
+    pub def insert_before(self, child: HtmlNode, ref: HtmlNode):
+        if self.id < 0 or child.id < 0: return
+        if ref.id >= 0 and self.doc.nodes[ref.id].parent != self.id: return
+        self.doc._insert(self.id, child.id, ref.id)
+
+    # Detach this node (and its subtree) from the tree.
+    pub def remove(self):
+        if self.id < 0: return
+        self.doc._detach(self.id)
+
+    # Replace this node's children by one text node.
+    pub def set_text(self, s: str):
+        if self.id < 0: return
+        while self.doc.nodes[self.id].first >= 0:
+            self.doc._detach(self.doc.nodes[self.id].first)
+        if s.len() > 0:
+            mut t = self.doc._new_node(HTML_TEXT, 0, "#text", s)
+            self.doc._append(self.id, t)
+
+    # Replace this element's children by parsed markup (body context).
+    pub def set_inner_html(self, markup: str):
+        if self.kind() != HTML_ELEMENT and self.kind() != HTML_DOCUMENT: return
+        while self.doc.nodes[self.id].first >= 0:
+            self.doc._detach(self.doc.nodes[self.id].first)
+        mut frag = html_parse_fragment(markup)
+        mut c = frag.doc.nodes[frag.id].first
+        while c >= 0:
+            mut nid = self.doc._clone(frag.doc, c, true)
+            self.doc._append(self.id, nid)
+            c = frag.doc.nodes[c].next
+
+    # ── selectors ──────────────────────────────────────────────────────────
+
+    # Descendant elements matching a CSS selector, in document order.
+    # Invalid selectors match nothing (use HtmlSelector.parse to get the
+    # error message).
+    pub def select(self, css: str) -> List[HtmlNode]:
+        mut sel = HtmlSelector.parse_lenient(css)
+        return sel.select(self)
+
+    pub def select_one(self, css: str) -> HtmlNode:
+        mut sel = HtmlSelector.parse_lenient(css)
+        return sel.select_one(self)
+
+    pub def matches(self, css: str) -> bool:
+        if self.kind() != HTML_ELEMENT: return false
+        mut sel = HtmlSelector.parse_lenient(css)
+        return sel._matches(self.doc, self.id)
+
+# ─── tree builder ───────────────────────────────────────────────────────────
+
+const _M_INITIAL = 0
+const _M_BEFORE_HTML = 1
+const _M_BEFORE_HEAD = 2
+const _M_IN_HEAD = 3
+const _M_IN_HEAD_NOSCRIPT = 4
+const _M_AFTER_HEAD = 5
+const _M_IN_BODY = 6
+const _M_TEXT = 7
+const _M_IN_TABLE = 8
+const _M_IN_TABLE_TEXT = 9
+const _M_IN_CAPTION = 10
+const _M_IN_COLGROUP = 11
+const _M_IN_TBODY = 12
+const _M_IN_ROW = 13
+const _M_IN_CELL = 14
+const _M_IN_SELECT = 15
+const _M_IN_SELECT_IN_TABLE = 16
+const _M_AFTER_BODY = 18
+const _M_IN_FRAMESET = 19
+const _M_AFTER_FRAMESET = 20
+const _M_AFTER_AFTER_BODY = 21
+const _M_AFTER_AFTER_FRAMESET = 22
+
+const _SPECIAL = " address applet area article aside base basefont bgsound blockquote body br button caption center col colgroup dd details dir div dl dt embed fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hgroup hr html iframe img input keygen li link listing main marquee menu meta nav noembed noframes noscript object ol p param plaintext pre script search section select source style summary table tbody td template textarea tfoot th thead title tr track ul wbr xmp "
+const _SCOPE_HTML = " applet caption html table td th marquee object template "
+const _IMPLIED = " dd dt li optgroup option p rb rp rt rtc "
+const _IMPLIED_ALL = " caption colgroup dd dt li optgroup option p rb rp rt rtc tbody td tfoot th thead tr "
+const _FORMATTING = " a b big code em font i nobr s small strike strong tt u "
+const _HEADINGS = " h1 h2 h3 h4 h5 h6 "
+const _CLOSE_P_BLOCKS = " address article aside blockquote center details dialog dir div dl fieldset figcaption figure footer header hgroup main menu nav ol p search section summary ul "
+const _END_BLOCKS = " address article aside blockquote button center details dialog dir div dl fieldset figcaption figure footer header hgroup listing main menu nav ol pre search section summary ul "
+const _BREAKOUT = " b big blockquote body br center code dd div dl dt em embed h1 h2 h3 h4 h5 h6 head hr i img li listing menu meta nobr ol p pre ruby s small span strong strike sub sup table tt u ul var "
+const _TABLE_PARTS = " table tbody tfoot thead tr "
+
+const _SVG_TAGS = " altGlyph altGlyphDef altGlyphItem animateColor animateMotion animateTransform clipPath feBlend feColorMatrix feComponentTransfer feComposite feConvolveMatrix feDiffuseLighting feDisplacementMap feDistantLight feDropShadow feFlood feFuncA feFuncB feFuncG feFuncR feGaussianBlur feImage feMerge feMergeNode feMorphology feOffset fePointLight feSpecularLighting feSpotLight feTile feTurbulence foreignObject glyphRef linearGradient radialGradient textPath "
+const _SVG_ATTRS = " attributeName attributeType baseFrequency baseProfile calcMode clipPathUnits diffuseConstant edgeMode filterUnits glyphRef gradientTransform gradientUnits kernelMatrix kernelUnitLength keyPoints keySplines keyTimes lengthAdjust limitingConeAngle markerHeight markerUnits markerWidth maskContentUnits maskUnits numOctaves pathLength patternContentUnits patternTransform patternUnits pointsAtX pointsAtY pointsAtZ preserveAlpha preserveAspectRatio primitiveUnits refX refY repeatCount repeatDur requiredExtensions requiredFeatures specularConstant specularExponent spreadMethod startOffset stdDeviation stitchTiles surfaceScale systemLanguage tableValues targetX targetY textLength viewBox viewTarget xChannelSelector yChannelSelector zoomAndPan "
+
+# Case-fixed spelling of lowercase name w from a camelCase word list.
+def _case_fix(list: str, w: str) -> str:
+    mut n = list.len()
+    mut m = w.len()
+    mut i = 1
+    while i + m < n:
+        if _db(list, i - 1) == 32 and _db(list, i + m) == 32:
+            mut k = 0
+            mut ok = true
+            while k < m:
+                mut c = _db(list, i + k)
+                if c >= 65 and c <= 90: c = c + 32
+                if c != _db(w, k):
+                    ok = false
+                    break
+                k = k + 1
+            if ok: return list.slice(i, i + m)
+        i = i + 1
+    return w
+
+const _QUIRKS_PREFIXES = "+//silmaril//dtd html pro v0r11 19970101//|-//as//dtd html 3.0 aswedit + extensions//|-//advasoft ltd//dtd html 3.0 aswedit + extensions//|-//ietf//dtd html 2.0 level 1//|-//ietf//dtd html 2.0 level 2//|-//ietf//dtd html 2.0 strict level 1//|-//ietf//dtd html 2.0 strict level 2//|-//ietf//dtd html 2.0 strict//|-//ietf//dtd html 2.0//|-//ietf//dtd html 2.1e//|-//ietf//dtd html 3.0//|-//ietf//dtd html 3.2 final//|-//ietf//dtd html 3.2//|-//ietf//dtd html 3//|-//ietf//dtd html level 0//|-//ietf//dtd html level 1//|-//ietf//dtd html level 2//|-//ietf//dtd html level 3//|-//ietf//dtd html strict level 0//|-//ietf//dtd html strict level 1//|-//ietf//dtd html strict level 2//|-//ietf//dtd html strict level 3//|-//ietf//dtd html strict//|-//ietf//dtd html//|-//metrius//dtd metrius presentational//|-//microsoft//dtd internet explorer 2.0 html strict//|-//microsoft//dtd internet explorer 2.0 html//|-//microsoft//dtd internet explorer 2.0 tables//|-//microsoft//dtd internet explorer 3.0 html strict//|-//microsoft//dtd internet explorer 3.0 html//|-//microsoft//dtd internet explorer 3.0 tables//|-//netscape comm. corp.//dtd html//|-//netscape comm. corp.//dtd strict html//|-//o'reilly and associates//dtd html 2.0//|-//o'reilly and associates//dtd html extended 1.0//|-//o'reilly and associates//dtd html extended relaxed 1.0//|-//sq//dtd html 2.0 hotmetal + extensions//|-//softquad software//dtd hotmetal pro 6.0::19990601::extensions to html 4.0//|-//softquad//dtd hotmetal pro 4.0::19971010::extensions to html 4.0//|-//spyglass//dtd html 2.0 extended//|-//sun microsystems corp.//dtd hotjava html//|-//sun microsystems corp.//dtd hotjava strict html//|-//w3c//dtd html 3 1995-03-24//|-//w3c//dtd html 3.2 draft//|-//w3c//dtd html 3.2 final//|-//w3c//dtd html 3.2//|-//w3c//dtd html 3.2s draft//|-//w3c//dtd html 4.0 frameset//|-//w3c//dtd html 4.0 transitional//|-//w3c//dtd html experimental 19960712//|-//w3c//dtd html experimental 970421//|-//w3c//dtd w3 html//|-//w3o//dtd w3 html 3.0//|-//webtechs//dtd mozilla html 2.0//|-//webtechs//dtd mozilla html//"
+
+def _doctype_quirks(t: HtmlToken) -> bool:
+    if t.force_quirks or t.name != "html": return true
+    mut pid = _ascii_lower(t.public_id)
+    mut sid = _ascii_lower(t.system_id)
+    if pid == "-//w3o//dtd w3 html strict 3.0//en//" or pid == "-/w3c/dtd html 4.0 transitional/en" or pid == "html": return true
+    if sid == "http://www.ibm.com/data/dtd/v11/ibmxhtml1-transitional.dtd": return true
+    if t.has_public:
+        mut prefixes = _QUIRKS_PREFIXES.split_exact("|")
+        mut i = 0
+        while i < len(prefixes):
+            if pid.starts_with(prefixes[i]): return true
+            i = i + 1
+    if not t.has_system and (pid.starts_with("-//w3c//dtd html 4.01 frameset//") or pid.starts_with("-//w3c//dtd html 4.01 transitional//")): return true
+    return false
+
+def _list_insert(l: List[int], at: int, v: int):
+    l.append(v)
+    mut i = len(l) - 1
+    while i > at:
+        l[i] = l[i - 1]
+        i = i - 1
+    l[at] = v
+
+def _list_find(l: List[int], v: int) -> int:
+    mut i = 0
+    while i < len(l):
+        if l[i] == v: return i
+        i = i + 1
+    return -1
+
+class _TB:
+    pub doc: HtmlDocument
+    pub tk: HtmlTokenizer
+    pub mode: int
+    pub orig: int
+    pub stack: List[int]
+    pub afe: List[int]          # -1 = marker
+    pub head_el: int
+    pub form_el: int
+    pub frameset_ok: bool
+    pub foster: bool
+    pub skip_lf: bool
+    pub pend: StringBuilder
+    pub pend_nonws: bool
+    pub fragment: bool
+    pub ip_parent: int
+    pub ip_before: int
+    pub done: bool
+
+def _new_tb(src: str) -> _TB:
+    mut b = _TB()
+    b.doc = HtmlDocument.empty()
+    b.tk = HtmlTokenizer.init(src)
+    b.mode = _M_INITIAL
+    b.orig = _M_INITIAL
+    mut s: List[int] = []
+    mut a: List[int] = []
+    b.stack = s
+    b.afe = a
+    b.head_el = -1
+    b.form_el = -1
+    b.frameset_ok = true
+    b.foster = false
+    b.skip_lf = false
+    b.pend = StringBuilder.init(16)
+    b.pend_nonws = false
+    b.fragment = false
+    b.ip_parent = 0
+    b.ip_before = -1
+    b.done = false
+    return b
+
+extend _TB:
+    def run(self):
+        while not self.done:
+            mut c = self._cur()
+            self.tk.cdata_ok = c >= 0 and self.doc.nodes[c].ns != 0
+            mut t = self.tk.next()
+            if self.skip_lf:
+                self.skip_lf = false
+                if t.kind == HTML_TOK_CHARS and t.data.starts_with("\n"):
+                    t.data = t.data.slice(1, t.data.len())
+                    if t.data.len() == 0: continue
+            self._dispatch(t)
+            if t.kind == HTML_TOK_EOF: self.done = true
+        self.pend.free()
+
+    # ── element / stack helpers ─────────────────────────────────────────
+
+    def _cur(self) -> int:
+        mut n = len(self.stack)
+        if n == 0: return -1
+        return self.stack[n - 1]
+
+    def _tag(self, id: int) -> str:
+        return self.doc.nodes[id].tag
+
+    def _is(self, id: int, tag: str) -> bool:
+        if id < 0: return false
+        return self.doc.nodes[id].ns == 0 and self.doc.nodes[id].tag == tag
+
+    def _is_in(self, id: int, set: str) -> bool:
+        if id < 0: return false
+        return self.doc.nodes[id].ns == 0 and _inset(set, self.doc.nodes[id].tag)
+
+    def _cur_is(self, tag: str) -> bool:
+        return self._is(self._cur(), tag)
+
+    def _is_special(self, id: int) -> bool:
+        mut ns = self.doc.nodes[id].ns
+        mut t = self.doc.nodes[id].tag
+        if ns == 0: return _inset(_SPECIAL, t)
+        if ns == 2: return _inset(" mi mo mn ms mtext annotation-xml ", t)
+        return _inset(" foreignObject desc title ", t)
+
+    def _pop(self):
+        if len(self.stack) > 0: self.stack.pop()
+
+    # Pop until an HTML element named tag has been popped.
+    def _pop_until(self, tag: str):
+        while len(self.stack) > 0:
+            mut c = self._cur()
+            self.stack.pop()
+            if self._is(c, tag): return
+
+    def _pop_until_in(self, set: str):
+        while len(self.stack) > 0:
+            mut c = self._cur()
+            self.stack.pop()
+            if self._is_in(c, set): return
+
+    def _in_stack(self, tag: str) -> bool:
+        mut i = len(self.stack) - 1
+        while i >= 0:
+            if self._is(self.stack[i], tag): return true
+            i = i - 1
+        return false
+
+    def _remove_from_stack(self, id: int):
+        mut k = _list_find(self.stack, id)
+        if k >= 0: self.stack.remove(k)
+
+    # kind: 0 default, 1 list item, 2 button, 3 table, 4 select.
+    def _in_scope_k(self, tag: str, kind: int) -> bool:
+        mut i = len(self.stack) - 1
+        while i >= 0:
+            mut c = self.stack[i]
+            mut ns = self.doc.nodes[c].ns
+            mut t = self.doc.nodes[c].tag
+            if ns == 0 and t == tag: return true
+            if kind == 4:
+                if not (ns == 0 and (t == "optgroup" or t == "option")): return false
+            elif kind == 3:
+                if ns == 0 and (t == "html" or t == "table" or t == "template"): return false
+            else:
+                if ns == 0:
+                    if _inset(_SCOPE_HTML, t): return false
+                    if kind == 1 and (t == "ol" or t == "ul"): return false
+                    if kind == 2 and t == "button": return false
+                elif ns == 2:
+                    if _inset(" mi mo mn ms mtext annotation-xml ", t): return false
+                else:
+                    if _inset(" foreignObject desc title ", t): return false
+            i = i - 1
+        return false
+
+    def _in_scope(self, tag: str) -> bool:
+        return self._in_scope_k(tag, 0)
+
+    def _gen_implied(self, except_tag: str):
+        while true:
+            mut c = self._cur()
+            if c < 0: return
+            if not self._is_in(c, _IMPLIED): return
+            if self.doc.nodes[c].tag == except_tag: return
+            self._pop()
+
+    def _gen_implied_all(self):
+        while true:
+            mut c = self._cur()
+            if c < 0: return
+            if not self._is_in(c, _IMPLIED_ALL): return
+            self._pop()
+
+    def _close_p(self):
+        self._gen_implied("p")
+        self._pop_until("p")
+
+    def _close_p_if_scoped(self):
+        if self._in_scope_k("p", 2): self._close_p()
+
+    # ── insertion ───────────────────────────────────────────────────────
+
+    # Sets ip_parent / ip_before to the appropriate place for inserting a
+    # node (target = override or the current node), with foster parenting.
+    def _place(self, override: int):
+        mut target = override
+        if target < 0: target = self._cur()
+        if target < 0: target = 0
+        if self.foster and self._is_in(target, _TABLE_PARTS):
+            mut ti = len(self.stack) - 1
+            while ti >= 0 and not self._is(self.stack[ti], "table"): ti = ti - 1
+            if ti < 0:
+                self.ip_parent = self.stack[0]
+                self.ip_before = -1
+                return
+            mut table = self.stack[ti]
+            mut tp = self.doc.nodes[table].parent
+            if tp >= 0:
+                self.ip_parent = tp
+                self.ip_before = table
+                return
+            self.ip_parent = self.stack[ti - 1]
+            self.ip_before = -1
+            return
+        self.ip_parent = target
+        self.ip_before = -1
+
+    def _create(self, t: HtmlToken, ns: int) -> int:
+        mut tag = t.name
+        if ns == 1: tag = _case_fix(_SVG_TAGS, t.name)
+        mut id = self.doc._new_node(HTML_ELEMENT, ns, tag, "")
+        mut i = 0
+        while i < len(t.anames):
+            mut nm = t.anames[i]
+            if ns == 1: nm = _case_fix(_SVG_ATTRS, nm)
+            elif ns == 2 and nm == "definitionurl": nm = "definitionURL"
+            self.doc.nodes[id].an.append(nm)
+            self.doc.nodes[id].av.append(t.avals[i])
+            i = i + 1
+        return id
+
+    def _insert_node(self, id: int):
+        self._place(-1)
+        self.doc._insert(self.ip_parent, id, self.ip_before)
+
+    def _insert_el(self, t: HtmlToken) -> int:
+        mut id = self._create(t, 0)
+        self._insert_node(id)
+        self.stack.append(id)
+        return id
+
+    def _insert_foreign(self, t: HtmlToken, ns: int) -> int:
+        mut id = self._create(t, ns)
+        self._insert_node(id)
+        self.stack.append(id)
+        return id
+
+    def _insert_fake(self, tag: str) -> int:
+        mut t = html_token(HTML_TOK_START)
+        t.name = tag
+        return self._insert_el(t)
+
+    def _insert_text(self, s: str):
+        if s.len() == 0: return
+        self._place(-1)
+        mut p = self.ip_parent
+        if self.doc.nodes[p].kind == HTML_DOCUMENT: return
+        mut prev = -1
+        if self.ip_before < 0: prev = self.doc.nodes[p].last
+        else: prev = self.doc.nodes[self.ip_before].prev
+        if prev >= 0 and self.doc.nodes[prev].kind == HTML_TEXT:
+            self.doc.nodes[prev].data = self.doc.nodes[prev].data + s
+            return
+        mut id = self.doc._new_node(HTML_TEXT, 0, "#text", s)
+        self.doc._insert(p, id, self.ip_before)
+
+    def _insert_comment(self, data: str, parent: int):
+        mut id = self.doc._new_node(HTML_COMMENT, 0, "#comment", data)
+        if parent >= 0:
+            self.doc._append(parent, id)
+            return
+        self._place(-1)
+        self.doc._insert(self.ip_parent, id, self.ip_before)
+
+    def _raw(self, t: HtmlToken, state: int):
+        self._insert_el(t)
+        self.tk.state = state
+        self.tk.last_start = t.name
+        self.orig = self.mode
+        self.mode = _M_TEXT
+
+    # ── active formatting elements ──────────────────────────────────────
+
+    def _same_el(self, a: int, b: int) -> bool:
+        if self.doc.nodes[a].tag != self.doc.nodes[b].tag or self.doc.nodes[a].ns != self.doc.nodes[b].ns: return false
+        mut n = len(self.doc.nodes[a].an)
+        if n != len(self.doc.nodes[b].an): return false
+        mut i = 0
+        while i < n:
+            mut k = self.doc._attr_index(b, self.doc.nodes[a].an[i])
+            if k < 0: return false
+            if self.doc.nodes[b].av[k] != self.doc.nodes[a].av[i]: return false
+            i = i + 1
+        return true
+
+    def _push_afe(self, id: int):
+        mut count = 0
+        mut i = len(self.afe) - 1
+        mut earliest = -1
+        while i >= 0:
+            mut e = self.afe[i]
+            if e < 0: break
+            if self._same_el(e, id):
+                count = count + 1
+                earliest = i
+            i = i - 1
+        if count >= 3: self.afe.remove(earliest)
+        self.afe.append(id)
+
+    def _push_marker(self):
+        self.afe.append(-1)
+
+    def _clear_afe_to_marker(self):
+        while len(self.afe) > 0:
+            mut e = self.afe.pop()
+            if e < 0: return
+
+    def _reconstruct(self):
+        mut n = len(self.afe)
+        if n == 0: return
+        mut last = self.afe[n - 1]
+        if last < 0 or _list_find(self.stack, last) >= 0: return
+        mut i = n - 1
+        while i > 0:
+            mut e = self.afe[i - 1]
+            if e < 0 or _list_find(self.stack, e) >= 0: break
+            i = i - 1
+        while i < n:
+            mut e = self.afe[i]
+            mut cl = self.doc._clone(self.doc, e, false)
+            self._insert_node(cl)
+            self.stack.append(cl)
+            self.afe[i] = cl
+            i = i + 1
+
+    # Last formatting element named tag after the last marker, or -1.
+    def _afe_find(self, tag: str) -> int:
+        mut i = len(self.afe) - 1
+        while i >= 0:
+            mut e = self.afe[i]
+            if e < 0: return -1
+            if self._is(e, tag): return e
+            i = i - 1
+        return -1
+
+    def _remove_afe(self, id: int):
+        mut k = _list_find(self.afe, id)
+        if k >= 0: self.afe.remove(k)
+
+    # The adoption agency algorithm. Returns false when the caller should
+    # run the "any other end tag" steps instead.
+    def _adoption(self, subject: str) -> bool:
+        mut cur = self._cur()
+        if self._is(cur, subject) and _list_find(self.afe, cur) < 0:
+            self._pop()
+            return true
+        mut outer = 0
+        while outer < 8:
+            outer = outer + 1
+            mut fe = self._afe_find(subject)
+            if fe < 0: return false
+            mut fe_si = _list_find(self.stack, fe)
+            if fe_si < 0:
+                self._remove_afe(fe)
+                return true
+            if not self._in_scope(subject): return true
+            mut fb = -1
+            mut fb_si = -1
+            mut k = fe_si + 1
+            while k < len(self.stack):
+                if self._is_special(self.stack[k]):
+                    fb = self.stack[k]
+                    fb_si = k
+                    break
+                k = k + 1
+            if fb < 0:
+                while len(self.stack) > fe_si: self._pop()
+                self._remove_afe(fe)
+                return true
+            mut ca = self.stack[fe_si - 1]
+            mut bookmark = _list_find(self.afe, fe)
+            mut node = fb
+            mut last_node = fb
+            mut node_si = fb_si
+            mut inner = 0
+            while true:
+                inner = inner + 1
+                node_si = node_si - 1
+                node = self.stack[node_si]
+                if node == fe: break
+                mut ai = _list_find(self.afe, node)
+                if inner > 3 and ai >= 0:
+                    self.afe.remove(ai)
+                    if ai < bookmark: bookmark = bookmark - 1
+                    ai = -1
+                if ai < 0:
+                    self.stack.remove(node_si)
+                    continue
+                mut nn = self.doc._clone(self.doc, node, false)
+                self.afe[ai] = nn
+                self.stack[node_si] = nn
+                node = nn
+                if last_node == fb: bookmark = ai + 1
+                self.doc._append(node, last_node)
+                last_node = node
+            # insert last_node at the appropriate place for common ancestor
+            self._place(ca)
+            self.doc._insert(self.ip_parent, last_node, self.ip_before)
+            mut ne = self.doc._clone(self.doc, fe, false)
+            while self.doc.nodes[fb].first >= 0:
+                self.doc._append(ne, self.doc.nodes[fb].first)
+            self.doc._append(fb, ne)
+            mut fi = _list_find(self.afe, fe)
+            if fi >= 0:
+                self.afe.remove(fi)
+                if fi < bookmark: bookmark = bookmark - 1
+            if bookmark > len(self.afe): bookmark = len(self.afe)
+            _list_insert(self.afe, bookmark, ne)
+            self._remove_from_stack(fe)
+            mut fbi = _list_find(self.stack, fb)
+            _list_insert(self.stack, fbi + 1, ne)
+        return true
+
+    # ── mode reset ──────────────────────────────────────────────────────
+
+    def _reset_mode(self):
+        mut i = len(self.stack) - 1
+        while i >= 0:
+            mut node = self.stack[i]
+            mut last = i == 0
+            mut t = self.doc.nodes[node].tag
+            mut html = self.doc.nodes[node].ns == 0
+            if last and self.fragment:
+                self.mode = _M_IN_BODY
+                return
+            if html:
+                if t == "select":
+                    mut j = i - 1
+                    while j > 0:
+                        if self._is(self.stack[j], "table"):
+                            self.mode = _M_IN_SELECT_IN_TABLE
+                            return
+                        j = j - 1
+                    self.mode = _M_IN_SELECT
+                    return
+                if (t == "td" or t == "th") and not last:
+                    self.mode = _M_IN_CELL
+                    return
+                if t == "tr":
+                    self.mode = _M_IN_ROW
+                    return
+                if t == "tbody" or t == "thead" or t == "tfoot":
+                    self.mode = _M_IN_TBODY
+                    return
+                if t == "caption":
+                    self.mode = _M_IN_CAPTION
+                    return
+                if t == "colgroup":
+                    self.mode = _M_IN_COLGROUP
+                    return
+                if t == "table":
+                    self.mode = _M_IN_TABLE
+                    return
+                if t == "template":
+                    self.mode = _M_IN_BODY
+                    return
+                if t == "head" and not last:
+                    self.mode = _M_IN_HEAD
+                    return
+                if t == "body":
+                    self.mode = _M_IN_BODY
+                    return
+                if t == "frameset":
+                    self.mode = _M_IN_FRAMESET
+                    return
+                if t == "html":
+                    if self.head_el < 0: self.mode = _M_BEFORE_HEAD
+                    else: self.mode = _M_AFTER_HEAD
+                    return
+            if last:
+                self.mode = _M_IN_BODY
+                return
+            i = i - 1
+
+    # ── dispatch ────────────────────────────────────────────────────────
+
+    def _is_html_ip(self, id: int) -> bool:
+        mut ns = self.doc.nodes[id].ns
+        mut t = self.doc.nodes[id].tag
+        if ns == 1: return t == "foreignObject" or t == "desc" or t == "title"
+        if ns == 2 and t == "annotation-xml":
+            mut enc = _ascii_lower(self.doc._attr(id, "encoding"))
+            return enc == "text/html" or enc == "application/xhtml+xml"
+        return false
+
+    def _is_mathml_tip(self, id: int) -> bool:
+        return self.doc.nodes[id].ns == 2 and _inset(" mi mo mn ms mtext ", self.doc.nodes[id].tag)
+
+    def _dispatch(self, t: HtmlToken):
+        mut c = self._cur()
+        if c < 0 or self.doc.nodes[c].ns == 0 or t.kind == HTML_TOK_EOF:
+            self._process(self.mode, t)
+            return
+        if self._is_mathml_tip(c):
+            if t.kind == HTML_TOK_START and t.name != "mglyph" and t.name != "malignmark":
+                self._process(self.mode, t)
+                return
+            if t.kind == HTML_TOK_CHARS:
+                self._process(self.mode, t)
+                return
+        if self.doc.nodes[c].ns == 2 and self.doc.nodes[c].tag == "annotation-xml" and t.kind == HTML_TOK_START and t.name == "svg":
+            self._process(self.mode, t)
+            return
+        if self._is_html_ip(c) and (t.kind == HTML_TOK_START or t.kind == HTML_TOK_CHARS):
+            self._process(self.mode, t)
+            return
+        self._foreign(t)
+
+    def _foreign(self, t: HtmlToken):
+        if t.kind == HTML_TOK_CHARS:
+            mut s = t.data
+            if s.find("\0") >= 0: s = s.replace("\0", "�")
+            self._insert_text(s)
+            if not _all_ws(s): self.frameset_ok = false
+            return
+        if t.kind == HTML_TOK_COMMENT:
+            self._insert_comment(t.data, -1)
+            return
+        if t.kind == HTML_TOK_DOCTYPE: return
+        if t.kind == HTML_TOK_START:
+            mut brk = _inset(_BREAKOUT, t.name)
+            if t.name == "font" and (t.has_attr("color") or t.has_attr("face") or t.has_attr("size")): brk = true
+            if brk:
+                while true:
+                    mut c = self._cur()
+                    if c < 0 or self.doc.nodes[c].ns == 0 or self._is_mathml_tip(c) or self._is_html_ip(c): break
+                    self._pop()
+                self._process(self.mode, t)
+                return
+            mut ns = self.doc.nodes[self._cur()].ns
+            self._insert_foreign(t, ns)
+            if t.self_closing: self._pop()
+            return
+        # end tag
+        mut i = len(self.stack) - 1
+        mut node = self.stack[i]
+        while true:
+            if i == 0: return
+            if _ascii_lower(self.doc.nodes[node].tag) == t.name:
+                while len(self.stack) > i: self._pop()
+                return
+            i = i - 1
+            node = self.stack[i]
+            if self.doc.nodes[node].ns == 0:
+                self._process(self.mode, t)
+                return
+
+    def _process(self, mode: int, t: HtmlToken):
+        if mode == _M_INITIAL: self._m_initial(t)
+        elif mode == _M_BEFORE_HTML: self._m_before_html(t)
+        elif mode == _M_BEFORE_HEAD: self._m_before_head(t)
+        elif mode == _M_IN_HEAD: self._m_in_head(t)
+        elif mode == _M_IN_HEAD_NOSCRIPT: self._m_in_head_noscript(t)
+        elif mode == _M_AFTER_HEAD: self._m_after_head(t)
+        elif mode == _M_IN_BODY: self._m_in_body(t)
+        elif mode == _M_TEXT: self._m_text(t)
+        elif mode == _M_IN_TABLE: self._m_in_table(t)
+        elif mode == _M_IN_TABLE_TEXT: self._m_in_table_text(t)
+        elif mode == _M_IN_CAPTION: self._m_in_caption(t)
+        elif mode == _M_IN_COLGROUP: self._m_in_colgroup(t)
+        elif mode == _M_IN_TBODY: self._m_in_tbody(t)
+        elif mode == _M_IN_ROW: self._m_in_row(t)
+        elif mode == _M_IN_CELL: self._m_in_cell(t)
+        elif mode == _M_IN_SELECT: self._m_in_select(t)
+        elif mode == _M_IN_SELECT_IN_TABLE: self._m_in_select_in_table(t)
+        elif mode == _M_AFTER_BODY: self._m_after_body(t)
+        elif mode == _M_IN_FRAMESET: self._m_in_frameset(t)
+        elif mode == _M_AFTER_FRAMESET: self._m_after_frameset(t)
+        elif mode == _M_AFTER_AFTER_BODY: self._m_after_after_body(t)
+        else: self._m_after_after_frameset(t)
+
+    def _reprocess(self, t: HtmlToken):
+        self._dispatch(t)
+
+    # Split a CHARS token: handle the leading whitespace with `ws_mode`
+    # semantics (inserted), return the rest (possibly "").
+    def _chars_rest(self, t: HtmlToken, insert_ws: bool) -> HtmlToken:
+        mut k = _ws_prefix(t.data)
+        if k > 0 and insert_ws:
+            mut w = t.data.slice(0, k)
+            self._insert_text(w)
+        mut r = html_token(HTML_TOK_CHARS)
+        r.data = t.data.slice(k, t.data.len())
+        return r
+
+    # ── insertion modes ─────────────────────────────────────────────────
+
+    def _m_initial(self, t: HtmlToken):
+        if t.kind == HTML_TOK_CHARS:
+            mut r = self._chars_rest(t, false)
+            if r.data.len() == 0: return
+            self.doc.quirks = true
+            self.mode = _M_BEFORE_HTML
+            self._reprocess(r)
+            return
+        if t.kind == HTML_TOK_COMMENT:
+            self._insert_comment(t.data, 0)
+            return
+        if t.kind == HTML_TOK_DOCTYPE:
+            mut id = self.doc._new_node(HTML_DOCTYPE, 0, "#doctype", t.name)
+            self.doc.nodes[id].pub_id = t.public_id
+            self.doc.nodes[id].sys_id = t.system_id
+            self.doc._append(0, id)
+            self.doc.quirks = _doctype_quirks(t)
+            self.mode = _M_BEFORE_HTML
+            return
+        self.doc.quirks = true
+        self.mode = _M_BEFORE_HTML
+        self._reprocess(t)
+
+    def _m_before_html(self, t: HtmlToken):
+        if t.kind == HTML_TOK_DOCTYPE: return
+        if t.kind == HTML_TOK_COMMENT:
+            self._insert_comment(t.data, 0)
+            return
+        if t.kind == HTML_TOK_CHARS:
+            mut r = self._chars_rest(t, false)
+            if r.data.len() == 0: return
+            self._fake_html()
+            self._reprocess(r)
+            return
+        if t.kind == HTML_TOK_START and t.name == "html":
+            mut id = self._create(t, 0)
+            self.doc._append(0, id)
+            self.stack.append(id)
+            self.mode = _M_BEFORE_HEAD
+            return
+        if t.kind == HTML_TOK_END and not _inset(" head body html br ", t.name): return
+        self._fake_html()
+        self._reprocess(t)
+
+    def _fake_html(self):
+        mut id = self.doc._new_node(HTML_ELEMENT, 0, "html", "")
+        self.doc._append(0, id)
+        self.stack.append(id)
+        self.mode = _M_BEFORE_HEAD
+
+    def _m_before_head(self, t0: HtmlToken):
+        mut t = t0
+        if t.kind == HTML_TOK_CHARS:
+            mut r = self._chars_rest(t, false)
+            if r.data.len() == 0: return
+            t = r
+        elif t.kind == HTML_TOK_COMMENT:
+            self._insert_comment(t.data, -1)
+            return
+        elif t.kind == HTML_TOK_DOCTYPE:
+            return
+        elif t.kind == HTML_TOK_START and t.name == "html":
+            self._m_in_body(t)
+            return
+        elif t.kind == HTML_TOK_START and t.name == "head":
+            self.head_el = self._insert_el(t)
+            self.mode = _M_IN_HEAD
+            return
+        elif t.kind == HTML_TOK_END and not _inset(" head body html br ", t.name):
+            return
+        self.head_el = self._insert_fake("head")
+        self.mode = _M_IN_HEAD
+        self._reprocess(t)
+
+    def _m_in_head(self, t0: HtmlToken):
+        mut t = t0
+        if t.kind == HTML_TOK_CHARS:
+            mut r = self._chars_rest(t, true)
+            if r.data.len() == 0: return
+            t = r
+        elif t.kind == HTML_TOK_COMMENT:
+            self._insert_comment(t.data, -1)
+            return
+        elif t.kind == HTML_TOK_DOCTYPE:
+            return
+        elif t.kind == HTML_TOK_START:
+            mut n = t.name
+            if n == "html":
+                self._m_in_body(t)
+                return
+            if _inset(" base basefont bgsound link meta ", n):
+                self._insert_el(t)
+                self._pop()
+                return
+            if n == "title":
+                self._raw(t, HTML_TS_RCDATA)
+                return
+            if n == "noscript":
+                self._insert_el(t)
+                self.mode = _M_IN_HEAD_NOSCRIPT
+                return
+            if n == "noframes" or n == "style":
+                self._raw(t, HTML_TS_RAWTEXT)
+                return
+            if n == "script":
+                self._raw(t, HTML_TS_SCRIPT)
+                return
+            if n == "template":
+                self._insert_el(t)
+                self._push_marker()
+                self.frameset_ok = false
+                self.mode = _M_IN_BODY
+                return
+            if n == "head": return
+        elif t.kind == HTML_TOK_END:
+            mut n = t.name
+            if n == "head":
+                self._pop()
+                self.mode = _M_AFTER_HEAD
+                return
+            if n == "template":
+                self._end_template()
+                return
+            if not _inset(" body html br ", n): return
+        self._pop()
+        self.mode = _M_AFTER_HEAD
+        self._reprocess(t)
+
+    def _end_template(self):
+        if not self._in_stack("template"): return
+        self._gen_implied_all()
+        self._pop_until("template")
+        self._clear_afe_to_marker()
+        self._reset_mode()
+
+    def _m_in_head_noscript(self, t0: HtmlToken):
+        mut t = t0
+        if t.kind == HTML_TOK_DOCTYPE: return
+        if t.kind == HTML_TOK_START and t.name == "html":
+            self._m_in_body(t)
+            return
+        if t.kind == HTML_TOK_END and t.name == "noscript":
+            self._pop()
+            self.mode = _M_IN_HEAD
+            return
+        if t.kind == HTML_TOK_CHARS:
+            mut k = _ws_prefix(t.data)
+            if k > 0:
+                mut w = t.data.slice(0, k)
+                self._insert_text(w)
+            if k == t.data.len(): return
+            mut r = html_token(HTML_TOK_CHARS)
+            r.data = t.data.slice(k, t.data.len())
+            t = r
+        elif t.kind == HTML_TOK_COMMENT:
+            self._m_in_head(t)
+            return
+        elif t.kind == HTML_TOK_START and _inset(" basefont bgsound link meta noframes style ", t.name):
+            self._m_in_head(t)
+            return
+        elif t.kind == HTML_TOK_START and (t.name == "head" or t.name == "noscript"):
+            return
+        elif t.kind == HTML_TOK_END and t.name != "br":
+            return
+        self._pop()
+        self.mode = _M_IN_HEAD
+        self._reprocess(t)
+
+    def _m_after_head(self, t0: HtmlToken):
+        mut t = t0
+        if t.kind == HTML_TOK_CHARS:
+            mut r = self._chars_rest(t, true)
+            if r.data.len() == 0: return
+            t = r
+        elif t.kind == HTML_TOK_COMMENT:
+            self._insert_comment(t.data, -1)
+            return
+        elif t.kind == HTML_TOK_DOCTYPE:
+            return
+        elif t.kind == HTML_TOK_START:
+            mut n = t.name
+            if n == "html":
+                self._m_in_body(t)
+                return
+            if n == "body":
+                self._insert_el(t)
+                self.frameset_ok = false
+                self.mode = _M_IN_BODY
+                return
+            if n == "frameset":
+                self._insert_el(t)
+                self.mode = _M_IN_FRAMESET
+                return
+            if _inset(" base basefont bgsound link meta noframes script style template title ", n):
+                if self.head_el >= 0:
+                    self.stack.append(self.head_el)
+                    self._m_in_head(t)
+                    self._remove_from_stack(self.head_el)
+                return
+            if n == "head": return
+        elif t.kind == HTML_TOK_END:
+            if t.name == "template":
+                self._m_in_head(t)
+                return
+            if not _inset(" body html br ", t.name): return
+        self._insert_fake("body")
+        self.mode = _M_IN_BODY
+        self._reprocess(t)
+
+    def _body_chars(self, t: HtmlToken):
+        mut s = t.data
+        if s.find("\0") >= 0: s = s.replace("\0", "")
+        if s.len() == 0: return
+        self._reconstruct()
+        self._insert_text(s)
+        if not _all_ws(s): self.frameset_ok = false
+
+    def _any_other_end(self, name: str):
+        mut i = len(self.stack) - 1
+        while i >= 0:
+            mut node = self.stack[i]
+            if self._is(node, name):
+                self._gen_implied(name)
+                while len(self.stack) > i: self._pop()
+                return
+            if self._is_special(node): return
+            i = i - 1
+
+    def _m_in_body(self, t: HtmlToken):
+        if t.kind == HTML_TOK_CHARS:
+            self._body_chars(t)
+            return
+        if t.kind == HTML_TOK_COMMENT:
+            self._insert_comment(t.data, -1)
+            return
+        if t.kind == HTML_TOK_DOCTYPE: return
+        if t.kind == HTML_TOK_EOF:
+            return
+        if t.kind == HTML_TOK_START:
+            self._body_start(t)
+            return
+        self._body_end(t)
+
+    def _body_start(self, t: HtmlToken):
+        mut n = t.name
+        if n == "html":
+            if self._in_stack("template") or len(self.stack) == 0: return
+            mut h = self.stack[0]
+            mut i = 0
+            while i < len(t.anames):
+                if self.doc._attr_index(h, t.anames[i]) < 0: self.doc._set_attr(h, t.anames[i], t.avals[i])
+                i = i + 1
+            return
+        if _inset(" base basefont bgsound link meta noframes script style template title ", n):
+            self._m_in_head(t)
+            return
+        if n == "body":
+            if len(self.stack) < 2 or not self._is(self.stack[1], "body") or self._in_stack("template"): return
+            self.frameset_ok = false
+            mut b = self.stack[1]
+            mut i = 0
+            while i < len(t.anames):
+                if self.doc._attr_index(b, t.anames[i]) < 0: self.doc._set_attr(b, t.anames[i], t.avals[i])
+                i = i + 1
+            return
+        if n == "frameset":
+            if len(self.stack) < 2 or not self._is(self.stack[1], "body"): return
+            if not self.frameset_ok: return
+            self.doc._detach(self.stack[1])
+            while len(self.stack) > 1: self._pop()
+            self._insert_el(t)
+            self.mode = _M_IN_FRAMESET
+            return
+        if _inset(_CLOSE_P_BLOCKS, n):
+            self._close_p_if_scoped()
+            self._insert_el(t)
+            return
+        if _inset(_HEADINGS, n):
+            self._close_p_if_scoped()
+            if self._is_in(self._cur(), _HEADINGS): self._pop()
+            self._insert_el(t)
+            return
+        if n == "pre" or n == "listing":
+            self._close_p_if_scoped()
+            self._insert_el(t)
+            self.skip_lf = true
+            self.frameset_ok = false
+            return
+        if n == "form":
+            if self.form_el >= 0 and not self._in_stack("template"): return
+            self._close_p_if_scoped()
+            mut f = self._insert_el(t)
+            if not self._in_stack("template"): self.form_el = f
+            return
+        if n == "li" or n == "dd" or n == "dt":
+            self.frameset_ok = false
+            mut i = len(self.stack) - 1
+            while i >= 0:
+                mut node = self.stack[i]
+                mut hit = false
+                if n == "li": hit = self._is(node, "li")
+                else: hit = self._is(node, "dd") or self._is(node, "dt")
+                if hit:
+                    mut nt = self.doc.nodes[node].tag
+                    self._gen_implied(nt)
+                    self._pop_until(nt)
+                    break
+                if self._is_special(node) and not self._is_in(node, " address div p "): break
+                i = i - 1
+            self._close_p_if_scoped()
+            self._insert_el(t)
+            return
+        if n == "plaintext":
+            self._close_p_if_scoped()
+            self._insert_el(t)
+            self.tk.state = HTML_TS_PLAINTEXT
+            return
+        if n == "button":
+            if self._in_scope("button"):
+                self._gen_implied("")
+                self._pop_until("button")
+            self._reconstruct()
+            self._insert_el(t)
+            self.frameset_ok = false
+            return
+        if n == "a":
+            mut a = self._afe_find("a")
+            if a >= 0:
+                if not self._adoption("a"): self._any_other_end("a")
+                self._remove_afe(a)
+                self._remove_from_stack(a)
+            self._reconstruct()
+            mut e = self._insert_el(t)
+            self._push_afe(e)
+            return
+        if _inset(" b big code em font i s small strike strong tt u ", n):
+            self._reconstruct()
+            mut e = self._insert_el(t)
+            self._push_afe(e)
+            return
+        if n == "nobr":
+            self._reconstruct()
+            if self._in_scope("nobr"):
+                if not self._adoption("nobr"): self._any_other_end("nobr")
+                self._reconstruct()
+            mut e = self._insert_el(t)
+            self._push_afe(e)
+            return
+        if n == "applet" or n == "marquee" or n == "object":
+            self._reconstruct()
+            self._insert_el(t)
+            self._push_marker()
+            self.frameset_ok = false
+            return
+        if n == "table":
+            if not self.doc.quirks: self._close_p_if_scoped()
+            self._insert_el(t)
+            self.frameset_ok = false
+            self.mode = _M_IN_TABLE
+            return
+        if _inset(" area br embed img keygen wbr ", n):
+            self._reconstruct()
+            self._insert_el(t)
+            self._pop()
+            self.frameset_ok = false
+            return
+        if n == "input":
+            self._reconstruct()
+            self._insert_el(t)
+            self._pop()
+            if not t.has_attr("type") or _ascii_lower(t.attr("type")) != "hidden": self.frameset_ok = false
+            return
+        if n == "param" or n == "source" or n == "track":
+            self._insert_el(t)
+            self._pop()
+            return
+        if n == "hr":
+            self._close_p_if_scoped()
+            self._insert_el(t)
+            self._pop()
+            self.frameset_ok = false
+            return
+        if n == "image":
+            t.name = "img"
+            self._reprocess(t)
+            return
+        if n == "textarea":
+            self._insert_el(t)
+            self.skip_lf = true
+            self.tk.state = HTML_TS_RCDATA
+            self.tk.last_start = "textarea"
+            self.orig = self.mode
+            self.frameset_ok = false
+            self.mode = _M_TEXT
+            return
+        if n == "xmp":
+            self._close_p_if_scoped()
+            self._reconstruct()
+            self.frameset_ok = false
+            self._raw(t, HTML_TS_RAWTEXT)
+            return
+        if n == "iframe":
+            self.frameset_ok = false
+            self._raw(t, HTML_TS_RAWTEXT)
+            return
+        if n == "noembed":
+            self._raw(t, HTML_TS_RAWTEXT)
+            return
+        if n == "select":
+            self._reconstruct()
+            self._insert_el(t)
+            self.frameset_ok = false
+            mut m = self.mode
+            if m == _M_IN_TABLE or m == _M_IN_CAPTION or m == _M_IN_TBODY or m == _M_IN_ROW or m == _M_IN_CELL:
+                self.mode = _M_IN_SELECT_IN_TABLE
+            else:
+                self.mode = _M_IN_SELECT
+            return
+        if n == "optgroup" or n == "option":
+            if self._cur_is("option"): self._pop()
+            self._reconstruct()
+            self._insert_el(t)
+            return
+        if n == "rb" or n == "rtc":
+            if self._in_scope("ruby"): self._gen_implied("")
+            self._insert_el(t)
+            return
+        if n == "rp" or n == "rt":
+            if self._in_scope("ruby"): self._gen_implied("rtc")
+            self._insert_el(t)
+            return
+        if n == "math" or n == "svg":
+            self._reconstruct()
+            mut ns = 2
+            if n == "svg": ns = 1
+            self._insert_foreign(t, ns)
+            if t.self_closing: self._pop()
+            return
+        if _inset(" caption col colgroup frame head tbody td tfoot th thead tr ", n): return
+        self._reconstruct()
+        self._insert_el(t)
+
+    def _body_end(self, t: HtmlToken):
+        mut n = t.name
+        if n == "template":
+            self._end_template()
+            return
+        if n == "body":
+            if not self._in_scope("body"): return
+            self.mode = _M_AFTER_BODY
+            return
+        if n == "html":
+            if not self._in_scope("body"): return
+            self.mode = _M_AFTER_BODY
+            self._reprocess(t)
+            return
+        if _inset(_END_BLOCKS, n):
+            if not self._in_scope(n): return
+            self._gen_implied("")
+            self._pop_until(n)
+            return
+        if n == "form":
+            if self._in_stack("template"):
+                if not self._in_scope("form"): return
+                self._gen_implied("")
+                self._pop_until("form")
+                return
+            mut node = self.form_el
+            self.form_el = -1
+            if node < 0 or _list_find(self.stack, node) < 0 or not self._in_scope("form"): return
+            self._gen_implied("")
+            self._remove_from_stack(node)
+            return
+        if n == "p":
+            if not self._in_scope_k("p", 2): self._insert_fake("p")
+            self._close_p()
+            return
+        if n == "li":
+            if not self._in_scope_k("li", 1): return
+            self._gen_implied("li")
+            self._pop_until("li")
+            return
+        if n == "dd" or n == "dt":
+            if not self._in_scope(n): return
+            self._gen_implied(n)
+            self._pop_until(n)
+            return
+        if _inset(_HEADINGS, n):
+            if not (self._in_scope("h1") or self._in_scope("h2") or self._in_scope("h3") or self._in_scope("h4") or self._in_scope("h5") or self._in_scope("h6")): return
+            self._gen_implied("")
+            self._pop_until_in(_HEADINGS)
+            return
+        if _inset(_FORMATTING, n):
+            if not self._adoption(n): self._any_other_end(n)
+            return
+        if n == "applet" or n == "marquee" or n == "object":
+            if not self._in_scope(n): return
+            self._gen_implied("")
+            self._pop_until(n)
+            self._clear_afe_to_marker()
+            return
+        if n == "br":
+            mut b = html_token(HTML_TOK_START)
+            b.name = "br"
+            self._body_start(b)
+            return
+        self._any_other_end(n)
+
+    def _m_text(self, t: HtmlToken):
+        if t.kind == HTML_TOK_CHARS:
+            self._insert_text(t.data)
+            return
+        if t.kind == HTML_TOK_EOF:
+            self._pop()
+            self.mode = self.orig
+            self._reprocess(t)
+            return
+        if t.kind == HTML_TOK_END:
+            self._pop()
+            self.mode = self.orig
+            self.tk.state = HTML_TS_DATA
+            return
+
+    def _clear_to_ctx(self, set: str):
+        while len(self.stack) > 0:
+            mut c = self._cur()
+            if self._is_in(c, set): return
+            self._pop()
+
+    def _m_in_table(self, t: HtmlToken):
+        if t.kind == HTML_TOK_CHARS:
+            if self._is_in(self._cur(), " table tbody template tfoot thead tr "):
+                self.pend.clear()
+                self.pend_nonws = false
+                self.orig = self.mode
+                self.mode = _M_IN_TABLE_TEXT
+                self._reprocess(t)
+                return
+            self._table_anything(t)
+            return
+        if t.kind == HTML_TOK_COMMENT:
+            self._insert_comment(t.data, -1)
+            return
+        if t.kind == HTML_TOK_DOCTYPE: return
+        if t.kind == HTML_TOK_EOF:
+            self._m_in_body(t)
+            return
+        mut n = t.name
+        if t.kind == HTML_TOK_START:
+            if n == "caption":
+                self._clear_to_ctx(" table template html ")
+                self._push_marker()
+                self._insert_el(t)
+                self.mode = _M_IN_CAPTION
+                return
+            if n == "colgroup":
+                self._clear_to_ctx(" table template html ")
+                self._insert_el(t)
+                self.mode = _M_IN_COLGROUP
+                return
+            if n == "col":
+                self._clear_to_ctx(" table template html ")
+                self._insert_fake("colgroup")
+                self.mode = _M_IN_COLGROUP
+                self._reprocess(t)
+                return
+            if n == "tbody" or n == "tfoot" or n == "thead":
+                self._clear_to_ctx(" table template html ")
+                self._insert_el(t)
+                self.mode = _M_IN_TBODY
+                return
+            if n == "td" or n == "th" or n == "tr":
+                self._clear_to_ctx(" table template html ")
+                self._insert_fake("tbody")
+                self.mode = _M_IN_TBODY
+                self._reprocess(t)
+                return
+            if n == "table":
+                if not self._in_scope_k("table", 3): return
+                self._pop_until("table")
+                self._reset_mode()
+                self._reprocess(t)
+                return
+            if n == "style" or n == "script" or n == "template":
+                self._m_in_head(t)
+                return
+            if n == "input" and t.has_attr("type") and _ascii_lower(t.attr("type")) == "hidden":
+                self._insert_el(t)
+                self._pop()
+                return
+            if n == "form":
+                if self._in_stack("template") or self.form_el >= 0: return
+                self.form_el = self._insert_el(t)
+                self._pop()
+                return
+        else:
+            if n == "table":
+                if not self._in_scope_k("table", 3): return
+                self._pop_until("table")
+                self._reset_mode()
+                return
+            if _inset(" body caption col colgroup html tbody td tfoot th thead tr ", n): return
+            if n == "template":
+                self._m_in_head(t)
+                return
+        self._table_anything(t)
+
+    def _table_anything(self, t: HtmlToken):
+        mut saved = self.foster
+        self.foster = true
+        self._m_in_body(t)
+        self.foster = saved
+
+    def _m_in_table_text(self, t: HtmlToken):
+        if t.kind == HTML_TOK_CHARS:
+            mut s = t.data
+            if s.find("\0") >= 0: s = s.replace("\0", "")
+            self.pend.append(s)
+            if not _all_ws(s): self.pend_nonws = true
+            return
+        mut txt = self.pend.to_owned()
+        self.pend.clear()
+        if txt.len() > 0:
+            if self.pend_nonws:
+                mut ct = html_token(HTML_TOK_CHARS)
+                ct.data = txt
+                self._table_anything(ct)
+            else:
+                self._insert_text(txt)
+        self.pend_nonws = false
+        self.mode = self.orig
+        self._reprocess(t)
+
+    def _m_in_caption(self, t: HtmlToken):
+        mut n = t.name
+        if t.kind == HTML_TOK_END and n == "caption":
+            if not self._in_scope_k("caption", 3): return
+            self._gen_implied("")
+            self._pop_until("caption")
+            self._clear_afe_to_marker()
+            self.mode = _M_IN_TABLE
+            return
+        if (t.kind == HTML_TOK_START and _inset(" caption col colgroup tbody td tfoot th thead tr ", n)) or (t.kind == HTML_TOK_END and n == "table"):
+            if not self._in_scope_k("caption", 3): return
+            self._gen_implied("")
+            self._pop_until("caption")
+            self._clear_afe_to_marker()
+            self.mode = _M_IN_TABLE
+            self._reprocess(t)
+            return
+        if t.kind == HTML_TOK_END and _inset(" body col colgroup html tbody td tfoot th thead tr ", n): return
+        self._m_in_body(t)
+
+    def _m_in_colgroup(self, t0: HtmlToken):
+        mut t = t0
+        if t.kind == HTML_TOK_CHARS:
+            mut r = self._chars_rest(t, true)
+            if r.data.len() == 0: return
+            t = r
+        elif t.kind == HTML_TOK_COMMENT:
+            self._insert_comment(t.data, -1)
+            return
+        elif t.kind == HTML_TOK_DOCTYPE:
+            return
+        elif t.kind == HTML_TOK_START and t.name == "html":
+            self._m_in_body(t)
+            return
+        elif t.kind == HTML_TOK_START and t.name == "col":
+            self._insert_el(t)
+            self._pop()
+            return
+        elif t.kind == HTML_TOK_END and t.name == "colgroup":
+            if not self._cur_is("colgroup"): return
+            self._pop()
+            self.mode = _M_IN_TABLE
+            return
+        elif t.kind == HTML_TOK_END and t.name == "col":
+            return
+        elif t.name == "template" and (t.kind == HTML_TOK_START or t.kind == HTML_TOK_END):
+            self._m_in_head(t)
+            return
+        elif t.kind == HTML_TOK_EOF:
+            self._m_in_body(t)
+            return
+        if not self._cur_is("colgroup"): return
+        self._pop()
+        self.mode = _M_IN_TABLE
+        self._reprocess(t)
+
+    def _m_in_tbody(self, t: HtmlToken):
+        mut n = t.name
+        if t.kind == HTML_TOK_START and n == "tr":
+            self._clear_to_ctx(" tbody tfoot thead template html ")
+            self._insert_el(t)
+            self.mode = _M_IN_ROW
+            return
+        if t.kind == HTML_TOK_START and (n == "th" or n == "td"):
+            self._clear_to_ctx(" tbody tfoot thead template html ")
+            self._insert_fake("tr")
+            self.mode = _M_IN_ROW
+            self._reprocess(t)
+            return
+        if t.kind == HTML_TOK_END and (n == "tbody" or n == "tfoot" or n == "thead"):
+            if not self._in_scope_k(n, 3): return
+            self._clear_to_ctx(" tbody tfoot thead template html ")
+            self._pop()
+            self.mode = _M_IN_TABLE
+            return
+        if (t.kind == HTML_TOK_START and _inset(" caption col colgroup tbody tfoot thead ", n)) or (t.kind == HTML_TOK_END and n == "table"):
+            if not (self._in_scope_k("tbody", 3) or self._in_scope_k("thead", 3) or self._in_scope_k("tfoot", 3)): return
+            self._clear_to_ctx(" tbody tfoot thead template html ")
+            self._pop()
+            self.mode = _M_IN_TABLE
+            self._reprocess(t)
+            return
+        if t.kind == HTML_TOK_END and _inset(" body caption col colgroup html td th tr ", n): return
+        self._m_in_table(t)
+
+    def _m_in_row(self, t: HtmlToken):
+        mut n = t.name
+        if t.kind == HTML_TOK_START and (n == "th" or n == "td"):
+            self._clear_to_ctx(" tr template html ")
+            self._insert_el(t)
+            self.mode = _M_IN_CELL
+            self._push_marker()
+            return
+        if t.kind == HTML_TOK_END and n == "tr":
+            if not self._in_scope_k("tr", 3): return
+            self._clear_to_ctx(" tr template html ")
+            self._pop()
+            self.mode = _M_IN_TBODY
+            return
+        if (t.kind == HTML_TOK_START and _inset(" caption col colgroup tbody tfoot thead tr ", n)) or (t.kind == HTML_TOK_END and n == "table"):
+            if not self._in_scope_k("tr", 3): return
+            self._clear_to_ctx(" tr template html ")
+            self._pop()
+            self.mode = _M_IN_TBODY
+            self._reprocess(t)
+            return
+        if t.kind == HTML_TOK_END and (n == "tbody" or n == "tfoot" or n == "thead"):
+            if not self._in_scope_k(n, 3): return
+            if not self._in_scope_k("tr", 3): return
+            self._clear_to_ctx(" tr template html ")
+            self._pop()
+            self.mode = _M_IN_TBODY
+            self._reprocess(t)
+            return
+        if t.kind == HTML_TOK_END and _inset(" body caption col colgroup html td th ", n): return
+        self._m_in_table(t)
+
+    def _close_cell(self):
+        self._gen_implied("")
+        self._pop_until_in(" td th ")
+        self._clear_afe_to_marker()
+        self.mode = _M_IN_ROW
+
+    def _m_in_cell(self, t: HtmlToken):
+        mut n = t.name
+        if t.kind == HTML_TOK_END and (n == "td" or n == "th"):
+            if not self._in_scope_k(n, 3): return
+            self._gen_implied("")
+            self._pop_until(n)
+            self._clear_afe_to_marker()
+            self.mode = _M_IN_ROW
+            return
+        if t.kind == HTML_TOK_START and _inset(" caption col colgroup tbody td tfoot th thead tr ", n):
+            if not (self._in_scope_k("td", 3) or self._in_scope_k("th", 3)): return
+            self._close_cell()
+            self._reprocess(t)
+            return
+        if t.kind == HTML_TOK_END and _inset(" body caption col colgroup html ", n): return
+        if t.kind == HTML_TOK_END and _inset(" table tbody tfoot thead tr ", n):
+            if not self._in_scope_k(n, 3): return
+            self._close_cell()
+            self._reprocess(t)
+            return
+        self._m_in_body(t)
+
+    def _m_in_select(self, t: HtmlToken):
+        if t.kind == HTML_TOK_CHARS:
+            mut s = t.data
+            if s.find("\0") >= 0: s = s.replace("\0", "")
+            self._insert_text(s)
+            return
+        if t.kind == HTML_TOK_COMMENT:
+            self._insert_comment(t.data, -1)
+            return
+        if t.kind == HTML_TOK_DOCTYPE: return
+        if t.kind == HTML_TOK_EOF:
+            self._m_in_body(t)
+            return
+        mut n = t.name
+        if t.kind == HTML_TOK_START:
+            if n == "html":
+                self._m_in_body(t)
+                return
+            if n == "option":
+                if self._cur_is("option"): self._pop()
+                self._insert_el(t)
+                return
+            if n == "optgroup":
+                if self._cur_is("option"): self._pop()
+                if self._cur_is("optgroup"): self._pop()
+                self._insert_el(t)
+                return
+            if n == "select":
+                if not self._in_scope_k("select", 4): return
+                self._pop_until("select")
+                self._reset_mode()
+                return
+            if n == "input" or n == "keygen" or n == "textarea":
+                if not self._in_scope_k("select", 4): return
+                self._pop_until("select")
+                self._reset_mode()
+                self._reprocess(t)
+                return
+            if n == "script" or n == "template":
+                self._m_in_head(t)
+                return
+            return
+        if n == "optgroup":
+            mut ns = len(self.stack)
+            if self._cur_is("option") and ns >= 2 and self._is(self.stack[ns - 2], "optgroup"): self._pop()
+            if self._cur_is("optgroup"): self._pop()
+            return
+        if n == "option":
+            if self._cur_is("option"): self._pop()
+            return
+        if n == "select":
+            if not self._in_scope_k("select", 4): return
+            self._pop_until("select")
+            self._reset_mode()
+            return
+        if n == "template":
+            self._m_in_head(t)
+            return
+
+    def _m_in_select_in_table(self, t: HtmlToken):
+        mut n = t.name
+        mut set = " caption table tbody tfoot thead tr td th "
+        if t.kind == HTML_TOK_START and _inset(set, n):
+            self._pop_until("select")
+            self._reset_mode()
+            self._reprocess(t)
+            return
+        if t.kind == HTML_TOK_END and _inset(set, n):
+            if not self._in_scope_k(n, 3): return
+            self._pop_until("select")
+            self._reset_mode()
+            self._reprocess(t)
+            return
+        self._m_in_select(t)
+
+    def _m_after_body(self, t: HtmlToken):
+        if t.kind == HTML_TOK_CHARS:
+            mut k = _ws_prefix(t.data)
+            if k > 0:
+                mut w = html_token(HTML_TOK_CHARS)
+                w.data = t.data.slice(0, k)
+                self._m_in_body(w)
+            if k == t.data.len(): return
+            mut r = html_token(HTML_TOK_CHARS)
+            r.data = t.data.slice(k, t.data.len())
+            self.mode = _M_IN_BODY
+            self._reprocess(r)
+            return
+        if t.kind == HTML_TOK_COMMENT:
+            if len(self.stack) > 0: self._insert_comment(t.data, self.stack[0])
+            return
+        if t.kind == HTML_TOK_DOCTYPE: return
+        if t.kind == HTML_TOK_START and t.name == "html":
+            self._m_in_body(t)
+            return
+        if t.kind == HTML_TOK_END and t.name == "html":
+            if self.fragment: return
+            self.mode = _M_AFTER_AFTER_BODY
+            return
+        if t.kind == HTML_TOK_EOF: return
+        self.mode = _M_IN_BODY
+        self._reprocess(t)
+
+    # Only the whitespace characters of a CHARS token (frameset modes).
+    def _ws_only(self, s: str) -> str:
+        mut sb = StringBuilder.init(s.len() + 1)
+        mut i = 0
+        while i < s.len():
+            mut c = _db(s, i)
+            if _ws(c): sb.append_char(c)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    def _m_in_frameset(self, t: HtmlToken):
+        if t.kind == HTML_TOK_CHARS:
+            mut w = self._ws_only(t.data)
+            self._insert_text(w)
+            return
+        if t.kind == HTML_TOK_COMMENT:
+            self._insert_comment(t.data, -1)
+            return
+        if t.kind == HTML_TOK_DOCTYPE or t.kind == HTML_TOK_EOF: return
+        mut n = t.name
+        if t.kind == HTML_TOK_START:
+            if n == "html":
+                self._m_in_body(t)
+                return
+            if n == "frameset":
+                self._insert_el(t)
+                return
+            if n == "frame":
+                self._insert_el(t)
+                self._pop()
+                return
+            if n == "noframes":
+                self._m_in_head(t)
+                return
+            return
+        if n == "frameset":
+            if len(self.stack) <= 1: return
+            self._pop()
+            if not self.fragment and not self._cur_is("frameset"): self.mode = _M_AFTER_FRAMESET
+            return
+
+    def _m_after_frameset(self, t: HtmlToken):
+        if t.kind == HTML_TOK_CHARS:
+            mut w = self._ws_only(t.data)
+            self._insert_text(w)
+            return
+        if t.kind == HTML_TOK_COMMENT:
+            self._insert_comment(t.data, -1)
+            return
+        if t.kind == HTML_TOK_START and t.name == "html":
+            self._m_in_body(t)
+            return
+        if t.kind == HTML_TOK_END and t.name == "html":
+            self.mode = _M_AFTER_AFTER_FRAMESET
+            return
+        if t.kind == HTML_TOK_START and t.name == "noframes":
+            self._m_in_head(t)
+            return
+
+    def _m_after_after_body(self, t: HtmlToken):
+        if t.kind == HTML_TOK_COMMENT:
+            self._insert_comment(t.data, 0)
+            return
+        if t.kind == HTML_TOK_DOCTYPE or (t.kind == HTML_TOK_START and t.name == "html"):
+            self._m_in_body(t)
+            return
+        if t.kind == HTML_TOK_CHARS:
+            mut k = _ws_prefix(t.data)
+            if k > 0:
+                mut w = html_token(HTML_TOK_CHARS)
+                w.data = t.data.slice(0, k)
+                self._m_in_body(w)
+            if k == t.data.len(): return
+            mut r = html_token(HTML_TOK_CHARS)
+            r.data = t.data.slice(k, t.data.len())
+            self.mode = _M_IN_BODY
+            self._reprocess(r)
+            return
+        if t.kind == HTML_TOK_EOF: return
+        self.mode = _M_IN_BODY
+        self._reprocess(t)
+
+    def _m_after_after_frameset(self, t: HtmlToken):
+        if t.kind == HTML_TOK_COMMENT:
+            self._insert_comment(t.data, 0)
+            return
+        if t.kind == HTML_TOK_DOCTYPE or (t.kind == HTML_TOK_START and t.name == "html"):
+            self._m_in_body(t)
+            return
+        if t.kind == HTML_TOK_CHARS:
+            mut w = self._ws_only(t.data)
+            if w.len() > 0:
+                mut wt = html_token(HTML_TOK_CHARS)
+                wt.data = w
+                self._m_in_body(wt)
+            return
+        if t.kind == HTML_TOK_START and t.name == "noframes":
+            self._m_in_head(t)
+            return
+
+# ─── parsing entry points ───────────────────────────────────────────────────
+
+# Parse a complete HTML document. Never fails.
+pub def html_parse(src: str) -> HtmlDocument:
+    mut b = _new_tb(src)
+    b.run()
+    return b.doc
+
+# Parse markup as the children of a <body> (the fragment parsing algorithm
+# with a body context element). Returns the fragment's container: an <html>
+# element whose children are the parsed nodes (serialize it with
+# inner_html(); its document has no <head>/<body>).
+pub def html_parse_fragment(src: str) -> HtmlNode:
+    mut b = _new_tb(src)
+    b.fragment = true
+    mut root = b.doc._new_node(HTML_ELEMENT, 0, "html", "")
+    b.doc._append(0, root)
+    b.stack.append(root)
+    b.mode = _M_IN_BODY
+    b.run()
+    return b.doc.node(root)
+
+extend HtmlDocument:
+    pub def parse(src: str) -> HtmlDocument:
+        return html_parse(src)
+
+# ─── CSS selectors ──────────────────────────────────────────────────────────
+#
+# Supported: type and `*`, #id, .class, [attr], [attr=v], [attr~=v],
+# [attr|=v], [attr^=v], [attr$=v], [attr*=v] (values quoted or bare, with an
+# optional ` i` flag for ASCII case-insensitive matching), the descendant,
+# child (>), adjacent (+) and general sibling (~) combinators, selector lists
+# (a, b), and the pseudo-classes :first-child :last-child :only-child
+# :nth-child(an+b) :nth-last-child() :first-of-type :last-of-type
+# :only-of-type :nth-of-type() :nth-last-of-type() :empty :root
+# :not(selector-list) :is(selector-list) :where(...) :has(...) (relative
+# descendant / '>' / '+' / '~' arguments), :checked :disabled :enabled.
+# Type and attribute names match ASCII case-insensitively; ids, classes and
+# attribute values are case-sensitive unless the `i` flag is given.
+
+const _S_TYPE = 1
+const _S_ID = 2
+const _S_CLASS = 3
+const _S_ATTR = 4
+const _S_NTH = 5           # a, b; name = "child"/"last-child"/"of-type"/"last-of-type"
+const _S_NOT = 6
+const _S_IS = 7
+const _S_HAS = 8
+const _S_EMPTY = 9
+const _S_ROOT = 10
+const _S_ONLY = 11         # name = "child" / "of-type"
+const _S_CHECKED = 12
+const _S_DISABLED = 13
+const _S_ENABLED = 14
+
+class _SelSimple:
+    pub kind: int
+    pub name: str
+    pub op: int            # 0 exists, 1 =, 2 ~=, 3 |=, 4 ^=, 5 $=, 6 *=
+    pub value: str
+    pub ci: bool
+    pub a: int
+    pub b: int
+    pub sub: List[_SelComplex]
+
+class _SelCompound:
+    pub simples: List[_SelSimple]
+    pub comb: int          # combinator to the previous compound: 0 none, 1 descendant, 2 '>', 3 '+', 4 '~'
+
+class _SelComplex:
+    pub parts: List[_SelCompound]
+
+pub class HtmlSelector:
+    pub items: List[_SelComplex]
+    pub ok: bool
+    pub error: str
+    pub source: str
+
+class _SP:
+    pub s: str
+    pub i: int
+    pub n: int
+    pub err: str
+
+def _new_simple(kind: int) -> _SelSimple:
+    mut x = _SelSimple()
+    x.kind = kind
+    x.name = ""
+    x.op = 0
+    x.value = ""
+    x.ci = false
+    x.a = 0
+    x.b = 0
+    mut l: List[_SelComplex] = []
+    x.sub = l
+    return x
+
+def _is_ident_char(c: int) -> bool:
+    return (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or (c >= 48 and c <= 57) or c == 45 or c == 95 or c >= 128
+
+extend _SP:
+    def peek(self) -> int:
+        if self.i >= self.n: return -1
+        return _db(self.s, self.i)
+
+    def skip_ws(self) -> bool:
+        mut st = self.i
+        while self.i < self.n and _ws(_db(self.s, self.i)): self.i = self.i + 1
+        return self.i > st
+
+    def fail(self, msg: str):
+        if self.err.len() == 0:
+            self.err = f"selector: {msg} at offset {self.i}"
+
+    def ident(self) -> str:
+        mut sb = StringBuilder.init(16)
+        while self.i < self.n:
+            mut c = _db(self.s, self.i)
+            if c == 92 and self.i + 1 < self.n:
+                # escape: hex digits (+ one space) or a literal character
+                self.i = self.i + 1
+                mut h = 0
+                mut cnt = 0
+                while self.i < self.n and cnt < 6:
+                    mut d = _db(self.s, self.i)
+                    mut v = -1
+                    if d >= 48 and d <= 57: v = d - 48
+                    elif d >= 97 and d <= 102: v = d - 87
+                    elif d >= 65 and d <= 70: v = d - 55
+                    if v < 0: break
+                    h = h * 16 + v
+                    cnt = cnt + 1
+                    self.i = self.i + 1
+                if cnt > 0:
+                    if h == 0 or h > 1114111: h = 65533
+                    html_put_utf8(sb, h)
+                    if self.i < self.n and _ws(_db(self.s, self.i)): self.i = self.i + 1
+                else:
+                    sb.append_char(_db(self.s, self.i))
+                    self.i = self.i + 1
+                continue
+            if not _is_ident_char(c): break
+            sb.append_char(c)
+            self.i = self.i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    def string(self) -> str:
+        mut q = _db(self.s, self.i)
+        self.i = self.i + 1
+        mut sb = StringBuilder.init(16)
+        while self.i < self.n:
+            mut c = _db(self.s, self.i)
+            if c == q:
+                self.i = self.i + 1
+                mut out = sb.to_owned()
+                sb.free()
+                return out
+            if c == 92 and self.i + 1 < self.n:
+                self.i = self.i + 1
+                c = _db(self.s, self.i)
+            sb.append_char(c)
+            self.i = self.i + 1
+        self.fail("unterminated string")
+        mut out2 = sb.to_owned()
+        sb.free()
+        return out2
+
+    def selector_list(self, relative: bool) -> List[_SelComplex]:
+        mut out: List[_SelComplex] = []
+        while true:
+            self.skip_ws()
+            mut cx = self.complex(relative)
+            if self.err.len() > 0: return out
+            out.append(cx)
+            self.skip_ws()
+            if self.peek() == 44:
+                self.i = self.i + 1
+                continue
+            break
+        return out
+
+    def complex(self, relative: bool) -> _SelComplex:
+        mut cx = _SelComplex()
+        mut parts: List[_SelCompound] = []
+        cx.parts = parts
+        mut comb = 0
+        if relative:
+            # :has() arguments start with an implicit "descendant of :scope"
+            self.skip_ws()
+            mut c = self.peek()
+            comb = 1
+            if c == 62: comb = 2
+            elif c == 43: comb = 3
+            elif c == 126: comb = 4
+            if comb != 1: self.i = self.i + 1
+            self.skip_ws()
+            # placeholder scope compound (matched specially)
+            mut sc = _SelCompound()
+            mut ss: List[_SelSimple] = []
+            sc.simples = ss
+            sc.comb = 0
+            mut scope = _new_simple(_S_TYPE)
+            scope.name = ":scope"
+            sc.simples.append(scope)
+            cx.parts.append(sc)
+        while true:
+            mut cp = self.compound()
+            if self.err.len() > 0: return cx
+            cp.comb = comb
+            cx.parts.append(cp)
+            mut had_ws = self.skip_ws()
+            mut c = self.peek()
+            if c == 62 or c == 43 or c == 126:
+                if c == 62: comb = 2
+                elif c == 43: comb = 3
+                else: comb = 4
+                self.i = self.i + 1
+                self.skip_ws()
+                continue
+            if c < 0 or c == 44 or c == 41: break
+            if had_ws:
+                comb = 1
+                continue
+            self.fail("unexpected character")
+            return cx
+        return cx
+
+    def nth(self, txt: str) -> _SelSimple:
+        mut x = _new_simple(_S_NTH)
+        mut t = _ascii_lower(_strip_ws(txt))
+        if t == "odd":
+            x.a = 2
+            x.b = 1
+            return x
+        if t == "even":
+            x.a = 2
+            x.b = 0
+            return x
+        mut np = t.find("n")
+        if np < 0:
+            x.a = 0
+            x.b = self.int_of(t)
+            return x
+        mut ap = _strip_ws(t.slice(0, np))
+        if ap == "" or ap == "+": x.a = 1
+        elif ap == "-": x.a = -1
+        else: x.a = self.int_of(ap)
+        mut bp = _strip_ws(t.slice(np + 1, t.len()))
+        if bp.len() == 0:
+            x.b = 0
+            return x
+        mut sign = 1
+        mut c = _db(bp, 0)
+        if c == 43 or c == 45:
+            if c == 45: sign = -1
+            bp = _strip_ws(bp.slice(1, bp.len()))
+        else:
+            self.fail("bad an+b")
+        x.b = sign * self.int_of(bp)
+        return x
+
+    def int_of(self, t: str) -> int:
+        mut i = 0
+        mut sign = 1
+        mut v = 0
+        if t.len() == 0:
+            self.fail("bad number")
+            return 0
+        if _db(t, 0) == 45 or _db(t, 0) == 43:
+            if _db(t, 0) == 45: sign = -1
+            i = 1
+        if i >= t.len(): self.fail("bad number")
+        while i < t.len():
+            mut c = _db(t, i)
+            if c < 48 or c > 57:
+                self.fail("bad number")
+                return 0
+            if v < 100000000: v = v * 10 + (c - 48)
+            i = i + 1
+        return sign * v
+
+    # Raw text up to the matching ')'.
+    def paren_text(self) -> str:
+        mut depth = 1
+        mut st = self.i
+        while self.i < self.n:
+            mut c = _db(self.s, self.i)
+            if c == 40: depth = depth + 1
+            if c == 41:
+                depth = depth - 1
+                if depth == 0:
+                    mut out = self.s.slice(st, self.i)
+                    self.i = self.i + 1
+                    return out
+            self.i = self.i + 1
+        self.fail("missing ')'")
+        return ""
+
+    def compound(self) -> _SelCompound:
+        mut cp = _SelCompound()
+        mut l: List[_SelSimple] = []
+        cp.simples = l
+        cp.comb = 0
+        mut c = self.peek()
+        mut star = false
+        if c == 42:
+            self.i = self.i + 1
+            star = true
+        elif c >= 0 and (_is_ident_char(c) or c == 92):
+            mut x = _new_simple(_S_TYPE)
+            mut nm = self.ident()
+            x.name = _ascii_lower(nm)
+            cp.simples.append(x)
+        mut count = 0
+        while true:
+            c = self.peek()
+            if c == 35:
+                self.i = self.i + 1
+                mut x = _new_simple(_S_ID)
+                x.name = self.ident()
+                if x.name.len() == 0: self.fail("empty id")
+                cp.simples.append(x)
+            elif c == 46:
+                self.i = self.i + 1
+                mut x = _new_simple(_S_CLASS)
+                x.name = self.ident()
+                if x.name.len() == 0: self.fail("empty class")
+                cp.simples.append(x)
+            elif c == 91:
+                self.i = self.i + 1
+                self.skip_ws()
+                mut x = _new_simple(_S_ATTR)
+                mut an = self.ident()
+                x.name = _ascii_lower(an)
+                if x.name.len() == 0: self.fail("empty attribute name")
+                self.skip_ws()
+                mut d = self.peek()
+                if d == 93:
+                    self.i = self.i + 1
+                else:
+                    if d == 61:
+                        x.op = 1
+                        self.i = self.i + 1
+                    else:
+                        if d == 126: x.op = 2
+                        elif d == 124: x.op = 3
+                        elif d == 94: x.op = 4
+                        elif d == 36: x.op = 5
+                        elif d == 42: x.op = 6
+                        else: self.fail("bad attribute operator")
+                        self.i = self.i + 1
+                        if self.peek() != 61: self.fail("bad attribute operator")
+                        self.i = self.i + 1
+                    self.skip_ws()
+                    d = self.peek()
+                    if d == 34 or d == 39: x.value = self.string()
+                    else: x.value = self.ident()
+                    self.skip_ws()
+                    d = self.peek()
+                    if d == 105 or d == 73:
+                        x.ci = true
+                        self.i = self.i + 1
+                        self.skip_ws()
+                    elif d == 115 or d == 83:
+                        self.i = self.i + 1
+                        self.skip_ws()
+                    if self.peek() != 93: self.fail("missing ']'")
+                    self.i = self.i + 1
+                cp.simples.append(x)
+            elif c == 58:
+                self.i = self.i + 1
+                if self.peek() == 58: self.fail("pseudo-elements are not supported")
+                mut pn = self.ident()
+                mut p = _ascii_lower(pn)
+                mut args = ""
+                mut has_args = false
+                if self.peek() == 40:
+                    self.i = self.i + 1
+                    has_args = true
+                if p == "first-child" or p == "last-child" or p == "first-of-type" or p == "last-of-type":
+                    mut x = _new_simple(_S_NTH)
+                    x.a = 0
+                    x.b = 1
+                    x.name = "child"
+                    if p == "last-child": x.name = "last-child"
+                    elif p == "first-of-type": x.name = "of-type"
+                    elif p == "last-of-type": x.name = "last-of-type"
+                    cp.simples.append(x)
+                elif p == "only-child" or p == "only-of-type":
+                    mut x = _new_simple(_S_ONLY)
+                    x.name = "child"
+                    if p == "only-of-type": x.name = "of-type"
+                    cp.simples.append(x)
+                elif p == "nth-child" or p == "nth-last-child" or p == "nth-of-type" or p == "nth-last-of-type":
+                    if not has_args: self.fail("missing (an+b)")
+                    args = self.paren_text()
+                    mut x = self.nth(args)
+                    x.name = "child"
+                    if p == "nth-last-child": x.name = "last-child"
+                    elif p == "nth-of-type": x.name = "of-type"
+                    elif p == "nth-last-of-type": x.name = "last-of-type"
+                    has_args = false
+                    cp.simples.append(x)
+                elif p == "not" or p == "is" or p == "where" or p == "matches" or p == "has":
+                    if not has_args: self.fail("missing (selector)")
+                    mut k = _S_IS
+                    if p == "not": k = _S_NOT
+                    elif p == "has": k = _S_HAS
+                    mut x = _new_simple(k)
+                    x.sub = self.selector_list(k == _S_HAS)
+                    self.skip_ws()
+                    if self.peek() != 41: self.fail("missing ')'")
+                    self.i = self.i + 1
+                    has_args = false
+                    cp.simples.append(x)
+                elif p == "empty":
+                    cp.simples.append(_new_simple(_S_EMPTY))
+                elif p == "root":
+                    cp.simples.append(_new_simple(_S_ROOT))
+                elif p == "checked":
+                    cp.simples.append(_new_simple(_S_CHECKED))
+                elif p == "disabled":
+                    cp.simples.append(_new_simple(_S_DISABLED))
+                elif p == "enabled":
+                    cp.simples.append(_new_simple(_S_ENABLED))
+                else:
+                    self.fail(f"unsupported pseudo-class :{p}")
+                if has_args: self.fail("unexpected '('")
+            else:
+                break
+            if self.err.len() > 0: return cp
+            count = count + 1
+        if not star and len(cp.simples) == 0: self.fail("expected a selector")
+        return cp
+
+extend HtmlSelector:
+    # Compile a selector list; raises a message for invalid syntax.
+    pub def parse(css: str) throws str -> HtmlSelector:
+        mut sel = HtmlSelector.parse_lenient(css)
+        if not sel.ok: raise(sel.error)
+        return sel
+
+    # Compile; an invalid selector gives ok == false and matches nothing.
+    pub def parse_lenient(css: str) -> HtmlSelector:
+        mut p = _SP()
+        p.s = css
+        p.i = 0
+        p.n = css.len()
+        p.err = ""
+        mut sel = HtmlSelector()
+        sel.source = css
+        sel.items = p.selector_list(false)
+        p.skip_ws()
+        if p.err.len() == 0 and p.i < p.n: p.fail("unexpected character")
+        sel.ok = p.err.len() == 0
+        sel.error = p.err
+        if not sel.ok:
+            mut empty: List[_SelComplex] = []
+            sel.items = empty
+        return sel
+
+    pub def select(self, scope: HtmlNode) -> List[HtmlNode]:
+        mut out: List[HtmlNode] = []
+        if scope.id < 0 or len(self.items) == 0: return out
+        mut ids: List[int] = []
+        scope.doc._descendants(scope.id, ids)
+        mut i = 0
+        while i < len(ids):
+            if self._matches(scope.doc, ids[i]): out.append(scope.doc.node(ids[i]))
+            i = i + 1
+        return out
+
+    pub def select_one(self, scope: HtmlNode) -> HtmlNode:
+        if scope.id < 0 or len(self.items) == 0: return scope.doc.node(-1)
+        mut ids: List[int] = []
+        scope.doc._descendants(scope.id, ids)
+        mut i = 0
+        while i < len(ids):
+            if self._matches(scope.doc, ids[i]): return scope.doc.node(ids[i])
+            i = i + 1
+        return scope.doc.node(-1)
+
+    pub def matches(self, node: HtmlNode) -> bool:
+        if node.kind() != HTML_ELEMENT: return false
+        return self._matches(node.doc, node.id)
+
+    pub def _matches(self, d: HtmlDocument, id: int) -> bool:
+        return _match_list(d, self.items, id, -1)
+
+def _match_list(d: HtmlDocument, items: List[_SelComplex], id: int, scope: int) -> bool:
+    mut i = 0
+    while i < len(items):
+        if _match_from(d, items[i], len(items[i].parts) - 1, id, scope): return true
+        i = i + 1
+    return false
+
+def _parent_el(d: HtmlDocument, id: int) -> int:
+    mut p = d.nodes[id].parent
+    if p >= 0 and d.nodes[p].kind == HTML_ELEMENT: return p
+    return -1
+
+def _prev_el(d: HtmlDocument, id: int) -> int:
+    mut c = d.nodes[id].prev
+    while c >= 0 and d.nodes[c].kind != HTML_ELEMENT: c = d.nodes[c].prev
+    return c
+
+def _next_el(d: HtmlDocument, id: int) -> int:
+    mut c = d.nodes[id].next
+    while c >= 0 and d.nodes[c].kind != HTML_ELEMENT: c = d.nodes[c].next
+    return c
+
+def _match_from(d: HtmlDocument, cx: _SelComplex, k: int, id: int, scope: int) -> bool:
+    if not _match_compound(d, cx.parts[k], id, scope): return false
+    if k == 0: return true
+    mut comb = cx.parts[k].comb
+    if comb == 1:
+        mut p = d.nodes[id].parent
+        while p >= 0 and (d.nodes[p].kind == HTML_ELEMENT or p == scope):
+            if _match_from(d, cx, k - 1, p, scope): return true
+            p = d.nodes[p].parent
+        return false
+    if comb == 2:
+        mut p = d.nodes[id].parent
+        if p < 0 or (d.nodes[p].kind != HTML_ELEMENT and p != scope): return false
+        return _match_from(d, cx, k - 1, p, scope)
+    if comb == 3:
+        mut s = _prev_el(d, id)
+        if s < 0: return false
+        return _match_from(d, cx, k - 1, s, scope)
+    mut s = _prev_el(d, id)
+    while s >= 0:
+        if _match_from(d, cx, k - 1, s, scope): return true
+        s = _prev_el(d, s)
+    return false
+
+def _ci_eq(a: str, b: str) -> bool:
+    if a.len() != b.len(): return false
+    return _ascii_lower(a) == _ascii_lower(b)
+
+def _attr_match(d: HtmlDocument, id: int, x: _SelSimple) -> bool:
+    mut i = 0
+    mut found = -1
+    while i < len(d.nodes[id].an):
+        mut nm = d.nodes[id].an[i]
+        if nm == x.name or _ascii_lower(nm) == x.name:
+            found = i
+            break
+        i = i + 1
+    if found < 0: return false
+    if x.op == 0: return true
+    mut v = d.nodes[id].av[found]
+    mut want = x.value
+    if x.ci:
+        v = _ascii_lower(v)
+        want = _ascii_lower(want)
+    if x.op == 1: return v == want
+    if x.op == 2:
+        if want.len() == 0: return false
+        mut ws = _split_ws(v)
+        mut j = 0
+        while j < len(ws):
+            if ws[j] == want: return true
+            j = j + 1
+        return false
+    if x.op == 3:
+        if v == want: return true
+        mut pre = want + "-"
+        return v.starts_with(pre)
+    if want.len() == 0: return false
+    if x.op == 4: return v.starts_with(want)
+    if x.op == 5: return v.ends_with(want)
+    return v.find(want) >= 0
+
+# 1-based position among element siblings (of the same type when of_type),
+# counted from the end when from_end.
+def _position(d: HtmlDocument, id: int, of_type: bool, from_end: bool) -> int:
+    mut pos = 1
+    mut t = d.nodes[id].tag
+    mut ns = d.nodes[id].ns
+    mut s = -1
+    if from_end: s = _next_el(d, id)
+    else: s = _prev_el(d, id)
+    while s >= 0:
+        if not of_type or (d.nodes[s].tag == t and d.nodes[s].ns == ns): pos = pos + 1
+        if from_end: s = _next_el(d, s)
+        else: s = _prev_el(d, s)
+    return pos
+
+def _nth_ok(a: int, b: int, pos: int) -> bool:
+    if a == 0: return pos == b
+    mut diff = pos - b
+    if a > 0:
+        if diff < 0: return false
+        return diff % a == 0
+    if diff > 0: return false
+    return (0 - diff) % (0 - a) == 0
+
+def _match_compound(d: HtmlDocument, cp: _SelCompound, id: int, scope: int) -> bool:
+    mut i = 0
+    while i < len(cp.simples):
+        mut x = cp.simples[i]
+        mut k = x.kind
+        if k == _S_TYPE:
+            if x.name == ":scope":
+                if id != scope: return false
+            else:
+                if d.nodes[id].kind != HTML_ELEMENT: return false
+                mut t = d.nodes[id].tag
+                if t != x.name and _ascii_lower(t) != x.name: return false
+        elif d.nodes[id].kind != HTML_ELEMENT:
+            return false
+        elif k == _S_ID:
+            if d._attr(id, "id") != x.name: return false
+        elif k == _S_CLASS:
+            mut cls = d._attr(id, "class")
+            if cls.find(x.name) < 0: return false
+            mut ws = _split_ws(cls)
+            mut hit = false
+            mut j = 0
+            while j < len(ws):
+                if ws[j] == x.name:
+                    hit = true
+                    break
+                j = j + 1
+            if not hit: return false
+        elif k == _S_ATTR:
+            if not _attr_match(d, id, x): return false
+        elif k == _S_NTH:
+            if _parent_el(d, id) < 0 and d.nodes[id].parent < 0: return false
+            mut of_type = x.name == "of-type" or x.name == "last-of-type"
+            mut from_end = x.name == "last-child" or x.name == "last-of-type"
+            mut pos = _position(d, id, of_type, from_end)
+            if not _nth_ok(x.a, x.b, pos): return false
+        elif k == _S_ONLY:
+            if d.nodes[id].parent < 0: return false
+            mut of_type = x.name == "of-type"
+            if _position(d, id, of_type, false) != 1 or _position(d, id, of_type, true) != 1: return false
+        elif k == _S_NOT:
+            if _match_list(d, x.sub, id, scope): return false
+        elif k == _S_IS:
+            if not _match_list(d, x.sub, id, scope): return false
+        elif k == _S_HAS:
+            mut ids: List[int] = []
+            mut p = d.nodes[id].parent
+            if p >= 0: d._descendants(p, ids)
+            else: d._descendants(id, ids)
+            mut hit = false
+            mut j = 0
+            while j < len(ids):
+                if _match_list(d, x.sub, ids[j], id):
+                    hit = true
+                    break
+                j = j + 1
+            if not hit: return false
+        elif k == _S_EMPTY:
+            mut c = d.nodes[id].first
+            while c >= 0:
+                mut ck = d.nodes[c].kind
+                if ck == HTML_ELEMENT: return false
+                if ck == HTML_TEXT and d.nodes[c].data.len() > 0: return false
+                c = d.nodes[c].next
+        elif k == _S_ROOT:
+            mut p = d.nodes[id].parent
+            if p < 0 or d.nodes[p].kind != HTML_DOCUMENT: return false
+        elif k == _S_CHECKED:
+            mut t = d.nodes[id].tag
+            mut ok = false
+            if t == "input":
+                mut ty = _ascii_lower(d._attr(id, "type"))
+                ok = (ty == "checkbox" or ty == "radio") and d._attr_index(id, "checked") >= 0
+            elif t == "option":
+                ok = d._attr_index(id, "selected") >= 0
+            if not ok: return false
+        elif k == _S_DISABLED or k == _S_ENABLED:
+            mut t = d.nodes[id].tag
+            if not _inset(" button input select textarea optgroup option fieldset ", t): return false
+            mut dis = d._attr_index(id, "disabled") >= 0
+            if k == _S_DISABLED and not dis: return false
+            if k == _S_ENABLED and dis: return false
+        i = i + 1
+    return true

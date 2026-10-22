@@ -1,0 +1,205 @@
+# std.crypto.otp -- HOTP and TOTP one-time passwords (RFC 4226 / RFC 6238).
+#
+# The secret is RAW key bytes. Authenticator apps exchange it as unpadded
+# Base32 text; `Otp.secret_from_base32` / `Otp.secret_to_base32` convert
+# (spaces and lower case are accepted on input).
+#
+# Usage:
+#   from std.crypto.otp import Otp
+#   from std.crypto.native import ALG_SHA1
+#   mut secret = Otp.generate_secret(20)?                  # raw bytes
+#   mut b32    = Otp.secret_to_base32(secret)              # show to the user / QR
+#   mut uri    = Otp.provisioning_uri(b32, "alice@example.com", "Example", ALG_SHA1, 6, 30)
+#   mut code   = Otp.totp(secret, now, 30, 6, ALG_SHA1)?   # "492039"
+#   mut ok     = Otp.verify_totp(secret, "492039", now, 30, 6, ALG_SHA1, 1)
+#
+# verify_totp accepts codes from `window` steps either side of `now` (clock
+# skew); compare results in constant time. To stop a code being replayed,
+# store the last accepted counter (Otp.totp_counter) and reject any code at
+# or before it.
+
+from std.crypto.native import ALG_SHA1, ALG_SHA256, ALG_SHA512
+from std.crypto.native import trc_hmac, trc_ct_eq, _cn_alloc, _cn_take, _cn_md_size
+from std.crypto.random import SecureRandom
+from std.encoding.base32 import Base32
+from std.core.string import StringBuilder
+
+def _otp_counter_bytes(counter: int) -> str:
+    mut p = _cn_alloc(8)
+    mut i = 0
+    while i < 8:
+        unsafe: p.offset(i).write(((counter >> (56 - 8 * i)) & 255) as char)
+        i = i + 1
+    return _cn_take(p, 8)
+
+def _otp_byte(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+def _otp_pow10(d: int) -> int:
+    mut r = 1
+    mut i = 0
+    while i < d:
+        r = r * 10
+        i = i + 1
+    return r
+
+def _otp_alg_name(alg: int) -> str:
+    if alg == ALG_SHA256: return "SHA256"
+    if alg == ALG_SHA512: return "SHA512"
+    return "SHA1"
+
+# Percent-encode everything outside RFC 3986's unreserved set.
+def _otp_pct(s: str) -> str:
+    mut hx = "0123456789ABCDEF"
+    mut sb = StringBuilder.init(s.len() * 3 + 4)
+    mut i = 0
+    while i < s.len():
+        mut c = _otp_byte(s, i)
+        mut plain = (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 45 or c == 46 or c == 95 or c == 126
+        if plain:
+            sb.append_char(c)
+        else:
+            sb.append_char(37)
+            sb.append_char(_otp_byte(hx, c >> 4))
+            sb.append_char(_otp_byte(hx, c & 15))
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+pub class Otp:
+    _dummy: int
+
+extend Otp:
+    # HOTP value for `counter` as a zero-padded decimal string.
+    # digits: 6..10. alg: ALG_SHA1 (the RFC 4226 default), ALG_SHA256 or ALG_SHA512.
+    pub def hotp(secret: str, counter: int, digits: int, alg: int) throws str -> str:
+        if digits < 6 or digits > 10: raise("Otp: digits must be between 6 and 10")
+        if alg != ALG_SHA1 and alg != ALG_SHA256 and alg != ALG_SHA512:
+            raise("Otp: algorithm must be ALG_SHA1, ALG_SHA256 or ALG_SHA512")
+        if counter < 0: raise("Otp: counter must be non-negative")
+        mut msg = _otp_counter_bytes(counter)
+        mut sz = _cn_md_size(alg)
+        mut p = _cn_alloc(sz)
+        mut kp = secret as Pointer[char]
+        mut mp = msg as Pointer[char]
+        trc_hmac(alg, kp, secret.len(), mp, 8, p)
+        mut mac = _cn_take(p, sz)
+        mut off = _otp_byte(mac, sz - 1) & 15
+        mut bin = ((_otp_byte(mac, off) & 127) << 24) | (_otp_byte(mac, off + 1) << 16) | (_otp_byte(mac, off + 2) << 8) | _otp_byte(mac, off + 3)
+        mut code = bin % _otp_pow10(digits)
+        mut s = f"{code}"
+        while s.len() < digits:
+            s = "0" + s
+        return s
+
+    # The TOTP time-step counter for a Unix time (seconds) and step length.
+    pub def totp_counter(unix_time: int, step: int) -> int:
+        if step <= 0: return 0
+        return unix_time / step
+
+    # TOTP value at `unix_time` (RFC 6238: T0 = 0). step is usually 30.
+    pub def totp(secret: str, unix_time: int, step: int, digits: int, alg: int) throws str -> str:
+        if step <= 0: raise("Otp: step must be positive")
+        return Otp.hotp(secret, unix_time / step, digits, alg)?
+
+    # True if `code` matches the TOTP for any step within +/- window of now.
+    pub def verify_totp(secret: str, code: str, unix_time: int, step: int, digits: int, alg: int, window: int) -> bool:
+        if step <= 0 or code.len() != digits: return false
+        mut ctr = unix_time / step
+        mut found = false
+        mut d = 0 - window
+        while d <= window:
+            if ctr + d >= 0:
+                mut r: Result[str, str] = Otp.hotp(secret, ctr + d, digits, alg)
+                if r.is_ok:
+                    mut want = r.ok
+                    mut wp = want as Pointer[char]
+                    mut cp = code as Pointer[char]
+                    if trc_ct_eq(wp, digits, cp, digits) == 1: found = true
+            d = d + 1
+        return found
+
+    # True if `code` matches HOTP for a counter in [counter, counter+look_ahead].
+    # Returns the matching counter + 1 (the next counter to store) or -1.
+    pub def verify_hotp(secret: str, code: str, counter: int, digits: int, alg: int, look_ahead: int) -> int:
+        if code.len() != digits: return -1
+        mut c = counter
+        while c <= counter + look_ahead:
+            mut r: Result[str, str] = Otp.hotp(secret, c, digits, alg)
+            if r.is_ok:
+                mut want = r.ok
+                mut wp = want as Pointer[char]
+                mut cp = code as Pointer[char]
+                if trc_ct_eq(wp, digits, cp, digits) == 1: return c + 1
+            c = c + 1
+        return -1
+
+    # A fresh random secret of `nbytes` raw bytes (20 matches SHA-1's size).
+    pub def generate_secret(nbytes: int) throws str -> str:
+        if nbytes < 10: raise("Otp: secrets shorter than 10 bytes are too weak (RFC 4226 section 4)")
+        return SecureRandom.bytes(nbytes)?
+
+    # Unpadded Base32, as authenticator apps expect.
+    pub def secret_to_base32(secret: str) -> str:
+        return Base32.encode_nopad(secret)
+
+    # Parse a Base32 secret; spaces and dashes are ignored, case-insensitive.
+    pub def secret_from_base32(text: str) throws str -> str:
+        mut sb = StringBuilder.init(text.len() + 8)
+        mut i = 0
+        while i < text.len():
+            mut c = _otp_byte(text, i)
+            if c != 32 and c != 45 and c != 61: sb.append_char(c)
+            i = i + 1
+        mut clean = sb.to_owned()
+        sb.free()
+        return Base32.decode(clean)?
+
+    # otpauth://totp/ URI for QR codes (Key Uri Format). b32_secret is unpadded Base32.
+    pub def provisioning_uri(b32_secret: str, account: str, issuer: str, alg: int, digits: int, period: int) -> str:
+        mut label = _otp_pct(account)
+        mut iss = _otp_pct(issuer)
+        mut sb = StringBuilder.init(128)
+        sb.append("otpauth://totp/")
+        if issuer.len() > 0:
+            sb.append(iss)
+            sb.append(":")
+        sb.append(label)
+        sb.append("?secret=")
+        sb.append(b32_secret)
+        if issuer.len() > 0:
+            sb.append("&issuer=")
+            sb.append(iss)
+        sb.append("&algorithm=")
+        sb.append(_otp_alg_name(alg))
+        mut tail = f"&digits={digits}&period={period}"
+        sb.append(tail)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # otpauth://hotp/ URI with the initial counter.
+    pub def provisioning_uri_hotp(b32_secret: str, account: str, issuer: str, alg: int, digits: int, counter: int) -> str:
+        mut label = _otp_pct(account)
+        mut iss = _otp_pct(issuer)
+        mut sb = StringBuilder.init(128)
+        sb.append("otpauth://hotp/")
+        if issuer.len() > 0:
+            sb.append(iss)
+            sb.append(":")
+        sb.append(label)
+        sb.append("?secret=")
+        sb.append(b32_secret)
+        if issuer.len() > 0:
+            sb.append("&issuer=")
+            sb.append(iss)
+        sb.append("&algorithm=")
+        sb.append(_otp_alg_name(alg))
+        mut tail = f"&digits={digits}&counter={counter}"
+        sb.append(tail)
+        mut out = sb.to_owned()
+        sb.free()
+        return out

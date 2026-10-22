@@ -36,10 +36,12 @@ from std.string.str import Str
 from std.string.fmt import Fmt
 from std.core.map import Map
 from std.core.vec import Vec
+from std.net.tls import TlsServerConfig
 
 extern "C":
     def _tr_time_ms() -> int
     def _tr_c_free(ptr: Pointer[char])
+    def trc_tls_server_proxy(fd: int, cfg: Pointer[char], timeout_ms: int) -> int
 
 # Lowercase a single ASCII byte ('A'..'Z' -> 'a'..'z'); other bytes unchanged.
 # Used for case-insensitive header-name matching without allocating a lowercased
@@ -576,14 +578,14 @@ extend HttpConn:
         sb.free()
         HttpConn.set_resp_header(self, "Set-Cookie", cookie)
 
-    # Close the underlying TCP connection.
+    # Close the underlying TCP connection. The request and the queued response
+    # headers are reference-counted like the HttpConn itself and are released
+    # with it (freeing them here too released them twice once `conn` went out
+    # of scope -- a use-after-free in the documented accept/close loop).
     pub def close(self):
         if not self._closed:
             self._stream.close()
             self._closed = true
-            self.request.free_owned()
-            self._headers.free()
-            self._horder.free()
 
     # Reset this connection's per-request state to serve another request
     # (HTTP/1.1 keep-alive) on the same underlying TCP stream.
@@ -877,6 +879,9 @@ pub class HttpServer:
     pub _router:     HttpRouter
     pub _recv_buf:   int
     pub _max_body:   int   # reject request bodies larger than this many bytes (0 = unlimited)
+    pub _tls:        bool  # serve HTTPS (enable_tls)
+    pub _tls_cfg:    TlsServerConfig
+    pub _tls_timeout: int
 
 extend HttpServer:
     pub def init(host: str, port: int) -> HttpServer:
@@ -895,7 +900,37 @@ extend HttpServer:
         # while still reading typical request headers in a single recv(); the
         # StringBuilder grows automatically for larger requests/bodies.
         s._recv_buf  = 16384
+        s._tls       = false
+        s._tls_timeout = 30000
         return s
+
+    # Serve HTTPS: every accepted connection runs the TLS 1.3 server handshake
+    # with `cfg` (std.net.tls, no OpenSSL). Decryption happens on a background
+    # thread per connection that feeds a local socket, so handlers, keep-alive,
+    # chunked responses and SSE work exactly as over plain TCP. A client that
+    # fails the handshake shows up as a closed connection (empty request).
+    pub def enable_tls(self, cfg: TlsServerConfig):
+        self._tls = true
+        self._tls_cfg = cfg
+
+    # Handshake timeout for HTTPS connections, in milliseconds (default 30000).
+    pub def set_tls_timeout(self, ms: int):
+        self._tls_timeout = ms
+
+    pub def is_tls(self) -> bool:
+        return self._tls
+
+    # Accept the next connection as a stream (TLS already set up when enabled),
+    # for servers running their own keep-alive loop with read_next / read_next_into.
+    pub def accept_stream(self) -> TcpStream:
+        mut stream = self._listener.accept()
+        if self._tls and stream.fd >= 0:
+            mut plain = trc_tls_server_proxy(stream.fd, self._tls_cfg.handle(), self._tls_timeout)
+            if plain < 0:
+                stream.close()
+            stream.fd = plain
+            stream.connected = plain >= 0
+        return stream
 
     # Attach a pre-built router (optional — use server.router() to get the internal one).
     pub def set_router(self, router: HttpRouter):
@@ -1050,7 +1085,7 @@ extend HttpServer:
     # Block until the next client connects, read the full request, run the
     # router, and return an HttpConn ready for the handler to write a response.
     pub def accept(self) -> HttpConn:
-        mut stream = self._listener.accept()
+        mut stream = HttpServer.accept_stream(self)
         mut req    = HttpServer.read_next(self, stream)
         return HttpConn.init(req, stream)
 

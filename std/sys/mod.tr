@@ -11,6 +11,10 @@
 #   from std.sys.signal   import Signal
 #   from std.sys.dotenv   import Dotenv
 #   from std.sys.cron     import Cron, CronSchedule
+#   from std.sys.mmap        import MemoryMap            (not re-exported here:
+#   from std.sys.shm         import SharedMemory, NamedSemaphore   these link
+#   from std.sys.pipe        import Pipe, PipeEnd, Fifo            std/sys/
+#   from std.sys.unix_socket import UnixListener, UnixStream      ipc_native.c)
 
 from std.sys.process  import Process
 from std.sys.time     import Clock

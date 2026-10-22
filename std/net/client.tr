@@ -47,20 +47,25 @@
 # Limitations (honest list)
 #   * TCP connect is blocking with no connect timeout (the OS limit applies);
 #     timeouts only cover waiting for response bytes.
-#   * https:// goes through the runtime's _tr_tls_* layer (dlopen'd OpenSSL),
-#     which encrypts but DOES NOT VERIFY server certificates or host names.
-#     So https is refused unless you opt in with set_allow_unverified_tls(true).
-#     It also cannot honour read timeouts (blocking SSL_read). Not exercised by
-#     the offline test-suite (no network access there).
-#   * No compression: requests send "Accept-Encoding: identity".
-#   * No keep-alive / connection reuse, no proxies, no Expect: 100-continue,
+#   * https:// uses std.net.tls, the built-in TLS 1.3 client: the server's
+#     certificate chain and host name are verified against the system roots
+#     (plus any set_ca_pem() roots). set_allow_unverified_tls(true) turns
+#     verification off (testing only). TLS 1.2-only servers are not supported.
+#   * Compression: in-memory requests send "Accept-Encoding: gzip, deflate, br"
+#     and decode the body (reply.content_encoding says which); downloads and
+#     stream_get callbacks send "identity" and get the raw bytes.
+#     set_decompress(false) turns this off.
+#   * Proxies: set_proxy("socks5h://user:pw@host:1080" | "http://proxy:3128")
+#     or use_env_proxy() (HTTP_PROXY / HTTPS_PROXY / ALL_PROXY / NO_PROXY, see
+#     std.net.proxy). Plain http through an HTTP proxy uses absolute-form
+#     request targets and Proxy-Authorization; https goes through a CONNECT
+#     tunnel (or SOCKS) and TLS is negotiated end to end with the target.
+#   * No keep-alive / connection reuse, no Expect: 100-continue,
 #     no userinfo ("user:pw@host") or IPv6-literal URLs, IPv4 only (the
 #     runtime resolver is AF_INET).
-#   * In-memory bodies are Tauraro `str` (NUL-terminated): a body containing NUL
-#     bytes is cut at the first NUL. download_to_file is binary-safe (bytes go
-#     to disk from raw buffers); callbacks receive `str` chunks, so they are
-#     only NUL-safe for text.
-#   * Request bodies are `str` too (same NUL limit).
+#   * Bodies are binary-safe in every direction: reply.body, request bodies,
+#     stream_get chunks and downloads keep embedded NUL bytes (strs carry their
+#     length).
 
 from std.core.vec import Vec
 from std.core.string import StringBuilder
@@ -74,6 +79,12 @@ from std.net.url import Url
 from std.net.cookie import CookieJar
 from std.net.multipart import FormBuilder
 from std.net.multipart import MultipartBuilder
+from std.net.tls import trc_tls_connect, trc_tls_ok, trc_tls_error, trc_tls_set_timeout, trc_tls_write, trc_tls_read, trc_tls_close
+from std.crypto.x509 import TrustStore
+from std.compress.flate import Flate
+from std.compress.brotli import Brotli
+from std.net.proxy import ProxyUrl, Proxy, ProxyEnv, NoProxy
+from std.net.tls import trc_tls_client_fd
 
 extern "C":
     def _tr_c_malloc(size: int) -> Pointer[char]
@@ -86,10 +97,6 @@ extern "C":
     def _tr_c_fopen(path: str, mode: str) -> Pointer[char]
     def _tr_c_fclose(fp: Pointer[char]) -> int
     def _tr_c_fwrite(buf: Pointer[char], size: int, nmemb: int, fp: Pointer[char]) -> int
-    def _tr_tls_connect(host: str, port: int) -> Pointer[char]
-    def _tr_tls_send(handle: Pointer[char], data: str) -> int
-    def _tr_tls_recv(handle: Pointer[char], cap: int) -> str
-    def _tr_tls_close(handle: Pointer[char])
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -260,6 +267,7 @@ pub class HttpReply:
     pub bytes:     int          # body bytes received (also for streamed/downloaded bodies)
     pub chunked:   bool         # body used Transfer-Encoding: chunked
     pub saved_to:  str          # path written by download_to_file ("" otherwise)
+    pub content_encoding: str   # Content-Encoding that was decoded into body ("" = none)
     pub headers:   HeaderList
     pub history:   Vec[str]     # every URL requested, in order (last == url)
 
@@ -276,6 +284,7 @@ extend HttpReply:
         r.bytes     = 0
         r.chunked   = false
         r.saved_to  = ""
+        r.content_encoding = ""
         r.headers   = HeaderList.init()
         r.history   = Vec[str].init(4)
         return r
@@ -325,6 +334,18 @@ def _hdr_parse_len(v_in: str) -> int:
         if c < 48 or c > 57: return -1
         i = i + 1
     return Str.parse_int(v)
+
+# Decode a Content-Encoding (gzip / x-gzip / deflate / br). Raises
+# "unsupported" for other codings (the body is then returned undecoded).
+def _decode_body(body: str, enc: str, max_out: int) throws str -> str:
+    if Str.eq(enc, "gzip") or Str.eq(enc, "x-gzip"): return Flate.gunzip_max(body, max_out)?
+    if Str.eq(enc, "br"): return Brotli.decompress_max(body, max_out)?
+    if Str.eq(enc, "deflate"):
+        # RFC 9110 deflate is a zlib stream; some servers send raw DEFLATE
+        mut z: Result[str, str] = Flate.zlib_decompress_max(body, max_out)
+        if z.is_ok: return z.ok
+        return Flate.inflate_max(body, max_out)?
+    raise("unsupported")
 
 # ---------------------------------------------------------------------------
 # Raw growable byte buffer + body sink + chunked decoder
@@ -574,20 +595,92 @@ pub class ClientConn:
     pub is_tls: bool
     pub open:   bool
     pub nb:     bool
+    pub error:  str
 
 extend ClientConn:
+    # use_tls: TLS 1.3 via std.net.tls; `verify` checks the chain + host name
+    # against the system roots plus `ca_pem` (PEM text, may be "").
     pub def connect(host: str, port: int, use_tls: bool) -> ClientConn:
+        return ClientConn.connect_tls(host, port, use_tls, true, "", 30000)
+
+    pub def connect_tls(host: str, port: int, use_tls: bool, verify: bool, ca_pem: str, timeout_ms: int) -> ClientConn:
         mut c = ClientConn()
         c.is_tls = use_tls
         c.open   = false
         c.nb     = false
+        c.error  = ""
         c.tls    = 0 as Pointer[char]
         if use_tls:
-            c.tls = _tr_tls_connect(host, port)
-            c.open = (c.tls as usize) != 0
+            mut store = TrustStore.system()
+            mut own = false
+            if ca_pem.len() > 0:
+                store = TrustStore.system_copy()
+                store.add_pem(ca_pem)
+                own = true
+            mut hp = host as Pointer[char]
+            mut empty = ""
+            mut ap = empty as Pointer[char]
+            mut v = 0
+            if verify: v = 1
+            c.tls = trc_tls_connect(hp, host.len(), port, store._handle(), v, ap, timeout_ms)
+            if (c.tls as usize) != 0 and trc_tls_ok(c.tls) == 1:
+                c.open = true
+            else:
+                if (c.tls as usize) != 0:
+                    mut eb = _tr_c_malloc(301)
+                    mut en = trc_tls_error(c.tls, eb, 300)
+                    unsafe: eb.offset(en).write('\0')
+                    c.error = _tr_str_wrap_len(eb, en)
+                    trc_tls_close(c.tls)
+                    c.tls = 0 as Pointer[char]
+                else:
+                    c.error = "TLS: out of memory"
+            if own: store.dispose()
             return c
         c.tcp  = TcpStream.connect(host, port)
         c.open = c.tcp.is_connected()
+        return c
+
+    # Wrap an already-connected stream (e.g. a proxy tunnel). With use_tls
+    # the TLS handshake runs over it and the TLS layer takes ownership of
+    # the socket (closing the connection closes it).
+    pub def over_stream(tcp: TcpStream, host: str, use_tls: bool, verify: bool, ca_pem: str, timeout_ms: int) -> ClientConn:
+        mut c = ClientConn()
+        c.is_tls = use_tls
+        c.open   = false
+        c.nb     = false
+        c.error  = ""
+        c.tls    = 0 as Pointer[char]
+        c.tcp    = tcp
+        if not use_tls:
+            c.open = tcp.is_connected()
+            return c
+        mut store = TrustStore.system()
+        mut own = false
+        if ca_pem.len() > 0:
+            store = TrustStore.system_copy()
+            store.add_pem(ca_pem)
+            own = true
+        mut hp = host as Pointer[char]
+        mut empty = ""
+        mut ap = empty as Pointer[char]
+        mut v = 0
+        if verify: v = 1
+        c.tls = trc_tls_client_fd(tcp.fd, hp, host.len(), store._handle(), v, ap, timeout_ms, 1)
+        if (c.tls as usize) != 0 and trc_tls_ok(c.tls) == 1:
+            c.open = true
+        else:
+            if (c.tls as usize) != 0:
+                mut eb = _tr_c_malloc(301)
+                mut en = trc_tls_error(c.tls, eb, 300)
+                unsafe: eb.offset(en).write('\0')
+                c.error = _tr_str_wrap_len(eb, en)
+                trc_tls_close(c.tls)
+                c.tls = 0 as Pointer[char]
+            else:
+                c.error = "TLS: out of memory"
+                tcp.close()
+        if own: store.dispose()
         return c
 
     # Send the whole string (blocking). False on failure.
@@ -595,7 +688,8 @@ extend ClientConn:
         mut total = Str.len(data)
         if total == 0: return true
         if self.is_tls:
-            return _tr_tls_send(self.tls, data) > 0
+            mut dp = data as Pointer[char]
+            return trc_tls_write(self.tls, dp, total) >= 0
         mut sent = self.tcp.send(data)
         while sent >= 0 and sent < total:
             mut rest = Str.slice(data, sent, total)
@@ -609,10 +703,14 @@ extend ClientConn:
     pub def read_raw(self, buf: Pointer[char], cap: int, deadline: int) -> int:
         if not self.open: return 0
         if self.is_tls:
-            mut s = _tr_tls_recv(self.tls, cap)
-            mut n = Str.len(s)
-            if n <= 0: return 0
-            unsafe: _tr_c_memcpy(buf, s as Pointer[char], n)
+            mut wait = 0
+            if deadline > 0:
+                wait = deadline - Clock.now_ms()
+                if wait < 1: return -3
+            trc_tls_set_timeout(self.tls, wait)
+            mut n = trc_tls_read(self.tls, buf, cap)
+            if n == -2: return -3
+            if n < 0: return -1
             return n
         if not self.nb:
             self.tcp.set_nonblocking()
@@ -631,7 +729,7 @@ extend ClientConn:
     pub def close(self):
         if self.is_tls:
             if (self.tls as usize) != 0:
-                _tr_tls_close(self.tls)
+                trc_tls_close(self.tls)
                 self.tls = 0 as Pointer[char]
         else:
             self.tcp.close()
@@ -652,7 +750,12 @@ pub class HttpSession:
     pub jar:              CookieJar
     pub use_cookies:      bool
     pub allow_unverified_tls: bool
+    pub ca_pem:           str      # extra trusted roots (PEM) for https
     pub max_body_bytes:   int      # cap for in-memory bodies (0 = unlimited)
+    pub decompress:       bool     # ask for and decode gzip / deflate / br bodies (in-memory requests)
+    pub proxy:            str      # proxy URL for every request ("" = none)
+    pub no_proxy:         str      # NO_PROXY-style bypass list for `proxy`
+    pub env_proxy:        bool     # take proxies from the environment
 
 extend HttpSession:
     pub def init() -> HttpSession:
@@ -667,7 +770,12 @@ extend HttpSession:
         s.jar              = CookieJar.init()
         s.use_cookies      = false
         s.allow_unverified_tls = false
+        s.ca_pem           = ""
         s.max_body_bytes   = 67108864
+        s.decompress       = true
+        s.proxy            = ""
+        s.no_proxy         = ""
+        s.env_proxy        = false
         return s
 
     # -- configuration --
@@ -708,11 +816,65 @@ extend HttpSession:
     pub def set_rewrite_post_on_301_302(self, v: bool):
         self.rewrite_post_on_301_302 = v
 
+    # Send "Accept-Encoding: gzip, deflate, br" and decode compressed bodies
+    # (default on). Downloads and streaming callbacks always get the raw bytes.
+    pub def set_decompress(self, v: bool):
+        self.decompress = v
+
     pub def set_max_body_bytes(self, n: int):
         self.max_body_bytes = n
 
+    # Skip certificate verification for https (testing only).
     pub def set_allow_unverified_tls(self, v: bool):
         self.allow_unverified_tls = v
+
+    # Trust these PEM roots in addition to the system store (e.g. a private CA).
+    pub def set_ca_pem(self, pem: str):
+        self.ca_pem = pem
+
+    # Send every request through this proxy: "socks5://", "socks5h://",
+    # "socks4://", "socks4a://" or "http://" with optional "user:pw@"
+    # ("" turns it off). An invalid URL makes requests fail with its error.
+    pub def set_proxy(self, url: str):
+        self.proxy = url
+
+    # Hosts that bypass set_proxy() (NO_PROXY syntax: names, .suffixes,
+    # IPs, CIDRs, host:port, "*").
+    pub def set_no_proxy(self, list_text: str):
+        self.no_proxy = list_text
+
+    # Opt in to http_proxy / https_proxy / all_proxy / no_proxy (either
+    # case) from the environment, read at each request. An explicit
+    # set_proxy() takes precedence.
+    pub def use_env_proxy(self):
+        self.env_proxy = true
+
+    pub def clear_proxy(self):
+        self.proxy = ""
+        self.no_proxy = ""
+        self.env_proxy = false
+
+    # The proxy URL a request to `url` would use ("" = direct).
+    pub def proxy_for(self, url: str) -> str:
+        mut u = Url.parse(url)
+        return self._proxy_for(u)
+
+    def _proxy_for(self, url: Url) -> str:
+        if self.proxy.len() > 0:
+            mut np = NoProxy.parse(self.no_proxy)
+            if np.matches(url.host, url.port): return ""
+            return self.proxy
+        if self.env_proxy:
+            mut env = ProxyEnv.from_env()
+            return env.proxy_for(url.scheme, url.host, url.port)
+        return ""
+
+    def _proxy_stream(self, px: ProxyUrl, url: Url, direct: bool, timeout_ms: int) throws str -> TcpStream:
+        if direct:
+            mut d = Proxy.connect_direct(px, timeout_ms)?
+            return d
+        mut t = Proxy.connect(px, url.host, url.port, timeout_ms)?
+        return t
 
     # Turn the cookie jar on (a fresh one unless you set your own first).
     pub def enable_cookies(self):
@@ -805,8 +967,12 @@ extend HttpSession:
         return r
 
     # Build the request text for one hop.
-    def _build_request(self, method: str, url: Url, req_headers: HeaderList, body: str, ctype: str, strip_auth: bool) -> str:
+    def _build_request(self, method: str, url: Url, req_headers: HeaderList, body: str, ctype: str, strip_auth: bool, accept_enc: str, proxy_auth: str, absolute: bool) -> str:
         mut target = url.request_target()
+        if absolute:
+            # absolute-form (RFC 9112 3.2.2) for a request sent to an HTTP proxy
+            mut hh = url.host_header()
+            target = url.scheme + "://" + hh + target
         mut hosth  = url.host_header()
         mut sb = StringBuilder.init(512)
         sb.append(method)
@@ -814,7 +980,7 @@ extend HttpSession:
         sb.append(target)
         sb.append(" HTTP/1.1\r\nHost: ")
         sb.append(hosth)
-        sb.append("\r\nConnection: close\r\nAccept-Encoding: identity\r\n")
+        sb.append("\r\nConnection: close\r\n")
         # Effective headers: session defaults overridden by per-request ones.
         mut eff = self.headers.copy()
         mut i = 0
@@ -826,10 +992,14 @@ extend HttpSession:
         if not eff.has("User-Agent") and Str.len(self.user_agent) > 0:
             eff.set("User-Agent", self.user_agent)
         if not eff.has("Accept"): eff.set("Accept", "*/*")
+        if not eff.has("Accept-Encoding"): eff.set("Accept-Encoding", accept_enc)
         if strip_auth:
             eff.remove("Authorization")
             eff.remove("Proxy-Authorization")
             eff.remove("Cookie")
+        if absolute:
+            eff.remove("Proxy-Authorization")
+            if proxy_auth.len() > 0: eff.set("Proxy-Authorization", proxy_auth)
         # Cookies: explicit header first, then the jar's.
         if self.use_cookies:
             mut jar_hdr = self.jar.header_for(url.host, url.path, url.is_https())
@@ -922,13 +1092,36 @@ extend HttpSession:
         mut reply = HttpReply.init()
         reply.url = url.to_string()
         mut use_tls = url.is_https()
-        if use_tls and not self.allow_unverified_tls:
-            reply.error = "https refused: std TLS does not verify certificates (call set_allow_unverified_tls(true) to opt in)"
-            return reply
-        mut wire = self._build_request(method, url, req_headers, body, ctype, strip_auth)
-        mut conn = ClientConn.connect(url.host, url.port, use_tls)
+        mut accept_enc = "identity"
+        if self.decompress and mode == 0: accept_enc = "gzip, deflate, br"
+        mut ctimeout = idle_ms
+        if ctimeout <= 0: ctimeout = 30000
+        mut proxy_url = self._proxy_for(url)
+        mut absolute = false
+        mut proxy_auth = ""
+        mut conn = ClientConn()
+        if proxy_url.len() > 0:
+            mut pr: Result[ProxyUrl, str] = ProxyUrl.parse(proxy_url)
+            if pr.is_err:
+                reply.error = pr.err
+                return reply
+            mut px = pr.ok
+            if px.is_http() and not use_tls:
+                absolute = true
+                proxy_auth = px.basic_auth()
+            mut sr: Result[TcpStream, str] = self._proxy_stream(px, url, absolute, ctimeout)
+            if sr.is_err:
+                reply.error = sr.err
+                return reply
+            conn = ClientConn.over_stream(sr.ok, url.host, use_tls, not self.allow_unverified_tls, self.ca_pem, ctimeout)
+        else:
+            conn = ClientConn.connect_tls(url.host, url.port, use_tls, not self.allow_unverified_tls, self.ca_pem, ctimeout)
+        mut wire = self._build_request(method, url, req_headers, body, ctype, strip_auth, accept_enc, proxy_auth, absolute)
         if not conn.open:
-            reply.error = "connection failed to " + url.host + ":" + Fmt.int_to_str(url.port)
+            if conn.error.len() > 0:
+                reply.error = conn.error
+            else:
+                reply.error = "connection failed to " + url.host + ":" + Fmt.int_to_str(url.port)
             return reply
         if not conn.send_all(wire):
             conn.close()
@@ -1083,6 +1276,15 @@ extend HttpSession:
                 Fs.delete(part_path)
         reply.bytes = sink.total
         if sink.kind == 0: reply.body = sink.mem.to_str()
+        if sink.kind == 0 and failed == "" and self.decompress and reply.body.len() > 0:
+            mut denc = Str.to_lower(Str.trim(reply.headers.get("Content-Encoding")))
+            if Str.len(denc) > 0 and not Str.eq(denc, "identity"):
+                mut dr: Result[str, str] = _decode_body(reply.body, denc, self.max_body_bytes)
+                if dr.is_ok:
+                    reply.body = dr.ok
+                    reply.content_encoding = denc
+                elif not Str.eq(dr.err, "unsupported"):
+                    failed = "cannot decode Content-Encoding " + denc + ": " + dr.err
         sink.release()
         hb.release()
         _tr_c_free(rbuf)

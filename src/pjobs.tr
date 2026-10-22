@@ -1,0 +1,117 @@
+# @trusted: compiler systems module — runs the C compiler jobs in parallel
+# compiler/src/pjobs.tr - tiny worker pool for the build driver.
+#
+# The driver used to run every `cc -c module.c` one after another. These jobs
+# are independent, so run them on N worker threads, each calling system().
+# Results come back in submission order so diagnostics stay deterministic.
+#
+#   TAURARO_JOBS=N   worker count (default: CPU count, capped at 16; 1 = serial)
+
+from core.vec import Vec
+from std.core.io import read_file, write_file, file_exists
+
+extern "C":
+    def _tr_cpu_count() -> int
+    def _tr_getenv(name: str) -> str
+    def _tr_file_delete(path: str) -> int
+
+# Shared job table. Sendable fields only: an atomic ticket counter, the immutable
+# command text (one command per line) and a result-file prefix. Each worker takes the
+# next ticket, runs that command, and records its exit code in "<base><ticket>.rc".
+class PJob implements Sendable:
+    pub next:  Atomic[int]
+    pub total: Atomic[int]
+    pub blob:  str
+    pub base:  str
+    pub done:  Atomic[int]
+
+def pj_line(blob: str, idx: int) -> str:
+    mut lines = blob.split("\n")
+    return lines.get(idx)
+
+def pj_worker(job: Shared[PJob]):
+    while true:
+        mut i = job.next.add(1)
+        if i >= job.total.load(): break
+        mut rc = _tr_system(pj_line(job.blob, i))
+        write_file(job.base + i.to_str() + ".rc", rc.to_str())
+    job.done.add(1)
+
+def pj_parse_int(s: str) -> int:
+    mut n = 0
+    mut i = 0
+    if s.len() == 0: return 0 - 1
+    while i < s.len():
+        mut c = s.char_at(i)
+        if c < 48 or c > 57: return 0 - 1
+        n = n * 10 + (c - 48)
+        i = i + 1
+    return n
+
+# Worker count to use for `njobs` independent commands.
+pub def pjobs_workers(njobs: int) -> int:
+    mut w = _tr_cpu_count()
+    mut env = pj_parse_int(_tr_getenv("TAURARO_JOBS"))
+    if env > 0: w = env
+    if w > 16: w = 16
+    if w < 1: w = 1
+    if w > njobs: w = njobs
+    return w
+
+# Run every command (commands must not contain newlines); returns each command's exit
+# code, in order. `rcbase` is a path prefix for the per-job result files.
+pub def pjobs_run(cmds: Vec[str], workers: int, rcbase: str) -> Vec[int]:
+    mut rcs = Vec[int].init(cmds.len + 1)
+    mut k = 0
+    if workers <= 1 or cmds.len <= 1:
+        while k < cmds.len:
+            rcs.push(_tr_system(cmds.get(k)))
+            k = k + 1
+        return rcs
+    mut blob = ""
+    k = 0
+    while k < cmds.len:
+        if k > 0: blob = blob + "\n"
+        blob = blob + cmds.get(k)
+        k = k + 1
+    shared job = PJob()
+    job.next = Atomic.new(0)
+    job.total = Atomic.new(cmds.len)
+    job.blob = blob
+    job.base = rcbase
+    job.done = Atomic.new(0)
+    k = 0
+    while k < workers:
+        mut t: Thread = Thread.spawn(pj_worker, job)
+        k = k + 1
+    while job.done.load() < workers:
+        Thread.sleep(1)
+    k = 0
+    while k < cmds.len:
+        mut rf = rcbase + k.to_str() + ".rc"
+        if file_exists(rf):
+            rcs.push(pj_parse_int(read_file(rf)))
+            _tr_file_delete(rf)
+        else:
+            rcs.push(0 - 1)
+        k = k + 1
+    return rcs
+
+# C/C++ shim compiles queued by the driver so they can run in the same parallel
+# batch as the generated modules (one batch instead of two serial phases).
+pub class PendingShims:
+    pub cmds:     Vec[str]
+    pub names:    Vec[str]
+    pub logs:     Vec[str]
+    pub sidecars: Vec[str]
+    pub keys:     Vec[str]
+
+extend PendingShims:
+    pub def init() -> PendingShims:
+        mut p = PendingShims()
+        p.cmds = Vec[str].init(8)
+        p.names = Vec[str].init(8)
+        p.logs = Vec[str].init(8)
+        p.sidecars = Vec[str].init(8)
+        p.keys = Vec[str].init(8)
+        return p

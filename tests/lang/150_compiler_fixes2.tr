@@ -1,0 +1,102 @@
+# tests/lang/150_compiler_fixes2.tr
+# Regressions: user method named as_str, Dict[int,int].has of a stored 0,
+# str/class element retains, List[List[T]] indexing, nested f-string format specs.
+
+from std.test import TestRunner
+
+class Cell:
+    pub v: str
+
+extend Cell:
+    pub def as_str(self) -> str: return "cell:" + self.v
+
+class Box:
+    pub items: List[str]
+    pub name: str
+
+extend Box:
+    pub def at(self, i: int) -> str: return self.items[i]
+
+class St:
+    pub n: int
+
+def rows() -> List[List[int]]:
+    mut out: List[List[int]] = []
+    mut a: List[int] = [1, 2, 3]
+    mut b: List[int] = [4, 5]
+    out.append(a)
+    out.append(b)
+    return out
+
+def main():
+    mut t = TestRunner.init("150_compiler_fixes2")
+
+    t.section("user method named as_str")
+    mut c = Cell()
+    c.v = "x"
+    t.assert_eq_str(c.as_str(), "cell:x", "as_str on a user class")
+
+    t.section("Dict[int,int].has")
+    mut e: Dict[int, int] = {}
+    e[1] = 0
+    e[2] = 7
+    t.assert_true(e.has(1), "stored 0 is present")
+    t.assert_true(e.has(2), "stored 7 is present")
+    t.assert_true(not e.has(3), "missing key is absent")
+
+    t.section("str element retain")
+    mut b = Box()
+    b.items = []
+    mut k = 0
+    while k < 3:
+        b.items.append("item" + f"{k}")
+        k = k + 1
+    mut i = 0
+    while i < 200:
+        mut s = b.at(1)
+        b.name = b.items[2]
+        i = i + 1
+    t.assert_eq_str(b.at(0) + b.at(1) + b.items[2] + b.name, "item0item1item2item2", "returned and stored elements survive")
+
+    t.section("class local reassigned from an element")
+    mut xs: List[St] = []
+    mut j = 0
+    while j < 3:
+        mut q = St()
+        q.n = j
+        xs.append(q)
+        j = j + 1
+    mut tot = 0
+    i = 0
+    while i < 100:
+        mut st = St()
+        st = xs[i % 3]
+        tot = tot + st.n
+        i = i + 1
+    t.assert_eq_int(tot, 99, "sum over reassigned local")
+    mut out: List[St] = []
+    out.append(xs[0])
+    out.append(xs[1])
+    out[1] = out[0]
+    out[0] = out[1]
+    t.assert_eq_int(out[0].n + out[1].n, 0, "list slot copy keeps the object alive")
+
+    t.section("List[List[int]]")
+    mut r = rows()
+    t.assert_eq_int(len(r[0]) + len(r[1]), 5, "len of inner lists")
+    t.assert_eq_int(r[1][0], 4, "double index")
+    mut z: List[List[int]] = []
+    mut em: List[int] = []
+    z.append(em)
+    z[0].append(7)
+    z[0] = r[1]
+    t.assert_eq_int(z[0][1], 5, "inner list slot assignment")
+
+    t.section("nested f-string format spec")
+    mut x = 3.14159
+    mut p = 3
+    mut w = 8
+    t.assert_eq_str(f"{x:.{p}g}", "3.14", "precision from a variable")
+    t.assert_eq_str(f"[{x:>{w}.{p}f}]", "[   3.142]", "width and precision")
+    t.assert_eq_str(f"[{p:{w}d}]", "[       3]", "width on an int")
+    t.summary()

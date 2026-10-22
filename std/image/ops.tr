@@ -1,0 +1,173 @@
+# std.image.ops -- resizing, colour adjustments, filters and geometry for
+# std.image Images (RGBA8). Every function returns a NEW image (the input is
+# untouched) except paste/fill, which draw into their first argument. (The
+# resizer is resize_image: `resize` is a built-in name.)
+#
+# Resampling filters: FILTER_NEAREST, FILTER_BOX (area average),
+# FILTER_BILINEAR, FILTER_BICUBIC (Catmull-Rom), FILTER_LANCZOS (Lanczos-3).
+# Resizing works on premultiplied alpha, so transparent edges do not bleed.
+#
+# Usage:
+#   from std.image.ops import resize_image, thumbnail, gaussian_blur, grayscale, rotate90, FILTER_LANCZOS
+#   mut small = thumbnail(img, 256, 256, FILTER_LANCZOS)
+#   mut soft  = gaussian_blur(small, 1.5)
+#   mut bw    = grayscale(soft)
+
+from std.image.mod import Image
+from std.image.native import trc_img_resize, trc_img_point, trc_img_convolve, trc_img_blur, trc_img_unsharp, trc_img_sobel, trc_img_geom, trc_img_blend
+from std.image.native import _im_alloc, _im_bad, _tr_c_memcpy
+
+pub const FILTER_NEAREST = 0
+pub const FILTER_BOX = 1
+pub const FILTER_BILINEAR = 2
+pub const FILTER_BICUBIC = 3
+pub const FILTER_LANCZOS = 4
+
+def _same(img: Image) -> Image: return _im_alloc(img.width, img.height)
+
+pub def copy_image(img: Image) -> Image:
+    mut out = _same(img)
+    _tr_c_memcpy(out.pixels.data, img.pixels.data, img.width * img.height * 4)
+    return out
+
+# A w x h image filled with one colour.
+pub def solid(w: int, h: int, r: int, g: int, b: int, a: int) -> Image:
+    mut img = _im_alloc(w, h)
+    fill(img, r, g, b, a)
+    return img
+
+# Paint every pixel of img with one colour (in place).
+pub def fill(img: Image, r: int, g: int, b: int, a: int):
+    mut n = img.width * img.height
+    mut i = 0
+    mut p: Pointer[char] = img.pixels.data
+    unsafe:
+        while i < n:
+            p.offset(i * 4).write((r & 255) as char)
+            p.offset(i * 4 + 1).write((g & 255) as char)
+            p.offset(i * 4 + 2).write((b & 255) as char)
+            p.offset(i * 4 + 3).write((a & 255) as char)
+            i = i + 1
+
+# ── resampling ──────────────────────────────────────────────────────────────
+pub def resize_image(img: Image, w: int, h: int, filter: int) -> Image:
+    if w <= 0 or h <= 0 or img.width <= 0 or img.height <= 0: return _im_bad()
+    mut out = _im_alloc(w, h)
+    trc_img_resize(img.pixels.data, img.width, img.height, out.pixels.data, w, h, filter)
+    return out
+
+# Scale down (never up) to fit within max_w x max_h, keeping the aspect ratio.
+pub def thumbnail(img: Image, max_w: int, max_h: int, filter: int) -> Image:
+    if img.width <= max_w and img.height <= max_h: return copy_image(img)
+    mut w = max_w
+    mut h = (img.height * max_w + img.width / 2) / img.width
+    if h > max_h:
+        h = max_h
+        w = (img.width * max_h + img.height / 2) / img.height
+    if w < 1: w = 1
+    if h < 1: h = 1
+    return resize_image(img, w, h, filter)
+
+# Scale by a factor (e.g. 0.5 or 2.0).
+pub def scale(img: Image, factor: float, filter: int) -> Image:
+    mut w = ((img.width as float) * factor + 0.5) as int
+    mut h = ((img.height as float) * factor + 0.5) as int
+    if w < 1: w = 1
+    if h < 1: h = 1
+    return resize_image(img, w, h, filter)
+
+# ── colour ──────────────────────────────────────────────────────────────────
+def _point(img: Image, op: int, p: float) -> Image:
+    mut out = _same(img)
+    trc_img_point(op, img.pixels.data, img.width * img.height, out.pixels.data, p)
+    return out
+
+pub def grayscale(img: Image) -> Image: return _point(img, 0, 0.0)
+pub def invert(img: Image) -> Image: return _point(img, 1, 0.0)
+# Add `delta` (-255..255) to every channel.
+pub def brightness(img: Image, delta: float) -> Image: return _point(img, 2, delta)
+# Scale distance from mid-grey (1.0 = unchanged, >1 more contrast).
+pub def contrast(img: Image, factor: float) -> Image: return _point(img, 3, factor)
+pub def gamma(img: Image, g: float) -> Image: return _point(img, 4, g)
+# 0 = grey, 1 = unchanged, >1 more saturated.
+pub def saturation(img: Image, factor: float) -> Image: return _point(img, 5, factor)
+pub def sepia(img: Image) -> Image: return _point(img, 6, 0.0)
+# Black/white at a luminance threshold (0..255).
+pub def threshold(img: Image, level: float) -> Image: return _point(img, 7, level)
+# Multiply alpha by `factor`.
+pub def opacity(img: Image, factor: float) -> Image: return _point(img, 8, factor)
+pub def posterize(img: Image, levels: int) -> Image: return _point(img, 9, levels as float)
+
+# ── filters ─────────────────────────────────────────────────────────────────
+pub def gaussian_blur(img: Image, sigma: float) -> Image:
+    mut out = _same(img)
+    trc_img_blur(img.pixels.data, img.width, img.height, out.pixels.data, 0, sigma)
+    return out
+
+pub def box_blur(img: Image, radius: int) -> Image:
+    mut out = _same(img)
+    trc_img_blur(img.pixels.data, img.width, img.height, out.pixels.data, 1, radius as float)
+    return out
+
+# Unsharp mask: sharpen by `amount` (e.g. 1.0) with a Gaussian of `sigma`,
+# ignoring differences below `threshold` (0..255).
+pub def unsharp_mask(img: Image, sigma: float, amount: float, threshold: float) -> Image:
+    mut out = _same(img)
+    trc_img_unsharp(img.pixels.data, img.width, img.height, out.pixels.data, sigma, amount, threshold)
+    return out
+
+pub def sharpen(img: Image) -> Image: return unsharp_mask(img, 1.0, 1.0, 0.0)
+
+# Sobel edge magnitude (grey image).
+pub def edges(img: Image) -> Image:
+    mut out = _same(img)
+    trc_img_sobel(img.pixels.data, img.width, img.height, out.pixels.data)
+    return out
+
+# Convolve RGB with a size x size kernel (row-major), then divide and add bias.
+pub def convolve(img: Image, kernel: List[float], size: int, divisor: float, bias: float) throws str -> Image:
+    if size < 1 or size % 2 == 0 or len(kernel) != size * size: raise("convolve: kernel must be size x size with an odd size")
+    mut out = _same(img)
+    mut kp = kernel as Pointer[float]
+    trc_img_convolve(img.pixels.data, img.width, img.height, out.pixels.data, kp, size, divisor, bias)
+    return out
+
+pub def emboss(img: Image) -> Image:
+    mut k: List[float] = [-2.0, -1.0, 0.0, -1.0, 1.0, 1.0, 0.0, 1.0, 2.0]
+    mut r: Result[Image, str] = convolve(img, k, 3, 1.0, 0.0)
+    return r.ok
+
+# ── geometry ────────────────────────────────────────────────────────────────
+def _geom(img: Image, op: int, w: int, h: int) -> Image:
+    mut out = _im_alloc(w, h)
+    trc_img_geom(op, img.pixels.data, img.width, img.height, out.pixels.data, 0, 0, 0, 0)
+    return out
+
+pub def flip_horizontal(img: Image) -> Image: return _geom(img, 0, img.width, img.height)
+pub def flip_vertical(img: Image) -> Image: return _geom(img, 1, img.width, img.height)
+# Clockwise rotations.
+pub def rotate90(img: Image) -> Image: return _geom(img, 2, img.height, img.width)
+pub def rotate180(img: Image) -> Image: return _geom(img, 3, img.width, img.height)
+pub def rotate270(img: Image) -> Image: return _geom(img, 4, img.height, img.width)
+pub def transpose_image(img: Image) -> Image: return _geom(img, 5, img.height, img.width)
+
+pub def crop(img: Image, x: int, y: int, w: int, h: int) throws str -> Image:
+    if x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > img.width or y + h > img.height: raise("crop: rectangle outside the image")
+    mut out = _im_alloc(w, h)
+    trc_img_geom(6, img.pixels.data, img.width, img.height, out.pixels.data, x, y, w, h)
+    return out
+
+# Undo an EXIF orientation (1..8) so the image displays upright.
+pub def apply_orientation(img: Image, orientation: int) -> Image:
+    if orientation == 2: return flip_horizontal(img)
+    if orientation == 3: return rotate180(img)
+    if orientation == 4: return flip_vertical(img)
+    if orientation == 5: return transpose_image(img)
+    if orientation == 6: return rotate90(img)
+    if orientation == 7: return rotate270(flip_horizontal(img))
+    if orientation == 8: return rotate270(img)
+    return copy_image(img)
+
+# Alpha-composite `top` onto `base` at (x, y) with an extra opacity (in place).
+pub def paste(base: Image, top: Image, x: int, y: int, opacity: float):
+    trc_img_blend(base.pixels.data, base.width, base.height, top.pixels.data, top.width, top.height, x, y, opacity)

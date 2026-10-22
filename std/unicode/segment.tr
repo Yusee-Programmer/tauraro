@@ -1,0 +1,77 @@
+# std.unicode.segment -- text segmentation (UAX #29) and display width.
+#
+# Extended grapheme clusters (user-perceived characters, including emoji ZWJ
+# sequences, flag pairs, Hangul syllables and the Indic conjunct rule GB9c),
+# word boundaries and sentence boundaries, following the Unicode 16 rules;
+# the implementation passes every case of the official GraphemeBreakTest,
+# WordBreakTest and SentenceBreakTest files.
+#
+# display_width() measures the columns a string occupies in a terminal:
+# East Asian Wide/Fullwidth characters and emoji take 2 columns, combining
+# marks, format and control characters take 0, and every grapheme cluster
+# is measured as a unit (so "👩‍💻" or a flag is 2, "é" decomposed is 1).
+#
+# Usage:
+#   from std.unicode.segment import graphemes, grapheme_count, words, display_width
+#   graphemes("a👍🏽🇳🇬")              # ["a", "👍🏽", "🇳🇬"]
+#   words("Hello, world! 42")          # ["Hello", "world", "42"]
+#   display_width("日本語")             # 6
+
+from std.unicode.native import uni_segments, uni_segment_offsets, uni_sub, trc_uni_grapheme_count, trc_uni_width, trc_uni_width_prefix, trc_uni_char_width, UNI_SEG_GRAPHEME, UNI_SEG_WORD, UNI_SEG_WORD_ONLY, UNI_SEG_SENTENCE
+
+# Extended grapheme clusters of `s`.
+pub def graphemes(s: str) -> List[str]: return uni_segments(UNI_SEG_GRAPHEME, s)
+
+# Number of extended grapheme clusters (user-perceived characters).
+pub def grapheme_count(s: str) -> int:
+    mut sp = s as Pointer[char]
+    return trc_uni_grapheme_count(sp, s.len())
+
+# Byte offsets [start0, end0, start1, end1, ...] of the grapheme clusters.
+pub def grapheme_offsets(s: str) -> List[int]: return uni_segment_offsets(UNI_SEG_GRAPHEME, s)
+
+# Every word-boundary segment of `s`: words, spaces and punctuation alike
+# (concatenating them gives back `s`).
+pub def word_segments(s: str) -> List[str]: return uni_segments(UNI_SEG_WORD, s)
+
+# The words of `s`: word-boundary segments that contain a letter or digit
+# ("can't", "3.14", "日本" style runs stay whole; spaces/punctuation dropped).
+pub def words(s: str) -> List[str]: return uni_segments(UNI_SEG_WORD_ONLY, s)
+
+# Byte offsets [start0, end0, ...] of the word-boundary segments.
+pub def word_offsets(s: str) -> List[int]: return uni_segment_offsets(UNI_SEG_WORD, s)
+
+# Sentences of `s` (each keeps its trailing spaces / line break).
+pub def sentences(s: str) -> List[str]: return uni_segments(UNI_SEG_SENTENCE, s)
+
+# Byte offsets [start0, end0, ...] of the sentences.
+pub def sentence_offsets(s: str) -> List[int]: return uni_segment_offsets(UNI_SEG_SENTENCE, s)
+
+# Terminal columns occupied by `s`.
+pub def display_width(s: str) -> int:
+    mut sp = s as Pointer[char]
+    return trc_uni_width(sp, s.len())
+
+# Columns occupied by one code point on its own: 0, 1 or 2.
+pub def char_width(cp: int) -> int: return trc_uni_char_width(cp)
+
+# Longest prefix of whole grapheme clusters that fits in `width` columns.
+pub def truncate_width(s: str, width: int) -> str:
+    if width <= 0: return ""
+    mut sp = s as Pointer[char]
+    mut n = trc_uni_width_prefix(sp, s.len(), width)
+    if n == s.len(): return s
+    return uni_sub(s, 0, n)
+
+# Truncate to `width` columns, ending with `ellipsis` when anything was cut.
+pub def truncate_width_ellipsis(s: str, width: int, ellipsis: str) -> str:
+    if display_width(s) <= width: return s
+    mut room = width - display_width(ellipsis)
+    if room <= 0: return truncate_width(ellipsis, width)
+    return truncate_width(s, room) + ellipsis
+
+# Pad `s` with spaces on the right to `width` columns (no truncation).
+pub def pad_width(s: str, width: int) -> str:
+    mut w = display_width(s)
+    if w >= width: return s
+    return s + " ".repeat(width - w)

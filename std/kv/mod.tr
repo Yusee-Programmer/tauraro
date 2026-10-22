@@ -1,0 +1,877 @@
+# std.kv -- an embedded, crash-safe key-value store (Bitcask-style).
+#
+# One data file holds an append-only log of CRC-protected records; an
+# in-memory index (hash table + a skip list for sorted keys) maps each live
+# key to the position of its newest value. Reads are one pread; writes are one
+# append. Opening rebuilds the index from the log, or from the hint file
+# (`<path>.hint`, written on close and after compaction) plus a scan of
+# whatever was appended after it.
+#
+#   from std.kv import KvStore, KvOptions, KvBatch
+#
+#   mut st = KvStore.open("app.kv", KvOptions.defaults())?
+#   st.put("user:1", "alice")?
+#   st.put_ttl("session:9", "tok", 60000)?        # expires in 60 s
+#   print(st.get("user:1")?)                       # alice
+#   for k in st.iter_prefix("user:")?: print(k)    # sorted keys
+#   mut b = KvBatch.init()
+#   b.put("a", "1"); b.put("b", "2"); b.delete("user:1")
+#   st.write_batch(b)?                             # all or nothing
+#   st.compact()?
+#   st.close()
+#
+# Record layout (little endian):  crc32 u32 | type u8 | expiry u64 (ms since
+# the epoch, 0 = never) | klen u32 | vlen u32 | key | value.  type 1 = put,
+# 2 = delete (tombstone), 3 = batch: the value is a sequence of put / delete
+# bodies (the same layout minus the CRC) covered by the batch record's single
+# CRC, which makes a batch atomic.  The file starts with the 8 bytes
+# "TAURAKV1" and a u64 generation id that ties a hint file to its data file.
+#
+# Crash safety: a record is only trusted when its CRC matches. On open the
+# log is scanned until the first record that is short, malformed or fails its
+# CRC; that record and everything after it is discarded (the file is
+# truncated back to the last good record), so a write that was cut off
+# anywhere never shows up half-applied. Compaction writes a new file next to
+# the old one and swaps it in with an atomic rename.
+#
+# Multi-process safety: the store takes an exclusive flock / LockFileEx lock on
+# `<path>.lock` for as long as it is open; a second open (same or another
+# process) fails with "locked". The lock file is left behind on purpose.
+#
+# Keys are non-empty byte strings without NUL bytes, at most max_key_size
+# long; values are arbitrary bytes. See docs/std/kv.md for limits.
+
+from std.kv.native import trc_kv_close, trc_kv_size, trc_kv_sync, trc_kv_truncate, trc_kv_unlock, trc_kv_now_ms, trc_kv_nanos, trc_kv_sync_dir
+from std.kv.native import kv_pread_str, kv_pwrite_str, kv_crc32, kv_path_exists, kv_unlink, kv_replace, kv_open_fd, kv_lock
+from std.collections.skiplist import SkipList
+from std.core.string import StringBuilder
+from std.io.file import File
+
+pub const KV_SYNC_ALWAYS = 0
+pub const KV_SYNC_INTERVAL = 1
+pub const KV_SYNC_NEVER = 2
+
+const KV_HDR = 16
+const KV_REC_FIXED = 21
+const KV_BODY_FIXED = 17
+const KV_HARD_KEY = 1048576
+const KV_HARD_VALUE = 1073741824
+
+pub class KvOptions:
+    pub sync_policy: int        # KV_SYNC_ALWAYS / KV_SYNC_INTERVAL / KV_SYNC_NEVER
+    pub sync_interval_ms: int   # for KV_SYNC_INTERVAL
+    pub max_key_size: int       # bytes, default 1024
+    pub max_value_size: int     # bytes, default 64 MiB
+    pub max_file_size: int      # 0 = unlimited; puts past it fail with "store full"
+    pub create: bool            # create the file when missing (default true)
+    pub use_hint: bool          # read and write the hint file (default true)
+    pub truncate_corrupt: bool  # repair a bad tail by truncating (default true)
+    pub lock: bool              # take the lock file (default true)
+
+extend KvOptions:
+    pub def defaults() -> KvOptions:
+        mut o = KvOptions()
+        o.sync_policy = KV_SYNC_ALWAYS
+        o.sync_interval_ms = 1000
+        o.max_key_size = 1024
+        o.max_value_size = 67108864
+        o.max_file_size = 0
+        o.create = true
+        o.use_hint = true
+        o.truncate_corrupt = true
+        o.lock = true
+        return o
+
+pub class KvStats:
+    pub keys: int               # live keys (expired-but-unreaped ones included)
+    pub file_size: int          # bytes in the data file
+    pub garbage_bytes: int      # bytes held by overwritten / deleted / expired records
+    pub records: int            # records seen or written since open
+    pub discarded_bytes: int    # corrupt tail bytes dropped by recovery at open
+    pub puts: int
+    pub gets: int
+    pub deletes: int
+    pub syncs: int
+    pub compactions: int
+    pub hint_loaded: bool       # the index came from the hint file
+
+extend KvStats:
+    pub def garbage_ratio(self) -> float:
+        if self.file_size <= 0: return 0.0
+        return (self.garbage_bytes as float) / (self.file_size as float)
+
+pub class KvPair:
+    pub key: str
+    pub value: str
+
+# A group of writes applied atomically by KvStore.write_batch.
+pub class KvBatch:
+    pub kinds: List[int]        # 1 = put, 2 = delete
+    pub keys: List[str]
+    pub vals: List[str]
+    pub ttls: List[int]         # ms, 0 = none
+
+extend KvBatch:
+    pub def init() -> KvBatch:
+        mut b = KvBatch()
+        b.kinds = []
+        b.keys = []
+        b.vals = []
+        b.ttls = []
+        return b
+
+    pub def put(self, key: str, value: str):
+        self.kinds.append(1)
+        self.keys.append(key)
+        self.vals.append(value)
+        self.ttls.append(0)
+
+    pub def put_ttl(self, key: str, value: str, ttl_ms: int):
+        self.kinds.append(1)
+        self.keys.append(key)
+        self.vals.append(value)
+        self.ttls.append(ttl_ms)
+
+    pub def delete(self, key: str):
+        self.kinds.append(2)
+        self.keys.append(key)
+        self.vals.append("")
+        self.ttls.append(0)
+
+    pub def len(self) -> int:
+        return self.kinds.len()
+
+    pub def clear(self):
+        self.kinds = []
+        self.keys = []
+        self.vals = []
+        self.ttls = []
+
+# ─── little-endian helpers ───────────────────────────────────────────────────
+
+def _w32(sb: StringBuilder, v: int):
+    sb.append_char(v & 255)
+    sb.append_char((v >> 8) & 255)
+    sb.append_char((v >> 16) & 255)
+    sb.append_char((v >> 24) & 255)
+
+def _w64(sb: StringBuilder, v: int):
+    _w32(sb, v & 4294967295)
+    _w32(sb, (v >> 32) & 4294967295)
+
+def _r8(s: str, i: int) -> int:
+    return s.char_at(i) & 255
+
+def _r32(s: str, i: int) -> int:
+    return _r8(s, i) | (_r8(s, i + 1) << 8) | (_r8(s, i + 2) << 16) | (_r8(s, i + 3) << 24)
+
+def _r64(s: str, i: int) -> int:
+    return _r32(s, i) | (_r32(s, i + 4) << 32)
+
+# One put / delete body: type | expiry | klen | vlen | key | value.
+def _body(kind: int, expiry: int, key: str, value: str) -> str:
+    mut sb = StringBuilder.init(KV_BODY_FIXED + key.len() + value.len() + 8)
+    sb.append_char(kind)
+    _w64(sb, expiry)
+    _w32(sb, key.len())
+    _w32(sb, value.len())
+    sb.append(key)
+    sb.append(value)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# CRC prefix + body.
+def _record(body: str) -> str:
+    mut sb = StringBuilder.init(body.len() + 8)
+    _w32(sb, kv_crc32(body))
+    sb.append(body)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def _prefix_end(prefix: str) -> str:
+    # Smallest string greater than every string starting with `prefix`, or ""
+    # when there is none (empty prefix or all 0xFF bytes).
+    mut n = prefix.len()
+    while n > 0:
+        mut c = prefix.char_at(n - 1) & 255
+        if c < 255:
+            return prefix.slice(0, n - 1) + _byte_str(c + 1)
+        n = n - 1
+    return ""
+
+def _byte_str(c: int) -> str:
+    mut sb = StringBuilder.init(4)
+    sb.append_char(c)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# ─── the store ───────────────────────────────────────────────────────────────
+
+pub class KvStore:
+    pub path: str
+    pub opts: KvOptions
+    fd: int
+    lock_h: int
+    size: int                   # end of the log == next append offset
+    generation: int
+    closed: bool
+    index: Dict[str, int]       # key -> slot
+    order: SkipList[str, int]   # sorted keys (key -> slot)
+    valoff: List[int]
+    vlen: List[int]
+    expiry: List[int]
+    rsize: List[int]
+    free_slots: List[int]
+    garbage: int
+    records: int
+    discarded: int
+    last_sync: int
+    clock_override: int         # -1 = real clock
+    sbuf: str                   # read window used while scanning
+    sbase: int
+    n_puts: int
+    n_gets: int
+    n_deletes: int
+    n_syncs: int
+    n_compactions: int
+    hint_loaded: bool
+
+extend KvStore:
+    # Open (and recover) the store at `path`.
+    pub def open(path: str, opts: KvOptions) throws str -> KvStore:
+        mut st = KvStore()
+        st.path = path
+        st.opts = opts
+        st.fd = -1
+        st.lock_h = -1
+        st.size = 0
+        st.generation = 0
+        st.closed = true
+        st.index = {}
+        st.order = SkipList[str, int].init()
+        st.valoff = []
+        st.vlen = []
+        st.expiry = []
+        st.rsize = []
+        st.free_slots = []
+        st.garbage = 0
+        st.records = 0
+        st.discarded = 0
+        st.last_sync = 0
+        st.clock_override = -1
+        st.sbuf = ""
+        st.sbase = 0
+        st.n_puts = 0
+        st.n_gets = 0
+        st.n_deletes = 0
+        st.n_syncs = 0
+        st.n_compactions = 0
+        st.hint_loaded = false
+        if path.len() == 0: raise("kv: empty path")
+        if opts.lock:
+            mut h = kv_lock(path + ".lock")
+            if h == -2: raise(f"kv: '{path}' is locked by another process or store handle")
+            if h < 0: raise(f"kv: cannot create lock file '{path}.lock'")
+            st.lock_h = h
+        mut existed = kv_path_exists(path)
+        if not existed and not opts.create:
+            st._release_lock()
+            raise(f"kv: '{path}' does not exist")
+        st.fd = kv_open_fd(path, opts.create)
+        if st.fd < 0:
+            st._release_lock()
+            raise(f"kv: cannot open '{path}'")
+        st.closed = false
+        mut r: Result[bool, str] = st._recover()
+        if r.is_err:
+            st._abort()
+            raise(r.err)
+        st.last_sync = st._now()
+        return st
+
+    def _release_lock(self):
+        if self.lock_h >= 0:
+            trc_kv_unlock(self.lock_h)
+            self.lock_h = -1
+
+    # Drop the descriptors without writing anything (failed open).
+    def _abort(self):
+        if self.fd >= 0:
+            trc_kv_close(self.fd)
+            self.fd = -1
+        self.closed = true
+        self._release_lock()
+
+    def _now(self) -> int:
+        if self.clock_override >= 0: return self.clock_override
+        return trc_kv_now_ms()
+
+    # Test hook: freeze the store's clock at `ms` (milliseconds since the
+    # epoch); pass -1 to go back to the real clock.
+    pub def set_clock(self, ms: int):
+        self.clock_override = ms
+        if ms >= 0 and self.last_sync > ms: self.last_sync = ms
+
+    def _check_open(self) throws str:
+        if self.closed: raise("kv: store is closed")
+
+    # ── index bookkeeping ───────────────────────────────────────────────────
+
+    def _set_entry(self, key: str, voff: int, vl: int, exp: int, rsz: int):
+        if self.index.has(key):
+            mut s = self.index.get(key)
+            self.garbage = self.garbage + self.rsize[s]
+            self.valoff[s] = voff
+            self.vlen[s] = vl
+            self.expiry[s] = exp
+            self.rsize[s] = rsz
+            return
+        mut slot = 0
+        if self.free_slots.len() > 0:
+            slot = self.free_slots.pop()
+            self.valoff[slot] = voff
+            self.vlen[slot] = vl
+            self.expiry[slot] = exp
+            self.rsize[slot] = rsz
+        else:
+            slot = self.valoff.len()
+            self.valoff.append(voff)
+            self.vlen.append(vl)
+            self.expiry.append(exp)
+            self.rsize.append(rsz)
+        self.index.set(key, slot)
+        self.order.insert(key, slot)
+
+    def _remove_key(self, key: str):
+        if self.index.has(key):
+            mut s = self.index.get(key)
+            self.garbage = self.garbage + self.rsize[s]
+            self.free_slots.append(s)
+            self.index.remove(key)
+            self.order.remove(key)
+
+    def _clear_index(self):
+        self.index = {}
+        self.order = SkipList[str, int].init()
+        self.valoff = []
+        self.vlen = []
+        self.expiry = []
+        self.rsize = []
+        self.free_slots = []
+        self.garbage = 0
+        self.records = 0
+
+    # Apply one put/delete body that sits at absolute file offset `bo`.
+    def _apply_body(self, body: str, p: int, bo: int, now: int):
+        mut kind = _r8(body, p)
+        mut exp = _r64(body, p + 1)
+        mut kl = _r32(body, p + 9)
+        mut vl = _r32(body, p + 13)
+        mut key = body.slice(p + KV_BODY_FIXED, p + KV_BODY_FIXED + kl)
+        mut rsz = KV_BODY_FIXED + kl + vl
+        self.records = self.records + 1
+        if kind == 1:
+            if exp != 0 and exp <= now:
+                self._remove_key(key)
+                self.garbage = self.garbage + rsz
+            else:
+                self._set_entry(key, bo + p + KV_BODY_FIXED + kl, vl, exp, rsz)
+        else:
+            self._remove_key(key)
+            self.garbage = self.garbage + rsz
+
+    # ── recovery ────────────────────────────────────────────────────────────
+
+    def _sread(self, off: int, n: int, fsize: int) -> str:
+        if off >= self.sbase and off + n <= self.sbase + self.sbuf.len():
+            return self.sbuf.slice(off - self.sbase, off - self.sbase + n)
+        mut want = n
+        if want < 1048576: want = 1048576
+        if off + want > fsize: want = fsize - off
+        self.sbuf = kv_pread_str(self.fd, off, want)
+        self.sbase = off
+        if self.sbuf.len() < n: return self.sbuf
+        return self.sbuf.slice(0, n)
+
+    # Scan records from `start`; returns the offset just past the last good
+    # record. With apply=false the index is left alone (used by verify()).
+    def _scan(self, start: int, apply: bool) -> int:
+        mut fsize = trc_kv_size(self.fd)
+        mut off = start
+        mut now = self._now()
+        self.sbuf = ""
+        self.sbase = 0
+        while off + KV_REC_FIXED <= fsize:
+            mut head = self._sread(off, KV_REC_FIXED, fsize)
+            if head.len() < KV_REC_FIXED: break
+            mut kind = _r8(head, 4)
+            mut kl = _r32(head, 13)
+            mut vl = _r32(head, 17)
+            if kind < 1 or kind > 3: break
+            if kl > KV_HARD_KEY or vl > KV_HARD_VALUE: break
+            if kind == 3 and kl != 0: break
+            if kind == 2 and vl != 0: break
+            mut total = KV_REC_FIXED + kl + vl
+            if off + total > fsize: break
+            mut rec = self._sread(off, total, fsize)
+            if rec.len() < total: break
+            mut body = rec.slice(4, total)
+            if kv_crc32(body) != _r32(rec, 0): break
+            if kind == 3:
+                # validate the whole payload before applying any of it
+                mut payload = body.slice(KV_BODY_FIXED, body.len())
+                mut p = 0
+                mut sound = true
+                while p < payload.len():
+                    if p + KV_BODY_FIXED > payload.len():
+                        sound = false
+                        break
+                    mut sk = _r8(payload, p)
+                    mut skl = _r32(payload, p + 9)
+                    mut svl = _r32(payload, p + 13)
+                    if (sk != 1 and sk != 2) or p + KV_BODY_FIXED + skl + svl > payload.len():
+                        sound = false
+                        break
+                    p = p + KV_BODY_FIXED + skl + svl
+                if not sound: break
+                if apply:
+                    self.garbage = self.garbage + KV_REC_FIXED
+                    p = 0
+                    while p < payload.len():
+                        mut skl2 = _r32(payload, p + 9)
+                        mut svl2 = _r32(payload, p + 13)
+                        self._apply_body(payload, p, off + 4 + KV_BODY_FIXED, now)
+                        p = p + KV_BODY_FIXED + skl2 + svl2
+            elif apply:
+                self._apply_body(body, 0, off + 4, now)
+            off = off + total
+        return off
+
+    def _write_header(self) throws str:
+        mut sb = StringBuilder.init(KV_HDR + 8)
+        sb.append("TAURAKV1")
+        _w64(sb, self.generation)
+        mut h = sb.to_owned()
+        sb.free()
+        if kv_pwrite_str(self.fd, 0, h) < 0: raise(f"kv: cannot write to '{self.path}'")
+        self.size = KV_HDR
+
+    def _new_generation() -> int:
+        return (trc_kv_nanos() ^ (trc_kv_now_ms() * 1000003)) & 4611686018427387903
+
+    def _recover(self) throws str -> bool:
+        if kv_path_exists(self.path + ".compact"): kv_unlink(self.path + ".compact")
+        mut fsize = trc_kv_size(self.fd)
+        if fsize < 0: raise(f"kv: cannot stat '{self.path}'")
+        if fsize < KV_HDR:
+            # new file, or creation was cut short before the header landed
+            if trc_kv_truncate(self.fd, 0) != 0: raise(f"kv: cannot truncate '{self.path}'")
+            self.generation = KvStore._new_generation()
+            self._write_header()?
+            trc_kv_sync(self.fd)
+            return true
+        mut h = kv_pread_str(self.fd, 0, KV_HDR)
+        if h.slice(0, 8) != "TAURAKV1": raise(f"kv: '{self.path}' is not a std.kv store (bad magic)")
+        self.generation = _r64(h, 8)
+        mut start = KV_HDR
+        if self.opts.use_hint:
+            mut covered = self._load_hint(fsize)
+            if covered > 0:
+                start = covered
+                self.hint_loaded = true
+        mut good = self._scan(start, true)
+        self.size = good
+        if good < fsize:
+            self.discarded = fsize - good
+            if not self.opts.truncate_corrupt:
+                raise(f"kv: corrupt record at offset {good} in '{self.path}' (truncate_corrupt is off)")
+            if trc_kv_truncate(self.fd, good) != 0: raise(f"kv: cannot truncate '{self.path}'")
+            trc_kv_sync(self.fd)
+        return true
+
+    # Check the store file end to end; returns "" when every record is intact
+    # or a description of the first problem. Does not change the store.
+    pub def verify(self) throws str -> str:
+        self._check_open()?
+        mut fsize = trc_kv_size(self.fd)
+        mut good = self._scan(KV_HDR, false)
+        if good == fsize: return ""
+        return f"corrupt or truncated record at offset {good} (file size {fsize})"
+
+    # ── hint file ───────────────────────────────────────────────────────────
+    # "TKHINT01" | generation u64 | covered u64 | garbage u64 | count u64 |
+    # count * (klen u32, key, valoff u64, vlen u32, expiry u64, rsize u32) | crc32
+    # `covered` is the log size the hint describes.
+
+    def _load_hint(self, fsize: int) -> int:
+        mut hp = self.path + ".hint"
+        if not kv_path_exists(hp): return 0
+        mut s = File.read_text(hp)
+        if s.len() < 44: return 0
+        if s.slice(0, 8) != "TKHINT01": return 0
+        if kv_crc32(s.slice(0, s.len() - 4)) != _r32(s, s.len() - 4): return 0
+        if _r64(s, 8) != self.generation: return 0
+        mut covered = _r64(s, 16)
+        if covered < KV_HDR or covered > fsize: return 0
+        mut count = _r64(s, 32)
+        mut limit = s.len() - 4
+        # first pass: make sure the entries are well formed
+        mut p = 40
+        mut i = 0
+        while i < count:
+            if p + 4 > limit: return 0
+            mut kl = _r32(s, p)
+            if p + 28 + kl > limit: return 0
+            mut voff = _r64(s, p + 4 + kl)
+            mut vl = _r32(s, p + 12 + kl)
+            if voff + vl > covered: return 0
+            p = p + 28 + kl
+            i = i + 1
+        if p != limit: return 0
+        self._clear_index()
+        self.garbage = _r64(s, 24)
+        p = 40
+        i = 0
+        while i < count:
+            mut kl2 = _r32(s, p)
+            mut key = s.slice(p + 4, p + 4 + kl2)
+            self._set_entry_raw(key, _r64(s, p + 4 + kl2), _r32(s, p + 12 + kl2), _r64(s, p + 16 + kl2), _r32(s, p + 24 + kl2))
+            p = p + 28 + kl2
+            i = i + 1
+        return covered
+
+    # Like _set_entry for a key known to be new (no garbage accounting).
+    def _set_entry_raw(self, key: str, voff: int, vl: int, exp: int, rsz: int):
+        mut slot = self.valoff.len()
+        self.valoff.append(voff)
+        self.vlen.append(vl)
+        self.expiry.append(exp)
+        self.rsize.append(rsz)
+        self.index.set(key, slot)
+        self.order.insert(key, slot)
+
+    def _write_hint(self):
+        mut keys = self.order.keys()
+        mut sb = StringBuilder.init(64 + keys.len() * 48)
+        sb.append("TKHINT01")
+        _w64(sb, self.generation)
+        _w64(sb, self.size)
+        _w64(sb, self.garbage)
+        _w64(sb, keys.len())
+        mut i = 0
+        while i < keys.len():
+            mut k = keys[i]
+            mut s = self.index.get(k)
+            _w32(sb, k.len())
+            sb.append(k)
+            _w64(sb, self.valoff[s])
+            _w32(sb, self.vlen[s])
+            _w64(sb, self.expiry[s])
+            _w32(sb, self.rsize[s])
+            i = i + 1
+        mut body = sb.to_owned()
+        sb.free()
+        mut sb2 = StringBuilder.init(body.len() + 8)
+        sb2.append(body)
+        _w32(sb2, kv_crc32(body))
+        mut full = sb2.to_owned()
+        sb2.free()
+        mut tmp = self.path + ".hint.tmp"
+        if File.write_text(tmp, full):
+            if not kv_replace(tmp, self.path + ".hint"): kv_unlink(tmp)
+        else:
+            kv_unlink(tmp)
+
+    # ── writing ─────────────────────────────────────────────────────────────
+
+    def _sync_now(self):
+        trc_kv_sync(self.fd)
+        self.n_syncs = self.n_syncs + 1
+        self.last_sync = self._now()
+
+    # Flush the log to stable storage now, whatever the sync policy.
+    pub def sync(self) throws str:
+        self._check_open()?
+        self._sync_now()
+
+    def _append(self, rec: str) throws str:
+        if self.opts.max_file_size > 0 and self.size + rec.len() > self.opts.max_file_size:
+            raise(f"kv: store full (max_file_size {self.opts.max_file_size})")
+        if kv_pwrite_str(self.fd, self.size, rec) < 0:
+            trc_kv_truncate(self.fd, self.size)
+            raise(f"kv: write to '{self.path}' failed")
+        self.size = self.size + rec.len()
+        if self.opts.sync_policy == KV_SYNC_ALWAYS:
+            self._sync_now()
+        elif self.opts.sync_policy == KV_SYNC_INTERVAL:
+            if self._now() - self.last_sync >= self.opts.sync_interval_ms: self._sync_now()
+
+    def _check_kv(self, key: str, value: str) throws str:
+        if key.len() == 0: raise("kv: empty key")
+        if key.len() > self.opts.max_key_size: raise(f"kv: key too large ({key.len()} > {self.opts.max_key_size})")
+        if key.contains_char(0): raise("kv: keys may not contain NUL bytes")
+        if value.len() > self.opts.max_value_size: raise(f"kv: value too large ({value.len()} > {self.opts.max_value_size})")
+
+    pub def put(self, key: str, value: str) throws str:
+        self.put_ttl(key, value, 0)?
+
+    # Store `value` under `key`; it expires `ttl_ms` milliseconds from now
+    # (0 = never).
+    pub def put_ttl(self, key: str, value: str, ttl_ms: int) throws str:
+        self._check_open()?
+        self._check_kv(key, value)?
+        if ttl_ms < 0: raise("kv: negative ttl")
+        mut exp = 0
+        if ttl_ms > 0: exp = self._now() + ttl_ms
+        mut rec = _record(_body(1, exp, key, value))
+        mut at = self.size
+        self._append(rec)?
+        self._set_entry(key, at + KV_REC_FIXED + key.len(), value.len(), exp, rec.len())
+        self.records = self.records + 1
+        self.n_puts = self.n_puts + 1
+
+    # Remove `key`. True when it existed (a tombstone is written only then).
+    pub def delete(self, key: str) throws str -> bool:
+        self._check_open()?
+        if not self._live(key):
+            if self.index.has(key):
+                # expired but not yet reaped: record the removal so it stays gone
+                self._tombstone(key)?
+            return false
+        self._tombstone(key)?
+        self.n_deletes = self.n_deletes + 1
+        return true
+
+    def _tombstone(self, key: str) throws str:
+        mut rec = _record(_body(2, 0, key, ""))
+        self._append(rec)?
+        self._remove_key(key)
+        self.garbage = self.garbage + rec.len()
+        self.records = self.records + 1
+
+    # Apply every operation in `b` atomically: after a crash either all of
+    # them are present or none is.
+    pub def write_batch(self, b: KvBatch) throws str:
+        self._check_open()?
+        if b.len() == 0: return
+        mut now = self._now()
+        mut sb = StringBuilder.init(256)
+        mut i = 0
+        while i < b.len():
+            mut k = b.keys[i]
+            if b.kinds[i] == 1:
+                self._check_kv(k, b.vals[i])?
+                if b.ttls[i] < 0: raise("kv: negative ttl")
+                mut exp = 0
+                if b.ttls[i] > 0: exp = now + b.ttls[i]
+                sb.append(_body(1, exp, k, b.vals[i]))
+            else:
+                if k.len() == 0 or k.len() > self.opts.max_key_size or k.contains_char(0): raise("kv: bad key in batch")
+                sb.append(_body(2, 0, k, ""))
+            i = i + 1
+        mut payload = sb.to_owned()
+        sb.free()
+        if payload.len() > KV_HARD_VALUE: raise("kv: batch too large")
+        mut outer = _body(3, 0, "", payload)
+        mut rec = _record(outer)
+        mut at = self.size
+        self._append(rec)?
+        self.garbage = self.garbage + KV_REC_FIXED
+        mut p = 0
+        while p < payload.len():
+            mut skl = _r32(payload, p + 9)
+            mut svl = _r32(payload, p + 13)
+            self._apply_body(payload, p, at + 4 + KV_BODY_FIXED, now)
+            if _r8(payload, p) == 1: self.n_puts = self.n_puts + 1
+            else: self.n_deletes = self.n_deletes + 1
+            p = p + KV_BODY_FIXED + skl + svl
+
+    # ── reading ─────────────────────────────────────────────────────────────
+
+    def _live(self, key: str) -> bool:
+        if not self.index.has(key): return false
+        mut s = self.index.get(key)
+        mut e = self.expiry[s]
+        if e != 0 and e <= self._now(): return false
+        return true
+
+    pub def contains(self, key: str) -> bool:
+        if self.closed: return false
+        return self._live(key)
+
+    def _read_value(self, s: int) throws str -> str:
+        mut vl = self.vlen[s]
+        if vl == 0: return ""
+        mut v = kv_pread_str(self.fd, self.valoff[s], vl)
+        if v.len() != vl: raise(f"kv: short read from '{self.path}' (file damaged?)")
+        return v
+
+    # The value stored under `key`; raises "kv: key not found" when it is
+    # missing or expired.
+    pub def get(self, key: str) throws str -> str:
+        self._check_open()?
+        self.n_gets = self.n_gets + 1
+        if not self._live(key): raise("kv: key not found")
+        return self._read_value(self.index.get(key))?
+
+    pub def get_or(self, key: str, fallback: str) throws str -> str:
+        self._check_open()?
+        self.n_gets = self.n_gets + 1
+        if not self._live(key): return fallback
+        return self._read_value(self.index.get(key))?
+
+    # Milliseconds until `key` expires; -1 = no expiry, -2 = missing / expired.
+    pub def ttl(self, key: str) -> int:
+        if self.closed or not self._live(key): return -2
+        mut e = self.expiry[self.index.get(key)]
+        if e == 0: return -1
+        return e - self._now()
+
+    pub def len(self) -> int:
+        return self.index.len()
+
+    # All live keys in sorted (byte) order.
+    pub def keys(self) throws str -> List[str]:
+        self._check_open()?
+        return self._live_keys(self.order.keys())
+
+    def _live_keys(self, names: List[str]) -> List[str]:
+        mut out: List[str] = []
+        mut now = self._now()
+        for k in names:
+            mut e = self.expiry[self.index.get(k)]
+            if e == 0 or e > now: out.append(k)
+        return out
+
+    # Live keys that start with `prefix`, sorted.
+    pub def iter_prefix(self, prefix: str) throws str -> List[str]:
+        self._check_open()?
+        if prefix.len() == 0: return self._live_keys(self.order.keys())
+        mut hi = _prefix_end(prefix)
+        if hi.len() == 0:
+            mut out: List[str] = []
+            for k in self._live_keys(self.order.keys()):
+                if k.starts_with(prefix): out.append(k)
+            return out
+        return self._live_keys(self.order.range_keys(prefix, hi))
+
+    # Like iter_prefix but with the values.
+    pub def iter_prefix_items(self, prefix: str) throws str -> List[KvPair]:
+        mut ks = self.iter_prefix(prefix)?
+        mut out: List[KvPair] = []
+        for k in ks:
+            mut p = KvPair()
+            p.key = k
+            p.value = self._read_value(self.index.get(k))?
+            out.append(p)
+        return out
+
+    # Write tombstones for every expired key; returns how many were reaped.
+    pub def purge_expired(self) throws str -> int:
+        self._check_open()?
+        mut dead: List[str] = []
+        mut now = self._now()
+        for k in self.order.keys():
+            mut e = self.expiry[self.index.get(k)]
+            if e != 0 and e <= now: dead.append(k)
+        if dead.len() == 0: return 0
+        mut b = KvBatch.init()
+        for k in dead: b.delete(k)
+        self.write_batch(b)?
+        return dead.len()
+
+    pub def stats(self) -> KvStats:
+        mut s = KvStats()
+        s.keys = self.index.len()
+        s.file_size = self.size
+        s.garbage_bytes = self.garbage
+        s.records = self.records
+        s.discarded_bytes = self.discarded
+        s.puts = self.n_puts
+        s.gets = self.n_gets
+        s.deletes = self.n_deletes
+        s.syncs = self.n_syncs
+        s.compactions = self.n_compactions
+        s.hint_loaded = self.hint_loaded
+        return s
+
+    # ── compaction ──────────────────────────────────────────────────────────
+
+    # Rewrite the log with only the live, unexpired records (in key order) and
+    # atomically replace the data file. Old data stays intact until the
+    # rename; a crash before it leaves a stray `<path>.compact` that the next
+    # open deletes.
+    pub def compact(self) throws str:
+        self._check_open()?
+        mut tmp = self.path + ".compact"
+        mut nfd = kv_open_fd(tmp, true)
+        if nfd < 0: raise(f"kv: cannot create '{tmp}'")
+        trc_kv_truncate(nfd, 0)
+        mut gen = KvStore._new_generation()
+        mut sb = StringBuilder.init(1048576 + 1024)
+        sb.append("TAURAKV1")
+        _w64(sb, gen)
+        mut off = 0
+        mut now = self._now()
+        mut failed = ""
+        for k in self.order.keys():
+            mut s = self.index.get(k)
+            mut e = self.expiry[s]
+            if e != 0 and e <= now: continue
+            mut v = ""
+            mut rv: Result[str, str] = self._read_value(s)
+            if rv.is_err:
+                failed = rv.err
+                break
+            v = rv.ok
+            sb.append(_record(_body(1, e, k, v)))
+            if sb.len() >= 1048576:
+                mut chunk = sb.to_owned()
+                if kv_pwrite_str(nfd, off, chunk) < 0:
+                    failed = f"kv: write to '{tmp}' failed"
+                    break
+                off = off + chunk.len()
+                sb.clear()
+        if failed == "":
+            mut chunk2 = sb.to_owned()
+            if kv_pwrite_str(nfd, off, chunk2) < 0: failed = f"kv: write to '{tmp}' failed"
+            off = off + chunk2.len()
+        sb.free()
+        if failed != "":
+            trc_kv_close(nfd)
+            kv_unlink(tmp)
+            raise(failed)
+        trc_kv_sync(nfd)
+        trc_kv_close(nfd)
+        trc_kv_close(self.fd)
+        self.fd = -1
+        if not kv_replace(tmp, self.path):
+            self.fd = kv_open_fd(self.path, false)
+            kv_unlink(tmp)
+            raise(f"kv: cannot replace '{self.path}' with the compacted file")
+        kv_sync_dir(self.path)
+        self.fd = kv_open_fd(self.path, false)
+        if self.fd < 0:
+            self.closed = true
+            raise(f"kv: cannot reopen '{self.path}' after compaction")
+        self.generation = gen
+        self._clear_index()
+        self.size = self._scan(KV_HDR, true)
+        self.n_compactions = self.n_compactions + 1
+        if self.opts.use_hint: self._write_hint()
+
+    # ── closing ─────────────────────────────────────────────────────────────
+
+    # Flush, write the hint file and release the file and the lock. Calling
+    # it twice is harmless.
+    pub def close(self):
+        if self.closed: return
+        self.closed = true
+        if self.opts.sync_policy != KV_SYNC_NEVER: trc_kv_sync(self.fd)
+        if self.opts.use_hint: self._write_hint()
+        trc_kv_close(self.fd)
+        self.fd = -1
+        self._release_lock()

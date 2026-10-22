@@ -1,0 +1,593 @@
+# tests/lang/140_font.tr
+# std.font: sfnt parsing (TrueType, CFF-based OpenType, WOFF), cmap, metrics,
+# kerning and ligatures, shaping, outlines, rasterizing, line breaking,
+# subsetting, damaged-font robustness; and Unicode text in std.encoding.pdf
+# (embedded CIDFontType2 subsets, ToUnicode, widths).
+# The two small fonts are subsets of DejaVu Sans (glyf, GPOS kern, GSUB liga)
+# and URW Nimbus Sans (CFF, GPOS kern, GSUB liga) made with fontTools; the
+# expected metrics were read back with fontTools and rasterizer coverage was
+# compared with Pillow (within 5%). The WOFF is the TrueType subset
+# re-wrapped with zlib-compressed tables.
+
+from std.test import TestRunner
+from std.core.string import StringBuilder
+from std.font import Font, FontSubset, draw_text, draw_glyph, render_text, render_glyph, wrap_text, find_system_font, system_font_dirs
+from std.font.mod import FONT_MOVE, FONT_QUAD, FONT_CUBIC, FONT_CLOSE, FONT_TRUETYPE, FONT_CFF
+from std.encoding.hex import Hex
+from std.encoding.pdf import PdfDocument, PDF_ALIGN_LEFT, PDF_ALIGN_JUSTIFY, PDF_HELVETICA
+from std.image.mod import Image
+
+def ttf_bytes() -> str:
+    return Hex.decode((
+        "00010000000f008000030070474445460042004000000c100000002247504f53207b21f600000c340000019047535542957aa89400000d"
+        + "c4000000f44d415448093f338400000eb8000000f64f532f326c7d8fb70000017800000056636d61700b4f2bf800000244000000c46761"
+        + "73700007000700000c040000000c676c79662ab8693300000344000008386865616433f11e55000000fc00000036686865610fe006b100"
+        + "00013400000024686d7478866e0bbb000001d0000000726c6f636116ec1909000003080000003c6d617870002500540000015800000020"
+        + "6e616d6504ed155d00000b7c00000068706f7374ffdb005a00000be4000000200001000000025eb88ad17f025f0f3cf5001f0800000000"
+        + "00e5531db800000000e6f9582cfffafe560876066600000008000200000000000000010000076dfe1d0000089efffaffd9087600010000"
+        + "000000000000000000000000001c00010000001d00320002002000030001000000000000000000000000000200010001040e0190000500"
+        + "00053305990000011e05330599000003d7006602120000020b060303080402020400000283000000020000000000000000506645640040"
+        + "002020ac0614fe14019a076d01e30000000100000000000004cd0066028b0000028b009e028b00db02b200f005790010060400c904e3ff"
+        + "fa0579001007e9004404e7007b04ec007102d1002f023900c1023900c104e500710400017304ec0071061d004e05460071051b00c0089e"
+        + "002804ef0070051700000583002f050a002f050a002f07bc002f002f00000000000200000003000000140003000100000014000400b000"
+        + "0000280020000400080020002c002e003a0041004800540057006100660069006c006f00e903a903b20416043120acffff00000020002c"
+        + "002e003a0041004800540056006100650069006c006f00e903a903b10416043120acffffffe1ffd6ffd5ffcaffc4ffbeffb3ffb2ffa9ff"
+        + "a6ffa4ffa2ffa0ff28fc69fc62fbfffbe5df6b000100000000000000000000000000000000000000000000000000000000000000000000"
+        + "000000000000000000150015002500310042005e00760089009e00be00f601280148015a0167019301a101ad01ea022e0261028e02d503"
+        + "210355037e03a203e4041c00020066fe96046605a40003000700001311211125211121660400fc73031bfce5fe96070ef8f27206290001"
+        + "009eff1201c300fe00050000373315032313f0d3a48152feacfec0014000000100db000001ae00fe0003000037331523dbd3d3fefe0000"
+        + "0200f0000001c304230003000700003733152311331523f0d3d3d3d3fefe0423fe000200100000056805d50002000a0000010121013301"
+        + "230321032302bcfeee0225fe7be50239d288fd5f88d5050efd1903aefa2b017ffe81000100c90000053b05d5000b000013331121113311"
+        + "2311211123c9ca02decacafd22ca05d5fd9c0264fa2b02c7fd39000001fffa000004e905d50007000003211521112311210604effdeecb"
+        + "fdee05d5aafad5052b00000100100000056805d50006000021013301013301024afdc6d301d901dad2fdc705d5fb1704e9fa2b00000100"
+        + "44000007a605d5000c00001333010133010133012301012344cc013a0139e3013a0139cdfe89fefec5fec2fe05d5fb1204eefb1204eefa"
+        + "2b0510faf0000002007bffe3042d047b000a00250000012206151416333236353537112335060623222635343633213534262322060735"
+        + "363633321602bedfac816f99b9b8b83fbc88accbfdfb0102a79760b65465be5af3f00233667b6273d9b4294cfd81aa6661c1a2bdc0127f"
+        + "8b2e2eaa2727fc0000020071ffe3047f047b0014001b000001152116163332363715060623200011100033320007262623220607047ffc"
+        + "b20ccdb76ac76263d06bfef4fec70129fce20107b802a5889ab90e025e5abec73434ae2a2c0138010a01130143feddc497b4ae9e000001"
+        + "002f000002f8061400130000011523220615152115211123112335333534363302f8b0634d012ffed1b9b0b0aebd0614995068638ffc2f"
+        + "03d18f4ebbab00000200c10000017906140003000700001333112311331523c1b8b8b8b80460fba00614e9000100c10000017906140003"
+        + "000013331123c1b8b80614f9ec0000020071ffe30475047b000b0017000001220615141633323635342627320011100023220011100002"
+        + "7394acab9593acac93f00112feeef0f1feef011103dfe7c9c9e7e8c8c7e99cfec8feecfeedfec701390113011401380001017304ee0352"
+        + "06660003000001330123028bc7feba990666fe88ffff0071ffe3047f06661226000b000010070010008b00000001004e000005cf05e700"
+        + "26000025152135363736353427262322001514171617152135212627263510373621201716111407060705cffda8b163638484d8d8fef7"
+        + "6364b2fda8013f9e4948c0bf0131012fc1c04747a1b2b2b261a6a6caf09191feddefcaa6a661b2b28b9595b8013ec5c5c5c4fecbc29494"
+        + "8d00020071ffe704e40479000d002a00000127262322070615141716333237131333031716171633331523222726270607062322272611"
+        + "1037363320034e2c2db2863d4d4b4c798648a463a4cd2809232920586e5e5429112e5e2c8feb72757f8dc601370209e7ed6e8ab6dc696b"
+        + "d501e70125fda1db3129309c542a586f5729989d011301268a9a00000200c0fe5604880621000e001c0000251123111021201110070411"
+        + "10212203163320111005352011342320110179b901aa01b2ac0118fe1ed4596fc50120fe30016beafefb45fe11060301c8fe7ffeee645a"
+        + "fef5fe26014aad013a011a16aa0140dbfec800000100280000087605d500130000013311013301012301011123110101230101330103ea"
+        + "ca02aaf5fddf0244d3fe13fefecafefefe13d30244fddff502aa05d5fd1e02e2fdb3fc780301fee9fe1601ea0117fcff0388024dfd1e00"
+        + "020070ffe3047f0637001d0029000001320011100023220003272635343736242536371706070706070607073617220615141633323635"
+        + "3426027df00112feeef0f1fef60706053a5b013b01087a3633312dfa7e4cc7130782d394acab9593acac047bfec8feecfeedfec7013001"
+        + "1ce57729a076b9a002011192140111092c759938779ce7c9c9e7e8c8c7e90000010000ffe3048f05f00031000001152626232206072107"
+        + "21060615141617210721161633323637150606232200032337333426353436352337331200333216048f5ba9669dca20024137fde60201"
+        + "010201be38fe8a20ca9d66a95b59b960edfecb28d3378b0101c2379c280136ec62b90562d5695ac8bb7b182e23202e187bbbca5a69d348"
+        + "48012201037b172f20232f177b01010122470001002f000005aa0614002400000115232206151521152111231121112311233533353436"
+        + "333315232207061515213534363305aab0634d012ffed1b9fe07b9b0b0aebdaeb063272601f9aebd0614995068638ffc2f03d1fc2f03d1"
+        + "8f4ebbab99282868634ebbab0002002f0000044a0614001500190000011123112111231123353335343633331523220615150133152304"
+        + "4ab9fe07b9b0b0adb3b9b0634d01f9b9b90460fba003d1fc2f03d18f4eb7af9950686301b2e9000001002f0000044a0614001500000121"
+        + "1123112122061515211521112311233533353436024a0200b9feb7634d012ffed1b9b0b0ae0614f9ec057b5068638ffc2f03d18f4ebbab"
+        + "000002002f000006fc06140029002d00000115232207061515213534373637363333152322061515211123112111231121112311233533"
+        + "353436330533152302f8b063272601f9571c274e83aeb0634d02b2b9fe07b9fe07b9b0b0aebd03f9b9b9061499282868634ebb551c1327"
+        + "99506863fba003d1fc2f03d1fc2f03d18f4ebbab02e9000001002f000006fc061400260000011523220706151521353436332111231121"
+        + "22061515211521112311211123112335333534363302f8b063272601f9aebd0200b9feb7634d012ffed1b9fe07b9b0b0aebd0614992828"
+        + "68634ebbabf9ec057b5068638ffc2f03d1fc2f03d18f4ebbab000000040036000300010409000100160000000300010409000200080016"
+        + "00030001040900040016000000030001040900060014001e00440065006a006100560075002000530061006e00730042006f006f006b00"
+        + "440065006a00610056007500530061006e00730003000000000000ffd8005a000000000000000000000000000000000000000000000002"
+        + "00080002ffff000300010000000c000000000000000200030001000f00010011001700010018001c0002000000010000000a002e003c00"
+        + "0244464c54000e6c61746e0018000400000000ffff0000000400000000ffff0001000000016b65726e0008000000010000000100040002"
+        + "000000010008000200f000040000010601240008000e0000ffdcffdc00390000ff61ff7dff900000ffdcffb700000000ffdc0000ffdc00"
+        + "00000000000000000000000000000000000000000000000000ff0dff1fff610000ffdc00000000feadfea40000ffc10000fea40000fef8"
+        + "ff59ff7d0000000000000000ff61ff610000ffd30000ff610000ff15ff88ff900000000000000000ff7dff880000ffd30000ff88000000"
+        + "000000000000000000000000000000000000000000000000000000ff6bffb7000000000000000000000000000000000000000000000000"
+        + "ffdc0000000000000000000000000000000000000000000000000001000900050006000700080009000b000c000f001100010006000c00"
+        + "010002000300040000000500060000000000070000000500010003000f000100020003000400050006000700080009000a000b000c000d"
+        + "0000000900010000000a009e00ac001444464c54007a61726162009061726d6e009062726169009063616e730090636865720090637972"
+        + "6c009067656f7200906772656b009068616e6900906865627200906b616e6100906c616f2000906c61746e00846d61746800906e6b6f20"
+        + "00906f67616d009072756e72009074666e670090746861690090000400000000ffff0000000400000000ffff000100000000000000016c"
+        + "696761000800000001000000010004000400000001000800010036000100080005000c0014001c00220028001c0003000c000e001b0003"
+        + "000c000d001a0002000e00190002000d00180002000c00010001000c00010000000a00e000e80050003c0c0007dd000000000282000004"
+        + "60000005d50000000000000460000000000000000000000000000004600000000000000168000004600000005500000000000000000000"
+        + "000000000000000000000000000000000000000000000000010e0000027600000000000000000000000000000000000000000000000000"
+        + "000000000000000000005a0000010e0000005a0000005a0000010e00000000000000000000010e0000005a0000005a0000010e0000005a"
+        + "0000005a0000005a000001720000005a0000005a000002380000fb8f0000003c00000000000000000028000a000a000000000001000000"
+        + "00"))
+
+def otf_bytes() -> str:
+    return Hex.decode((
+        "4f54544f000b00800003003043464620b315864f000002b40000047f47504f5306d5f23000000734000001bc475355423c3940c8000008"
+        + "f0000000d04f532f32685268690000012000000060636d6170025b03a40000020000000094686561641f5d6011000000bc000000366868"
+        + "6561075002c4000000f400000024686d7478272502d4000009c0000000526d6178700015500000000118000000066e616d6507e4175800"
+        + "0001800000007e706f7374ff85003200000294000000200001000000010000ebf035ed5f0f3cf5000303e800000000d59fc4b500000000"
+        + "e6f9582c000cff6c03a102e40000000300020000000000000001000002d9fef100c803b0000c000e03a100010000000000000000000000"
+        + "000000001400005000001500000003027f019000050004028a02580000004b028a02580000015e00320135000000000500000000000000"
+        + "00000003000000000000000000000000554b574e0040002000e902d9fef100c80433012b0000000100000000020402ce00000020000300"
+        + "00000400360003000104090001001600000003000104090002000e0016000300010409000400240024000300010409000600240024004e"
+        + "0069006d006200750073002000530061006e00730052006500670075006c00610072004e0069006d00620075007300530061006e007300"
+        + "2d0052006500670075006c0061007200000000000200000003000000140003000100000014000400800000001c00100003000c0020002c"
+        + "002e0041004800540057006100660069006c006f00e9ffff00000020002c002e0041004800540056006100650069006c006f00e9ffffff"
+        + "e1ffd6ffd5ffc3ffbdffb2ffb1ffa8ffa5ffa3ffa1ff9fff28000100000000000000000000000000000000000000000000000000000000"
+        + "0003000000000000ff82003200000000000000000000000000000000000000000100040200010101134e696d62757353616e732d526567"
+        + "756c6172000101012af81b00f81c01f81d0c00f81e02f81e03f81804fb2b0c0397fb28fa35f97805f8c10f93f9cc12f8ea110004010105"
+        + "3b7b86312e303028555257292b2b2c436f7079726967687420323031342062792028555257292b2b2044657369676e202620446576656c"
+        + "6f706d656e74436f707972696768742028555257292b2b2c436f7079726967687420323031342062792028555257292b2b204465736967"
+        + "6e202620446576656c6f706d656e744e696d6275732053616e7300170200010047007b007e0083008600ad00b200b300b600c000c400c7"
+        + "00ce00d200d500e500ea00ef00f300fa0104010e0125230a8a67797e4782fb0a7c79876b7e084e2c1dcdc0a2c1c61e5591a574c11b9d96"
+        + "300afb26f747156f837a72741e6c69627b5a1b4a65aac0c2afa7e5981fe4979c8fa798080bf895f77e15db85bb7cb21ee1693bbf291bfb"
+        + "262dfb03fb41fb41e522f728f70cdecff706a01f37064674260a8dcf291d492d1f0b211d0bf7a4200a0b231d0b1534dd06ae9e9db2928e"
+        + "8b8a9e1ed0078f78808c7a1b3e5d5f401f324547d1fc5cdef85ce2070bf86e210a0b0b2b1d0b15ec92c6cadf1be0c60bf96d150b221d0b"
+        + "2e0a2ccd4ff50b15311d0b2d1d0ef7e015fbe0e8f96d2efbcffc0bf7cf0bf8a0331d0b2323f3060b05c7060b1538fca0de060bf72c2a1d"
+        + "37fd6ddf060b70816d895708df06cb0b1523c77907467e775c891e6507cd89b2bbe01af70c070e000001000d000f002200290035003700"
+        + "38004200460047004a004d0050006d006e00cf010a010b010c0015010104070d14182529464d51555e676c708598a3afbbcafbe50efbe5"
+        + "0efbe5e2f3361dfbe5f753f32e1dbf261d0ef6f8bb2f1d2efd6de8f7e0070e872b0a0ebf271df81c16f791f96d052806fb5efcfdfb6af8"
+        + "fd052706f79a2d0a0ef7dd271d250a0e50220a0e50221d0efbe5f796f8a0251d0efc1df72a301d2f0a0efc1d341d0e50270a0efb07f790"
+        + "f8a0251df74ccf331df96d043822de060efb07f795f8a0251df741f7a51538fd6dde060e50281dfb07f84a152b240a50f798f8a0251df7"
+        + "a12c0a0ef737290af73ecf331d2f0a0ef737290af740f7a51537fd6ddf060efa7c14f8fb15931300110200010034005c005f0083008b00"
+        + "bb00cd00d000d500e000ec00fe01020106010c01140119f8af15fb283322fb44fb45e323280ae4f4f740f74a35f2fb2c1f8c3e15e9c33e"
+        + "fb16fb10513e2f2e52d8f713f713c4d8e81f0bf76f15d6fb6f05f306fb94f96d05fb0c06fb982d0aee06d8f76f05f793d915fb7c06f70c"
+        + "f7e0050b201d0bf8abbc158982878b861b6e7b9aa51ff7c807e847bdfb153e4e7564671e73351d922a0a0bfb28321d280a050ef97c16f7"
+        + "4df96d052306fb1afce4fb3af8e4052706fb36fce4fb1df8e4052306f74f2d0af106f737f8ebf73cfceb050b5c67481b565ea3b76f1f77"
+        + "a984a98abf080b241d0bf729f7280bf796f8a0251df7aa2c0a0bb1a8d91bd7b46f591f75070bf7f6f91b15f783ddfcd039f784fd1be806"
+        + "0bcf251d0bfd6d050b716c5d471a0bf96d043722df060b8d92a71f0b0000010000000a0030003e000444464c54001a6379726c001a6772"
+        + "656b001a6c61746e001a000400000000ffff0001000000016b65726e000800000001000000010004000200000001000800010022000400"
+        + "00000c003200580066009c00ca0100010a01200146014c01560164000200020004000e000000110011000b000900020005000300050004"
+        + "00140006ffa30007ffb90008ffd00009fffb000afff2000efff400030004fff50006fff30009fff9000d0002ffa00003ffa00004ffa000"
+        + "05fff2000600110007000b000800100009ff9d000affa3000cfffd000dfffc000effa50011ffa3000b0002ffac0003ffac0004ffbc0005"
+        + "fff00006000f0009ffc6000affcc000cfffb000dfffa000effce0011ffcc000d0002ffca0003ffca0004ffce0005fff400060012000700"
+        + "0d000800110009ffdb000affe3000cfffe000dfffd000effe50011ffe300020002fff80003fff800050002ffe90003ffe90009fff9000b"
+        + "fff6000dfffc00090002ffdd0003ffdd0009fff8000afff2000b0015000cfffe000dfffd000efff60011fff200010006fff800020002ff"
+        + "ef0003ffef00030002ffe70003ffe70006ff9e00030002ffe90003ffe9000dfffc00010000000a00580074000444464c54001a6379726c"
+        + "00246772656b00246c61746e0028000400000000ffff00000000000000160003415a4520001e43525420001e54524b20001e0000ffff00"
+        + "0100000000ffff0001000100026c696761000e6c6967610016000000020000000100000001000100020006002a00040000000100080001"
+        + "00480001000800020006000e00130003000b000c000f0002000c0004000000010008000100240001000800030008001000160014000300"
+        + "0b000d00120002000b00100002000d00010001000b01160000011600000116005701160057029b001102d2005302630015029b001e03b0"
+        + "0016022c002a022c00280116001200de004200de0044022c002401f4000c01f40011022c0028022c0014030a001200120000"))
+
+def woff_bytes() -> str:
+    return Hex.decode((
+        "774f46460001000000000bc0000f000000000fb00001000000000000000000000000000000000000000000004744454600000158000000"
+        + "22000000220042004047504f530000017c000000ca00000190207b21f64753554200000248000000b7000000f4957aa8944d4154480000"
+        + "030000000062000000f6093f33844f532f32000003640000004f000000566c7d8fb7636d6170000003b400000084000000c40b4f2bf867"
+        + "617370000004380000000c0000000c00070007676c796600000444000005f5000008382ab869336865616400000a3c0000003600000036"
+        + "33f11e556868656100000a7400000020000000240fe006b1686d747800000a940000006e00000072866e0bbb6c6f636100000b04000000"
+        + "3c0000003c16ec19096d61787000000b400000001d00000020002500546e616d6500000b60000000490000006804ed155d706f73740000"
+        + "0bac0000001300000020ffdb005a00010000000c000000000000000200030001000f00010011001700010018001c0002000078da7d50ab"
+        + "0ec240109c83d217b40d82048741e349900485c4202b502515045b5fc94760d168be01db8f40a2bacc5d1f18ca267b3bbb337bb7b75000"
+        + "7c2cb0426fbdd9ee101ee3738a292cd621c2a3415aa992c32985ab91710b3d135dc697562a5bcd9985ec28a4c09231964c2e26bf9b9b8a"
+        + "cabb4c029949dc68ca5b79257e1031966fd94bd62a63a37b6a449f48aedfa9b94cf29acbf1d724a9e6fac975cfa9e061001b0e7feb6188"
+        + "11228c59b58914b7d1377bd30a6d8ec18ad5a865bfddbee90fa8f13ec0a0417f000078da358e3d0ec2300c855fa04808b54c1df81b1013"
+        + "27e0048889910bb8a824555b570a65809903f8049c803b16271296fcf9f9e925320c80193ef8223f9ece17bcc8530121df32a4f05441ae"
+        + "c477a52bbdf2e91b882d3bd5d69735c4116bc695853a3531411aeab6813de3dd52ef205c07a7b3d442fc8335d9dfd82a5df81f89de8061"
+        + "50fc55b82a94692a4b9806153b8909a38ec121ce0952e4d86087bd72acdb1ceb3833ac30d26da9ccb050a6fac220fd01b4ff34230078da"
+        + "6360646060e06278c0f0822180c1868781fd2e90cfc0d4c4c0c092c0c0c07a95010c406c6400e3336640d9a10c0401231fd0dc32c2ea18"
+        + "a2206a41349c8d64068a781412bf08c166b26060f8dd0f64dbc0b56a007dc9053184810100764f0df3000078da636064e1639cc0c0cac0"
+        + "c06acc3a938181510e42335f67486312626060e2666366e66061626201b29b198004031404a4b9a63038302828ac6113f927c2388b3d97"
+        + "f13150981124070084a80a280078da636060606260606006621120c908a659183600690d0605208b0348ea30e831583138327830843084"
+        + "332432a4316432e430e433bc645ec9bc89458cc55061cdffff401da82ac3802a5391546e84a9fcfff0ffb5ff57ff9ffa7fe4ffbeff9bff"
+        + "6ffabff2ffb2ff4bfe2ffabfe0bfc69fcc3f49bfffff7e7a3f1bec16a20000dcbd33570000000200080002ffff000378da65550b6c9355"
+        + "14bee7fe2f5e92fdeb0b0449db9fb52b8f0df6af2d8f281867c009c41014180902c5062401850062a30b4ac864210bf27264103038a18c"
+        + "8985c02a0fc7636c1409425d02229280388730ea0385d1ffce73db150636fdefbdfdefb9e7fbce77cf39259404d9263128ed2402510831"
+        + "a90e35c7a13a8222492e11fa256fb24d4aeffb7f2e963d04c8b68e6c3849189108f1eb16413325e23b574e6635ac1ec612dcbf82432dee"
+        + "0ba97ded4a3cce18219424f0fd49514b23f01d159f443ccef7458da1451621d23ca919573dd0161ca0832638048d1e616d3487856ed291"
+        + "17cb8c37cb9aa5de465fa1b67d3094b295887806cf8dc6733d91b98ed47555c3513b13a33fc762863326351b55746efb60da688c44c71d"
+        + "ed8488ad688f3c0487c5c1ad65f1aed176d668939ac3edcdd2601e47868d4c0867825f5a6c9c8ec365f8f1a2d128353fb489aded29cb22"
+        + "42946ab4ecc5f1216dab016845dfc1281879830fe7d8278c35b0130ccf658b6dfc691f2c65b527b832a18e1be250318451e7a03ba76c31"
+        + "5bf5029fd7eb5735af2c6b4e97b7d0a73bbc852ecd292b5e9f4f2fb0d263d76a562eaa8cd6d58d39525673d67808f4cbcdb30e4e79eb58"
+        + "c95f09aa074373965c3ee09960ac0c07671ffffc687d7669795e5ed8ed4e72bc7711af14f1cca41fe2591c560ee7b720949da859442f20"
+        + "8a2b8525962623bdce1d7abb714ee0fb05ec6fd6089ee47550eae817655ba2bde9cc92638d8585b58386c008e8012678895d3db5f940ed"
+        + "36ae493e02dd97cdc4c411d097c592565af3ea3c1a7a7f5f6022e4b30bd17dfb6a8fcae6cad7e6052a92f9c2858a4987f7708ec7f1dc0a"
+        + "3c9fce477ea3982dc7ebf023ce7ab85d36b722c6639b9405eecae607b733112ec5087b125b57450b5dee021ea1e6e4235db2a166cfc6f5"
+        + "3535eb1390cdda127fb0bba00ad75ace9c69f9ada9b1b58a35b1dbec0e063d126333c3084cc925629b30590e72447ec7b4bc917d532907"
+        + "595947475a553998ede27998a560fe9413aec424cca3f3520b7111926371787d7ee4e1467989c56cb3daf08dc3e57679b3fc3e87dd6655"
+        + "cd8aac48e78d5d5f0702ab565dbac4fe0dcc8d18bb60ccb657c6d77f0bc321ff78fdb8713b2291c8eceaea5862dd3a76f56eacba7a7624"
+        + "52be71631dbcd0d0d0708a9d3db161c3da940a2de22fe20af20c19844438a6227350bdc06f32e902a25b7554d5e976b96545e6b38a3474"
+        + "bb3069c8d0c8eae727be3a61c5eaf13b033bcfe576d73cf6690b674ef1a879338754fcbe7869e9dad3e0a7dd5bee2c5c73f0a7f90b9aa1"
+        + "05728c1d57867b86554d19346dd154cf675b5134d79a2dfc36ead91b6299ec20bd497fd400af32cb6157b3141167a760d5712d79ed6aa1"
+        + "6657614514c210a9813e6cc00fd31735809d0d8305b7d8c397992a0bd0c44a59dbdc12768fb9a0782fd6d5b3d6308cbdc29ab8ceb98474"
+        + "5b8655c8334e577915620d22586ad641b815a3e17bc6355a146726c6628c31539c1619d7eed130368801f4bab13ff99e00ac9559e116d8"
+        + "921d42199d680c40feefa46ed64f9e231ef49dc920016fadd0ef1b98e3f3db6405af0d079fad4baed10f3279f58f224ba366c068e8f6be"
+        + "4f1f3eb4fdc3098d26e5a37867fa89a14799360cfadf5ceed9be2cba9d82faa919d4ee4396568e585e95c9491e2741361552820ce79595"
+        + "ae5387e29039ae0d178f8b19296a7ebd90770f2f2eb2b1b0ad62c58cddc1ad313b7dd16ffc4a01281c1bc1d6d8635b83bb674c8fcebac3"
+        + "cee6c6fde50027fc55b9e0bb3d272acd699e5fd27438d4274fb3e7f5091d8e95cc8f8f1f0f4e1042b67cbb966f0b0180735cbae2a53056"
+        + "e3c0a72abe4bd5f36453f806ff2185332d8029a92e50bb2fe076c18327da41a62554e6e6ce0bf0d640398e588c3816d21791fe0f80fe01"
+        + "67b138ed77effe28c779108df2c691f178e82b0e0191d6ce5ed5e991408af1d3ed8a16531265871e772cde67a4d0d33d0bfdc849f4e321"
+        + "43d31a74c6eac79acf50cb28d285b4845bbc1ff2e0a7f6774ffa18859848239c7ea73202b24751d21abcdedfe4e6e433c16418d04c2c29"
+        + "0eae2718e0dfc793713dd58ad3ba770db213f911ea9eae016720ff03e4489a9e0000000001000000025eb88ad17f025f0f3cf5001f0800"
+        + "00000000e5531db800000000e6f9582cfffafe560876066600000008000200000000000078da6360646060cffd27cbc0c031efffafff37"
+        + "39ca188022284006009f4906a378da6339cb90c6d4cdc000c4f380f836d326860fac950c026c2c0c27591effff0562b3bf64706179ce50"
+        + "cdf286a190e922833e9325c341106679ca50c8c2c0580c12679365f06375632864956638c0318f4183e53d4301ab3803036b33833e2b17"
+        + "04b3ef61d067d0070005411ba10000000000150015002500310042005e00760089009e00be00f601280148015a0167019301a101ad01ea"
+        + "022e0261028e02d503210355037e03a203e4041c78da63606460609065306260625060606600f11080898111000b4f007a00000078da63"
+        + "60606061306360666064e164606410636080b2991838803c089b05499c8d4184418ec1852195218b2191218ca19441812118c8ca632866"
+        + "7062c807c26c1459a81c0030b30a5b00000078da6360660083ff3718a218b00000332f023500"))
+
+def coverage(img: Image) -> float:
+    mut sum = 0
+    mut i = 3
+    while i < img.width * img.height * 4:
+        sum = sum + (img.pixels.get(i) as int)
+        i = i + 4
+    return (sum as float) / 255.0
+
+def near(t: TestRunner, got: float, want: float, tol: float, label: str):
+    mut d = got - want
+    if d < 0.0: d = 0.0 - d
+    t.assert_true(d <= want * tol, label + f" ({got} vs {want})")
+
+def test_ttf(t: TestRunner) throws str:
+    t.section("TrueType (glyf) font")
+    mut f = Font.load(ttf_bytes())?
+    t.assert_eq_int(f.units_per_em, 2048, "unitsPerEm")
+    t.assert_eq_int(f.num_glyphs, 29, "glyph count")
+    t.assert_eq_int(f.ascent, 1901, "ascent")
+    t.assert_eq_int(f.descent, -483, "descent")
+    t.assert_eq_str(f.family, "DejaVu Sans", "family name")
+    t.assert_eq_str(f.postscript_name, "DejaVuSans", "PostScript name")
+    t.assert_eq_int(f.outline_format(), FONT_TRUETYPE, "outline format")
+    t.assert_true(f.has_kerning(), "has kerning")
+    t.assert_true(f.has_ligatures(), "has ligatures")
+    t.assert_eq_int(f.glyph_index(65), 5, "cmap A")
+    t.assert_eq_int(f.glyph_index(0xE9), 17, "cmap e-acute")
+    t.assert_eq_int(f.glyph_index(0x3A9), f.glyph_index(937), "cmap Omega")
+    t.assert_true(f.glyph_index(0x3A9) > 0, "Omega mapped")
+    t.assert_eq_int(f.glyph_index(0x4E2D), 0, "missing glyph is .notdef")
+    t.assert_true(f.has_char(0x416), "has Zhe")
+    t.assert_true(f.covers("AVo é"), "covers text")
+    t.assert_false(f.covers("A中"), "does not cover CJK")
+    t.assert_eq_int(f.glyph_advance(5), 1401, "advance A")
+    t.assert_eq_int(f.glyph_advance(9), 2025, "advance W")
+    t.assert_eq_int(f.kern(5, 8), -131, "kern A V (GPOS)")
+    t.assert_eq_int(f.kern(7, f.glyph_index(97)), -339, "kern T a")
+    t.assert_eq_int(f.kern(6, 15), 0, "no kern H o")
+    mut m = f.glyph_metrics(6)
+    t.assert_false(m.empty, "H has an outline")
+    t.assert_eq_int(m.x_min, 201, "H xMin")
+    t.assert_eq_int(m.y_min, 0, "H yMin")
+    t.assert_eq_int(m.y_max, 1493, "H yMax")
+    t.assert_true(f.glyph_metrics(f.glyph_index(32)).empty, "space is empty")
+    t.assert_eq_float(f.measure_units("AV"), 1401.0 + 1401.0 - 131.0, 0.001, "AV units with kerning")
+    f.kerning = false
+    t.assert_eq_float(f.measure_units("AV"), 2802.0, 0.001, "AV units without kerning")
+    f.kerning = true
+    t.assert_eq_float(f.measure("Ho", 20.48), (1540.0 + 1253.0) / 100.0, 0.0001, "measure at size")
+    mut sh = f.shape("ffi")
+    t.assert_eq_int(len(sh), 1, "ffi becomes one ligature glyph")
+    t.assert_eq_int(sh[0].cluster_end, 3, "ligature covers three bytes")
+    f.ligatures = false
+    t.assert_eq_int(len(f.shape("ffi")), 3, "ligatures off")
+    f.ligatures = true
+    mut sh2 = f.shape("Aé")
+    t.assert_eq_int(sh2[1].cluster, 1, "cluster start of e-acute")
+    t.assert_eq_int(sh2[1].cluster_end, 3, "e-acute is two bytes")
+    t.assert_eq_float(sh2[1].x, 1401.0 + (f.kern(5, 17) as float), 0.001, "pen position")
+    # outline
+    mut o = f.glyph_outline(6)
+    t.assert_true(len(o.cmds) >= 12, "H outline has commands")
+    t.assert_eq_int(o.cmds[0], FONT_MOVE, "starts with a move")
+    mut o2 = f.glyph_outline(f.glyph_index(111))
+    mut quads = 0
+    mut i = 0
+    while i < len(o2.cmds):
+        if o2.cmds[i] == FONT_QUAD: quads = quads + 1
+        i = i + 1
+    t.assert_true(quads > 4, "o has quadratic curves")
+    # rasterizer (Pillow coverage: H 273.0, o 211.5, e-acute 249.93, Omega 321.8 at 40 px)
+    mut img = Image.init(120, 120)
+    draw_glyph(img, f, 6, 40.0, 30.0, 80.0, 0, 0, 0, 255)
+    near(t, coverage(img), 273.0, 0.05, "H coverage vs Pillow")
+    mut img2 = Image.init(120, 120)
+    draw_glyph(img2, f, 17, 40.0, 30.0, 80.0, 0, 0, 0, 255)
+    near(t, coverage(img2), 249.93, 0.05, "e-acute coverage vs Pillow")
+    mut img3 = Image.init(120, 120)
+    draw_glyph(img3, f, f.glyph_index(0x3A9), 40.0, 30.0, 80.0, 0, 0, 0, 255)
+    near(t, coverage(img3), 321.8, 0.05, "Omega coverage vs Pillow")
+    # colour and alpha
+    mut px = Image.init(60, 60)
+    draw_glyph(px, f, 6, 40.0, 5.0, 50.0, 200, 10, 30, 255)
+    mut found = false
+    mut y = 0
+    while y < 60:
+        mut x = 0
+        while x < 60:
+            mut pr, pg2, pb, pa = px.get_pixel(x, y)
+            if pa == 255:
+                found = true
+                t.assert_eq_int(pr, 200, "opaque pixel keeps red")
+                t.assert_eq_int(pb, 30, "opaque pixel keeps blue")
+            x = x + 1
+        y = y + 1
+    t.assert_true(found, "has fully covered pixels")
+    mut gb = render_glyph(f, 6, 40.0)
+    t.assert_true(gb.image.width > 10 and gb.image.height > 30, "glyph bitmap size")
+    t.assert_true(gb.top < 0, "glyph bitmap starts above the baseline")
+    mut line = render_text(f, "Hello", 24.0, 0, 0, 0, 255)
+    t.assert_true(line.width > 40 and line.height >= 24, "render_text image size")
+    mut dx = Image.init(200, 50)
+    mut endx = draw_text(dx, f, "AV Ho", 24.0, 10.0, 35.0, 0, 0, 0, 255)
+    t.assert_eq_float(endx, 10.0 + f.measure("AV Ho", 24.0), 0.001, "draw_text returns the pen position")
+    t.assert_true(coverage(dx) > 100.0, "text drawn")
+    mut b0, b1, b2, b3 = f.text_bounds("H", 40.0)
+    t.assert_eq_float(b0, 201.0 * 40.0 / 2048.0, 0.01, "text bounds x min")
+    t.assert_eq_float(b3, 1493.0 * 40.0 / 2048.0, 0.01, "text bounds y max")
+    # line breaking
+    mut ls = wrap_text(f, "Hello Ho Ho AV\nHo", 20.0, f.measure("Hello Ho", 20.0) + 0.5)
+    t.assert_eq_int(len(ls), 3, "three lines")
+    t.assert_eq_str(ls[0], "Hello Ho", "first line")
+    t.assert_eq_str(ls[1], "Ho AV", "second line")
+    t.assert_eq_str(ls[2], "Ho", "paragraph break")
+    mut hard = wrap_text(f, "HoHoHoHoHo", 20.0, f.measure("HoHo", 20.0) + 0.5)
+    t.assert_eq_str(hard[0], "HoHo", "over-long word broken between clusters")
+    t.assert_eq_int(len(hard), 3, "over-long word lines")
+    f.free()
+
+def test_otf(t: TestRunner) throws str:
+    t.section("OpenType CFF font")
+    mut f = Font.load(otf_bytes())?
+    t.assert_eq_int(f.units_per_em, 1000, "unitsPerEm")
+    t.assert_eq_int(f.num_glyphs, 21, "glyph count")
+    t.assert_eq_int(f.ascent, 729, "ascent")
+    t.assert_eq_int(f.descent, -271, "descent")
+    t.assert_eq_int(f.line_gap, 200, "line gap")
+    t.assert_eq_str(f.family, "Nimbus Sans", "family")
+    t.assert_eq_int(f.outline_format(), FONT_CFF, "CFF outlines")
+    t.assert_eq_int(f.glyph_index(65), 4, "cmap A")
+    t.assert_eq_int(f.glyph_advance(4), 667, "advance A")
+    t.assert_eq_int(f.glyph_advance(8), 944, "advance W")
+    t.assert_eq_int(f.kern(4, 7), -71, "kern A V")
+    t.assert_eq_float(f.measure_units("AV"), 1334.0 - 71.0, 0.001, "kerned width")
+    t.assert_eq_float(f.line_height(10.0), 12.0, 0.0001, "line height")
+    t.assert_eq_int(len(f.shape("fi")), 1, "fi ligature")
+    mut o = f.glyph_outline(f.glyph_index(111))
+    mut cubics = 0
+    mut i = 0
+    while i < len(o.cmds):
+        if o.cmds[i] == FONT_CUBIC: cubics = cubics + 1
+        i = i + 1
+    t.assert_true(cubics >= 4, "o has cubic curves")
+    t.assert_eq_int(o.cmds[len(o.cmds) - 1], FONT_CLOSE, "contours are closed")
+    mut ra = Image.init(120, 120)
+    draw_glyph(ra, f, 4, 40.0, 30.0, 80.0, 0, 0, 0, 255)
+    near(t, coverage(ra), 253.81, 0.05, "A coverage vs Pillow")
+    mut rh = Image.init(120, 120)
+    draw_glyph(rh, f, 5, 40.0, 30.0, 80.0, 0, 0, 0, 255)
+    near(t, coverage(rh), 265.73, 0.05, "H coverage vs Pillow")
+    mut ro = Image.init(120, 120)
+    draw_glyph(ro, f, 14, 40.0, 30.0, 80.0, 0, 0, 0, 255)
+    near(t, coverage(ro), 189.35, 0.05, "o coverage vs Pillow")
+    f.free()
+
+def test_woff(t: TestRunner) throws str:
+    t.section("WOFF 1.0")
+    mut f = Font.load(woff_bytes())?
+    t.assert_eq_int(f.num_glyphs, 29, "glyphs from WOFF")
+    t.assert_eq_str(f.family, "DejaVu Sans", "family from WOFF")
+    t.assert_eq_int(f.glyph_advance(5), 1401, "advance from WOFF")
+    t.assert_eq_int(Font.collection_count(woff_bytes()), 1, "single font count")
+    t.assert_eq_int(Font.collection_count("not a font at all"), 0, "not a font")
+    f.free()
+
+def test_errors(t: TestRunner):
+    t.section("invalid fonts")
+    mut r1: Result[Font, str] = Font.load("hello")
+    t.assert_true(r1.is_err, "tiny garbage rejected")
+    mut r2: Result[Font, str] = Font.load("OTTO" + "\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
+    t.assert_true(r2.is_err, "empty table directory rejected")
+    mut r3: Result[Font, str] = Font.load_index(ttf_bytes(), 3)
+    t.assert_true(r3.is_err, "collection index on a plain font rejected")
+    mut r4: Result[Font, str] = Font.open("/nonexistent/font.ttf")
+    t.assert_true(r4.is_err, "missing file")
+    t.assert_true(r4.err.starts_with("font:"), "error message prefix")
+    mut full = ttf_bytes()
+    mut r5: Result[Font, str] = Font.load(full.slice(0, 200))
+    t.assert_true(r5.is_err, "truncated font rejected")
+    t.assert_eq_str(find_system_font("No Such Family Qwxz"), "", "unknown system font")
+    mut dirs = system_font_dirs()
+    t.assert_true(len(dirs) >= 0, "system font dirs listed")
+
+# Deterministic corruption: every damaged font must load or fail cleanly, and
+# a font that loads must shape, measure and draw without crashing.
+def corrupt(data: str, seed: int, nflips: int) -> str:
+    mut buf = StringBuilder.init(data.len() + 1)
+    mut state = (seed * 2654435761 + 12345) & 0x7FFFFFFF
+    mut flips: List[int] = []
+    mut flipv: List[int] = []
+    mut k = 0
+    while k < nflips:
+        state = (state * 1103515245 + 12345) & 0x7FFFFFFF
+        flips.append((state >> 8) % data.len())
+        state = (state * 1103515245 + 12345) & 0x7FFFFFFF
+        flipv.append((state >> 11) & 255)
+        k = k + 1
+    mut p = data as Pointer[char]
+    mut i = 0
+    while i < data.len():
+        mut c = 0
+        unsafe: c = (p.offset(i).read() as int) & 255
+        mut j = 0
+        while j < nflips:
+            if flips[j] == i: c = flipv[j]
+            j = j + 1
+        buf.append_char(c)
+        i = i + 1
+    mut out = buf.to_owned()
+    buf.free()
+    return out
+
+def fuzz_one(data: str, t: TestRunner) -> int:
+    mut ok = 0
+    mut r: Result[Font, str] = Font.load(data)
+    if r.is_ok:
+        mut f = r.ok
+        mut img = Image.init(80, 60)
+        f.measure("AVHo é", 12.0)
+        draw_text(img, f, "AVHo fi é", 20.0, 2.0, 40.0, 0, 0, 0, 255)
+        f.glyph_outline(5)
+        f.glyph_metrics(7)
+        f.kern(5, 8)
+        mut ws = wrap_text(f, "AV Ho Ho", 12.0, 30.0)
+        mut sub = FontSubset.init(f)
+        sub.add(5)
+        sub.add(17)
+        mut sr: Result[str, str] = sub.build()
+        sub.free()
+        f.free()
+        ok = 1
+    return ok
+
+def test_fuzz(t: TestRunner):
+    t.section("corrupted fonts")
+    mut ttf = ttf_bytes()
+    mut otf = otf_bytes()
+    mut woff = woff_bytes()
+    mut loaded = 0
+    mut seed = 1
+    while seed <= 120:
+        loaded = loaded + fuzz_one(corrupt(ttf, seed, 1 + seed % 6), t)
+        loaded = loaded + fuzz_one(corrupt(otf, seed, 1 + seed % 6), t)
+        if seed % 4 == 0: loaded = loaded + fuzz_one(corrupt(woff, seed, 1 + seed % 3), t)
+        seed = seed + 1
+    t.assert_true(loaded > 0, "some damaged fonts still load")
+    # truncations at every 37 bytes
+    mut n = 0
+    mut cut = 12
+    while cut < ttf.len():
+        n = n + fuzz_one(ttf.slice(0, cut), t)
+        cut = cut + 37
+    t.assert_true(true, "truncated fonts did not crash")
+    cut = 12
+    while cut < otf.len():
+        n = n + fuzz_one(otf.slice(0, cut), t)
+        cut = cut + 41
+    t.assert_true(true, "truncated CFF fonts did not crash")
+
+def test_subset(t: TestRunner) throws str:
+    t.section("subsetting")
+    mut f = Font.load(ttf_bytes())?
+    mut sub = FontSubset.init(f)
+    mut ga = sub.add(f.glyph_index(65))
+    mut gh = sub.add(f.glyph_index(72))
+    t.assert_eq_int(ga, 1, "first glyph gets id 1")
+    t.assert_eq_int(gh, 2, "second glyph gets id 2")
+    t.assert_eq_int(sub.add(f.glyph_index(65)), 1, "re-adding returns the same id")
+    t.assert_eq_int(sub.original(2), f.glyph_index(72), "original id")
+    mut data = sub.build()?
+    mut s = Font.load(data)?
+    t.assert_eq_int(s.num_glyphs, 3, "subset glyph count")
+    t.assert_eq_int(s.units_per_em, 2048, "subset upem")
+    t.assert_eq_int(s.glyph_advance(1), 1401, "subset advance A")
+    t.assert_eq_int(s.glyph_advance(2), 1540, "subset advance H")
+    mut mo = f.glyph_metrics(f.glyph_index(72))
+    mut ms = s.glyph_metrics(2)
+    t.assert_eq_int(ms.x_max, mo.x_max, "subset H bounds")
+    t.assert_true(data.len() < ttf_bytes().len(), "subset is smaller")
+    mut a = Image.init(100, 100)
+    mut b = Image.init(100, 100)
+    draw_glyph(a, f, f.glyph_index(72), 40.0, 20.0, 70.0, 0, 0, 0, 255)
+    draw_glyph(b, s, 2, 40.0, 20.0, 70.0, 0, 0, 0, 255)
+    t.assert_eq_float(coverage(a), coverage(b), 0.01, "subset renders identically")
+    s.free()
+    sub.free()
+    # CFF -> TrueType conversion
+    mut c = Font.load(otf_bytes())?
+    mut cs = FontSubset.init(c)
+    cs.add(c.glyph_index(111))
+    cs.add(c.glyph_index(65))
+    mut cdata = cs.build()?
+    mut c2 = Font.load(cdata)?
+    t.assert_eq_int(c2.outline_format(), FONT_TRUETYPE, "CFF subset is TrueType")
+    t.assert_eq_int(c2.glyph_advance(1), 556, "converted advance")
+    mut r1 = Image.init(100, 100)
+    mut r2 = Image.init(100, 100)
+    draw_glyph(r1, c, c.glyph_index(111), 40.0, 20.0, 70.0, 0, 0, 0, 255)
+    draw_glyph(r2, c2, 1, 40.0, 20.0, 70.0, 0, 0, 0, 255)
+    near(t, coverage(r2), coverage(r1), 0.01, "converted outline renders the same")
+    c2.free()
+    cs.free()
+    c.free()
+    f.free()
+
+def count_of(hay: str, needle: str) -> int:
+    mut n = 0
+    mut pos = 0
+    while true:
+        mut k = hay.slice(pos, hay.len()).find(needle)
+        if k < 0: break
+        n = n + 1
+        pos = pos + k + needle.len()
+    return n
+
+def test_pdf(t: TestRunner) throws str:
+    t.section("PDF with embedded fonts")
+    mut doc = PdfDocument.init()
+    mut dv = doc.add_font_ttf(ttf_bytes())?
+    mut nm = doc.add_font_ttf(otf_bytes())?
+    t.assert_eq_int(dv, 100, "first font id")
+    t.assert_eq_int(nm, 101, "second font id")
+    mut pg = doc.add_page_a4()
+    pg.set_font(dv, 12.0)
+    t.assert_eq_float(pg.text_width("AV Ho"), doc.ttf_font(dv).measure("AV Ho", 12.0), 0.0001, "text_width uses font metrics")
+    pg.text(72.0, 700.0, "AVoé Ωαβ Жб € fi")
+    pg.text_aligned(300.0, 680.0, "Hello", 1)
+    mut yend = pg.text_box(72.0, 660.0, 45.0, "Hello Ho Ho AV Hello Ho", PDF_ALIGN_JUSTIFY, 1.2)
+    t.assert_true(yend < 660.0 - 3.0 * 12.0, "text box wrapped to several lines")
+    mut lines = pg.wrap_text("Hello Ho Ho AV Hello Ho", 45.0)
+    t.assert_true(len(lines) >= 3, "wrap_text lines")
+    pg.set_font(nm, 10.0)
+    pg.text(72.0, 500.0, "AVoHe")
+    pg.set_font(PDF_HELVETICA, 10.0)
+    pg.text(72.0, 480.0, "standard font still works")
+    mut p2 = doc.add_page_a4()
+    p2.set_font(dv, 9.0)
+    p2.text(72.0, 700.0, "second page AVo")
+    mut pdf = doc.to_bytes()
+    t.assert_true(pdf.starts_with("%PDF-1.7"), "header")
+    t.assert_eq_int(count_of(pdf, "/Subtype /Type0"), 2, "two Type0 fonts")
+    t.assert_eq_int(count_of(pdf, "/Subtype /CIDFontType2"), 2, "two CID fonts")
+    t.assert_eq_int(count_of(pdf, "/Encoding /Identity-H"), 2, "Identity-H")
+    t.assert_eq_int(count_of(pdf, "/FontFile2"), 2, "embedded font programs")
+    t.assert_eq_int(count_of(pdf, "/ToUnicode"), 2, "ToUnicode maps")
+    t.assert_true(pdf.find("/BaseFont /Helvetica") > 0, "standard font object")
+    t.assert_true(count_of(pdf, "/T0 ") >= 2, "font resource used on both pages")
+    # xref integrity
+    mut sx = pdf.find("startxref\n")
+    mut rest = pdf.slice(sx + 10, pdf.len())
+    mut xoff = int(rest.slice(0, rest.find("\n")))
+    t.assert_eq_str(pdf.slice(xoff, xoff + 4), "xref", "startxref points at xref")
+    mut hdr = pdf.slice(xoff + 5, xoff + 40)
+    mut nobj = int(hdr.slice(2, hdr.find("\n")))
+    mut ok = true
+    mut i = 1
+    while i < nobj:
+        mut eo = xoff + 5 + hdr.find("\n") + 1 + 20 * i
+        mut off = int(pdf.slice(eo, eo + 10))
+        mut want = f"{i} 0 obj"
+        if pdf.slice(off, off + want.len()) != want: ok = false
+        i = i + 1
+    t.assert_true(ok, "every xref offset hits its object")
+    # documents without embedded fonts are unchanged
+    mut plain = PdfDocument.init()
+    mut pp = plain.add_page_a4()
+    pp.text(72.0, 700.0, "x")
+    t.assert_eq_int(count_of(plain.to_bytes(), "Type0"), 0, "no CID fonts without add_font_ttf")
+    mut bad: Result[int, str] = plain.add_font_ttf("garbage data here")
+    t.assert_true(bad.is_err, "invalid font rejected")
+    pg.set_font(777, 12.0)
+    t.assert_eq_int(pg.font(), 0, "unknown font id falls back")
+
+def main():
+    mut t = TestRunner.init("140_font")
+    mut r: Result[bool, str] = run_all(t)
+    t.assert_true(r.is_ok, "no unexpected error")
+    if r.is_err: print(r.err)
+    t.summary()
+
+def run_all(t: TestRunner) throws str -> bool:
+    test_ttf(t)?
+    test_otf(t)?
+    test_woff(t)?
+    test_errors(t)
+    test_fuzz(t)
+    test_subset(t)?
+    test_pdf(t)?
+    return true

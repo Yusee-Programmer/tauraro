@@ -812,3 +812,52 @@ uf.union(2, 3)
 print(str(uf.connected(0, 4)))     # true -- {0,1,2} and {3,4} now joined
 print(str(uf.component_count()))   # 6
 ```
+
+---
+
+## BitSet
+
+`BitSet.init(nbits)`, `from_list(ints)`, `from_string("0101")`; `set(i)`, `clear(i)`, `flip(i)`, `assign(i, on)`,
+`test(i)`, `count()`, `is_empty()`, `next_set(start)`, `next_clear(start)`, `to_list()`, `set_all(n)`, `clear_all()`,
+`union/intersection/difference/symmetric_difference(other)` (new sets), `union_with/intersect_with/subtract(other)`
+(in place), `is_subset_of`, `intersects`, `equals`, `copy`, `to_string`. Grows when you set past the end.
+
+## RingBuffer[T]
+
+`RingBuffer[T].init(capacity, overwrite)`: `push_back(v)` / `push_front(v)` (when full, drop from the other end if
+`overwrite`, else return false), `pop_front(empty)` / `pop_back(empty)`, `front(empty)`, `back(empty)`,
+`get(i, empty)` (negative counts from the back), `set(i, v)`, `len`, `is_full`, `clear`, `to_list`.
+
+## SkipList[K, V]
+
+Ordered map (keys with `<`/`==`: int, float, str), O(log n) expected. `insert(k, v) -> bool` (true if new),
+`get(k, missing)`, `contains`, `remove(k) -> bool`, `keys()`, `values()`, `first_key(missing)`, `last_key(missing)`,
+`floor_key(k, missing)`, `ceiling_key(k, missing)`, `range_keys(lo, hi)` / `range_values(lo, hi)` (lo <= k < hi).
+
+## IntervalTree[V]
+
+Half-open integer intervals `[lo, hi)` with values; a treap augmented with subtree max-end. `insert(lo, hi, v) -> id`,
+`remove(id)`, `query_point(x) -> ids`, `query_range(lo, hi) -> ids` (overlapping, ordered by start), `values_at(x)`,
+`overlaps(lo, hi)`, `value(id, missing)`, `lo_of(id)`, `hi_of(id)`, `ids()`.
+
+## Rope
+
+Balanced tree of ≤ 512-byte chunks for editing large text: `Rope.from_str(s)`, `insert(pos, s)`, `delete(pos, n)`,
+`replace_range(pos, n, s)`, `append`, `prepend`, `slice(pos, n)`, `byte_at(i)`, `to_str()`, `len()`, `line_count()`,
+`find(needle, start)`, `depth()`, `rebalance()` (automatic when the tree gets deep or fragmented). Byte offsets.
+
+## SlotMap[T]
+
+Values addressed by generation-checked handles — the single-ownership alternative to pointers between objects.
+`insert(v) -> handle`, `get(h, missing)`, `set(h, v)`, `contains(h)`, `remove(h)` (stale handles stay invalid after the
+slot is reused), `handles()`, `values()`, `len`, `clear`.
+
+## Arena and Slab
+
+`Arena.init(block_size)`: bump allocation of raw 8-byte-aligned memory — `allocate(n)`, `allocate_zeroed(n)`,
+`copy_str(s)` (NUL-terminated copy), `reset()` (free all, keep one block), `dispose()`, `bytes_used()`,
+`bytes_reserved()`, `block_count()`. `Slab.init(obj_size, per_chunk)`: fixed-size blocks with a free list —
+`allocate()`, `release(p)`, `live_count()`, `capacity()`, `dispose()`. Pointers are invalid after reset/release/dispose.
+
+Tested by `tests/lang/111_collections3.tr` (SkipList, IntervalTree, Rope, RingBuffer and SlotMap against brute-force
+models under randomized operations).

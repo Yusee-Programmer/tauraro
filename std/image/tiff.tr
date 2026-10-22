@@ -1,0 +1,154 @@
+# tauraro-cpp-shim: tiff_native.c
+#
+# std.image.tiff -- baseline TIFF decode and encode.
+#
+# Decodes classic (not Big-) TIFF: strips or tiles, chunky or planar, no
+# compression / PackBits / LZW / Deflate, horizontal predictor, 1-16 bit
+# samples (16-bit is reduced to 8), WhiteIsZero / BlackIsZero / RGB /
+# palette / CMYK, associated or unassociated alpha. Multi-page files: page 0
+# by default, any page with decode_tiff_page, and tiff_page_count.
+#
+# encode_tiff writes 8-bit RGB (or RGBA when any pixel is not opaque),
+# uncompressed or LZW + horizontal predictor; TiffEncoder writes several
+# pages.
+#
+# Usage:
+#   from std.image.tiff import decode_tiff, decode_tiff_page, tiff_page_count, encode_tiff, TiffEncoder, TIFF_LZW
+#   mut img = decode_tiff(bytes, n)              # img.width == -1 on error
+#   mut (out, len_) = encode_tiff(img, TIFF_LZW)
+
+from std.image.mod import Image
+from std.image.native import _im_alloc, _im_bad
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+    def trc_tiff_decode(data: Pointer[char], n: int, page: int) -> Pointer[char]
+    def trc_tiff_free(h: Pointer[char])
+    def trc_tiff_ok(h: Pointer[char]) -> int
+    def trc_tiff_w(h: Pointer[char]) -> int
+    def trc_tiff_h(h: Pointer[char]) -> int
+    def trc_tiff_npages(h: Pointer[char]) -> int
+    def trc_tiff_info(h: Pointer[char], what: int) -> int
+    def trc_tiff_error(h: Pointer[char], out: Pointer[char], cap: int) -> int
+    def trc_tiff_copy(h: Pointer[char], out: Pointer[char])
+    def trc_tiff_buf_free(p: Pointer[char])
+    def trc_tiff_enc_begin() -> Pointer[char]
+    def trc_tiff_enc_add(e: Pointer[char], rgba: Pointer[char], w: int, h: int, compression: int) -> int
+    def trc_tiff_enc_finish(e: Pointer[char], out_len: Pointer[int]) -> Pointer[char]
+
+pub const TIFF_NONE: int = 1
+pub const TIFF_LZW: int = 5
+
+# Facts about one page of a TIFF file.
+pub class TiffInfo:
+    pub width: int
+    pub height: int
+    pub pages: int
+    pub bits_per_sample: int
+    pub samples_per_pixel: int
+    pub photometric: int
+    pub compression: int
+
+def _tf_err(h: Pointer[char]) -> str:
+    mut out = _tr_c_malloc(201)
+    mut n = trc_tiff_error(h, out, 200)
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap_len(out, n)
+
+def _tf_open(data: str, len_: int, page: int) throws str -> Pointer[char]:
+    mut dp = data as Pointer[char]
+    mut h = trc_tiff_decode(dp, len_, page)
+    if (h as usize) == (0 as usize): raise("TIFF: out of memory")
+    if trc_tiff_ok(h) != 1:
+        mut e = _tf_err(h)
+        trc_tiff_free(h)
+        raise(e)
+    return h
+
+def _tf_image(h: Pointer[char]) -> Image:
+    mut img = _im_alloc(trc_tiff_w(h), trc_tiff_h(h))
+    trc_tiff_copy(h, img.pixels.data)
+    return img
+
+# Page `page` (0-based), raising with the reason on failure.
+pub def decode_tiff_page(data: str, len_: int, page: int) throws str -> Image:
+    mut h = _tf_open(data, len_, page)?
+    mut img = _tf_image(h)
+    trc_tiff_free(h)
+    return img
+
+# First page; width == -1 on malformed or unsupported input.
+pub def decode_tiff(data: str, len_: int) -> Image:
+    mut r: Result[Image, str] = decode_tiff_page(data, len_, 0)
+    if r.is_err: return _im_bad()
+    return r.ok
+
+pub def decode_tiff_checked(data: str, len_: int) throws str -> Image:
+    return decode_tiff_page(data, len_, 0)?
+
+# Number of pages (image file directories); 0 when the file is not a readable TIFF.
+pub def tiff_page_count(data: str, len_: int) -> int:
+    mut dp = data as Pointer[char]
+    mut h = trc_tiff_decode(dp, len_, 0)
+    if (h as usize) == (0 as usize): return 0
+    mut n = trc_tiff_npages(h)
+    trc_tiff_free(h)
+    return n
+
+pub def tiff_info(data: str, len_: int, page: int) throws str -> TiffInfo:
+    mut h = _tf_open(data, len_, page)?
+    mut i = TiffInfo()
+    i.width = trc_tiff_w(h)
+    i.height = trc_tiff_h(h)
+    i.pages = trc_tiff_npages(h)
+    i.bits_per_sample = trc_tiff_info(h, 0)
+    i.samples_per_pixel = trc_tiff_info(h, 1)
+    i.photometric = trc_tiff_info(h, 2)
+    i.compression = trc_tiff_info(h, 3)
+    trc_tiff_free(h)
+    return i
+
+# Multi-page writer. compression: TIFF_NONE or TIFF_LZW.
+pub class TiffEncoder:
+    _h: Pointer[char]
+    pub pages: int
+
+extend TiffEncoder:
+    pub def init() -> TiffEncoder:
+        mut e = TiffEncoder()
+        e._h = trc_tiff_enc_begin()
+        e.pages = 0
+        return e
+
+    pub def add_page(self, img: Image, compression: int) throws str -> bool:
+        if (self._h as usize) == (0 as usize): raise("TIFF: encoder already finished")
+        if compression != 1 and compression != 5: raise("TIFF: compression must be TIFF_NONE or TIFF_LZW")
+        if trc_tiff_enc_add(self._h, img.pixels.data, img.width, img.height, compression) != 0: raise("TIFF: encoding failed")
+        self.pages = self.pages + 1
+        return true
+
+    pub def finish(self) -> (str, int):
+        if (self._h as usize) == (0 as usize): return ("", 0)
+        mut lenbox = [0]
+        mut lp = lenbox as Pointer[int]
+        mut p = trc_tiff_enc_finish(self._h, lp)
+        self._h = 0 as Pointer[char]
+        if (p as usize) == (0 as usize): return ("", 0)
+        mut n = lenbox[0]
+        mut out = _tr_c_malloc(n + 1)
+        _tr_c_memcpy(out, p, n)
+        unsafe: out.offset(n).write('\0')
+        trc_tiff_buf_free(p)
+        return (_tr_str_wrap_len(out, n), n)
+
+# One page. Returns (bytes, length); length 0 on failure.
+pub def encode_tiff(img: Image, compression: int) -> (str, int):
+    mut e = TiffEncoder.init()
+    mut r: Result[bool, str] = e.add_page(img, compression)
+    if r.is_err:
+        e.finish()
+        return ("", 0)
+    return e.finish()

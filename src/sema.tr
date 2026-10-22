@@ -228,8 +228,12 @@ pub class Sema:
     pub current_class_name: str
     pub current_scope_depth: int
     pub in_async_fn:        bool
+    pub fn_try_ok:          bool   # `?` allowed: the enclosing fn throws / returns Result|Option (or we are in a closure)
+    pub closure_depth:      int
     pub assign_froms:       Map[str, int] # block-local last use tracking
     pub fn_sigs:            Map[str, AstType] # top-level fn name -> def(...)->R type, for first-class function references
+    pub closure_hint:       Pointer[AstType]  # expected def(...)->R type of the closure argument being lowered (null = none)
+    pub list_hint:          Pointer[AstType]  # expected List[T]/Vec[T] type of an empty `[]` argument being lowered (null = none)
     pub extern_names:       Map[str, bool]    # [N-3] extern "C" function names (valid bare names not in fn_sigs/globals)
     # Nested declarations (class/def/enum/interface inside main()) hoisted to file scope.
     pub nested_classes:     Vec[HirClass]
@@ -340,8 +344,12 @@ extend Sema:
         s.current_class_name = ""
         s.current_scope_depth = 0
         s.in_async_fn        = false
+        s.fn_try_ok          = true
+        s.closure_depth      = 0
         s.assign_froms       = Map[str, int].init(32)
         s.fn_sigs            = Map[str, AstType].init(64)
+        s.closure_hint       = Pointer[AstType](0)
+        s.list_hint          = Pointer[AstType](0)
         s.extern_names       = Map[str, bool].init(128)
         s.nested_classes     = Vec[HirClass].init(4)
         s.nested_functions   = Vec[HirFunction].init(4)
@@ -1489,6 +1497,16 @@ extend Sema:
             if sym.active_borrows > 0: return false
             if not sym.is_init or sym.is_maybe_init: return false
             return true
+        # A Result local owns its boxed payloads (a str or value-type Ok value, a
+        # str error): free them at scope exit unless the Result itself was passed
+        # on, returned, aliased or moved (then the new holder owns them).
+        if tn == "Result":
+            if sym.coll_escaped: return false
+            if self.alias_assigned.contains(sym.name): return false
+            if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
+            if sym.active_borrows > 0: return false
+            if not sym.is_init or sym.is_maybe_init: return false
+            return true
         if not self.classes.contains(tn): return false
         # "Box" omitted: builtin Box[T] is not in self.classes (guarded above), so a
         # tn=="Box" here is a user `class Box` — a droppable owned local, not the builtin.
@@ -1615,6 +1633,97 @@ extend Sema:
     # `out` (best-effort recursive walk over the common HirExpr shapes). Used
     # to find `str` locals that a `return EXPR` reads, so they aren't
     # auto-dropped before EXPR is evaluated.
+    # Expected function type of argument k of a call to top-level `fname`
+    # (non-null only when that parameter is a `def(...) -> R` type).
+    pub def closure_hint_for_fn(self, fname: str, k: int) -> Pointer[AstType]:
+        mut nohint = Pointer[AstType](0)
+        if not self.fn_sigs.contains(fname): return nohint
+        mut sig = self.fn_sigs.get(fname)
+        if k >= sig.args.len - 1: return nohint
+        mut pt = sig.args.get(k)
+        if pt as usize == 0 as usize: return nohint
+        if pt.read().name == "def": return pt
+        return nohint
+
+    # Same for a method call `obj.method(...)`, used when every class that
+    # declares `method` agrees on the arity of the function-typed parameter
+    # (the receiver type is not known yet while the arguments are lowered).
+    pub def closure_hint_for_method(self, method: str, k: int) -> Pointer[AstType]:
+        mut nohint = Pointer[AstType](0)
+        mut found = Pointer[AstType](0)
+        mut ambiguous = false
+        mut keys = self.classes.keys()
+        mut ci = 0
+        while ci < keys.len:
+            mut cd = self.classes.get(keys.get(ci))
+            mut mi = 0
+            while mi < cd.methods.len:
+                mut md = cd.methods.get(mi)
+                if md.name == method:
+                    mut idx = 0
+                    mut pi = 0
+                    while pi < md.params.len:
+                        mut prm = md.params.get(pi)
+                        if prm.name != "self":
+                            if idx == k and prm.ty as usize != 0 as usize and prm.ty.read().name == "def":
+                                if found as usize == 0 as usize:
+                                    found = prm.ty
+                                elif found.read().args.len != prm.ty.read().args.len:
+                                    ambiguous = true
+                            idx = idx + 1
+                        pi = pi + 1
+                mi = mi + 1
+            ci = ci + 1
+        if ambiguous: return nohint
+        return found
+
+    # Declared List/Vec type of parameter k of free function `fname`, for an
+    # empty `[]` argument (null when unknown or not a list).
+    pub def list_hint_for_fn(self, fname: str, k: int) -> Pointer[AstType]:
+        mut nohint = Pointer[AstType](0)
+        if not self.fn_sigs.contains(fname): return nohint
+        mut sig = self.fn_sigs.get(fname)
+        if k >= sig.args.len - 1: return nohint
+        mut pt = sig.args.get(k)
+        if pt as usize == 0 as usize: return nohint
+        mut pn = pt.read().name
+        if (pn == "List" or pn == "Vec") and pt.read().args.len > 0: return pt
+        return nohint
+
+    # Same for `obj.method(...)`: used when every class declaring `method` gives
+    # parameter k the same List/Vec element type.
+    pub def list_hint_for_method(self, method: str, k: int) -> Pointer[AstType]:
+        mut nohint = Pointer[AstType](0)
+        mut found = Pointer[AstType](0)
+        mut keys = self.classes.keys()
+        mut ci = 0
+        while ci < keys.len:
+            mut cd = self.classes.get(keys.get(ci))
+            mut mi = 0
+            while mi < cd.methods.len:
+                mut md = cd.methods.get(mi)
+                if md.name == method:
+                    mut idx = 0
+                    mut pi = 0
+                    while pi < md.params.len:
+                        mut prm = md.params.get(pi)
+                        if prm.name != "self":
+                            if idx == k and prm.ty as usize != 0 as usize:
+                                mut pn = prm.ty.read().name
+                                if (pn == "List" or pn == "Vec") and prm.ty.read().args.len > 0:
+                                    mut en = prm.ty.read().args.get(0).read().name
+                                    if found as usize == 0 as usize:
+                                        found = prm.ty
+                                    elif found.read().name != pn or found.read().args.get(0).read().name != en:
+                                        return nohint
+                                else:
+                                    return nohint
+                            idx = idx + 1
+                        pi = pi + 1
+                mi = mi + 1
+            ci = ci + 1
+        return found
+
     pub def collect_idents(self, e: Pointer[HirExpr], out: Vec[str]):
         if e as usize == 0 as usize: return
         if _is_invalid_ptr(e as usize): return
@@ -1675,6 +1784,19 @@ extend Sema:
                 self.collect_idents(inner, out)
                 self.collect_idents(to, out)
             case HirExpr.EYield(inner, _): self.collect_idents(inner, out)
+            case HirExpr.EFString(fparts, _):
+                # `return f"...{local}..."` reads the local while building the
+                # result; it must not be released before the return expression.
+                mut fpi = 0
+                while fpi < fparts.len:
+                    mut fpart = fparts.get(fpi)
+                    if fpart.is_expr and fpart.expr as usize != 0 as usize:
+                        self.collect_idents(fpart.expr, out)
+                    mut fsa = 0
+                    while fsa < fpart.spec_args.len:
+                        self.collect_idents(fpart.spec_args.get(fsa), out)
+                        fsa = fsa + 1
+                    fpi = fpi + 1
             case _: pass
 
     # True if `name` is a declared local/param variable in any open scope.
@@ -2023,6 +2145,10 @@ extend Sema:
                     # A closure-valued local used as an argument / returned / stored may
                     # outlive this frame: codegen must give it a HEAP env (see
                     # escaping_closures), not a stack env.
+                    self.mark_coll_escaped(nm)
+                elif tn == "Result":
+                    # a Result handed on (argument, return, alias) is owned by its new
+                    # holder: never auto-drop it here
                     self.mark_coll_escaped(nm)
                 elif self.classes.contains(tn):
                     # A class instance passed in a NON-RECEIVER position (call/method arg,
@@ -2427,6 +2553,13 @@ extend Sema:
 
         if self.scopes.len > 0:
             mut decl_scope = self.scopes.get(self.scopes.len - 1)
+            # Rule N-2: a second `mut x` / `x: T = ...` for a local already declared
+            # in the same block would be a C redefinition. Shadowing in an inner
+            # block (an if/while body) stays legal, as in C.
+            if kind == SymbolKind.SVariable and decl_scope.variables.contains(name) and not name.starts_with("_"):
+                mut prev = decl_scope.variables.get(name)
+                if prev.kind == SymbolKind.SVariable and prev.decl_block_id == sym.decl_block_id and not prev.is_param:
+                    self.error("[N-2] '" + name + "' is already declared in this block. Assign to it without `mut` (`" + name + " = ...`), or pick a different name.")
             if not decl_scope.variables.contains(name): decl_scope.decl_order.push(name)
             decl_scope.variables.insert(name, sym)
         else:
@@ -3797,6 +3930,12 @@ extend Sema:
         # Save async context, set function context
         mut saved_async = self.in_async_fn
         self.in_async_fn = f.is_async
+        mut saved_try_ok = self.fn_try_ok
+        self.fn_try_ok = false
+        if f.throws_ty as usize != 0 as usize and f.throws_ty.read().name != "": self.fn_try_ok = true
+        if f.ret_ty as usize != 0 as usize:
+            mut _rtn = f.ret_ty.read().name
+            if _rtn == "Result" or _rtn == "Option": self.fn_try_ok = true
         self.current_func_name = f.name
         mut saved_func_generics = self.current_func_generics
         self.current_func_generics = f.generics
@@ -3988,6 +4127,7 @@ extend Sema:
         self.exit_scope()
         # Restore async context and lifetime context
         self.in_async_fn = saved_async
+        self.fn_try_ok = saved_try_ok
         self.current_func_name = ""
         self.current_func_generics = saved_func_generics
         self.current_func_constraints = saved_func_constraints
@@ -4449,6 +4589,9 @@ extend Sema:
                                 # freed again at scope exit (was a double free of the same struct).
                                 self.mark_moved(m1_src)
                         case _: pass
+                # `shared x = f()` where f returns Shared[T]: x is the shared handle of T
+                # (typed as its inner T, like every other shared local).
+                if is_shared and ty.name == "Shared" and ty.args.len > 0: ty = ty.args.get(0).read()
                 self.declare(name, SymbolKind.SVariable, box_asttype(ty), is_mut)
                 # A `shared` local: record is_shared on the symbol so the Shared[T]
                 # control methods (clone/downgrade/drop) resolve on it and its drop is
@@ -5290,7 +5433,7 @@ extend Sema:
             case _: pass
 
     pub def str_method_ret_ty(self, method: str) -> AstType:
-        if method == "split" or method == "split_to_vec" or method == "split_once":
+        if method == "split" or method == "split_to_vec" or method == "split_once" or method == "split_exact":
             return AstType.init_generic("Vec", box_asttype(AstType.init("str")))
         if method == "strip": return AstType.init("str")
         if method == "trim": return AstType.init("str")
@@ -5321,7 +5464,7 @@ extend Sema:
         if method == "join": return AstType.init("str")
         if method == "len": return AstType.init("int")
         if method == "index_of": return AstType.init("int")
-        if method == "last_index_of": return AstType.init("int")
+        if method == "last_index_of" or method == "rfind": return AstType.init("int")
         if method == "count": return AstType.init("int")
         if method == "char_at": return AstType.init("int")
         if method == "parse_int": return AstType.init("int")
@@ -5639,9 +5782,23 @@ extend Sema:
                             p23_seen.insert(p23_nm, true)
                     p23_k = p23_k + 1
                 mut hl = Vec[Pointer[HirExpr]].init(4)
+                mut _ch_fname = ""
+                if callee as usize != 0 as usize:
+                    match callee.read():
+                        case Expr.EIdent(_ch_n): _ch_fname = _ch_n
+                        case _: pass
                 mut k = 0
                 while k < args.len:
+                    self.closure_hint = Pointer[AstType](0)
+                    if _ch_fname != "":
+                        match args.get(k).read():
+                            case Expr.EClosure(_, _, _, _): self.closure_hint = self.closure_hint_for_fn(_ch_fname, k)
+                            case Expr.EList(_lh_items):
+                                if _lh_items.len == 0: self.list_hint = self.list_hint_for_fn(_ch_fname, k)
+                            case _: pass
                     hl.push(self.lower_expr(args.get(k)))
+                    self.closure_hint = Pointer[AstType](0)
+                    self.list_hint = Pointer[AstType](0)
                     k = k + 1
                 # release borrows after call
                 mut p23_ui = 0
@@ -5958,7 +6115,15 @@ extend Sema:
                 mut hl = Vec[Pointer[HirExpr]].init(4)
                 mut k = 0
                 while k < args.len:
+                    self.closure_hint = Pointer[AstType](0)
+                    match args.get(k).read():
+                        case Expr.EClosure(_, _, _, _): self.closure_hint = self.closure_hint_for_method(method, k)
+                        case Expr.EList(_lhm_items):
+                            if _lhm_items.len == 0: self.list_hint = self.list_hint_for_method(method, k)
+                        case _: pass
                     hl.push(self.lower_expr(args.get(k)))
+                    self.closure_hint = Pointer[AstType](0)
+                    self.list_hint = Pointer[AstType](0)
                     k = k + 1
                 mut _saved_recv_mc = self.in_recv_pos
                 self.in_recv_pos = true
@@ -6137,7 +6302,7 @@ extend Sema:
                     if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                     else: ret_ty = AstType.init("void")
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "reversed" or method == "reversed_copy"): ret_ty = hobj_ty
-                elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "clone" or method == "copy"): ret_ty = hobj_ty
+                elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "clone" or method == "copy" or method == "slice"): ret_ty = hobj_ty
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and method == "reverse": ret_ty = AstType.init("void")
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "index_of" or method == "last_index_of" or method == "count"): ret_ty = AstType.init("int")
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and method == "join": ret_ty = AstType.init("str")
@@ -6180,6 +6345,10 @@ extend Sema:
                 # str primitive method dispatch - str.split/strip/join/etc.
                 elif hobj_ty.name == "str":
                     ret_ty = self.str_method_ret_ty(method)
+                    if not _str_method_known(method) and not self.class_method_exists("str", method) and not self.is_universal_method(method):
+                        # Otherwise the call reaches the C compiler as an undeclared
+                        # `TrStr_<method>` function.
+                        self.error("[E-1] No method '" + method + "' found on type 'str'.\n      FIX: see docs/std/string.md for the str methods, or add one with 'extend str:'.")
                 # Int format methods - return str (int/char/iN/uN types ONLY, not Thread/Atomic/etc.)
                 elif hobj_ty.name == "int" or hobj_ty.name == "i64" or hobj_ty.name == "i32" or hobj_ty.name == "i16" or hobj_ty.name == "i8" or hobj_ty.name == "u64" or hobj_ty.name == "u32" or hobj_ty.name == "u16" or hobj_ty.name == "u8" or hobj_ty.name == "usize" or hobj_ty.name == "char":
                     if method == "to_hex" or method == "to_HEX" or method == "to_hex_upper" or method == "to_octal" or method == "to_oct" or method == "to_binary" or method == "to_bin":
@@ -6404,6 +6573,7 @@ extend Sema:
                         if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                         else: ret_ty = AstType.init("int")
                 elif hobj_ty.name == "StringBuilder" and method == "to_string": ret_ty = AstType.init("StringObj")
+                elif hobj_ty.name == "StringBuilder" and method == "to_owned": ret_ty = AstType.init("str")
                 # Shared[T] method return types
                 # Note: s1's HIR type is the inner T (not Shared[T]), so these branches
                 # are reached only when an explicit Shared[T] annotation is used.
@@ -6807,6 +6977,10 @@ extend Sema:
                     hp.text_len = p_ast.text_len
                     hp.fmt_spec = p_ast.fmt_spec
                     hp.expr     = self.lower_expr(p_ast.expr)
+                    mut sai = 0
+                    while sai < p_ast.spec_args.len:
+                        hp.spec_args.push(self.lower_expr(p_ast.spec_args.get(sai)))
+                        sai = sai + 1
                     hparts.push(hp)
                     m = m + 1
                 return box_hirexpr(HirExpr.EFString(hparts, AstType.init("str")))
@@ -6841,6 +7015,10 @@ extend Sema:
                 if hitems.len > 0:
                     list_ty.args = Vec[Pointer[AstType]].init(1)
                     list_ty.args.push(box_asttype(hir_expr_type(hitems.get(0))))
+                elif self.list_hint as usize != 0 as usize:
+                    # empty `[]` passed straight to a List[T] parameter
+                    list_ty = self.list_hint.read()
+                self.list_hint = Pointer[AstType](0)
                 return box_hirexpr(HirExpr.EList(hitems, list_ty))
             case Expr.ESet(items):
                 self.check_no_heap("a set literal", "use a fixed-size array [T; N] + linear scan, or a bitset over a fixed word")
@@ -6857,6 +7035,12 @@ extend Sema:
                     set_ty.args.push(box_asttype(hir_expr_type(sitems.get(0))))
                 return box_hirexpr(HirExpr.ESet(sitems, set_ty))
             case Expr.EClosure(params, ret_ty, body, is_async):
+                self.closure_depth = self.closure_depth + 1
+                # Untyped parameters take their types from the expected `def(...) -> R`
+                # parameter type of the call this closure is passed to (else `int`).
+                mut _cl_hint = self.closure_hint
+                self.closure_hint = Pointer[AstType](0)
+                mut _cl_hint_ok = _cl_hint as usize != 0 as usize and _cl_hint.read().args.len == params.len + 1
                 self.enter_scope()
                 mut cap_idx = self.scopes.len - 1   # the closure's OWN scope
                 mut hparams = Vec[HirParam].init(params.len)
@@ -6864,7 +7048,10 @@ extend Sema:
                 while l < params.len:
                     mut pa = params.get(l)
                     mut pa_ty = AstType.init("int")
-                    if pa.ty as usize != 0 as usize: pa_ty = pa.ty.read()
+                    if pa.ty as usize != 0 as usize:
+                        pa_ty = pa.ty.read()
+                    elif _cl_hint_ok and _cl_hint.read().args.get(l) as usize != 0 as usize:
+                        pa_ty = _cl_hint.read().args.get(l).read()
                     self.declare(pa.name, SymbolKind.SVariable, box_asttype(pa_ty), false)
                     mut hpa = HirParam()
                     hpa.name = pa.name
@@ -6926,6 +7113,7 @@ extend Sema:
                     if inf_ty.name != "" and inf_ty.name != "void" and inf_ty.name != "None":
                         r_ty = inf_ty
                 mut hexpr = HirExpr.EClosure(hparams, r_ty, clo_body, is_async, clo_caps)
+                self.closure_depth = self.closure_depth - 1
                 self.exit_scope()
                 return box_hirexpr(hexpr)
             case Expr.EIfElse(cond, then_e, else_e):
@@ -7007,6 +7195,8 @@ extend Sema:
                 h_we_else_b.push(box_hirstmt(HirStmt.SExpr(h_we_else)))
                 return box_hirexpr(HirExpr.EWhileExpr(h_we_cond, h_we_body, h_we_else_b, we_ty))
             case Expr.ETryExpr(inner):
+                if not self.fn_try_ok and self.closure_depth == 0 and self.current_func_name != "":
+                    self.error("[F-4] '?' used in '" + self.current_func_name + "', which neither throws nor returns a Result/Option. FIX: declare it 'def " + self.current_func_name + "(...) throws str -> T' (or return Result[T, E]), or handle the error with 'if r.is_err:' instead of '?'.")
                 mut hinner = self.lower_expr(inner)
                 mut inner_ty = hir_expr_type(hinner)
                 # ? extracts the Ok type from a Result[T,E]
@@ -7181,6 +7371,11 @@ extend Sema:
         if name == "List" or name == "Dict": return "built-in container type"
         if name == "Option" or name == "Result": return "built-in enum type"
         if name == "Exception" or name == "Error": return "built-in exception type"
+        # Top-level names are emitted as plain C identifiers, so these collide with C
+        # keywords / libc typedefs / Windows SDK macros in the generated code.
+        if name == "_Complex" or name == "_Imaginary" or name == "_Bool" or name == "_Atomic" or name == "_Generic" or name == "_Noreturn" or name == "_Alignas" or name == "_Alignof" or name == "_Static_assert" or name == "_Thread_local": return "C99/C11 keyword"
+        if name == "DIR" or name == "FILE" or name == "EOF" or name == "NULL" or name == "errno" or name == "stdin" or name == "stdout" or name == "stderr": return "C library identifier"
+        if name == "ERROR" or name == "DELETE" or name == "IN" or name == "OUT" or name == "OPTIONAL" or name == "NEAR" or name == "FAR" or name == "VOID" or name == "CONST" or name == "TRUE" or name == "FALSE" or name == "INFINITE" or name == "SEVERITY_ERROR" or name == "SEVERITY_SUCCESS": return "Windows SDK macro"
         return ""
 
     # -- Rule F-3: Definite return check ---------------------------------------
@@ -7357,3 +7552,8 @@ pub def box_symbol(s: Symbol) -> Pointer[Symbol]:
         mut p = alloc[Symbol](1)
         p.write(s)
         return p
+
+# Methods the C backend implements on `str` (keep in sync with the str
+# dispatch in codegen/c.tr gen_method_call).
+pub def _str_method_known(m: str) -> bool:
+    return " as_ptr as_str capitalize ceil center char_at chars contains contains_char count ends_with eq find floor format free get_index index_of is_alnum is_alpha is_digit is_empty is_lower is_space is_upper join last_index_of rfind __len__ len length lines lower lpad offset pad_left pad_right parse_bool parse_float parse_int pow read remove_char repeat replace replace_first reverse rpad slice split split_exact split_once split_to_vec starts_with strip strip_prefix strip_suffix title to_float to_int to_lower to_str to_string to_upper trim trim_left trim_right upper words write zfill clone hash bytes ".contains(" " + m + " ")

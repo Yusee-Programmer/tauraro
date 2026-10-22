@@ -1,0 +1,171 @@
+# std.net.mdns -- multicast DNS queries and DNS-SD service discovery on the
+# local network (RFC 6762 / RFC 6763).
+#
+# Queries are sent from an ephemeral port to 224.0.0.251:5353 ("one-shot"
+# queries, RFC 6762 section 5.1), so responders answer by unicast to that
+# port; no system mDNS daemon is needed and port 5353 is not taken.
+#
+#   Mdns.query(name, qtype, timeout_ms)   -> all records seen in replies
+#   Mdns.resolve_host("printer.local")    -> IPv4/IPv6 addresses
+#   Mdns.browse("_http._tcp", timeout_ms) -> service instances with host,
+#                                            port, addresses and TXT entries
+#
+# Usage:
+#   from std.net.mdns import Mdns
+#   mut svcs = Mdns.browse("_ipp._tcp", 1500)?
+#   mut i = 0
+#   while i < len(svcs):
+#       print(svcs[i].instance + " -> " + svcs[i].host + ":" + f"{svcs[i].port}")
+#       i = i + 1
+
+from std.net.udpx import UdpEndpoint, Datagram, unix_ms
+from std.net.dnsmsg import DnsMessage, DnsRecord, DNS_A, DNS_AAAA, DNS_PTR, DNS_SRV, DNS_TXT, DNS_ANY
+
+pub const MDNS_GROUP = "224.0.0.251"
+pub const MDNS_PORT = 5353
+
+pub class MdnsService:
+    pub instance:  str          # "My Printer._ipp._tcp.local"
+    pub name:      str          # "My Printer"
+    pub host:      str          # "printer.local"
+    pub port:      int
+    pub addresses: List[str]
+    pub txt:       List[str]    # "key=value" entries
+
+def _lower(s: str) -> str: return s.lower()
+
+def _contains_str(xs: List[str], v: str) -> bool:
+    mut i = 0
+    while i < len(xs):
+        if xs[i] == v: return true
+        i = i + 1
+    return false
+
+pub class Mdns:
+    _dummy: int
+
+extend Mdns:
+    # Send a one-shot query and collect every record from replies for timeout_ms.
+    pub def query(name: str, qtype: int, timeout_ms: int) throws str -> List[DnsRecord]:
+        mut names: List[str] = [name]
+        mut types: List[int] = [qtype]
+        return Mdns.query_many(names, types, timeout_ms)?
+
+    pub def query_many(names: List[str], qtypes: List[int], timeout_ms: int) throws str -> List[DnsRecord]:
+        mut u = UdpEndpoint.open(4, 0)?
+        u.set_multicast_ttl(255)
+        mut q = DnsMessage.multi_query(0, names, qtypes, false)?
+        mut out: List[DnsRecord] = []
+        mut sr: Result[bool, str] = _md_send(u, q, MDNS_GROUP, MDNS_PORT)
+        if sr.is_err:
+            u.close()
+            raise(sr.err)
+        mut deadline = unix_ms() + timeout_ms
+        mut resent = false
+        while true:
+            mut left = deadline - unix_ms()
+            if left <= 0: break
+            # one retransmission after a quiet first second (RFC 6762 section 5.2)
+            if not resent and timeout_ms > 1500 and unix_ms() > deadline - timeout_ms + 1000:
+                mut rs: Result[bool, str] = _md_send(u, q, MDNS_GROUP, MDNS_PORT)
+                resent = true
+            mut d: Result[Datagram, str] = u.recv(9000, left)
+            if d.is_err or d.ok.timed_out: break
+            mut m: Result[DnsMessage, str] = DnsMessage.parse(d.ok.data)
+            if m.is_err or not m.ok.is_response: continue
+            mut i = 0
+            while i < len(m.ok.answers):
+                out.append(m.ok.answers[i])
+                i = i + 1
+            i = 0
+            while i < len(m.ok.additional):
+                out.append(m.ok.additional[i])
+                i = i + 1
+        u.close()
+        return out
+
+    # Addresses of a ".local" host name.
+    pub def resolve_host(host: str, timeout_ms: int) throws str -> List[str]:
+        mut names: List[str] = [host, host]
+        mut types: List[int] = [DNS_A, DNS_AAAA]
+        mut recs = Mdns.query_many(names, types, timeout_ms)?
+        mut out: List[str] = []
+        mut h = _lower(host)
+        mut i = 0
+        while i < len(recs):
+            mut r = recs[i]
+            if (r.rtype == DNS_A or r.rtype == DNS_AAAA) and _lower(r.name) == h and not _contains_str(out, r.address):
+                out.append(r.address)
+            i = i + 1
+        return out
+
+    # Service instances of a type such as "_http._tcp" (".local" is added).
+    pub def browse(service: str, timeout_ms: int) throws str -> List[MdnsService]:
+        mut stype = service
+        if not stype.ends_with(".local"): stype = stype + ".local"
+        mut recs = Mdns.query(stype, DNS_PTR, timeout_ms)?
+        return Mdns.services_from_records(stype, recs)
+
+    # Assemble MdnsService values from PTR/SRV/TXT/A/AAAA records.
+    pub def services_from_records(stype: str, recs: List[DnsRecord]) -> List[MdnsService]:
+        mut out: List[MdnsService] = []
+        mut st = _lower(stype)
+        mut i = 0
+        while i < len(recs):
+            mut r = recs[i]
+            if r.rtype == DNS_PTR and _lower(r.name) == st:
+                mut dup = false
+                mut k = 0
+                while k < len(out):
+                    if _lower(out[k].instance) == _lower(r.target): dup = true
+                    k = k + 1
+                if not dup:
+                    mut s = MdnsService()
+                    s.instance = r.target
+                    s.name = r.target
+                    if r.target.len() > stype.len() + 1 and _lower(r.target).ends_with("." + st):
+                        s.name = r.target.slice(0, r.target.len() - stype.len() - 1)
+                    s.host = ""
+                    s.port = 0
+                    s.addresses = []
+                    s.txt = []
+                    out.append(s)
+            i = i + 1
+        mut si = 0
+        while si < len(out):
+            mut svc = out[si]
+            mut inst = _lower(svc.instance)
+            mut j = 0
+            while j < len(recs):
+                mut r2 = recs[j]
+                if _lower(r2.name) == inst:
+                    if r2.rtype == DNS_SRV:
+                        svc.host = r2.target
+                        svc.port = r2.port
+                    elif r2.rtype == DNS_TXT and len(svc.txt) == 0:
+                        svc.txt = r2.texts
+                j = j + 1
+            if svc.host.len() > 0:
+                mut hn = _lower(svc.host)
+                j = 0
+                while j < len(recs):
+                    mut r3 = recs[j]
+                    if (r3.rtype == DNS_A or r3.rtype == DNS_AAAA) and _lower(r3.name) == hn and not _contains_str(svc.addresses, r3.address):
+                        svc.addresses.append(r3.address)
+                    j = j + 1
+            si = si + 1
+        return out
+
+    # Every service type advertised on the network ("_services._dns-sd._udp.local").
+    pub def service_types(timeout_ms: int) throws str -> List[str]:
+        mut recs = Mdns.query("_services._dns-sd._udp.local", DNS_PTR, timeout_ms)?
+        mut out: List[str] = []
+        mut i = 0
+        while i < len(recs):
+            if recs[i].rtype == DNS_PTR and not _contains_str(out, recs[i].target): out.append(recs[i].target)
+            i = i + 1
+        return out
+
+def _md_send(u: UdpEndpoint, q: str, host: str, port: int) throws str -> bool:
+    u.send_to(q, host, port)?
+    return true

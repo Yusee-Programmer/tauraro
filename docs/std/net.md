@@ -9,6 +9,14 @@ from std.net.http import HttpClient, HttpClientResponse, HttpHeader
 from std.net.client    import HttpSession, ClientRequest, HttpReply, HeaderList
 from std.net.cookie    import CookieJar, Cookie
 from std.net.multipart import FormBuilder, MultipartBuilder
+from std.net.imap      import ImapClient
+from std.net.pop3      import Pop3Client
+from std.net.mime      import Mime, MediaType
+from std.net.email     import EmailMessage, Address, Attachment, MimePart
+from std.net.dnsmsg    import Dns, DnsMessage
+from std.net.ntp       import Ntp
+from std.net.mdns      import Mdns
+from std.net.mqtt      import MqttClient, MqttOptions, MqttBroker
 ```
 
 > **Platform note** — All socket classes require `-lws2_32` on Windows (Winsock).  
@@ -287,13 +295,310 @@ print(r3.header("Content-Type"))           # "application/json"
 
 ---
 
+## std.net.tls — TLS 1.3 client and server
+
+A self-contained TLS 1.3 client (RFC 8446), no OpenSSL. Verifies the server's certificate chain and
+host name against the system trust store by default (`std.crypto.x509`). Key exchange X25519 /
+secp256r1 (secp384r1 via HelloRetryRequest); AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305; server
+signatures ECDSA P-256/P-384 and RSA-PSS; SNI, ALPN, KeyUpdate. Not supported: TLS 1.2 and older,
+resumption/0-RTT, client certificates.
+
+```tauraro
+from std.net.tls import TlsStream, TlsOptions
+
+mut s = TlsStream.connect("example.com", 443)?
+s.write("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")?
+mut resp = s.read_all()?
+print(s.cipher_suite())                  # TLS_AES_128_GCM_SHA256
+print(s.peer_certificates()[0].subject())
+s.close()
+```
+
+| Member | Description |
+|---|---|
+| `TlsOptions.default()` / `TlsOptions.insecure()` | Settings: `verify` (default true), `alpn` (`"h2,http/1.1"`), `timeout_ms` (30000), `ca_pem` (extra roots), `only_ca_pem`. |
+| `TlsStream.connect(host, port)?` / `connect_with(host, port, opts)?` | Resolve, connect (with timeout) and handshake. Raises with the TLS/verification error. |
+| `TlsStream.wrap_fd(fd, host, opts)?` | Handshake on an already-connected socket (STARTTLS). `close()` leaves the fd open. |
+| `write(data)?`, `read(cap)?`, `read_all()?`, `read_line(max)?` | I/O; `read` returns `""` at end of stream and raises on timeout. |
+| `alpn()`, `cipher_suite()`, `version()`, `peer_certificates()` | Connection details. |
+| `set_timeout(ms)`, `close()` | `close()` sends close_notify. |
+
+### Server side
+
+`std.net.tls` also accepts TLS 1.3 connections, no OpenSSL. The server supports:
+
+- RSA (RSA-PSS signatures) or ECDSA P-256 / P-384 certificates;
+- X25519, P-256 and P-384 key exchange, with HelloRetryRequest;
+- all three TLS 1.3 cipher suites;
+- ALPN (the server's preference wins) and SNI.
+
+It interoperates with OpenSSL clients and with this module's own client.
+
+```tauraro
+from std.net.tls import TlsServerConfig, TlsListener
+
+mut cfg = TlsServerConfig.from_pem(File.read_text("cert.pem"), File.read_text("key.pem"))?
+cfg.set_alpn("h2,http/1.1")?
+mut l = TlsListener.listen("0.0.0.0", 8443, cfg)?
+while true:
+    mut r: Result[TlsStream, str] = l.accept()     # handshake done (or it raised)
+    if r.is_ok:
+        mut c = r.ok
+        print(c.server_name() + " " + c.alpn())    # SNI, negotiated protocol
+        c.write("hello\n")?
+        c.close()
+```
+
+| Member | Description |
+|---|---|
+| `TlsServerConfig.from_pem(chain_pem, key_pem)?` | Certificate chain (leaf first) and the matching key: PKCS#8 `PRIVATE KEY`, `RSA PRIVATE KEY` or `EC PRIVATE KEY`. Encrypted keys are not supported. |
+| `cfg.set_alpn(protocols)?`, `cfg.dispose()` | Comma-separated ALPN preference; free the config. |
+| `TlsListener.listen(host, port, cfg)?`, `accept()?`, `close()`, `timeout_ms` | Accept loop. A client failing the handshake raises from `accept`; the listener keeps working. |
+| `TlsStream.accept_fd(fd, cfg, timeout_ms, owns_fd)?` | Server handshake on an already-accepted socket. |
+| `stream.server_name()` | The SNI host name the client sent. |
+| `cfg.add_route(server_name, alpn, other)?`, `cfg.clear_routes()` | Serve a ClientHello whose SNI is `server_name` (case-insensitive, `""` = any) and that offers ALPN `alpn` (`""` = any) with the config `other`: one certificate per host name, or the `acme-tls/1` challenge certificate next to the normal one. Up to 16 routes, first match wins; `other` must stay alive; `set_alpn` drops the routes. |
+
+Client certificates, session resumption and 0-RTT are not supported on either side.
+
+`std.net.http_server` serves HTTPS with `srv.enable_tls(cfg)`. Each connection is decrypted by a
+background thread that feeds a local socket, so handlers, keep-alive, chunked responses and SSE
+work unchanged.
+
+---
+
+## Automatic certificates (ACME) — `std.net.acme`
+
+An ACME client (RFC 8555) for Let's Encrypt and other CAs. `obtain()` does the whole flow: account,
+order, challenges, CSR, finalize, polling, download. The result loads straight into a TLS server.
+
+```tauraro
+from std.net.acme import AcmeClient, LETSENCRYPT_STAGING, CHALLENGE_HTTP01
+from std.net.tls import TlsServerConfig
+from std.crypto.csr import KeyPair
+
+mut acme = AcmeClient.init(LETSENCRYPT_STAGING)        # LETSENCRYPT_PRODUCTION when it works
+acme.set_contacts(["admin@example.com"])
+acme.agree_to_terms(true)
+# acme.set_account_key(KeyPair.from_pem(read_file("account.pem"))?)   # reuse an account
+mut cert = acme.obtain(["example.com", "www.example.com"], CHALLENGE_HTTP01)?
+write_file("account.pem", acme.account_key.private_pem())
+mut cfg = TlsServerConfig.from_pem(cert.cert_pem, cert.key_pem)?
+if AcmeClient.needs_renewal(cert.cert_pem, 30): ...           # renew 30 days before expiry
+```
+
+**Challenges.** `http-01` is served by a built-in responder on port `http_port` (80) and
+`tls-alpn-01` (RFC 8737) by a built-in TLS responder on `tls_port` (443): it presents a self-signed
+certificate with the critical `acmeIdentifier` extension for ALPN `acme-tls/1`, routed by SNI. Both
+run on a background thread only while the CA validates. To answer from your own server instead, set
+a hook. `dns-01` always needs a hook. Wildcard names (`*.example.com`) can only be validated with
+`dns-01`. IP addresses (RFC 8738) work with `http-01` and `tls-alpn-01`.
+
+```tauraro
+def put_txt(name: str, value: str, present: bool) -> bool:
+    # create (present) or delete the TXT record `name` = `value` at your DNS provider
+    return true
+acme.set_dns01_hook(put_txt)
+acme.dns_wait_ms = 30000                       # time for the record to propagate
+mut wild = acme.obtain(["*.example.com", "example.com"], CHALLENGE_DNS01)?
+```
+
+| `AcmeClient` member | Description |
+|---|---|
+| `init(directory_url)` | `LETSENCRYPT_PRODUCTION`, `LETSENCRYPT_STAGING` or any ACME directory. |
+| `set_account_key(KeyPair)`, `set_account(key, url)` | ES256 (P-256), ES384 (P-384) or RS256 (RSA from PEM) key. Without one, a P-256 key is generated. |
+| `set_contacts(emails)`, `agree_to_terms(b)`, `set_external_account_binding(kid, hmac_b64url)` | Account details; EAB (HS256) for CAs that require it (`directory()?.eab_required`). |
+| `register()?`, `find_account()?`, `account()?`, `update_contacts(list)?`, `deactivate_account()?` | Account URL is kept in `kid`. |
+| `change_key(new_key)?` | Key rollover (RFC 8555 section 7.3.5). |
+| `obtain(names, type)?`, `obtain_with_key(names, type, key)?` | Returns `AcmeCertificate`: `cert_pem` (leaf + chain), `key_pem` (PKCS#8), `url`, `alternates`, `not_after`. |
+| `set_http01_hook(f)`, `set_dns01_hook(f)`, `set_tls_alpn01_hook(f)` | `f(token, key_auth, present)`, `f(record_name, txt_value, present)`, `f(identifier, cert_pem, key_pem, present)`; return true on success. |
+| `new_order(names)?`, `get_order(url)?`, `get_authorization(url)?`, `respond(challenge)?`, `wait_authorization(url)?`, `wait_order(url, until)?`, `finalize(order, csr_der)?`, `download(url)?` | The steps of `obtain`, for custom flows. Polling honours `Retry-After` (capped by `max_retry_after_ms`, default `poll_interval_ms`, overall `poll_timeout_ms`). |
+| `preferred_chain` | Issuer name substring: pick the matching chain among the `Link: rel="alternate"` chains. |
+| `revoke(cert_pem, reason)?`, `revoke_with_key(cert_pem, cert_key, reason)?` | Revoke with the account key, or by proving possession of the certificate key. `REVOKE_*` reasons. |
+| `post(url, payload, use_jwk)?`, `fetch(url)?`, `new_nonce()?` | Signed requests; a `badNonce` error is retried (`nonce_retries`, 3) with the fresh nonce. |
+| `set_ca_pem(pem)`, `set_insecure(b)` | Trust roots for the ACME server's own HTTPS (e.g. Pebble). |
+
+`AcmeJws` holds the JOSE parts: `b64url`, `jwk(key)` (RFC 7638 canonical form), `thumbprint(key)`,
+`thumbprint_of(json)?`, `key_authorization(token, key)`, `dns01_value(key_auth)`,
+`protected_header(...)`, `sign(key, protected, payload)?` (flattened JSON), `eab(...)?`,
+`key_from_jwk(json)?` (import certbot/lego JWK account keys), `public_key_from_jwk(json)?`,
+`verify(...)`, `tls_alpn01_cert(identifier, key_auth)?`, `reverse_name(ip)`.
+
+The keys, CSRs and certificates come from `std.crypto.csr` (`KeyPair`, `Csr`, `CertBuilder`) on top
+of `std.crypto.der`; see [crypto](crypto.md).
+
+Not implemented: RSA key generation (load RSA keys from PEM), pre-authorization (`newAuthz`), ACME
+Renewal Information. The built-in responders bind `0.0.0.0` and handle one connection at a time.
+
+Tested by `tests/lang/144_acme.tr` against a fake CA in a thread that checks every JWS signature,
+nonce and URL, EAB, key rollover and the CSR, and validates http-01 / dns-01 / tls-alpn-01 against
+the client's responders. The client was also run against Pebble (http-01, tls-alpn-01 for a DNS
+name and an IP, RS256 + EAB, key rollover, revocation, deactivation, Pebble's random `badNonce`s).
+
+---
+
+## std.net.http2 — HTTP/2 client and HPACK
+
+One connection, many concurrent requests (RFC 9113): https with ALPN `h2` (verified TLS 1.3) or
+cleartext h2c with prior knowledge. Flow control, CONTINUATION, PING, SETTINGS, RST_STREAM and
+GOAWAY are handled; server push is disabled. Response trailers are exposed (gRPC status).
+
+```tauraro
+from std.net.http2 import Http2Client, H2Headers
+
+mut c = Http2Client.connect("nghttp2.org", 443)?
+mut h = H2Headers.init()
+mut a = c.submit("GET", "/httpbin/get", h, "", false)?
+mut b = c.submit("POST", "/httpbin/post", h, "payload", true)?
+c.wait_all()?                                   # both streams run concurrently
+mut ra = c.response(a)
+print(ra.status, ra.headers.get("content-type"), ra.body.len())
+c.release(a)
+c.release(b)
+mut r = c.get("/httpbin/headers")?              # submit + wait + response + release
+c.close()
+```
+
+| Member | Description |
+|---|---|
+| `Http2Client.connect(host, port)?` / `connect_with(host, port, Http2Options)?` | `Http2Options.default()` (https, verified) or `Http2Options.cleartext()`; fields `tls`, `verify`, `ca_pem`, `timeout_ms`. |
+| `submit(method, path, headers, body, has_body)? -> int` | Start a request; returns the stream id. `default_headers` (user-agent) are merged in; hop-by-hop headers are dropped. |
+| `wait(sid)?`, `wait_all()?`, `is_done(sid)` | Drive the connection. |
+| `response(sid) -> Http2Response` | `status`, `headers`, `trailers` (`H2Headers`), `body` (binary-safe), `error`, `ok()`. |
+| `request(...)?`, `get(path)?`, `post(path, body, content_type)?` | One-shot helpers. |
+| `release(sid)`, `ping()`, `is_closing()`, `set_timeout(ms)`, `close()` | Housekeeping (`release` cancels an open stream). |
+
+`H2Headers` is an ordered, case-insensitive header list (`add`, `set`, `get`, `has`, `remove`). `Hpack.init(table_size)`
+exposes the compressor (`encode(headers)?`, `decode(block)?`, `set_max_table`, `table_size`) and `Huffman.encode/decode`
+the RFC 7541 Huffman code. Sensitive headers (`authorization`, `cookie`, ...) are sent never-indexed.
+
+### Streaming requests
+
+`open_stream(method, path, headers)? -> int` starts a request whose body is sent with
+`send_data(sid, chunk, end)?` (queued against the flow-control windows; blocks only while more than
+1 MiB is waiting). `read_data(sid, timeout_ms)?` returns the next chunk of the response body (`""` at the
+end), `wait_headers(sid, ms)?` waits for the response headers, `reset(sid, code)` sends RST_STREAM
+(`response()` keeps working) and `reset_code(sid)` reports the code. Both directions can be used at once.
+
+---
+
+## std.net.http2_server — HTTP/2 server
+
+An HTTP/2 server (RFC 9113) over cleartext h2c (prior knowledge) or TLS 1.3 with ALPN `h2`
+(`TlsServerConfig`, see `std.net.tls`). One `Http2Server` owns the listener and all its connections and drives
+them from the calling thread: preface, SETTINGS, HPACK (shared with the client), HEADERS + CONTINUATION,
+DATA with connection and stream flow control (credit is returned as the handler reads), WINDOW_UPDATE, PING,
+RST_STREAM, GOAWAY, request and response trailers, many concurrent streams. Protocol violations get
+GOAWAY / RST_STREAM with the right error code; invalid requests (upper-case header names, missing
+pseudo-headers, `te` other than `trailers`, ...) are reset.
+
+```tauraro
+from std.net.http2_server import Http2Server, H2ServerRequest
+from std.net.http2 import H2Headers
+
+def respond_to(r: H2ServerRequest) throws str -> bool:
+    mut body = r.read_all()?
+    mut h = H2Headers.init()
+    h.add("content-type", "text/plain")
+    r.reply(200, h, r.method + " " + r.path + " got " + str(body.len()) + " bytes")?
+    return true
+
+def handle(r: H2ServerRequest):
+    mut res: Result[bool, str] = respond_to(r)    # errors: client reset, timeout
+
+mut srv: Result[Http2Server, str] = Http2Server.listen("127.0.0.1", 8080)    # h2c; listen_tls(host, port, cfg) for https
+srv.ok.serve(handle, -1)                          # next() + handle + release, forever
+```
+
+| Member | Description |
+|---|---|
+| `Http2Server.listen(host, port)?`, `listen_tls(host, port, cfg)?`, `listen_with` / `listen_tls_with(..., Http2ServerOptions)` | `port` 0 picks a free port (`srv.port`). Options: `timeout_ms`, `max_streams` (SETTINGS_MAX_CONCURRENT_STREAMS, default 100). |
+| `next(timeout_ms)? -> H2ServerRequest` | Next request; `valid()` is false on timeout. Other connections are serviced while waiting. |
+| `serve(handler, max_requests)` | Loop `next` + handler + `release` (`max_requests < 0`: forever). Write your own loop with `next`. |
+| `run(ms)`, `pending()`, `connections()` | Keep serving (PING, flow control, queued data); queue length; live connections. |
+| `shutdown()`, `close()` | GOAWAY(NO_ERROR) and stop accepting (open streams may finish); close everything. |
+
+`H2ServerRequest`: `method`, `path`, `scheme`, `authority`, `headers` (regular headers), `is_tls()`,
+`stream_id()`; body: `read(timeout_ms)?` (a chunk, `""` at the end, raises on timeout or reset), `read_all()?`,
+`take()`, `available()`, `body_complete()`, `trailers()`; response: `respond(status, headers)?`,
+`send(data)?`, `finish(data)?`, `send_trailers(headers)?`, `reply(status, headers, body)?`, `respond_end`;
+state: `cancelled()`, `reset_code()`, `finished()`, `flush(ms)?`, `reset(code)`, `release()`. `send` queues data and
+waits only when more than 1 MiB is queued; DATA goes out as the client's windows allow. Handlers run one at a
+time, but while one waits (`read`, `flush`, `wait_event`) the server keeps servicing every connection, so
+streaming in both directions works and slow clients do not stall others' I/O.
+
+---
+
+## std.net.grpc — gRPC
+
+gRPC over HTTP/2 (grpc.io PROTOCOL-HTTP2), client and server, on raw message bytes: encode messages with
+`std.encoding.protobuf` (or anything else). Handles length-prefixed messages (optional gzip message
+compression via `std.compress.flate`), `content-type: application/grpc`, `te: trailers`, `grpc-status` /
+`grpc-message` (percent-encoded) trailers and trailers-only responses, `grpc-timeout` deadlines, metadata
+including `-bin` (base64) headers, and the status codes (`GRPC_OK()` ... `GRPC_UNAUTHENTICATED()`).
+
+```tauraro
+from std.net.grpc import GrpcChannel, GrpcCallOptions, GrpcServer, GrpcServerCall, GRPC_NOT_FOUND
+
+# server
+def say_hello(c: GrpcServerCall, req: str) -> str:
+    if req.len() == 0:
+        c.fail(GRPC_NOT_FOUND(), "no name")
+        return ""
+    return "Hello " + req
+mut s = GrpcServer.listen("127.0.0.1", 50051)?        # listen_tls(host, port, cfg)? for TLS
+s.add_unary("/helloworld.Greeter/SayHello", say_hello)
+s.enable_health()                                    # grpc.health.v1 Check + Watch
+s.serve(-1)
+
+# client
+mut ch = GrpcChannel.connect("127.0.0.1", 50051)?     # connect_tls(host, port, ca_pem)? for TLS
+mut o = GrpcCallOptions.with_timeout(2000)           # deadline in ms
+o.metadata.add("x-user", "ann")
+mut r = ch.unary("/helloworld.Greeter/SayHello", "Ann", o)
+if r.ok(): print(r.message) else: print(r.code, r.details)
+```
+
+| Client member | Description |
+|---|---|
+| `GrpcChannel.connect(host, port)?`, `connect_tls(host, port, ca_pem)?`, `connect_with(host, port, Http2Options)?` | h2c / TLS (ALPN h2). |
+| `unary(method, request, opts) -> GrpcReply` | Never raises: `code`, `details`, `message`, `messages`, `headers`, `trailers`, `ok()`, `status_name()`. Connection errors give `UNAVAILABLE`. |
+| `server_streaming(method, request, opts)?`, `client_streaming(method, opts)?`, `bidi(method, opts)?`, `open_call` | Return a `GrpcCall`. |
+| `GrpcCall`: `send(msg)`, `close_send()`, `recv()` (message in `.message`), `collect() -> GrpcReply`, `finish()`, `cancel()`, `response_headers()` | After the end `code` / `details` / `trailers` hold the status. A deadline gives `DEADLINE_EXCEEDED` (RST_STREAM CANCEL sent), `cancel()` gives `CANCELLED`. |
+| `GrpcCallOptions`: `timeout_ms`, `metadata`, `compress` (gzip requests), `max_message` | `default()`, `with_timeout(ms)`. |
+
+| Server member | Description |
+|---|---|
+| `GrpcServer.listen(host, port)?`, `listen_tls(host, port, cfg)?`, `port()` | |
+| `add_unary(path, def(GrpcServerCall, str) -> str)`, `add_server_streaming(path, def(GrpcServerCall, str))`, `add_client_streaming(path, def(GrpcServerCall) -> str)`, `add_bidi(path, def(GrpcServerCall))` | Register by full method path. |
+| `enable_health()`, `set_health(service, status)`, `health_of(service)` | `grpc.health.v1.Health/Check` and `Watch`; `health_request`, `health_response`, `health_parse_response` build / read the messages. |
+| `serve(max_calls)`, `serve_one(timeout_ms)`, `run(ms)`, `shutdown()`, `close()` | `max_calls < 0` serves forever. |
+
+`GrpcServerCall` (handler context): `method`, `metadata` (request), `header_metadata` / `trailer_metadata`
+(sent back), `fail(code, details)`, `recv()` (request message in `.message`), `send(msg)`, `send_headers()`,
+`compress` (gzip responses when the client accepts them), `cancelled()`, `deadline_exceeded()`,
+`time_remaining()`, `sleep(ms)` (returns early on cancel / deadline) and `metadata_bin(name)`. A handler
+that returns normally ends the call with the status set by `fail` (OK by default); requests on other
+streams are dispatched (nested) while a handler waits in `recv` / `send` / `sleep`, so a long-lived Watch
+does not block unary calls. Helpers on `Grpc`: `frame`, `encode_timeout`, `parse_timeout`, `percent_encode` /
+`percent_decode`, `b64_encode` / `b64_decode`, `add_bin` / `get_bin`, `compress` / `decompress`, `status_name`;
+`GrpcFramer` parses a stream of messages.
+
+Interoperability was checked against Python `grpcio` 1.84 in both directions (h2c and TLS): unary,
+all three streaming kinds, metadata and `-bin` metadata, error details, deadlines, cancellation, gzip,
+3 MB messages, health Check / Watch and concurrent clients; and against `curl --http2-prior-knowledge`
+for the HTTP/2 server.
+
+---
+
 ## std.net.https — HTTPS/TLS Client
 
 **When**: You need to call HTTPS endpoints — secure REST APIs, webhooks, OAuth flows.
-**Why**: Identical API to `HttpClient` but tunnelled through OpenSSL.
+**Why**: Identical API to `HttpClient`, over `std.net.tls` (built-in TLS 1.3, certificates verified).
 
-> **Opt-in** — compile with `-DTAURARO_TLS_OPENSSL -lssl -lcrypto`.
-> Without those flags all methods return `HttpClientResponse { status: 0, body: "tls connect failed" }`.
+> Certificate chain and host name are verified against the system trust store. On failure the
+> response has `status: 0` and the TLS error as its body. `set_verify(false)` disables
+> verification (testing only); `set_ca_pem(pem)` adds private roots. TLS 1.2-only servers are not
+> supported.
 
 ```tauraro
 from std.net.https import HttpsClient
@@ -303,7 +608,9 @@ from std.net.https import HttpsClient
 |---|---|---|---|
 | `HttpsClient.init` | `(host: str, port: int) -> HttpsClient` | `HttpsClient` | Create a TLS client. Default timeout: 10 000 ms. |
 | `set_header` | `(name: str, value: str)` | `void` | Add a header to all requests. |
-| `set_timeout` | `(ms: int)` | `void` | Set timeout hint. |
+| `set_timeout` | `(ms: int)` | `void` | Connect and read timeout. |
+| `set_verify` | `(v: bool)` | `void` | Turn certificate verification off/on (default on). |
+| `set_ca_pem` | `(pem: str)` | `void` | Trust these PEM roots in addition to the system store. |
 | `get` | `(path: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS GET. |
 | `post` | `(path: str, data: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS POST (form-encoded). |
 | `post_json` | `(path: str, data: str) -> HttpClientResponse` | `HttpClientResponse` | HTTPS POST (JSON). |
@@ -351,7 +658,8 @@ from std.net.multipart import FormBuilder, MultipartBuilder
 | `set_rewrite_post_on_301_302` | `(bool)` | `true` (default): `POST` becomes `GET` on 301/302 like browsers; `false`: keep the method. |
 | `enable_cookies` / `disable_cookies` / `set_cookie_jar` / `cookie_jar` | | Cookie handling (off by default). |
 | `set_max_body_bytes` | `(n)` | Cap for in-memory bodies (`0` = unlimited). |
-| `set_allow_unverified_tls` | `(bool)` | Required before any `https://` URL is attempted (see limitations). |
+| `set_allow_unverified_tls` | `(bool)` | Skip https certificate verification (testing only). |
+| `set_ca_pem` | `(pem: str)` | Extra trusted roots (PEM) for https. |
 | `get` / `head` / `delete` | `(url) -> HttpReply` | |
 | `post` / `put` / `patch` | `(url, body, content_type) -> HttpReply` | |
 | `post_json` | `(url, json) -> HttpReply` | |
@@ -397,21 +705,103 @@ mut r = HttpSession.init().post_multipart("http://127.0.0.1:8080/upload", m)
 
 `build()` returns the body and `content_type()` the header value (`multipart/form-data; boundary=...`); `with_boundary()` pins the boundary. Field/file names are quoted-escaped (`"` → `%22`, CR/LF removed). The server-side counterpart is watax's `req.multipart()`.
 
+### Compression
+
+In-memory requests (`get`, `post`, `request`, `send`, ...) send `Accept-Encoding: gzip, deflate, br`
+and decode the response body: `reply.body` is the decoded content, `reply.content_encoding` names
+the coding that was removed (`""` when none) and `reply.bytes` is the size on the wire. A body that
+fails to decode sets `reply.error`. `download_to_file` and `stream_get` ask for `identity` and get the
+bytes unchanged. `s.set_decompress(false)` turns it off; an explicit `Accept-Encoding` header is
+sent as given. Decoded bodies are capped by `set_max_body_bytes`.
+
+Proxies: `s.set_proxy("socks5h://user:pw@host:1080")` / `"http://proxy:3128"`, `s.set_no_proxy("localhost,.corp,10.0.0.0/8")`, and the opt-in `s.use_env_proxy()` (see `std.net.proxy` below).
+
 ### Limitations
 
-- `https://` is refused unless you call `set_allow_unverified_tls(true)`: the runtime's `_tr_tls_*` layer (also behind `HttpsClient`) encrypts but **does not verify server certificates or host names**, and its reads are blocking (no idle timeout). It was not exercised by the offline test-suite.
-- TCP connect is blocking with no connect timeout; IPv4 only; no proxies, no keep-alive/connection reuse, no `Expect: 100-continue`, no `user:pass@host` or IPv6-literal URLs.
-- No compression (`Accept-Encoding: identity` is sent).
-- In-memory bodies and callback chunks are `str` (NUL-terminated): a body with embedded NUL bytes is cut at the first NUL. Request bodies have the same limit. `download_to_file` is NUL-safe.
+- `https://` uses `std.net.tls` (TLS 1.3 only, verified against the system roots); servers that only speak TLS 1.2 fail with a handshake error.
+- TCP connect is blocking with no connect timeout; IPv4 only; no keep-alive/connection reuse, no `Expect: 100-continue`, no `user:pass@host` or IPv6-literal URLs.
+- Bodies are binary-safe everywhere (response bodies, request bodies, `stream_get` chunks and downloads keep NUL bytes).
 - No public-suffix list for cookies (a dot-less `Domain` is rejected as a heuristic); `SameSite` is stored but not enforced; `Secure` cookies set over plain http are accepted but only sent over https.
 - A closure passed as `on_chunk` cannot re-assign a captured `str` local (compiler limitation); accumulate into a class field instead.
+
+
+---
+
+## Proxies - `std.net.proxy`
+
+```tauraro
+from std.net.proxy import Proxy, ProxyUrl, Socks5, HttpTunnel
+from std.net.tls import TlsStream, TlsOptions
+
+mut px = ProxyUrl.parse("socks5h://user:pw@127.0.0.1:1080")?
+mut tcp = Proxy.connect(px, "example.com", 443, 10000)?      # connected TcpStream
+mut tls = TlsStream.wrap_fd(tcp.fd, "example.com", TlsOptions.default())?
+
+mut s = HttpSession.init()
+s.set_proxy("http://u:p@proxy:3128")        # or socks5://, socks5h://, socks4://, socks4a://
+s.set_no_proxy("localhost,.internal,10.0.0.0/8,[::1],example.org:8080")
+s.use_env_proxy()                            # opt in to HTTP_PROXY / HTTPS_PROXY / ALL_PROXY / NO_PROXY
+```
+
+| API | Description |
+|---|---|
+| `ProxyUrl.parse(url)?` | `scheme://[user[:pw]@]host[:port]` (credentials percent-decoded; scheme-less = `http`). `https://` proxies are rejected. |
+| `Socks5.connect(proxy_host, proxy_port, host, port, user, password, remote_dns, timeout_ms)?` | RFC 1928 CONNECT with IPv4 / IPv6 / domain targets; RFC 1929 auth when `user` is non-empty; `remote_dns` sends the name to the proxy (`socks5h://`), otherwise the client resolves it (IPv4). |
+| `Socks4.connect(..., user_id, remote_dns, timeout_ms)?` | SOCKS4 / SOCKS4a (IPv4 targets). |
+| `HttpTunnel.connect(proxy_host, proxy_port, host, port, proxy_auth, timeout_ms)?` | HTTP CONNECT; `proxy_auth` is a full header value, e.g. `basic_credentials(u, p)`. 407 and other refusals are errors. |
+| `Proxy.connect(px, host, port, timeout_ms)?` | Dispatch on the URL scheme; `Proxy.connect_direct(px)?` is a plain connection to the proxy. |
+| `NoProxy.parse(text)`, `matches(host, port)` | Names and `.suffixes` on label boundaries, IPv4 / IPv6 addresses and CIDRs, `host:port`, `*`. |
+| `ProxyEnv.from_env()`, `proxy_for(scheme, host, port)` | Lower-case variables win over upper case. |
+| `HttpSession.set_proxy`, `set_no_proxy`, `use_env_proxy`, `clear_proxy`, `proxy_for(url)` | Explicit proxy beats the environment. Plain http through an HTTP proxy sends absolute-form request targets and `Proxy-Authorization`; https is tunnelled (CONNECT or SOCKS) and TLS runs end to end with the target. |
+
+Connects have a real timeout (a small C shim: non-blocking connect with `poll`) and try every address returned for the proxy.
+Tested by `tests/lang/135_proxy.tr` with fake SOCKS5, SOCKS4a and HTTP proxies in threads.
+Limitations: no TLS to the proxy itself, no proxy chaining, SOCKS5 GSSAPI is not offered, SOCKS4 has no IPv6, a redirect
+that leaves the proxy's NO_PROXY set is re-evaluated per hop but connections are not reused.
+
+---
+
+## OAuth 2.0 and OpenID Connect - `std.net.oauth`
+
+```tauraro
+from std.net.oauth import OAuthClient
+
+mut c = OAuthClient.init("my-app", "secret", "http://127.0.0.1:8765/cb")
+c.discover("https://accounts.example.com")?                 # /.well-known/openid-configuration
+mut req = c.begin_authorization("openid profile email")?    # state, nonce, PKCE S256 verifier
+print(req.url)                                              # send the user here
+mut tok = c.handle_callback(callback_url, req)?             # checks state / error, exchanges the code
+mut id = c.validate_id_token(tok.id_token, req.nonce, tok.access_token)?
+print(id.subject())
+mut api = c.authorized_session(tok)                         # Bearer + auto-refresh
+mut r = api.get("https://api.example.com/me")
+```
+
+| API | Description |
+|---|---|
+| `OAuthClient.init(id, secret, redirect_uri)` | No secret = public client (`none`); else `client_secret_basic`. `set_auth_method("client_secret_post")`, `use_private_key_jwt(jwk, alg)` (RFC 7523), `set_endpoints`, `set_issuer`. |
+| `discover(issuer)?`, `fetch_jwks(force)?` | Discovery (issuer must match) and a JWKS cached for `jwks_ttl` s, refetched once for an unknown `kid`. |
+| `begin_authorization(scope)?`, `authorization_url(...)`, `handle_callback(url, req)?`, `exchange_code(code, verifier)?` | Authorization code + PKCE (S256 only). `extra_auth_params` appends parameters to the URL. |
+| `refresh(rt, scope)?`, `ensure_fresh(tok, skew)?`, `client_credentials(scope)?` | Other token grants; the old refresh token is kept when not rotated. |
+| `device_authorize(scope)?`, `device_poll(dev, max_wait_ms)?` | RFC 8628; honours `authorization_pending` and `slow_down`. |
+| `revoke(token, hint)?`, `introspect(token, hint)?` | RFC 7009 / RFC 7662. |
+| `validate_id_token(id_token, nonce, access_token)?` | Signature through the JWKS (asymmetric algs only unless `id_token_algs` says otherwise), `iss`, `aud` / `azp`, `exp`, `iat`, `sub`, `nonce`, `at_hash`; `leeway` default 60 s. |
+| `userinfo(access_token)?`, `authorized_session(tok)` | UserInfo JSON; `AuthorizedSession.get/post/delete/send` add the Bearer header, refresh `refresh_skew` s before expiry and once after a 401. |
+
+`OAuthToken`: `access_token token_type refresh_token id_token scope expires_in obtained_at`, `expires_at()`,
+`is_expired(skew)`, `authorization()`. Error responses surface as `oauth: <error>: <description>` (e.g.
+`oauth: invalid_grant: ...`). Tested by `tests/lang/134_oauth.tr` against a fake provider in a thread
+(code + PKCE verified server side, refresh, client credentials, device grant, revocation, introspection, discovery,
+JWKS, foreign-audience / expired / bad-nonce / bad-at_hash ID tokens rejected, all client auth methods).
+Limitations: no PAR / JAR / DPoP / mTLS client auth, no `plain` PKCE, no encrypted ID tokens, no form_post response mode,
+and the HTTP layer is `HttpSession` (HTTP/1.1, TLS 1.3 only).
 
 ---
 
 ## SMTP — `std.net.smtp`
 
 **When**: You need to send outbound email — transactional notifications, alerts, password resets — from a Tauraro program, against a real SMTP server.
-**Why**: A pure-Tauraro RFC 5321 client built entirely on `TcpStream` (plaintext) and the same OpenSSL TLS primitive `HttpsClient` uses (implicit TLS) — no new runtime C code. Handles multi-line reply parsing, RFC 5321 dot-stuffing, and `AUTH LOGIN`/`AUTH PLAIN` correctly (the parts most hand-rolled SMTP clients get subtly wrong).
+**Why**: A pure-Tauraro RFC 5321 client built on `TcpStream` and `std.net.tls` (verified TLS 1.3, both implicit TLS and STARTTLS). Handles multi-line reply parsing, RFC 5321 dot-stuffing, and `AUTH LOGIN`/`AUTH PLAIN` correctly (the parts most hand-rolled SMTP clients get subtly wrong).
 
 ```tauraro
 from std.net.smtp import SmtpClient, SmtpResponse
@@ -433,17 +823,21 @@ A parsed (possibly multi-line) SMTP reply.
 | Method | Signature | Returns | Description |
 |---|---|---|---|
 | `SmtpClient.connect` | `(host: str, port: int) -> SmtpClient` | `SmtpClient` | Open a plaintext TCP connection and read the server's greeting. Check `.connected`. |
-| `SmtpClient.connect_tls` | `(host: str, port: int) -> SmtpClient` | `SmtpClient` | Open an **implicit TLS** connection (e.g. port 465) and read the greeting. Uses the same OpenSSL primitive as `HttpsClient`; requires `-DTAURARO_TLS_OPENSSL -lssl -lcrypto` (see the `std.net.https` note above) — without it, connection fails and `.connected` is `false`. |
+| `SmtpClient.connect_tls` | `(host: str, port: int) -> SmtpClient` | `SmtpClient` | Open an **implicit TLS** connection (e.g. port 465), verifying the server certificate, and read the greeting. On failure `.connected` is `false` and `last_text` holds the TLS error. |
+| `SmtpClient.connect_tls_with` | `(host: str, port: int, opts: TlsOptions) -> SmtpClient` | `SmtpClient` | Same with explicit `TlsOptions` (private CA, timeout, verification). |
 | `ehlo` | `(client_host: str) -> SmtpResponse` | `SmtpResponse` | Send `EHLO`, correctly parsing a multi-line capability reply (`250-...` continuations, final line `250 ...`). Falls back to `HELO` automatically if the server rejects `EHLO`. Records capabilities for `supports_starttls`/`supports_auth`. |
 | `helo` | `(client_host: str) -> SmtpResponse` | `SmtpResponse` | Send plain `HELO` (no capability negotiation). |
 | `supports_starttls` | `() -> bool` | `bool` | `true` if the last `ehlo()` capability list advertised `STARTTLS`. |
 | `supports_auth` | `() -> bool` | `bool` | `true` if the last `ehlo()` capability list advertised `AUTH`. |
-| `starttls` | `() -> SmtpResponse` | `SmtpResponse` | Send `STARTTLS` and read the server's response. **Does not upgrade the connection to TLS** — see Limitations below. |
+| `starttls` | `() -> SmtpResponse` | `SmtpResponse` | Send `STARTTLS`; on `220`, run the TLS handshake on the same socket (verified with `client.tls_opts`). Sets `use_tls`; call `ehlo()` again afterwards. A failed handshake returns code `0` with the TLS error and disconnects. |
 | `auth_login` | `(username: str, password: str) -> SmtpResponse` | `SmtpResponse` | `AUTH LOGIN`: two round-trips, base64-encoded username then password. Returns the final (3rd) response. |
 | `auth_plain` | `(username: str, password: str) -> SmtpResponse` | `SmtpResponse` | `AUTH PLAIN`: single command, base64 of `"\0username\0password"`. |
 | `mail_from` | `(addr: str) -> SmtpResponse` | `SmtpResponse` | Send `MAIL FROM:<addr>`. |
 | `rcpt_to` | `(addr: str) -> SmtpResponse` | `SmtpResponse` | Send `RCPT TO:<addr>`. Call once per recipient. |
 | `data` | `(body: str) -> SmtpResponse` | `SmtpResponse` | Send `DATA`, then `body` (CRLF-translated and dot-stuffed per RFC 5321 — a body line starting with `.` is sent as `..`), then the terminating `.` line. Returns the server's final response. |
+| `send_message` | `(msg: EmailMessage) -> SmtpResponse` | `SmtpResponse` | Send a `std.net.email` message: `MAIL FROM` the Sender/From address, `RCPT TO` every To + Cc + Bcc address (deduplicated), then `DATA` with `msg.to_string()` (Bcc is never written). Adds `BODY=8BITMIME` when the data has 8-bit bytes and `SMTPUTF8` when an envelope address is not ASCII, if the server advertises them. Stops at the first failing reply. |
+| `send_message_to` | `(msg: EmailMessage, envelope_from: str, rcpts: List[str]) -> SmtpResponse` | `SmtpResponse` | Same with an explicit envelope. |
+| `supports` | `(extension: str) -> bool` | `bool` | `true` if the last `ehlo()` advertised the extension (e.g. `"8BITMIME"`). |
 | `send_mail` | `(from_addr: str, to: List[str], subject: str, body: str) -> SmtpResponse` | `SmtpResponse` | Convenience wrapper: `mail_from` + `rcpt_to` for each address in `to` + builds a `From`/`To`/`Subject`/`Date` message and calls `data`. Stops at the first error response. |
 | `rset` | `() -> SmtpResponse` | `SmtpResponse` | Send `RSET` (abort the current mail transaction). |
 | `noop` | `() -> SmtpResponse` | `SmtpResponse` | Send `NOOP`. |
@@ -499,8 +893,214 @@ if client.connected:
 
 ### Limitations (v1)
 
-- **`STARTTLS` does not upgrade the connection in place.** `starttls()` sends the command and reads the server's response (useful if you just need to satisfy a server that demands the handshake before `AUTH`), but the socket stays plaintext afterwards — the runtime's TLS primitive (the same one `HttpsClient` uses) only knows how to open a *fresh* TLS connection given a hostname; there is no client-side "wrap an already-connected fd in TLS" function (only a server-side equivalent exists, for TLS-terminating servers). For a real confidentiality guarantee, use `connect_tls()` (implicit TLS, typically port 465) instead — that path is fully functional TLS from the first byte.
-- **No MIME / multipart / attachment support.** `send_mail`/`data` send a single `text/plain` body (headers + blank line + body text). Building a `multipart/mixed` message with attachments is left to the caller (construct the full body string yourself, including boundaries, and pass it to `data()` directly) or a future module.
+- TLS is TLS 1.3 only; a server limited to TLS 1.2 fails the handshake.
+- `send_mail` sends a single `text/plain` body. For HTML, attachments or non-ASCII headers build an `EmailMessage` (`std.net.email`, below) and call `send_message`.
+
+---
+
+## Mail — `std.net.pop3`, `std.net.imap`
+
+Both run over `std.net.linestream.LineStream` (plain TCP or verified TLS, with an in-place
+STARTTLS upgrade). Pass `tls = true` for implicit TLS (ports 995 / 993), or connect in plaintext
+(110 / 143) and call `starttls()` before authenticating. `-ERR` / `NO` / `BAD` replies raise with
+the server's text.
+
+```tauraro
+from std.net.imap import ImapClient
+from std.net.pop3 import Pop3Client
+
+mut c = ImapClient.connect("imap.example.com", 993, true)?
+c.login("user", "secret")?
+mut box = c.select("INBOX")?                # exists, recent, uidvalidity, uidnext, flags
+for uid in c.uid_search("UNSEEN")?:
+    mut raw = c.fetch_message(uid)?         # RFC 5322 bytes (BODY.PEEK[], keeps \Unseen)
+    c.add_flags(uid, "\\Seen")?
+c.logout()
+
+mut p = Pop3Client.connect("pop.example.com", 995, true)?
+p.login("user", "secret")?
+mut st = p.stat()?                           # st.count, st.size
+mut first = p.retr(1)?                       # dot-unstuffed, CRLF line ends
+p.quit()
+```
+
+| `ImapClient` | Description |
+|---|---|
+| `connect(host, port, tls)?` / `connect_with(host, port, tls, opts)?` | Connect and read the greeting (`[CAPABILITY]` codes are picked up). |
+| `starttls()?`, `login(user, pw)?`, `auth_plain(user, pw)?`, `logout()` | Session. `LOGIN` arguments are quoted and escaped. |
+| `capability()?`, `has_capability(name)` | Capabilities (upper-cased). |
+| `list_mailboxes(ref, pattern)?` | `ImapMailbox` (`name`, `delimiter`, `flags`); names sent as literals are handled. |
+| `select(box)?` / `examine(box)?` | `ImapStatus` (`exists`, `recent`, `uidvalidity`, `uidnext`, `flags`, `read_only`). |
+| `search(criteria)?` / `uid_search(criteria)?` | Matching sequence numbers / UIDs. |
+| `fetch(set, items, by_uid)?`, `fetch_message(uid)?` | `ImapMessage` (`seq`, `uid`, `flags`, `size`, `body`); `{n}` literals are read exactly, so bodies are binary-safe. |
+| `add_flags` / `remove_flags(uid, flags)?`, `copy` / `move(uid_set, box)?`, `expunge()?` | `move` uses `MOVE` when advertised, else COPY + `\Deleted` + EXPUNGE. |
+| `create` / `delete_mailbox` / `rename`, `append(box, message, flags)?`, `noop()?` | Mailbox management and upload. |
+| `command(text)?` / `command_raw(text)?` | Any other command; returns `ImapResponse` (`status`, `text`, `untagged` with their literals). |
+
+| `Pop3Client` | Description |
+|---|---|
+| `connect(host, port, tls)?` / `connect_with(...)?` | Connect and read the greeting. |
+| `starttls()?` (STLS), `login(user, pw)?`, `apop(user, pw)?`, `auth_plain(user, pw)?` | Authentication; APOP only when the greeting carries a timestamp. |
+| `capabilities()?` | CAPA list (empty if unsupported). |
+| `stat()?`, `list()?`, `uidl()?` | `Pop3Stat` (`count`, `size`); `Pop3Entry` (`num`, `size`, `uid`). |
+| `retr(n)?`, `top(n, lines)?` | Message text, dot-unstuffed, CRLF-terminated lines. |
+| `dele(n)?`, `rset()?`, `noop()?`, `quit()` | `quit` commits deletions and closes. |
+
+`ImapClient.fetch_email(uid)?` and `Pop3Client.retr_email(n)?` return the message already parsed as
+a `std.net.email.EmailMessage` (`subject()`, `text_body()`, `attachments()`, ...).
+
+Not supported: IMAP IDLE/NOTIFY push, CONDSTORE/QRESYNC, BODYSTRUCTURE parsing; OAuth2
+(`XOAUTH2`) is available through `command(...)` with your own token.
+
+---
+
+## Media types — `std.net.mime`
+
+**When**: picking a `Content-Type` for a file (static file servers, uploads, attachments), checking
+what some bytes really are, or parsing/formatting a `Content-Type` header.
+
+```tauraro
+from std.net.mime import Mime, MediaType
+
+Mime.type_for_path("site/app.wasm")        # "application/wasm"
+Mime.type_for_path("notes")                # "application/octet-stream" (unknown)
+Mime.guess_type("x.unknown")               # "" (no default)
+Mime.content_type_for("index.html")        # "text/html; charset=utf-8"
+Mime.extension_for_type("image/jpeg")      # "jpg"
+Mime.sniff(first_bytes)                    # "image/png", "text/html", "application/json", ...
+Mime.matches("image/webp", "image/*")      # true
+
+mut mt = Mime.parse("Text/HTML; Charset=\"UTF-8\"")?
+mt.essence()                               # "text/html"
+mt.charset()                               # "utf-8"
+mt.set_param("name", "résumé.pdf")
+mt.to_str()                                # "text/html; charset=UTF-8; name*=utf-8''r%C3%A9sum%C3%A9.pdf"
+```
+
+| `Mime` | Description |
+|---|---|
+| `type_for_path(path)` / `guess_type(path)` / `type_for_ext(ext)` | Type from the last extension (case-insensitive; URL query/fragment ignored; dot-files have no extension). `type_for_path` defaults to `application/octet-stream`, the others return `""`. |
+| `content_type_for(path)` | `type_for_path` plus `; charset=utf-8` for textual types. |
+| `extension_for_type(t)` / `extensions_for_type(t)` | Preferred extension (no dot) / all of them, preferred first. |
+| `default_charset(t)`, `is_text(t)` | `"utf-8"` for text/*, JSON, XML, JavaScript, YAML, TOML, `+json`, `+xml` (not SVG). |
+| `sniff(data)` | WHATWG MIME Sniffing "unknown type" algorithm: HTML tags / `<?xml` / PDF / PostScript, BOMs, GIF/PNG/JPEG/WebP/BMP/ICO/TIFF/PSD/QOI/JPEG XL, MP4-family brands (MP4, QuickTime, 3GP, AVIF, HEIC/HEIF, M4A), WebM/Matroska, Ogg (Opus/Vorbis/Theora), MP3 (ID3 and frame sync), AAC, FLAC, WAV, AIFF, MIDI, AVI, fonts (WOFF/WOFF2/OTF/TTF/TTC/EOT), gzip/ZIP (EPUB/ODF via their `mimetype` entry)/RAR/7z/xz/bzip2/zstd/lz4/tar, wasm, SQLite, ELF/PE/Java class, a JSON heuristic, then `text/plain` or `application/octet-stream` by the binary-byte test. Pass at least 512 leading bytes. |
+| `sniff_with_hint(data, declared)` | Keep a specific declared type; sniff when it is missing or generic. |
+| `parse(s)?` / `MediaType.parse(s)?` | Throws on a malformed type/subtype; parameters are lenient (bad ones skipped). |
+| `matches(t, pattern)` | `*`, `*/*`, `image/*`, `*/json` (also matches `+json`), or exact; parameters ignored. |
+| `is_token(s)`, `quote(s)`, `format_param(name, value)`, `pct_encode_2231(v)` | RFC 9110 token / quoted-string / RFC 2231 helpers. |
+| `normalize_charset(cs)`, `is_supported_charset(cs)` | Canonical names (`latin1` → `iso-8859-1`, `cp1252` → `windows-1252`, ...). |
+| `to_utf8(bytes, cs)?` / `decode_text(bytes, cs)` | Convert UTF-8, US-ASCII, ISO-8859-1, ISO-8859-15, Windows-1252, UTF-16/LE/BE to UTF-8 (invalid UTF-8 → U+FFFD). `to_utf8` throws `"unsupported charset: X"`; `decode_text` returns other charsets' bytes unchanged. |
+| `sanitize_utf8(s)`, `is_valid_utf8(s)` | UTF-8 validation (overlongs and surrogates rejected). |
+
+`MediaType` fields: `type_`, `subtype` (lower case), `names` (lower case), `values` (unquoted, RFC 2231
+continuations `name*0*=` … joined and converted to UTF-8). Methods: `essence()`, `suffix()`,
+`param(name)`, `has_param`, `set_param`, `remove_param`, `charset()`, `is_multipart()`, `is_text()`,
+`matches(pattern)`, `to_str()`, and `MediaType.parse_params("; a=1; b=\"x\"")` for headers such as
+`Content-Disposition`.
+
+The table is Python 3.14's `mimetypes` table merged with the Debian media-types list and a
+hand-picked modern set; `.tr` maps to `text/x-tauraro`. Sniffing never returns `text/html` for
+data that starts with a BOM (WHATWG rule).
+
+---
+
+## Email messages — `std.net.email`
+
+**When**: sending anything beyond a plain-text note (HTML, attachments, inline images, non-ASCII
+names and subjects), or reading what IMAP / POP3 fetched. RFC 5322, MIME (RFC 2045-2049),
+encoded words (RFC 2047), parameter continuations (RFC 2231) and UTF-8 headers (RFC 6532, read side).
+
+```tauraro
+from std.net.email import EmailMessage, Address
+from std.net.smtp import SmtpClient
+
+mut m = EmailMessage.init()
+m.set_from("Zoë Example <zoe@example.com>")
+m.add_to("bob@example.com, \"Doe, Jane\" <jane@example.org>")
+m.add_bcc("archive@example.com")                 # envelope only
+m.set_subject("Quarterly report — draft")         # encoded words when not ASCII
+m.set_text("Hi Bob,\nthe report is attached.\n")
+m.set_html("<p>Hi Bob</p><img src=\"cid:logo\">")
+m.add_inline("logo", "logo.png", png_bytes)       # multipart/related
+m.attach("report.pdf", pdf_bytes)                 # type from std.net.mime
+mut c = SmtpClient.connect("smtp.example.com", 587)
+c.ehlo("me")
+c.send_message(m)
+
+mut p = EmailMessage.parse(raw)                   # lenient, never throws
+p.subject()                                       # decoded UTF-8
+p.get_from()[0].name                              # "Zoë Example"
+p.text_body()                                     # UTF-8, '\n' line ends
+for a in p.attachments():
+    print(a.filename + " " + a.content_type + " " + str(a.data.len()))
+```
+
+| Building (`EmailMessage`) | Description |
+|---|---|
+| `init()` | Empty message. Fields: `allow_8bit` (use 8bit instead of QP/base64 for text), `boundary_seed` (fixed boundaries, for tests). |
+| `set_from`, `set_sender`, `set_to`, `add_to`, `add_cc`, `add_bcc`, `set_reply_to` | Take address-list text (`"a@x, Name <b@y>"`); display names may be UTF-8 and are written as atoms, quoted strings or encoded words. `add_address(field, name, addr)` skips parsing. |
+| `set_subject(s)`, `set_header(name, text)`, `add_raw_header(name, wire)`, `remove_header(name)` | Unstructured text is RFC 2047-encoded when not plain ASCII (first word sized to fit after the header name). |
+| `set_date(ts)`, `set_date_tz(ts, offset_min)` | RFC 5322 date; added automatically (now, UTC) when missing. |
+| `set_message_id(id)`, `set_in_reply_to(id)`, `add_reference(id)`, `make_message_id()` | Angle brackets added; a random `<...@from-domain>` id is generated when missing. |
+| `set_text(s)`, `set_html(s)` | Both → `multipart/alternative`. Text is labelled `charset=utf-8` and sent with CRLF line ends. |
+| `attach(filename, data)`, `attach_as(filename, type, data)` | Attachments (`multipart/mixed`, base64; message/rfc822 as 7bit/8bit). Non-ASCII filenames use RFC 2231 `filename*=utf-8''…`. |
+| `add_inline(cid, filename, data)`, `add_inline_as(...)` | Inline parts with `Content-ID`, related to the HTML body. |
+| `build()`, `to_string()` | Build the MIME tree into `root` / serialise: CRLF, headers folded at 78 columns, Bcc omitted, MIME-Version added. Transfer encoding per part: 7bit for ASCII with lines ≤ 998, else the shorter of quoted-printable and base64. `root`, `message_id()` etc. reflect generated values only after `build()` / `to_string()`. |
+| `recipients()`, `envelope_from()` | Envelope for SMTP: To + Cc + Bcc (deduplicated) / Sender or first From. |
+
+| Reading | Description |
+|---|---|
+| `EmailMessage.parse(raw)` | CRLF or LF input; a leading mbox `From ` line is skipped; malformed parts degrade like Python's parser. Re-serialising with `to_string()` is lossless. |
+| `subject()`, `get_from()`, `sender()`, `to()`, `cc()`, `bcc()`, `reply_to()` | Decoded; addresses are `Address` (`name`, `addr`, `group`; `local_part()`, `domain()`, `display()`, `to_str()`). A trailing comment (`a@x (Name)`) is used as the name, as `email.utils.getaddresses` does. |
+| `date()`, `timestamp()`, `message_id()`, `in_reply_to()`, `references()` | `timestamp()` parses RFC 5322 dates incl. obsolete forms (2-digit years, named zones), `-1` when unparseable. |
+| `header(name)`, `header_all(name)`, `decoded_header(name)`, `decoded_header_strict(name)?`, `header_names()` | Raw (unfolded) / decoded values. The strict form raises `"unsupported charset: X"`. |
+| `text_body()`, `html_body()`, `has_text_body()`, `has_html_body()` | First non-attachment `text/plain` / `text/html` part converted to UTF-8 with `\n` line ends. |
+| `attachments()` | `Attachment` (`filename`, `content_type`, `data` bytes, `content_id`, `is_inline`) for every leaf that is not the text/HTML body: attachment dispositions, named parts, related images and non-text parts. Unlike Python's `iter_attachments`, related (inline) images are included. |
+| `parts()`, `root`, `content_type()`, `is_multipart()` | The `MimePart` tree: `names`/`values`, `ctype` (`MediaType`), `body` (transfer encoding removed), `raw_body`, `parts`, `preamble`, `epilogue`; methods `header`, `charset()`, `transfer_encoding()`, `disposition()`, `filename()` (RFC 2231 and 2047), `content_id()`, `text()`, `text_strict()?`, `walk()`, `as_message()` for message/rfc822 parts. |
+
+Free functions: `decode_header(s)`, `decode_header_strict(s)?`, `encode_words(s)`,
+`encode_header_text(s)`, `fold_header(name, value)`, `format_phrase(name)`,
+`format_address_list(addrs)`, `format_date(ts, offset_min)`, `parse_date(s)`.
+
+Charsets decoded: UTF-8, US-ASCII, ISO-8859-1, ISO-8859-15, Windows-1252, UTF-16. Others are
+reported: encoded words in them stay as written in `decode_header`, `text()` returns the raw bytes,
+and the strict variants raise. Not supported: S/MIME and PGP, DKIM signing, `message/partial`
+reassembly.
+
+---
+
+## DNS messages, mDNS, NTP — `std.net.dnsmsg`, `std.net.mdns`, `std.net.ntp`, `std.net.udpx`
+
+`std.net.dns` resolves names through the OS. `std.net.dnsmsg` speaks the DNS wire protocol
+directly, so any record type can be asked of a chosen server:
+
+```tauraro
+from std.net.dnsmsg import Dns, DNS_MX, DNS_TXT, DNS_SRV
+from std.net.ntp import Ntp
+from std.net.mdns import Mdns
+
+mut r = Dns.lookup("1.1.1.1", "gmail.com", DNS_MX)?
+for rec in r.answers: print(rec.to_str())   # gmail.com 3600 MX 5 gmail-smtp-in.l.google.com
+
+mut t = Ntp.query("time.google.com")?
+print(f"clock offset {t.offset_ms} ms, delay {t.delay_ms} ms, stratum {t.stratum}")
+
+for svc in Mdns.browse("_http._tcp", 1500)?:
+    print(f"{svc.name} at {svc.host}:{svc.port} {svc.addresses}")
+```
+
+| API | Description |
+|---|---|
+| `DnsMessage.query(id, name, qtype, recursion)?` | Encode a query (with an EDNS0 OPT record, 4096-byte UDP payload). |
+| `DnsMessage.multi_query(id, names, qtypes, unicast)?` | Several questions; `unicast` sets the mDNS QU bit. |
+| `DnsMessage.parse(bytes)?` | Header flags, questions, `answers` / `authority` / `additional` as `DnsRecord`. Compression pointers are followed (loops and truncation raise). |
+| `DnsRecord` | `name`, `rtype`, `rclass`, `cache_flush`, `ttl`, `rdata`, plus decoded `address` (A/AAAA), `target` (NS/CNAME/PTR/MX/SRV/SOA), `priority`, `weight`, `port`, `texts`, `soa_serial`; `to_str()`. |
+| `Dns.lookup(server, name, qtype)?` / `lookup_port(server, port, name, qtype, timeout_ms)?` | One UDP query with a retry; checks the reply ID. |
+| `DNS_A`, `DNS_NS`, `DNS_CNAME`, `DNS_SOA`, `DNS_PTR`, `DNS_MX`, `DNS_TXT`, `DNS_AAAA`, `DNS_SRV`, `DNS_ANY`, `dns_type_name(t)` | Record types. |
+| `Ntp.query(server)?` / `query_port(server, port, timeout_ms)?` / `best_of(server, n)?` | SNTPv4 (RFC 4330): `NtpResult` with `offset_ms`, `delay_ms`, `server_time_ms`, `stratum`, `leap`, `version`, `ref_id`. Replies that do not echo the request, and kiss-o'-death packets, are rejected. |
+| `Mdns.query(name, qtype, ms)?`, `query_many(...)?`, `resolve_host("x.local", ms)?` | One-shot multicast DNS (RFC 6762) on 224.0.0.251:5353; collects every reply within the window. |
+| `Mdns.browse("_ipp._tcp", ms)?`, `service_types(ms)?`, `services_from_records(stype, recs)` | DNS-SD (RFC 6763) browsing into `MdnsService` (`name`, `instance`, `host`, `port`, `addresses`, `txt`). |
+| `UdpEndpoint.open(family, port)?` / `open_shared(...)?` | UDP with IPv4/IPv6, receive timeouts (`recv(cap, ms)?` returns a `Datagram` with `data`, `addr`, `port`, `timed_out`), multicast join/TTL, `local_port()`. `unix_ms()` is the wall clock in ms. |
 
 ---
 
@@ -763,3 +1363,103 @@ if conn.ok:
 else:
     print("handshake failed: " + conn.err)
 ```
+
+---
+
+## MQTT — `std.net.mqtt`
+
+MQTT 3.1.1 and 5.0 client, packet codec, topic-filter helpers and a small embeddable broker.
+Transports: TCP (`mqtt://`, 1883), TLS 1.3 through `std.net.tls` (`mqtts://`, 8883) and MQTT
+over WebSocket (`ws://host:port/path`, subprotocol `mqtt`). The client has been run against
+`test.mosquitto.org` (3.1.1 and 5.0 over TCP, TLS and WebSocket) and `broker.emqx.io`
+(5.0); the broker has been run against the Python `paho-mqtt` client (3.1.1 and 5.0 over TCP
+and WebSocket).
+
+```tauraro
+from std.net.mqtt import MqttClient, MqttOptions, MqttProps, MqttMessage, MQTT_V5, mqtt_sub_options
+
+mut o = MqttOptions.from_url("mqtts://user:pw@broker.example.com")?   # or MqttOptions.new(host, port)
+o.version = MQTT_V5
+o.client_id = "sensor-1"
+o.set_will("status/sensor-1", "offline", 1, true)
+o.connect_props.session_expiry = 3600          # v5 CONNECT properties
+o.auto_reconnect = true                         # exponential backoff, resends in-flight messages
+mut c = MqttClient.connect(o)?
+
+c.subscribe("cmd/sensor-1/#", 1)?              # returns the granted QoS; raises if refused
+c.publish("status/sensor-1", "online", 1, true)?
+
+mut p = MqttProps.new()
+p.content_type = "application/json"
+p.add_user("unit", "C")
+mut pid = c.publish_with("data/temp", "{\"t\": 21.5}", 2, false, p)?
+c.wait_published(pid, 5000)?                   # PUBREC / PUBREL / PUBCOMP done
+
+mut m = c.next_message(1000)?                  # poll style; m.valid is false on timeout
+if m.valid: print(m.topic + ": " + m.payload)
+c.disconnect()
+```
+
+| `MqttOptions` field | Meaning |
+|---|---|
+| `host`, `port`, `transport` (`MQTT_TCP` / `MQTT_TLS` / `MQTT_WS`), `ws_path`, `tls` (`TlsOptions`) | Where and how to connect. |
+| `version` | `MQTT_V311` (default) or `MQTT_V5`. |
+| `client_id`, `clean_start`, `keep_alive` (s, default 60) | An empty id is assigned by a v5 server or generated (`tauraro-…`) on 3.1.1. |
+| `set_auth(user, pw)`, `set_will(topic, payload, qos, retain)`, `will_props` | Credentials and will message. |
+| `connect_props` | v5 CONNECT properties: `session_expiry`, `receive_maximum`, `max_packet_size`, `topic_alias_max`, user properties... |
+| `timeout_ms` | CONNACK / SUBACK / UNSUBACK wait (default 10000). |
+| `auto_reconnect`, `reconnect_min_ms`, `reconnect_max_ms`, `max_reconnect_attempts`, `resubscribe` | Reconnect with doubling delay; in-flight QoS 1/2 PUBLISHes are resent with DUP and PUBRELs are resent; subscriptions are re-sent when the server lost the session. |
+| `topic_aliases` | v5: replace repeated topics by aliases when the server allows them. |
+
+| `MqttClient` | Description |
+|---|---|
+| `connect(opts)?` | Connect and wait for CONNACK; refusals raise with the reason (`Bad User Name or Password`...). `session_present`, `client_id`, `connack_props`, `server_receive_max`, `server_topic_alias_max`, `server_max_qos`, `server_max_packet`, `keep_alive` are filled in. |
+| `publish(topic, payload, qos, retain)?`, `publish_with(..., props)?` | Returns the packet id (0 for QoS 0). Respects the server's receive maximum, maximum QoS, retain availability and maximum packet size. |
+| `wait_published(pid, ms)?`, `flush(ms)?`, `inflight_count()`, `last_ack_reason` | Track acknowledgements. |
+| `subscribe(filter, qos)?`, `subscribe_opts(filter, options, props)?`, `subscribe_many(filters, options, props)?` | `mqtt_sub_options(qos, no_local, retain_as_published, retain_handling)` builds the options byte; `props.subscription_ids` sets a subscription identifier. |
+| `unsubscribe(filter)?`, `unsubscribe_many(filters)?` | v5 reason codes (`0x11` = no subscription existed). |
+| `next_message(ms)?`, `pending()` | Poll-style delivery; keep-alive, acks and QoS 2 handshakes run while waiting. |
+| `on_message(cb)`, `run_for(ms)?`, `run_forever()?`, `poll(ms)?` | Callback-style delivery (`cb: def(MqttMessage) -> void`). |
+| `ping(ms)?` | Explicit PINGREQ / PINGRESP. |
+| `disconnect()`, `disconnect_with(reason, props)`, `close()` | Clean DISCONNECT (v5 reason, e.g. `0x04` to publish the will anyway) or an abrupt drop. |
+
+`MqttMessage`: `valid`, `topic`, `payload` (binary-safe), `qos`, `retain`, `dup`, `packet_id`,
+`props` (`content_type`, `response_topic`, `correlation_data`, `user(key)`, `subscription_ids`...).
+Incoming topic aliases are resolved; incoming QoS 2 messages are delivered exactly once.
+
+Helpers: `mqtt_topic_matches(filter, topic)` (`+`, `#`, `$`-topics not matched by a leading
+wildcard), `mqtt_valid_filter`, `mqtt_valid_topic`, `mqtt_reason_name(code)`,
+`mqtt_connack_v3_name(code)`. The codec is public: `MqttPacket.new(type)` / `publish(...)` /
+`ack(type, id, reason)`, `encode(version)`, `MqttPacket.decode(bytes, version)?`,
+`mqtt_frame_len(buf)`, `MqttProps.encode()` / `decode`.
+
+### MqttBroker
+
+A single-threaded broker for tests and local use. Run `poll(ms)` in a loop (for example on its own
+thread):
+
+```tauraro
+mut b = MqttBroker.listen("127.0.0.1", 1883)?    # MqttBroker.listen_ws(host, port)? for WebSocket
+b.require_auth("user", "pw")                     # optional
+while running: b.poll(20)
+b.close()
+```
+
+It accepts 3.1.1 and 5.0 clients; supports wildcard subscriptions, QoS 0 / 1 / 2 (incoming and
+outgoing handshakes, delivered at min(publish, subscription) QoS), retained messages (empty payload
+deletes), will messages (on a dropped connection, keep-alive timeout or v5 DISCONNECT `0x04`),
+client takeover (v5 DISCONNECT `0x8E`), persistent subscriptions for `clean_start = false` (3.1.1)
+or a session expiry > 0 (5.0), v5 no-local / retain-as-published / retain handling / subscription
+identifiers / incoming topic aliases / forwarded message properties, and server-assigned client
+ids. `kick(client_id)` drops a client as a network failure would; `client_count()`,
+`retained_count()`, `routed` report state.
+
+### Limitations
+
+- No enhanced authentication (AUTH packets), no `wss://` (WebSocket over TLS).
+- TLS reads use the TLS layer's timeout; a record split across a pause of more than the poll
+  interval (minimum 20 ms) could desynchronise the stream.
+- Client state (in-flight messages, subscriptions) is kept in memory only.
+- Broker: no queueing for offline sessions, no resend of its own unacknowledged deliveries, no
+  shared subscriptions (`$share/...` is refused), no will delay, no limits on packet size or
+  in-flight counts; one thread, blocking writes.

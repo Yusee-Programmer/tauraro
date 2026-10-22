@@ -80,21 +80,22 @@ extend TimeDelta:
 
 # ─── TimeZone ─────────────────────────────────────────────────────────────────
 #
-# Scope: fixed UTC offsets (arithmetic only, works everywhere incl. bare-metal)
-# plus the host system's current local timezone (offset/DST/abbreviation, via
-# new runtime primitives — see runtime/tauraro_rt.h's "Timezone support"
-# section). This is NOT a full IANA tzdata implementation: there is no table
-# of named zones ("America/New_York") and no historical DST rule engine. For
-# a fixed offset there is no DST to compute; for the system zone, "now"'s
-# offset/DST state is read live from the OS each time .local() is called
-# (mirrors what the OS itself currently believes, same caveat as C's
-# localtime()).
+# A TimeZone is an offset snapshot: fixed UTC offsets (arithmetic only, works
+# everywhere incl. bare-metal) plus the host system's current local timezone
+# (offset/DST/abbreviation, via runtime primitives — see runtime/tauraro_rt.h's
+# "Timezone support" section). Named IANA zones ("America/New_York") with
+# full historical DST rules live in std.sys.tz: `Tz.to_local(unix)` returns a
+# DateTime whose TimeZone carries the offset/DST/abbreviation in force at that
+# instant and `zone` = the IANA name. For the system zone via .local(), "now"'s
+# offset/DST state is read live from the OS each time it is called (same
+# caveat as C's localtime()).
 
 @value_type
 pub class TimeZone:
     pub offset_seconds: int   # seconds EAST of UTC (negative = west)
     pub is_dst:          bool
     pub name:            str  # best-effort abbreviation, e.g. "UTC", "+05:30", "PST"
+    pub zone:            str  # IANA zone this snapshot came from (std.sys.tz), else ""
 
 extend TimeZone:
     # The UTC timezone: zero offset, never DST.
@@ -103,6 +104,7 @@ extend TimeZone:
         tz.offset_seconds = 0
         tz.is_dst = false
         tz.name = "UTC"
+        tz.zone = ""
         return tz
 
     # An arbitrary fixed UTC offset with no DST. Pure arithmetic — no OS call,
@@ -115,6 +117,7 @@ extend TimeZone:
         tz.offset_seconds = total_min * 60
         tz.is_dst = false
         tz.name = TimeZone._format_offset(tz.offset_seconds)
+        tz.zone = ""
         return tz
 
     # The system's current local timezone: UTC offset, whether DST is
@@ -130,6 +133,7 @@ extend TimeZone:
         if nm.len() == 0:
             nm = TimeZone._format_offset(tz.offset_seconds)
         tz.name = nm
+        tz.zone = ""
         return tz
 
     # Format a seconds-east-of-UTC offset as "+HH:MM" / "-HH:MM".
@@ -427,6 +431,36 @@ extend DateTime:
         mut out = sb.to_owned()
         sb.free()
         return out
+
+    # ISO 8601 with the zone's UTC offset: "YYYY-MM-DDTHH:MM:SS+HH:MM"
+    # ("+HH:MM:SS" when the offset has seconds, e.g. historical LMT).
+    pub def isoformat(self) -> str:
+        mut sb = StringBuilder.init(32)
+        sb.append(self.date_str())
+        sb.append("T")
+        sb.append(self.time_str())
+        mut off = self.tz.offset_seconds
+        if off < 0:
+            sb.append("-")
+            off = 0 - off
+        else:
+            sb.append("+")
+        mut h = off / 3600
+        mut mi = (off - h * 3600) / 60
+        mut s = off - h * 3600 - mi * 60
+        sb.append(Fmt.zero_pad(h, 2))
+        sb.append(":")
+        sb.append(Fmt.zero_pad(mi, 2))
+        if s != 0:
+            sb.append(":")
+            sb.append(Fmt.zero_pad(s, 2))
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # "YYYY-MM-DD HH:MM:SS ABBR", e.g. "2024-03-10 03:00:00 EDT".
+    pub def to_string_tz(self) -> str:
+        return self.to_string() + " " + self.tz.name
 
     # ISO 8601 date-only string: "YYYY-MM-DD"
     pub def date_str(self) -> str:

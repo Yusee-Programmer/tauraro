@@ -1,0 +1,1134 @@
+# std.net.grpc -- gRPC over HTTP/2 (grpc.io PROTOCOL-HTTP2), client and server.
+#
+# Messages are raw bytes: encode / decode them with std.encoding.protobuf
+# (or any other format). The wire protocol is handled here: length-prefixed
+# messages (optional gzip / deflate message compression), content-type
+# application/grpc, te: trailers, grpc-status / grpc-message (percent-
+# encoded) trailers, trailers-only responses, grpc-timeout deadlines,
+# custom metadata (including "-bin" headers, base64) and the status codes.
+#
+# Client (GrpcChannel over std.net.http2, h2c or TLS with ALPN h2):
+#   mut ch = GrpcChannel.connect("127.0.0.1", 50051)?          # h2c
+#   mut ch2 = GrpcChannel.connect_tls("api.example.com", 443, "")?
+#   mut o = GrpcCallOptions.default()
+#   o.timeout_ms = 2000                                        # deadline
+#   o.metadata.add("x-user", "ann")
+#   mut r = ch.unary("/helloworld.Greeter/SayHello", request_bytes, o)
+#   if r.ok(): print(r.message.len())  else: print(r.code, r.details)
+#
+#   mut call = ch.open_call("/pkg.Svc/Chat", o)?   # any streaming kind
+#   call.send(m1)  call.send(m2)  call.close_send()
+#   while call.recv(): handle(call.message)
+#   print(call.code, call.details)                 # final status
+#   # server_streaming(method, req, o) = open_call + send + close_send
+#
+# Server (GrpcServer over std.net.http2_server):
+#   def say_hello(c: GrpcServerCall, req: str) -> str: return reply_bytes
+#   mut s = GrpcServer.listen("0.0.0.0", 50051)?
+#   s.add_unary("/helloworld.Greeter/SayHello", say_hello)
+#   s.add_server_streaming(path, def(GrpcServerCall, str))
+#   s.add_client_streaming(path, def(GrpcServerCall) -> str)   # c.recv() loop
+#   s.add_bidi(path, def(GrpcServerCall))                      # recv / send
+#   s.enable_health()        # grpc.health.v1.Health Check + Watch
+#   s.serve(-1)
+# A handler reports errors with c.fail(GRPC_NOT_FOUND(), "no such user");
+# c.metadata holds the request metadata, c.header_metadata /
+# c.trailer_metadata are sent back, c.deadline_exceeded() / c.cancelled()
+# tell the handler to stop. Handlers run one at a time; while one waits in
+# recv() / send(), requests on other streams are dispatched (nested), so a
+# long-lived stream does not block unary calls.
+
+from std.crypto.native import _cn_alloc, _cn_take
+from std.core.string import StringBuilder
+from std.net.http2 import Http2Client, Http2Options, Http2Response, H2Headers
+from std.net.http2_server import Http2Server, H2ServerRequest, Http2ServerOptions
+from std.net.tls import TlsServerConfig
+from std.compress.flate import Flate
+from std.encoding.protobuf import ProtoWriter, ProtoReader
+from std.sys.time import Clock
+
+# ── status codes ──────────────────────────────────────────────────────────────
+pub def GRPC_OK() -> int: return 0
+pub def GRPC_CANCELLED() -> int: return 1
+pub def GRPC_UNKNOWN() -> int: return 2
+pub def GRPC_INVALID_ARGUMENT() -> int: return 3
+pub def GRPC_DEADLINE_EXCEEDED() -> int: return 4
+pub def GRPC_NOT_FOUND() -> int: return 5
+pub def GRPC_ALREADY_EXISTS() -> int: return 6
+pub def GRPC_PERMISSION_DENIED() -> int: return 7
+pub def GRPC_RESOURCE_EXHAUSTED() -> int: return 8
+pub def GRPC_FAILED_PRECONDITION() -> int: return 9
+pub def GRPC_ABORTED() -> int: return 10
+pub def GRPC_OUT_OF_RANGE() -> int: return 11
+pub def GRPC_UNIMPLEMENTED() -> int: return 12
+pub def GRPC_INTERNAL() -> int: return 13
+pub def GRPC_UNAVAILABLE() -> int: return 14
+pub def GRPC_DATA_LOSS() -> int: return 15
+pub def GRPC_UNAUTHENTICATED() -> int: return 16
+
+# Health checking (grpc.health.v1.HealthCheckResponse.ServingStatus).
+pub def HEALTH_UNKNOWN() -> int: return 0
+pub def HEALTH_SERVING() -> int: return 1
+pub def HEALTH_NOT_SERVING() -> int: return 2
+pub def HEALTH_SERVICE_UNKNOWN() -> int: return 3
+
+def _g_byte(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+def _g_hexval(c: int) -> int:
+    if c >= 48 and c <= 57: return c - 48
+    if c >= 65 and c <= 70: return c - 55
+    if c >= 97 and c <= 102: return c - 87
+    return -1
+
+pub class Grpc:
+    _dummy: int
+
+extend Grpc:
+    pub def status_name(code: int) -> str:
+        mut names = ["OK", "CANCELLED", "UNKNOWN", "INVALID_ARGUMENT", "DEADLINE_EXCEEDED", "NOT_FOUND", "ALREADY_EXISTS", "PERMISSION_DENIED", "RESOURCE_EXHAUSTED", "FAILED_PRECONDITION", "ABORTED", "OUT_OF_RANGE", "UNIMPLEMENTED", "INTERNAL", "UNAVAILABLE", "DATA_LOSS", "UNAUTHENTICATED"]
+        if code < 0 or code > 16: return "CODE_" + str(code)
+        return names[code]
+
+    # gRPC message prefix: compressed flag + 4-byte big-endian length.
+    pub def frame(msg: str, compressed: bool) -> str:
+        mut sb = StringBuilder.init(msg.len() + 8)
+        if compressed: sb.append_char(1)
+        else: sb.append_char(0)
+        mut n = msg.len()
+        sb.append_char((n >> 24) & 255)
+        sb.append_char((n >> 16) & 255)
+        sb.append_char((n >> 8) & 255)
+        sb.append_char(n & 255)
+        sb.append(msg)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # grpc-timeout value for a deadline in milliseconds (at most 8 digits).
+    pub def encode_timeout(ms: int) -> str:
+        if ms < 0: return "0m"
+        if ms < 100000000: return str(ms) + "m"
+        mut secs = ms / 1000
+        if secs < 100000000: return str(secs) + "S"
+        mut mins = secs / 60
+        if mins < 100000000: return str(mins) + "M"
+        return str(mins / 60) + "H"
+
+    # Milliseconds from a grpc-timeout value; -1 when absent or malformed.
+    pub def parse_timeout(v: str) -> int:
+        if v.len() < 2 or v.len() > 9: return -1
+        mut n = 0
+        mut i = 0
+        while i < v.len() - 1:
+            mut c = _g_byte(v, i)
+            if c < 48 or c > 57: return -1
+            n = n * 10 + (c - 48)
+            i = i + 1
+        mut u = _g_byte(v, v.len() - 1)
+        if u == 72: return n * 3600000          # H
+        if u == 77: return n * 60000            # M
+        if u == 83: return n * 1000             # S
+        if u == 109: return n                   # m
+        if u == 117: return (n + 999) / 1000    # u
+        if u == 110: return (n + 999999) / 1000000   # n
+        return -1
+
+    # grpc-message encoding: bytes outside 0x20..0x7E and '%' become %XX.
+    pub def percent_encode(s: str) -> str:
+        mut hexd = "0123456789ABCDEF"
+        mut sb = StringBuilder.init(s.len() + 8)
+        mut i = 0
+        while i < s.len():
+            mut c = _g_byte(s, i)
+            if c >= 32 and c <= 126 and c != 37:
+                sb.append_char(c)
+            else:
+                sb.append_char(37)
+                sb.append_char(_g_byte(hexd, c >> 4))
+                sb.append_char(_g_byte(hexd, c & 15))
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Lenient decoding: malformed escapes are kept as they are.
+    pub def percent_decode(s: str) -> str:
+        mut sb = StringBuilder.init(s.len() + 1)
+        mut i = 0
+        while i < s.len():
+            mut c = _g_byte(s, i)
+            if c == 37 and i + 2 < s.len() + 0 and _g_hexval(_g_byte(s, i + 1)) >= 0 and _g_hexval(_g_byte(s, i + 2)) >= 0:
+                sb.append_char(_g_hexval(_g_byte(s, i + 1)) * 16 + _g_hexval(_g_byte(s, i + 2)))
+                i = i + 3
+            else:
+                sb.append_char(c)
+                i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Base64 for "-bin" metadata (binary safe; encode without padding as
+    # gRPC implementations send it, decode with or without padding).
+    pub def b64_encode(s: str) -> str:
+        mut tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        mut sb = StringBuilder.init(s.len() * 4 / 3 + 4)
+        mut i = 0
+        while i + 2 < s.len():
+            mut v = (_g_byte(s, i) << 16) | (_g_byte(s, i + 1) << 8) | _g_byte(s, i + 2)
+            sb.append_char(_g_byte(tbl, (v >> 18) & 63))
+            sb.append_char(_g_byte(tbl, (v >> 12) & 63))
+            sb.append_char(_g_byte(tbl, (v >> 6) & 63))
+            sb.append_char(_g_byte(tbl, v & 63))
+            i = i + 3
+        mut rem = s.len() - i
+        if rem == 1:
+            mut v1 = _g_byte(s, i) << 16
+            sb.append_char(_g_byte(tbl, (v1 >> 18) & 63))
+            sb.append_char(_g_byte(tbl, (v1 >> 12) & 63))
+        elif rem == 2:
+            mut v2 = (_g_byte(s, i) << 16) | (_g_byte(s, i + 1) << 8)
+            sb.append_char(_g_byte(tbl, (v2 >> 18) & 63))
+            sb.append_char(_g_byte(tbl, (v2 >> 12) & 63))
+            sb.append_char(_g_byte(tbl, (v2 >> 6) & 63))
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def b64_decode(s: str) -> str:
+        mut sb = StringBuilder.init(s.len() + 4)
+        mut acc = 0
+        mut bits = 0
+        mut i = 0
+        while i < s.len():
+            mut c = _g_byte(s, i)
+            mut v = -1
+            if c >= 65 and c <= 90: v = c - 65
+            elif c >= 97 and c <= 122: v = c - 71
+            elif c >= 48 and c <= 57: v = c + 4
+            elif c == 43 or c == 45: v = 62
+            elif c == 47 or c == 95: v = 63
+            if v >= 0:
+                acc = ((acc << 6) | v) & 16777215
+                bits = bits + 6
+                if bits >= 8:
+                    bits = bits - 8
+                    sb.append_char((acc >> bits) & 255)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Add a binary metadata value (name must end in "-bin").
+    pub def add_bin(md: H2Headers, name: str, value: str):
+        md.add(name, Grpc.b64_encode(value))
+
+    # Decoded value of a "-bin" metadata entry ("" if absent).
+    pub def get_bin(md: H2Headers, name: str) -> str:
+        return Grpc.b64_decode(md.get(name))
+
+    pub def compress(data: str, encoding: str) -> str:
+        if encoding == "deflate": return Flate.zlib_compress(data, 6)
+        return Flate.gzip(data, 6)
+
+    pub def decompress(data: str, encoding: str, max_out: int) throws str -> str:
+        if encoding == "gzip": return Flate.gunzip_max(data, max_out)?
+        if encoding == "deflate": return Flate.zlib_decompress_max(data, max_out)?
+        raise("grpc: unsupported message encoding '" + encoding + "'")
+
+    # Reserved / transport headers that are not application metadata.
+    pub def is_reserved(name: str) -> bool:
+        if name.starts_with(":"): return true
+        if name == "content-type" or name == "te" or name == "user-agent": return true
+        if name == "grpc-timeout" or name == "grpc-encoding" or name == "grpc-accept-encoding": return true
+        if name == "grpc-status" or name == "grpc-message" or name == "grpc-status-details-bin": return true
+        if name == "content-length" or name == "accept-encoding" or name == "host": return true
+        return false
+
+# Incremental parser for a stream of length-prefixed messages.
+pub class GrpcFramer:
+    _buf: str
+    pub max_message: int
+    pub encoding: str          # grpc-encoding of the peer ("" / "identity" = none)
+    pub error: str             # set when next() fails
+    pub last: str              # the message decoded by the last successful next()
+
+extend GrpcFramer:
+    pub def init(max_message: int) -> GrpcFramer:
+        mut f = GrpcFramer()
+        f._buf = ""
+        f.max_message = max_message
+        f.encoding = ""
+        f.error = ""
+        f.last = ""
+        return f
+
+    pub def feed(self, data: str): self._buf = self._buf + data
+
+    pub def buffered(self) -> int: return self._buf.len()
+
+    # 1 = a message was decoded into `last`, 0 = need more bytes, -1 = error
+    # (-2 = message too large).
+    pub def next(self) -> int:
+        if self._buf.len() < 5: return 0
+        mut flag = _g_byte(self._buf, 0)
+        mut n = (_g_byte(self._buf, 1) << 24) | (_g_byte(self._buf, 2) << 16) | (_g_byte(self._buf, 3) << 8) | _g_byte(self._buf, 4)
+        if flag > 1:
+            self.error = "grpc: bad message flag"
+            return -1
+        if n > self.max_message:
+            self.error = "grpc: message larger than " + str(self.max_message) + " bytes"
+            return -2
+        if self._buf.len() < 5 + n: return 0
+        mut msg = self._buf.slice(5, 5 + n)
+        self._buf = self._buf.slice(5 + n, self._buf.len())
+        if flag == 1:
+            if self.encoding.len() == 0 or self.encoding == "identity":
+                self.error = "grpc: compressed message without grpc-encoding"
+                return -1
+            mut dr: Result[str, str] = Grpc.decompress(msg, self.encoding, self.max_message)
+            if dr.is_err:
+                self.error = dr.err
+                return -1
+            msg = dr.ok
+        self.last = msg
+        return 1
+
+# ══════════════════════════════ client ═══════════════════════════════════════
+
+pub class GrpcCallOptions:
+    pub timeout_ms:  int          # deadline (0 = none)
+    pub metadata:    H2Headers    # custom request metadata
+    pub compress:    bool         # gzip request messages
+    pub max_message: int          # largest response message accepted
+
+extend GrpcCallOptions:
+    pub def default() -> GrpcCallOptions:
+        mut o = GrpcCallOptions()
+        o.timeout_ms = 0
+        o.metadata = H2Headers.init()
+        o.compress = false
+        o.max_message = 4194304
+        return o
+
+    pub def with_timeout(ms: int) -> GrpcCallOptions:
+        mut o = GrpcCallOptions.default()
+        o.timeout_ms = ms
+        return o
+
+# Result of a unary (or fully collected) call.
+pub class GrpcReply:
+    pub code:     int             # GRPC_OK() on success
+    pub details:  str             # grpc-message (decoded)
+    pub message:  str             # the (first) response message
+    pub messages: List[str]       # every response message
+    pub headers:  H2Headers       # response headers (initial metadata)
+    pub trailers: H2Headers       # trailing metadata
+
+extend GrpcReply:
+    pub def ok(self) -> bool: return self.code == 0
+    pub def status_name(self) -> str: return Grpc.status_name(self.code)
+
+pub class GrpcChannel:
+    pub h2: Http2Client
+    pub host: str
+    pub port: int
+    pub user_agent: str
+    pub open: bool
+
+extend GrpcChannel:
+    # Cleartext HTTP/2 with prior knowledge (h2c).
+    pub def connect(host: str, port: int) throws str -> GrpcChannel:
+        mut o = Http2Options.cleartext()
+        return GrpcChannel.connect_with(host, port, o)?
+
+    # TLS 1.3, ALPN h2, verified against the system roots (+ ca_pem if given).
+    pub def connect_tls(host: str, port: int, ca_pem: str) throws str -> GrpcChannel:
+        mut o = Http2Options.default()
+        o.ca_pem = ca_pem
+        return GrpcChannel.connect_with(host, port, o)?
+
+    pub def connect_with(host: str, port: int, opts: Http2Options) throws str -> GrpcChannel:
+        mut c = Http2Client.connect_with(host, port, opts)?
+        mut ch = GrpcChannel()
+        ch.h2 = c
+        ch.host = host
+        ch.port = port
+        ch.user_agent = "grpc-tauraro/1.0"
+        ch.open = true
+        return ch
+
+    # Start a call of any kind; send() / close_send() / recv() drive it.
+    pub def open_call(self, method: str, opts: GrpcCallOptions) throws str -> GrpcCall:
+        mut h = H2Headers.init()
+        h.add("content-type", "application/grpc")
+        h.add("te", "trailers")
+        h.add("user-agent", self.user_agent)
+        h.add("grpc-accept-encoding", "identity,gzip,deflate")
+        if opts.compress: h.add("grpc-encoding", "gzip")
+        if opts.timeout_ms > 0: h.add("grpc-timeout", Grpc.encode_timeout(opts.timeout_ms))
+        mut i = 0
+        while i < len(opts.metadata.names):
+            mut n = _lower(opts.metadata.names[i])
+            if not Grpc.is_reserved(n): h.add(n, opts.metadata.values[i])
+            i = i + 1
+        mut call = GrpcCall()
+        call._ch = self
+        call.method = method
+        call.code = -1
+        call.details = ""
+        call.message = ""
+        call.headers = H2Headers.init()
+        call.trailers = H2Headers.init()
+        call._framer = GrpcFramer.init(opts.max_message)
+        call._compress = opts.compress
+        call._send_closed = false
+        call._done = false
+        call._got_headers = false
+        call.deadline = 0
+        if opts.timeout_ms > 0: call.deadline = Clock.now_ms() + opts.timeout_ms
+        mut sr: Result[int, str] = self.h2.open_stream("POST", method, h)
+        if sr.is_err:
+            call.sid = 0
+            call._finish(GRPC_UNAVAILABLE(), sr.err)
+            return call
+        call.sid = sr.ok
+        return call
+
+    # Unary call: one request, one response.
+    pub def unary(self, method: str, request: str, opts: GrpcCallOptions) -> GrpcReply:
+        mut cr: Result[GrpcCall, str] = self.open_call(method, opts)
+        mut rep = GrpcReply()
+        rep.messages = []
+        rep.message = ""
+        rep.headers = H2Headers.init()
+        rep.trailers = H2Headers.init()
+        if cr.is_err:
+            rep.code = GRPC_UNAVAILABLE()
+            rep.details = cr.err
+            return rep
+        mut call = cr.ok
+        call.send(request)
+        call.close_send()
+        return call.collect()
+
+    # Server streaming: one request; read the responses with recv().
+    pub def server_streaming(self, method: str, request: str, opts: GrpcCallOptions) throws str -> GrpcCall:
+        mut call = self.open_call(method, opts)?
+        call.send(request)
+        call.close_send()
+        return call
+
+    # Client streaming: send() requests, then close_send() and collect().
+    pub def client_streaming(self, method: str, opts: GrpcCallOptions) throws str -> GrpcCall:
+        return self.open_call(method, opts)?
+
+    # Bidirectional streaming.
+    pub def bidi(self, method: str, opts: GrpcCallOptions) throws str -> GrpcCall:
+        return self.open_call(method, opts)?
+
+    pub def is_closing(self) -> bool: return self.h2.is_closing()
+
+    pub def close(self):
+        if self.open:
+            self.h2.close()
+            self.open = false
+
+def _lower(s: str) -> str:
+    mut sb = StringBuilder.init(s.len() + 1)
+    mut i = 0
+    while i < s.len():
+        mut c = _g_byte(s, i)
+        if c >= 65 and c <= 90: c = c + 32
+        sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# HTTP status -> gRPC code when a response is not a gRPC response.
+def _http_to_grpc(status: int) -> int:
+    if status == 400: return GRPC_INTERNAL()
+    if status == 401: return GRPC_UNAUTHENTICATED()
+    if status == 403: return GRPC_PERMISSION_DENIED()
+    if status == 404: return GRPC_UNIMPLEMENTED()
+    if status == 429 or status == 502 or status == 503 or status == 504: return GRPC_UNAVAILABLE()
+    return GRPC_UNKNOWN()
+
+def _parse_int(s: str) -> int:
+    if s.len() == 0: return -1
+    mut n = 0
+    mut i = 0
+    while i < s.len():
+        mut c = _g_byte(s, i)
+        if c < 48 or c > 57: return -1
+        n = n * 10 + (c - 48)
+        i = i + 1
+    return n
+
+# One client call (any kind).
+pub class GrpcCall:
+    _ch: GrpcChannel
+    pub sid: int
+    pub method: str
+    pub code: int              # -1 while the call is running, then the final status
+    pub details: str
+    pub message: str           # last message from recv()
+    pub headers: H2Headers
+    pub trailers: H2Headers
+    pub deadline: int          # Clock.now_ms() deadline (0 = none)
+    _framer: GrpcFramer
+    _compress: bool
+    _send_closed: bool
+    _done: bool
+    _got_headers: bool
+
+extend GrpcCall:
+    pub def finished(self) -> bool: return self._done
+
+    def _finish(self, code: int, details: str):
+        if self._done: return
+        self._done = true
+        self.code = code
+        self.details = details
+        if self.sid > 0: self._ch.h2.release(self.sid)
+
+    def _remaining(self) -> int:
+        if self.deadline == 0: return self._ch.h2.timeout_ms
+        mut left = self.deadline - Clock.now_ms()
+        if left < 1: left = 0
+        return left
+
+    def _deadline_hit(self) -> bool:
+        return self.deadline > 0 and Clock.now_ms() >= self.deadline
+
+    # Send one request message. false if the call has already ended.
+    pub def send(self, msg: str) -> bool:
+        if self._done or self._send_closed: return false
+        if self._deadline_hit():
+            self._expire()
+            return false
+        mut body = msg
+        if self._compress: body = Grpc.compress(msg, "gzip")
+        mut fr = Grpc.frame(body, self._compress)
+        mut r: Result[bool, str] = _h2_send(self._ch.h2, self.sid, fr, false)
+        if r.is_err:
+            # the server may already have answered (e.g. an error status)
+            self._send_closed = true
+            return false
+        return true
+
+    # Half-close: no more requests.
+    pub def close_send(self):
+        if self._done or self._send_closed: return
+        self._send_closed = true
+        mut r: Result[bool, str] = _h2_send(self._ch.h2, self.sid, "", true)
+
+    def _expire(self):
+        if self._done: return
+        self._ch.h2.reset(self.sid, 8)
+        self._finish(GRPC_DEADLINE_EXCEEDED(), "Deadline Exceeded")
+
+    # Cancel the call (RST_STREAM CANCEL); the status becomes CANCELLED.
+    pub def cancel(self):
+        if self._done: return
+        self._ch.h2.reset(self.sid, 8)
+        self._finish(GRPC_CANCELLED(), "Cancelled by the client")
+
+    def _take_headers(self):
+        if self._got_headers: return
+        mut r = self._ch.h2.response(self.sid)
+        if r.status == 0: return
+        self._got_headers = true
+        self.headers = r.headers
+        self._framer.encoding = r.headers.get("grpc-encoding")
+
+    # Wait for the response headers (initial metadata).
+    pub def response_headers(self) -> H2Headers:
+        if not self._got_headers and not self._done:
+            mut r: Result[bool, str] = _h2_wait_headers(self._ch.h2, self.sid, self._remaining())
+            self._take_headers()
+        return self.headers
+
+    # Next response message into `message`. false at the end of the call
+    # (then `code` / `details` / `trailers` hold the final status).
+    pub def recv(self) -> bool:
+        while true:
+            if self._done: return false
+            self._take_headers()
+            mut k = self._framer.next()
+            if k == 1:
+                self.message = self._framer.last
+                return true
+            if k == -2:
+                self._ch.h2.reset(self.sid, 8)
+                self._finish(GRPC_RESOURCE_EXHAUSTED(), self._framer.error)
+                return false
+            if k < 0:
+                self._ch.h2.reset(self.sid, 8)
+                self._finish(GRPC_INTERNAL(), self._framer.error)
+                return false
+            if self._deadline_hit():
+                self._expire()
+                return false
+            mut rr: Result[str, str] = self._ch.h2.read_data(self.sid, self._remaining())
+            if rr.is_err:
+                if self._deadline_hit() or rr.err.contains("timed out"):
+                    self._expire()
+                else:
+                    self._finish(GRPC_UNAVAILABLE(), rr.err)
+                return false
+            if rr.ok.len() > 0:
+                self._framer.feed(rr.ok)
+            else:
+                self._end_of_stream()
+                return false
+        return false
+
+    def _end_of_stream(self):
+        mut r = self._ch.h2.response(self.sid)
+        if not self._got_headers and r.status > 0:
+            self.headers = r.headers
+            self._got_headers = true
+        self.trailers = r.trailers
+        if r.status == 0 or (r.error.len() > 0 and r.trailers.len() == 0 and not r.headers.has("grpc-status")):
+            mut rc = self._ch.h2.reset_code(self.sid)
+            mut code = GRPC_UNAVAILABLE()
+            if rc == 8: code = GRPC_CANCELLED()
+            elif rc == 7: code = GRPC_UNAVAILABLE()
+            elif rc > 0: code = GRPC_INTERNAL()
+            mut e = r.error
+            if e.len() == 0: e = "stream closed without a response"
+            self._finish(code, e)
+            return
+        if r.status != 200:
+            self._finish(_http_to_grpc(r.status), "HTTP status " + str(r.status))
+            return
+        mut src = r.trailers
+        if not src.has("grpc-status"): src = r.headers      # trailers-only response
+        if not src.has("grpc-status"):
+            self._finish(GRPC_UNKNOWN(), "missing grpc-status")
+            return
+        if self.trailers.len() == 0: self.trailers = r.headers
+        if self._framer.buffered() > 0:
+            self._finish(GRPC_INTERNAL(), "incomplete message at the end of the stream")
+            return
+        mut code2 = _parse_int(src.get("grpc-status"))
+        if code2 < 0: code2 = GRPC_UNKNOWN()
+        self._finish(code2, Grpc.percent_decode(src.get("grpc-message")))
+
+    # Read every remaining message and the status (half-closes first).
+    pub def collect(self) -> GrpcReply:
+        self.close_send()
+        mut rep = GrpcReply()
+        rep.messages = []
+        rep.message = ""
+        while self.recv():
+            rep.messages.append(self.message)
+        if len(rep.messages) > 0: rep.message = rep.messages[0]
+        rep.code = self.code
+        rep.details = self.details
+        rep.headers = self.headers
+        rep.trailers = self.trailers
+        return rep
+
+    # Wait for the final status (discarding unread messages).
+    pub def finish(self) -> int:
+        self.close_send()
+        while self.recv():
+            pass
+        return self.code
+
+def _h2_send(c: Http2Client, sid: int, data: str, end: bool) throws str -> bool:
+    c.send_data(sid, data, end)?
+    return true
+
+def _h2_wait_headers(c: Http2Client, sid: int, ms: int) throws str -> bool:
+    c.wait_headers(sid, ms)?
+    return true
+
+# ══════════════════════════════ server ═══════════════════════════════════════
+
+# Handler context for one incoming call.
+pub class GrpcServerCall:
+    pub method:   str              # "/package.Service/Method"
+    pub metadata: H2Headers        # request metadata (custom headers)
+    pub header_metadata:  H2Headers   # sent with the response headers
+    pub trailer_metadata: H2Headers   # sent with the status
+    pub code:     int              # status to send (GRPC_OK() unless fail() was called)
+    pub details:  str
+    pub message:  str              # last message from recv()
+    pub deadline: int              # Clock.now_ms() deadline from grpc-timeout (0 = none)
+    pub authority: str
+    pub compress: bool             # gzip responses (when the client accepts gzip)
+    _req: H2ServerRequest
+    _srv: GrpcServer
+    _framer: GrpcFramer
+    _ended: bool
+    _sent_headers: bool
+    _accept_gzip: bool
+    _expired: bool
+    _count: int
+
+extend GrpcServerCall:
+    # Set an error status (no response message is sent for unary calls).
+    pub def fail(self, code: int, details: str):
+        self.code = code
+        self.details = details
+
+    pub def ok(self) -> bool: return self.code == 0
+
+    pub def cancelled(self) -> bool: return self._req.cancelled()
+
+    pub def deadline_exceeded(self) -> bool:
+        if self._expired: return true
+        if self.deadline > 0 and Clock.now_ms() >= self.deadline: self._expired = true
+        return self._expired
+
+    # Milliseconds until the deadline (-1 = no deadline).
+    pub def time_remaining(self) -> int:
+        if self.deadline == 0: return -1
+        mut left = self.deadline - Clock.now_ms()
+        if left < 0: left = 0
+        return left
+
+    pub def metadata_bin(self, name: str) -> str: return Grpc.get_bin(self.metadata, name)
+
+    def _wait(self, cond: int) -> int:
+        # drive the server; nested dispatch of other requests while waiting
+        while true:
+            mut t = self.time_remaining()
+            if t == 0:
+                self._expired = true
+                return 0
+            mut nest = self._srv._depth < self._srv.max_nesting
+            mut r = self._req.wait_event(cond, t, nest)
+            if r == 2:
+                self._srv._dispatch_one()
+            else:
+                if r == 0 and self.deadline > 0: self._expired = true
+                return r
+        return 0
+
+    # Next request message into `message`; false at the end of the request
+    # stream (or on cancellation / deadline / protocol error).
+    pub def recv(self) -> bool:
+        while true:
+            if self._ended: return false
+            mut k = self._framer.next()
+            if k == 1:
+                self.message = self._framer.last
+                self._count = self._count + 1
+                return true
+            if k < 0:
+                if k == -2: self.fail(GRPC_RESOURCE_EXHAUSTED(), self._framer.error)
+                else: self.fail(GRPC_INTERNAL(), self._framer.error)
+                self._ended = true
+                return false
+            mut chunk = self._req.take()
+            if chunk.len() > 0:
+                self._framer.feed(chunk)
+                continue
+            if self._req.cancelled():
+                self._ended = true
+                self.fail(GRPC_CANCELLED(), "cancelled by the client")
+                return false
+            if self._req.body_complete():
+                self._ended = true
+                if self._framer.buffered() > 0: self.fail(GRPC_INTERNAL(), "incomplete request message")
+                return false
+            mut r = self._wait(1)
+            if r <= 0:
+                self._ended = true
+                if self._expired: self.fail(GRPC_DEADLINE_EXCEEDED(), "Deadline Exceeded")
+                else: self.fail(GRPC_UNAVAILABLE(), "connection lost")
+                return false
+        return false
+
+    def _resp_headers(self) -> H2Headers:
+        mut h = H2Headers.init()
+        h.add("content-type", "application/grpc")
+        if self.compress and self._accept_gzip: h.add("grpc-encoding", "gzip")
+        h.add("grpc-accept-encoding", "identity,gzip,deflate")
+        mut i = 0
+        while i < len(self.header_metadata.names):
+            mut n = _lower(self.header_metadata.names[i])
+            if not Grpc.is_reserved(n): h.add(n, self.header_metadata.values[i])
+            i = i + 1
+        return h
+
+    # Send the response headers now (otherwise done with the first message).
+    pub def send_headers(self) -> bool:
+        if self._sent_headers: return true
+        if self._req.cancelled(): return false
+        mut r: Result[bool, str] = _srv_respond(self._req, self._resp_headers())
+        self._sent_headers = r.is_ok
+        return r.is_ok
+
+    # Send one response message; false if the call is cancelled / expired.
+    pub def send(self, msg: str) -> bool:
+        if self.deadline_exceeded() or self._req.cancelled(): return false
+        if not self.send_headers(): return false
+        mut z = self.compress and self._accept_gzip
+        mut body = msg
+        if z: body = Grpc.compress(msg, "gzip")
+        mut r: Result[bool, str] = _srv_send(self._req, Grpc.frame(body, z))
+        if r.is_err: return false
+        if self._req.wait_event(2, 0, false) != 1 and self._req.headers_sent():
+            # more than a little queued: wait (dispatching other calls) for the client to read
+            mut w = self._wait(2)
+            if w <= 0: return false
+        return true
+
+    # Wait up to ms for cancellation (keeps serving other calls meanwhile).
+    # Returns true if the call was cancelled or its deadline passed.
+    pub def sleep(self, ms: int) -> bool:
+        mut until = Clock.now_ms() + ms
+        while Clock.now_ms() < until:
+            if self.cancelled() or self.deadline_exceeded(): return true
+            mut nest = self._srv._depth < self._srv.max_nesting
+            mut left = until - Clock.now_ms()
+            mut t = self.time_remaining()
+            if t >= 0 and t < left: left = t
+            if left <= 0: left = 1
+            mut r = self._req.wait_event(3, left, nest)
+            if r == 2: self._srv._dispatch_one()
+            if r < 0: return true
+        return self.cancelled() or self.deadline_exceeded()
+
+    def _finish(self):
+        if self._req.cancelled(): return
+        if self.deadline_exceeded() and self.code == 0: self.fail(GRPC_DEADLINE_EXCEEDED(), "Deadline Exceeded")
+        mut t = H2Headers.init()
+        t.add("grpc-status", str(self.code))
+        if self.details.len() > 0: t.add("grpc-message", Grpc.percent_encode(self.details))
+        mut i = 0
+        while i < len(self.trailer_metadata.names):
+            mut n = _lower(self.trailer_metadata.names[i])
+            if not Grpc.is_reserved(n): t.add(n, self.trailer_metadata.values[i])
+            i = i + 1
+        if not self._sent_headers:
+            # trailers-only response
+            mut h = self._resp_headers()
+            i = 0
+            while i < len(t.names):
+                h.add(t.names[i], t.values[i])
+                i = i + 1
+            mut r: Result[bool, str] = _srv_respond_end(self._req, h)
+            return
+        mut r2: Result[bool, str] = _srv_trailers(self._req, t)
+
+def _srv_respond(r: H2ServerRequest, h: H2Headers) throws str -> bool:
+    r.respond(200, h)?
+    return true
+
+def _srv_respond_end(r: H2ServerRequest, h: H2Headers) throws str -> bool:
+    r.respond_end(200, h)?
+    return true
+
+def _srv_send(r: H2ServerRequest, data: str) throws str -> bool:
+    r.send(data)?
+    return true
+
+def _srv_trailers(r: H2ServerRequest, t: H2Headers) throws str -> bool:
+    r.send_trailers(t)?
+    return true
+
+pub class GrpcServer:
+    pub h2: Http2Server
+    pub max_message: int
+    pub max_nesting: int         # nested dispatch depth while a handler waits
+    pub calls: int               # calls handled so far
+    _depth: int
+    _paths: List[str]
+    _kinds: List[int]            # 0 unary, 1 server streaming, 2 client streaming, 3 bidi
+    _idx: List[int]
+    _unary: List[def(GrpcServerCall, str) -> str]
+    _sstream: List[def(GrpcServerCall, str)]
+    _cstream: List[def(GrpcServerCall) -> str]
+    _bidi: List[def(GrpcServerCall)]
+    _health_names: List[str]
+    _health_status: List[int]
+    _health_version: int
+
+extend GrpcServer:
+    def _make(h2: Http2Server) -> GrpcServer:
+        mut s = GrpcServer()
+        s.h2 = h2
+        s.max_message = 4194304
+        s.max_nesting = 8
+        s.calls = 0
+        s._depth = 0
+        s._paths = []
+        s._kinds = []
+        s._idx = []
+        s._unary = []
+        s._sstream = []
+        s._cstream = []
+        s._bidi = []
+        s._health_names = []
+        s._health_status = []
+        s._health_version = 0
+        return s
+
+    # h2c (cleartext, prior knowledge). port 0 = any free port (see port()).
+    pub def listen(host: str, port: int) throws str -> GrpcServer:
+        mut h = Http2Server.listen(host, port)?
+        return GrpcServer._make(h)
+
+    # TLS 1.3 with ALPN h2.
+    pub def listen_tls(host: str, port: int, cfg: TlsServerConfig) throws str -> GrpcServer:
+        mut h = Http2Server.listen_tls(host, port, cfg)?
+        return GrpcServer._make(h)
+
+    pub def port(self) -> int: return self.h2.port
+
+    def _register(self, path: str, kind: int, idx: int):
+        self._paths.append(path)
+        self._kinds.append(kind)
+        self._idx.append(idx)
+
+    pub def add_unary(self, path: str, h: def(GrpcServerCall, str) -> str):
+        self._unary.append(h)
+        self._register(path, 0, len(self._unary) - 1)
+
+    pub def add_server_streaming(self, path: str, h: def(GrpcServerCall, str)):
+        self._sstream.append(h)
+        self._register(path, 1, len(self._sstream) - 1)
+
+    pub def add_client_streaming(self, path: str, h: def(GrpcServerCall) -> str):
+        self._cstream.append(h)
+        self._register(path, 2, len(self._cstream) - 1)
+
+    pub def add_bidi(self, path: str, h: def(GrpcServerCall)):
+        self._bidi.append(h)
+        self._register(path, 3, len(self._bidi) - 1)
+
+    # ── health checking (grpc.health.v1) ──
+    # Registers Health/Check and Health/Watch; the overall server ("") is SERVING.
+    pub def enable_health(self):
+        self.set_health("", HEALTH_SERVING())
+        self.add_unary("/grpc.health.v1.Health/Check", _health_check)
+        self.add_server_streaming("/grpc.health.v1.Health/Watch", _health_watch)
+
+    pub def set_health(self, service: str, status: int):
+        mut i = 0
+        while i < len(self._health_names):
+            if self._health_names[i] == service:
+                self._health_status[i] = status
+                self._health_version = self._health_version + 1
+                return
+            i = i + 1
+        self._health_names.append(service)
+        self._health_status.append(status)
+        self._health_version = self._health_version + 1
+
+    # -1 if the service is unknown.
+    pub def health_of(self, service: str) -> int:
+        mut i = 0
+        while i < len(self._health_names):
+            if self._health_names[i] == service: return self._health_status[i]
+            i = i + 1
+        return -1
+
+    # ── dispatch ──
+    def _plain_error(self, req: H2ServerRequest, http_status: int, code: int, msg: str):
+        mut h = H2Headers.init()
+        h.add("content-type", "application/grpc")
+        h.add("grpc-status", str(code))
+        h.add("grpc-message", Grpc.percent_encode(msg))
+        mut r: Result[bool, str] = _srv_respond_end_status(req, http_status, h)
+
+    def _handle(self, req: H2ServerRequest):
+        self.calls = self.calls + 1
+        if req.method != "POST":
+            self._plain_error(req, 405, GRPC_UNIMPLEMENTED(), "gRPC requires POST")
+            return
+        mut ct = req.headers.get("content-type")
+        if not ct.starts_with("application/grpc"):
+            mut h = H2Headers.init()
+            h.add("content-type", "text/plain")
+            mut r: Result[bool, str] = _srv_respond_end_status(req, 415, h)
+            return
+        mut enc = req.headers.get("grpc-encoding")
+        if enc.len() > 0 and enc != "identity" and enc != "gzip" and enc != "deflate":
+            self._plain_error(req, 200, GRPC_UNIMPLEMENTED(), "unsupported grpc-encoding " + enc)
+            return
+        mut call = GrpcServerCall()
+        call.method = req.path
+        call.authority = req.authority
+        call.metadata = H2Headers.init()
+        mut i = 0
+        while i < len(req.headers.names):
+            if not Grpc.is_reserved(req.headers.names[i]): call.metadata.add(req.headers.names[i], req.headers.values[i])
+            i = i + 1
+        call.header_metadata = H2Headers.init()
+        call.trailer_metadata = H2Headers.init()
+        call.code = 0
+        call.details = ""
+        call.message = ""
+        call.deadline = 0
+        call.compress = false
+        mut to = Grpc.parse_timeout(req.headers.get("grpc-timeout"))
+        if to >= 0: call.deadline = Clock.now_ms() + to
+        if to == 0: call.deadline = Clock.now_ms()
+        call._req = req
+        call._srv = self
+        call._framer = GrpcFramer.init(self.max_message)
+        call._framer.encoding = enc
+        call._ended = false
+        call._sent_headers = false
+        call._accept_gzip = req.headers.get("grpc-accept-encoding").contains("gzip")
+        call._expired = false
+        call._count = 0
+        mut k = -1
+        i = 0
+        while i < len(self._paths):
+            if self._paths[i] == req.path:
+                k = i
+                break
+            i = i + 1
+        if k < 0:
+            call.fail(GRPC_UNIMPLEMENTED(), "unknown method " + req.path)
+            call._finish()
+            return
+        mut kind = self._kinds[k]
+        mut idx = self._idx[k]
+        if kind == 0 or kind == 1:
+            mut got = call.recv()
+            if not got:
+                if call.code == 0: call.fail(GRPC_INTERNAL(), "missing request message")
+            else:
+                mut reqmsg = call.message
+                if call.recv():
+                    call.fail(GRPC_INTERNAL(), "more than one request message for a unary request")
+                elif call.code == 0:
+                    if kind == 0:
+                        mut uh = self._unary[idx]
+                        mut resp = uh(call, reqmsg)
+                        if call.code == 0 and not call.deadline_exceeded(): call.send(resp)
+                    else:
+                        mut sh = self._sstream[idx]
+                        sh(call, reqmsg)
+        elif kind == 2:
+            mut ch = self._cstream[idx]
+            mut resp2 = ch(call)
+            if call.code == 0 and not call.deadline_exceeded(): call.send(resp2)
+        else:
+            mut bh = self._bidi[idx]
+            bh(call)
+        call._finish()
+
+    def _dispatch_one(self):
+        mut rr: Result[H2ServerRequest, str] = self.h2.next(0)
+        if rr.is_err: return
+        mut req = rr.ok
+        if not req.valid(): return
+        self._depth = self._depth + 1
+        self._handle(req)
+        req.release()
+        self._depth = self._depth - 1
+
+    # Handle the next call (waits up to timeout_ms). false on timeout or
+    # once the server is closed.
+    pub def serve_one(self, timeout_ms: int) -> bool:
+        mut rr: Result[H2ServerRequest, str] = self.h2.next(timeout_ms)
+        if rr.is_err: return false
+        mut req = rr.ok
+        if not req.valid(): return false
+        self._handle(req)
+        req.release()
+        return true
+
+    # Serve until `max_calls` top-level calls were handled (< 0: forever).
+    pub def serve(self, max_calls: int):
+        mut n = 0
+        while max_calls < 0 or n < max_calls:
+            mut rr: Result[H2ServerRequest, str] = self.h2.next(-1)
+            if rr.is_err: return
+            mut req = rr.ok
+            if req.valid():
+                self._handle(req)
+                req.release()
+                n = n + 1
+        self.h2.run(0)
+
+    # Keep connections serviced for up to ms (delivers queued responses).
+    pub def run(self, ms: int): self.h2.run(ms)
+
+    # GOAWAY to every client; no new connections.
+    pub def shutdown(self): self.h2.shutdown()
+
+    pub def close(self): self.h2.close()
+
+def _srv_respond_end_status(r: H2ServerRequest, status: int, h: H2Headers) throws str -> bool:
+    r.respond_end(status, h)?
+    return true
+
+# grpc.health.v1: HealthCheckRequest { string service = 1; }
+#                 HealthCheckResponse { ServingStatus status = 1; }
+pub def health_request(service: str) -> str:
+    mut w = ProtoWriter.init()
+    if service.len() > 0: w.write_string(1, service)
+    mut out = w.to_str()
+    w.free()
+    return out
+
+pub def health_response(status: int) -> str:
+    mut w = ProtoWriter.init()
+    if status != 0: w.write_enum(1, status)
+    mut out = w.to_str()
+    w.free()
+    return out
+
+# ServingStatus from a HealthCheckResponse (-1 if malformed).
+pub def health_parse_response(msg: str) -> int:
+    mut r: Result[int, str] = _health_field_enum(msg)
+    if r.is_err: return -1
+    return r.ok
+
+def _health_field_enum(msg: str) throws str -> int:
+    mut rd = ProtoReader.init(msg)
+    mut v = 0
+    while rd.next_field()?:
+        if rd.field == 1 and rd.wire == 0: v = rd.read_enum()?
+        else: rd.skip()?
+    return v
+
+def _health_service(msg: str) throws str -> str:
+    mut rd = ProtoReader.init(msg)
+    mut v = ""
+    while rd.next_field()?:
+        if rd.field == 1 and rd.wire == 2: v = rd.read_string()?
+        else: rd.skip()?
+    return v
+
+def _health_check(c: GrpcServerCall, req: str) -> str:
+    mut sr: Result[str, str] = _health_service(req)
+    if sr.is_err:
+        c.fail(GRPC_INVALID_ARGUMENT(), "bad HealthCheckRequest")
+        return ""
+    mut st = c._srv.health_of(sr.ok)
+    if st < 0:
+        c.fail(GRPC_NOT_FOUND(), "unknown service")
+        return ""
+    return health_response(st)
+
+def _health_watch(c: GrpcServerCall, req: str):
+    mut sr: Result[str, str] = _health_service(req)
+    if sr.is_err:
+        c.fail(GRPC_INVALID_ARGUMENT(), "bad HealthCheckRequest")
+        return
+    mut last = -2
+    mut ver = -1
+    while true:
+        if ver != c._srv._health_version:
+            ver = c._srv._health_version
+            mut st = c._srv.health_of(sr.ok)
+            if st < 0: st = HEALTH_SERVICE_UNKNOWN()
+            if st != last:
+                last = st
+                if not c.send(health_response(st)): return
+        if c.sleep(50): return

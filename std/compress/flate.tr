@@ -1,0 +1,94 @@
+# std.compress.flate -- DEFLATE with raw, zlib and gzip framing, built in.
+# tauraro-cpp-shim: flate_native.c
+#
+# A self-contained DEFLATE decoder and encoder (no -lz needed). std.compress.zlib
+# and std.compress.gzip use it whenever the runtime is built without zlib, and
+# the HTTP client uses it for Content-Encoding: gzip / deflate.
+#
+#   from std.compress.flate import Flate
+#   mut z = Flate.zlib_compress(data, 6)
+#   mut back = Flate.zlib_decompress(z)?
+#   mut page = Flate.decompress_auto(body)?        # gzip, zlib or raw, sniffed
+#
+# Decompression raises on corrupt, truncated or checksum-failing input, and
+# when the output would exceed the size limit (FLATE_DEFAULT_MAX_OUT, 1 GiB,
+# unless a *_max variant is used; max <= 0 means no limit).
+
+extern "C":
+    def trc_flate_inflate(data: Pointer[char], n: int, max_out: int, mode: int, info: Pointer[int]) -> Pointer[char]
+    def trc_flate_bound(n: int) -> int
+    def trc_flate_deflate(data: Pointer[char], n: int, out: Pointer[char], level: int, framing: int) -> int
+    def trc_flate_crc32(data: Pointer[char], n: int) -> int
+    def trc_flate_adler32(data: Pointer[char], n: int) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_free(ptr: Pointer[char])
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+pub const FLATE_DEFAULT_MAX_OUT = 1073741824
+
+# Framing / decoding modes.
+pub const FLATE_RAW = 0
+pub const FLATE_ZLIB = 1
+pub const FLATE_GZIP = 2
+pub const FLATE_AUTO = 3
+
+def _flate_err(code: int) -> str:
+    if code == 1: return "flate: truncated input"
+    if code == 3: return "flate: output exceeds the size limit"
+    if code == 4: return "flate: out of memory"
+    if code == 5: return "flate: not a zlib / gzip stream (bad header)"
+    if code == 6: return "flate: checksum mismatch"
+    return "flate: corrupt data"
+
+def _flate_in(data: str, mode: int, max_out: int) throws str -> str:
+    mut info: List[int] = [0, 0, 0]
+    mut ip = info as Pointer[int]
+    mut out = trc_flate_inflate(data as Pointer[char], data.len(), max_out, mode, ip)
+    if out as int == 0: raise(_flate_err(info[1]))
+    return _tr_str_wrap_len(out, info[0])
+
+def _flate_out(data: str, level: int, framing: int) -> str:
+    mut n = data.len()
+    mut buf = _tr_c_malloc(trc_flate_bound(n) + 1)
+    mut m = trc_flate_deflate(data as Pointer[char], n, buf, level, framing)
+    if m < 0:
+        _tr_c_free(buf)
+        return ""
+    unsafe: buf.offset(m).write('\0')
+    return _tr_str_wrap_len(buf, m)
+
+pub class Flate:
+    _dummy: int
+
+extend Flate:
+    # Raw DEFLATE (RFC 1951).
+    pub def inflate(data: str) throws str -> str: return _flate_in(data, FLATE_RAW, FLATE_DEFAULT_MAX_OUT)?
+    pub def inflate_max(data: str, max_out: int) throws str -> str: return _flate_in(data, FLATE_RAW, max_out)?
+    pub def deflate(data: str, level: int) -> str: return _flate_out(data, level, FLATE_RAW)
+
+    # zlib stream (RFC 1950): 2-byte header, DEFLATE data, Adler-32.
+    pub def zlib_decompress(data: str) throws str -> str: return _flate_in(data, FLATE_ZLIB, FLATE_DEFAULT_MAX_OUT)?
+    pub def zlib_decompress_max(data: str, max_out: int) throws str -> str: return _flate_in(data, FLATE_ZLIB, max_out)?
+    pub def zlib_compress(data: str, level: int) -> str: return _flate_out(data, level, FLATE_ZLIB)
+
+    # gzip (RFC 1952). Decoding concatenates every member.
+    pub def gunzip(data: str) throws str -> str: return _flate_in(data, FLATE_GZIP, FLATE_DEFAULT_MAX_OUT)?
+    pub def gunzip_max(data: str, max_out: int) throws str -> str: return _flate_in(data, FLATE_GZIP, max_out)?
+    pub def gzip(data: str, level: int) -> str: return _flate_out(data, level, FLATE_GZIP)
+
+    # gzip, zlib or raw DEFLATE, detected from the first bytes.
+    pub def decompress_auto(data: str) throws str -> str: return _flate_in(data, FLATE_AUTO, FLATE_DEFAULT_MAX_OUT)?
+    pub def decompress_auto_max(data: str, max_out: int) throws str -> str: return _flate_in(data, FLATE_AUTO, max_out)?
+
+    pub def crc32(data: str) -> int: return trc_flate_crc32(data as Pointer[char], data.len())
+    pub def adler32(data: str) -> int: return trc_flate_adler32(data as Pointer[char], data.len())
+
+    pub def is_gzip(data: str) -> bool:
+        if data.len() < 2: return false
+        mut p = data as Pointer[char]
+        mut a = 0
+        mut b = 0
+        unsafe:
+            a = (p.offset(0).read() as int) & 255
+            b = (p.offset(1).read() as int) & 255
+        return a == 0x1f and b == 0x8b

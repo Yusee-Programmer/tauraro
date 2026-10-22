@@ -4,10 +4,12 @@
 from std.sys.env      import Env
 from std.sys.fs       import Fs
 from std.sys.process  import Process
+from std.sys.subprocess import Command, Stdio
 from std.sys.time     import Clock
 from std.sys.os       import OS
 from std.sys.platform import Platform
 from std.sys.datetime import DateTime, Date, Time, TimeDelta
+from std.sys.tz       import Tz
 from std.sys.signal   import Signal
 from std.sys.dotenv   import Dotenv
 from std.sys.cron     import Cron, CronSchedule
@@ -128,6 +130,86 @@ if Process.check_call("ls -la"):
 Process.sleep_ms(100)
 Process.exit(0)
 ```
+
+---
+
+## std.sys.subprocess — Run programs with pipes, environment and timeouts
+
+**When**: you need more than `Process.system`: pass an argument list without a shell, capture
+stdout and stderr separately, feed stdin, change the environment or working directory, or
+enforce a timeout.
+
+```tauraro
+from std.sys.subprocess import Command, Stdio
+
+# argv list, no shell: spaces and quotes in arguments need no escaping
+mut out = Command.new("git").arg("log").arg("--format=%an: %s").arg("-n").arg("3").output()?
+if out.success(): print(out.stdout_data)
+else: print("git failed (" + out.status.to_str() + "): " + out.stderr_data)
+
+# stdin from a string, a time limit, a changed environment and directory
+mut cmd = Command.new("sort").env("LC_ALL", "C").current_dir("/tmp").timeout(5000)
+mut sorted = cmd.output_with_input("pear\napple\n")?
+
+# talk to a running child
+mut child = Command.new("cat").stdin(Stdio.piped()).stdout(Stdio.piped()).spawn()?
+child.write_stdin("hello")?
+child.close_stdin()
+print(child.read_stdout_all()?)
+mut st = child.wait()?
+child.close()
+```
+
+| Command | Description |
+|---|---|
+| `Command.new(program)` | Program looked up on `PATH` (the child's `PATH` on POSIX) unless it contains a path separator. |
+| `Command.shell(line)` | `/bin/sh -c line` (POSIX) or `cmd.exe /d /s /c "line"` (Windows). The line is not escaped. |
+| `.arg(a)`, `.args(list)` | Append arguments. |
+| `.env(k, v)`, `.env_remove(k)`, `.env_clear()` | Set, unset, or start from an empty environment (default: inherit). On Windows `env_clear()` keeps `SystemRoot` (processes cannot start without it) unless you set or remove it yourself. |
+| `.current_dir(path)` | Working directory for the child. |
+| `.stdin(s)`, `.stdout(s)`, `.stderr(s)`, `.merge_stderr()` | Where each stream goes (`Stdio` below). |
+| `.timeout(ms)` | Limit for `output` / `status` / `output_with_input`; the child is killed and the call raises `"subprocess: timed out after N ms"`. |
+| `.output()?` → `Output` | Run, capturing stdout and stderr (stdin = null device unless set). |
+| `.output_with_input(data)?` → `Output` | Same, with `data` written to a stdin pipe. |
+| `.status()?` → `ExitStatus` | Run with the parent's stdio unless redirected. |
+| `.spawn()?` → `Child` | Start and return immediately; unset streams are inherited. |
+
+`Stdio`: `inherit()`, `piped()`, `devnull()`, `file(path)` (stdin reads it; output creates or
+truncates it), `append(path)`, `to_stdout()` (stderr only, like `2>&1`).
+
+`Output`: `status`, `stdout_data`, `stderr_data` (binary-safe `str`), `success()`. (The fields
+are not called `stdout` / `stderr` because those are C macros on Windows.)
+`ExitStatus`: `code` (-1 when a signal ended the process), `signal` (POSIX signal number, else 0),
+`success()`, `to_str()`.
+
+`Child`: `pid()`, `write_stdin(data)?`, `close_stdin()`, `read_stdout(cap)?` /
+`read_stderr(cap)?` (a chunk, `""` at end of stream), `read_stdout_timeout(cap, ms)?` /
+`read_stderr_timeout(cap, ms)?` (`""` also on timeout), `read_stdout_all()?` /
+`read_stderr_all()?`, `communicate(input, timeout_ms)?` → `Output`, `wait()?`, `try_wait()?` /
+`wait_timeout(ms)?` (→ `bool`; then read `exit_status`), `kill()?`, `send_signal(sig)?` (POSIX),
+`has_stdin()` / `has_stdout()` / `has_stderr()`, `close()` (frees pipes; does not kill).
+
+Errors are `throws str`: `"subprocess: program not found: NAME"`, `"subprocess: cannot change
+directory to DIR: ..."`, `"subprocess: cannot execute NAME: ..."`, `"subprocess: cannot open
+PATH: ..."`, and a broken-pipe error from `write_stdin` when the child stopped reading.
+
+Notes:
+- `output`, `output_with_input` and `communicate` drain stdout and stderr together (poll on POSIX,
+  `PeekNamedPipe` plus a stdin writer thread on Windows), so large output on both pipes cannot
+  deadlock. Reading one stream with `read_stdout_all` while the child fills the other can.
+- POSIX uses `fork` + `execve`; every descriptor except the child's stdio is close-on-exec, and
+  exec / chdir failures come back through a close-on-exec pipe. `SIGPIPE` is blocked while
+  writing to a child's stdin, so a child that exits early gives an error instead of killing the
+  parent.
+- Windows uses `CreateProcessW` with UTF-8 → UTF-16 conversion, arguments quoted by the MSVCRT
+  rules, and `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` so only the stdio handles are inherited. The
+  program is found by `CreateProcessW`'s own search (the parent's `PATH`). `kill()` is
+  `TerminateProcess` (exit code 1); `send_signal` raises.
+- For programs that act as children: `subprocess_write_stdout(data)?`,
+  `subprocess_write_stderr(data)?` and `subprocess_read_stdin_all()?` do raw, binary-safe I/O on
+  this process's own streams (no added newline, no CRLF translation on Windows).
+
+Tested by `tests/lang/120_subprocess.tr`.
 
 ---
 
@@ -325,6 +407,8 @@ print(now.to_string())   # "2026-05-24 14:30:00"
 | `eq` | `(other: DateTime) -> bool` | `bool` | `true` if both represent the same second. |
 | `strftime` | `(fmt: str) -> str` | `str` | Format using `strftime`-style specifiers, e.g. `"%Y-%m-%d"`. |
 | `to_string` | `() -> str` | `str` | ISO 8601: `"YYYY-MM-DD HH:MM:SS"`. |
+| `isoformat` | `() -> str` | `str` | ISO 8601 with the zone's offset: `"2024-03-10T03:00:00-04:00"` (`±HH:MM:SS` when the offset has seconds). |
+| `to_string_tz` | `() -> str` | `str` | `"2024-03-10 03:00:00 EDT"` (wall time + zone abbreviation). |
 | `date_str` | `() -> str` | `str` | Date-only: `"YYYY-MM-DD"`. |
 | `time_str` | `() -> str` | `str` | Time-only: `"HH:MM:SS"`. |
 
@@ -387,6 +471,89 @@ print(now.to_string())   # "14:30:00"
 | `before` | `(other: Time) -> bool` | `bool` | |
 
 Fields: `hour: int`, `minute: int`, `second: int`.
+
+### TimeZone — an offset snapshot
+
+A `DateTime` carries a `tz: TimeZone` with `offset_seconds` (east of UTC), `is_dst`, `name`
+(abbreviation) and `zone` (the IANA name when it came from `std.sys.tz`, else `""`).
+`TimeZone.utc()`, `TimeZone.fixed(h, m)` and `TimeZone.local()` (the OS's current local offset)
+build fixed snapshots; `DateTime.in_zone(...)`, `to_zone(tz)` and `from_timestamp_utc` use them.
+A `TimeZone` has no DST rules of its own — for named zones with full history, use `std.sys.tz`
+below, whose `to_local` returns a `DateTime` tagged with the offset in force at that instant.
+
+---
+
+## std.sys.tz — IANA time zones (TZif + POSIX TZ rules)
+
+**When**: You need real named zones — "America/New_York", "Europe/London" — with historical and
+future DST, conversions between zones, or wall-clock times that fall in DST gaps and overlaps.
+**Why**: Reads the system's compiled tzdata (TZif, RFC 8536 v1–v4) like Python's `zoneinfo`,
+falls back to an embedded table of every zone's current POSIX rule where there is no tzdata
+(Windows), and accepts POSIX `TZ` strings anywhere a zone name is accepted.
+
+```tauraro
+from std.sys.tz import Tz, TZ_RAISE
+
+mut ny = Tz.load("America/New_York")?
+mut off, dst, abbr = ny.offset_at(1710054000)          # (-14400, true, "EDT")
+mut dt = ny.to_local(1710054000)
+print(dt.isoformat())                                  # 2024-03-10T03:00:00-04:00
+print(dt.tz.zone)                                      # America/New_York
+mut tokyo = Tz.load("Asia/Tokyo")?
+print(tokyo.convert(dt).isoformat())                   # 2024-03-10T16:00:00+09:00
+print(ny.from_local(2024, 11, 3, 1, 30, 0).isoformat())        # first 01:30 (-04:00)
+print(ny.from_local_later(2024, 11, 3, 1, 30, 0).isoformat())  # second 01:30 (-05:00)
+mut u = ny.local_to_unix(2024, 3, 10, 2, 30, 0, TZ_RAISE)?    # raises: 02:30 does not exist
+mut here = Tz.local()?                                 # $TZ, Windows settings, /etc/localtime
+```
+
+**Where zones come from.** `Tz.load(name)` looks for `name` in the first existing zoneinfo
+directory — `$TZDIR`, `/usr/share/zoneinfo`, `/usr/lib/zoneinfo`, `/usr/share/lib/zoneinfo`,
+`/etc/zoneinfo` — and parses the TZif file (64-bit section when present, leap-second records
+ignored; instants after the last transition follow the file's POSIX footer). Without a file it
+uses the embedded table `std/sys/tz_table.tr` (all 486 IANA names → current POSIX rule, tzdata
+2026c, generated by `scripts/gen_tz_table.py`; re-run it after a tzdata release). Embedded zones
+are exact for today's rules but know no history: e.g. `America/Sao_Paulo` has no DST before 2019
+through the table. Finally, a `name` that parses as a POSIX TZ string is used as one. Names are
+validated (no absolute paths or `..`).
+
+**POSIX TZ strings** (`Tz.posix`, `TzRule.parse`): `std offset [dst [offset] [,start[/time],end[/time]]]`
+with `<+0330>`-style quoted names, offsets `[+-]hh[:mm[:ss]]` (west-positive, as in POSIX), dates
+`Mm.w.d`, `Jn` (1–365, Feb 29 never counted) and `n` (0–365, counted), and times from −167 to 167
+hours. A DST name without dates gets the US rules (`M3.2.0,M11.1.0`), as glibc does. A leading `:`
+is ignored.
+
+**Gaps and overlaps.** `TZ_EARLIER` uses the offset in force *before* the transition (Python's
+`fold=0`: the first of two repeated times; a skipped time is pushed forward, 02:30 → 03:30),
+`TZ_LATER` the offset *after* it (`fold=1`: the second occurrence; 02:30 → 01:30), `TZ_RAISE`
+raises for both. `from_local` = `TZ_EARLIER`, `from_local_later` = `TZ_LATER`; for raising use
+`local_to_unix(..., TZ_RAISE)?` (a `throws` function cannot return a `DateTime` value type yet).
+
+| Member | Returns | Description |
+|---|---|---|
+| `Tz.load(name)?` | `Tz` | IANA name (file → embedded table) or POSIX string. |
+| `Tz.local()?` | `Tz` | `$TZ` (name, `:name`, absolute TZif path or POSIX string; unusable → raises), then on Windows `GetDynamicTimeZoneInformation` (converted to a POSIX rule, named by its Windows key), then `/etc/localtime` (named from its symlink target or `/etc/timezone`); UTC when nothing is configured. |
+| `Tz.utc()`, `Tz.fixed(offset_seconds, abbr)` | `Tz` | Fixed zones (`abbr` `""` → `"+05:30"`). |
+| `Tz.posix(text)?`, `Tz.embedded(name)?` | `Tz` | Force a POSIX string / the embedded table. |
+| `Tz.from_tzif(name, bytes)?`, `Tz.load_file(path, name)?` | `Tz` | Parse TZif data / a file. |
+| `Tz.available()` | `List[str]` | Sorted zone names: TZif files of the zoneinfo dir (minus `right/`, `posix/`, `posixrules`, `localtime`), else the embedded table. |
+| `Tz.zoneinfo_dir()` | `str` | The directory in use, `""` if none. |
+| `tz.name`, `tz.source`, `tz.posix_rule` | `str` | Name; `"tzif"`/`"embedded"`/`"posix"`/`"fixed"`/`"windows"`; the footer/rule. |
+| `tz.offset_at(ts)` | `(int, bool, str)` | Offset east of UTC, DST flag, abbreviation at a Unix time. Also `utc_offset_at`, `is_dst_at`, `abbr_at`. |
+| `tz.zone_at(ts)` | `TimeZone` | The same as a `std.sys.datetime` snapshot (with `zone` = `tz.name`). |
+| `tz.to_local(ts)`, `tz.convert(dt)`, `tz.now()` | `DateTime` | Wall-clock `DateTime` in this zone (any `DateTime` converts — same instant). |
+| `tz.add(dt, delta)` | `DateTime` | Exact-duration add, re-resolving the offset (unlike `DateTime.add`, which keeps the fixed snapshot). |
+| `tz.from_local(y, m, d, h, mi, s)` / `from_local_later(...)` | `DateTime` | Wall time → `DateTime` with `TZ_EARLIER` / `TZ_LATER`. |
+| `tz.local_to_unix(y, m, d, h, mi, s, policy)?` | `int` | Wall time → Unix time with `TZ_EARLIER`, `TZ_LATER` or `TZ_RAISE`. |
+| `tz.classify_local(y, m, d, h, mi, s)` | `int` | `TZ_LOCAL_UNIQUE`, `TZ_LOCAL_AMBIGUOUS` or `TZ_LOCAL_NONEXISTENT`. |
+| `tz.next_transition(ts)` | `int` | Next instant the offset/DST/abbreviation changes (`-1` if none within 400 years). |
+| `tz_embedded_rule(name)`, `tz_embedded_names()`, `tz_embedded_version()` | | The embedded table. |
+| `TzRule.parse(text)?` → `std_abbr`, `std_off`, `has_dst`, `dst_abbr`, `dst_off`, `transitions(year) -> (start, end)` | | A parsed POSIX rule. |
+
+Results match Python's `zoneinfo` (tests/lang/121_tz.tr checks ~950 vectors around DST changes in
+New York, London, Lord Howe, Kathmandu, São Paulo, Casablanca, Apia and Sydney). Limitations:
+`DateTime.strftime` still formats through the OS's local zone; leap seconds (`right/` zones) are not
+applied; Windows' local zone is described by the current year's rule only.
 
 ---
 
@@ -486,3 +653,172 @@ mut now = DateTime.in_zone(2026, 10, 11, 6, 7, 30, TimeZone.utc()).timestamp()  
 print(DateTime.from_timestamp_utc(s.next_after(now)).to_string())     # 2026-10-12 09:00:00
 print(DateTime.from_timestamp_utc(s.prev_before(now)).to_string())    # 2026-10-09 17:45:00
 ```
+
+---
+
+## Memory maps, shared memory and IPC — `std.sys.mmap`, `std.sys.shm`, `std.sys.pipe`, `std.sys.unix_socket`
+
+Backed by `std/sys/ipc_native.c` (POSIX and Windows), linked automatically when imported. All data is
+binary-safe; failures raise with the OS error text.
+
+### MemoryMap (`std.sys.mmap`)
+
+```tauraro
+from std.sys.mmap import MemoryMap, MAP_READ, MAP_READ_WRITE, MAP_COPY_ON_WRITE
+mut m = MemoryMap.open("big.log", MAP_READ)?
+mut pos = m.find("ERROR", 0)
+mut line = m.read(pos, 80)?
+m.close()
+```
+
+| Member | Description |
+|---|---|
+| `MemoryMap.open(path, mode)?` / `open_range(path, mode, offset, length)?` | `MAP_READ`, `MAP_READ_WRITE` (writes reach the file), `MAP_COPY_ON_WRITE` (private copy-on-write). |
+| `MemoryMap.anonymous(size)?` | Zero-filled private memory. |
+| `len()`, `read(off, n)?`, `read_all()`, `write(off, data)?`, `byte_at(i)`, `set_byte(i, v)?`, `find(needle, start)` | Bounds-checked access. |
+| `atomic_load/store/add/cas(off, ...)` | 64-bit atomics at 8-byte aligned offsets (for shared maps). |
+| `flush()?`, `close()` | `flush` writes dirty pages of a file map to disk. |
+
+### SharedMemory and NamedSemaphore (`std.sys.shm`)
+
+`SharedMemory.create(name, size)?` (create or open), `create_new(name, size)?` (fail if it exists),
+`open(name)?` — each returns a `MemoryMap` onto the shared bytes; `SharedMemory.unlink(name)?` removes the
+name (POSIX; Windows segments vanish with their last handle). `NamedSemaphore.create(name, initial)?`,
+`open(name)?`, `post()?`, `wait(timeout_ms)? -> bool` (-1 forever, 0 try), `try_wait()?`, `close()`,
+`NamedSemaphore.unlink(name)?`. Names are plain identifiers; the platform prefix is added. On Linux with
+glibc older than 2.34, `shm_open`/`sem_open` need `-lrt`.
+
+### Pipes (`std.sys.pipe`)
+
+`Pipe.create()?` → `.reader` / `.writer` (`PipeEnd`: `read(cap)?`, `read_all()?`, `write(data)?`,
+`wait_readable(ms)`, `close()`, `fd`). `Fifo.create(path, mode)?`, `Fifo.open_read(path)?`,
+`Fifo.open_write(path)?`, `Fifo.remove(path)?` (POSIX only).
+
+### Unix-domain sockets (`std.sys.unix_socket`)
+
+`UnixListener.bind(path)?` → `accept(timeout_ms)?` → `UnixStream`; `UnixStream.connect(path)?`;
+`UnixStream.pair()?` (socketpair, POSIX). Streams: `send(data)?`, `recv(cap)?` (`""` when the peer closed),
+`recv_exact(n)?`, `recv_all()?`, `set_timeout(ms)`, `shutdown_write()`, `send_fd(fd)?` / `recv_fd()?`
+(SCM_RIGHTS, POSIX), `close()`. `UnixListener.close()` removes the socket file. Windows 10 1803+ supports
+AF_UNIX streams.
+
+Tested by `tests/lang/109_sys_ipc.tr`.
+
+---
+
+## Shared libraries and plugins — `std.sys.dylib`, `std.sys.plugin`
+
+`std.sys.dylib` loads a shared library at run time (`dlopen` / `LoadLibraryW`) and calls its
+functions. Calls go through trampolines with exact C prototypes, so these signatures are supported:
+
+| Method | C signature |
+|---|---|
+| `call_int(name, [ints])?` | `int64 f(int64/pointer × 0–8)`; narrower integer parameters work on x86-64 and AArch64 |
+| `call_void(name, [ints])?` | `void f(int64/pointer × 0–8)` |
+| `call_float(name, [floats])?` | `double f(double × 0–6)` |
+| `call_str(name, [strs])?` | `str f(str × 0–4)`: functions exported by `tauraroc --lib` |
+| `call_str_int(name, s, [ints])?` | `int64 f(str, int64 × 0–3)`: functions exported by `tauraroc --lib` |
+
+32-bit `float` parameters and struct arguments are not supported.
+
+```tauraro
+from std.sys.dylib import DynLib, dylib_filename, dylib_cstr_addr
+
+mut lib = DynLib.open("./libgeometry.so")?
+mut area = lib.call_float("circle_area", [2.0])?
+mut me = DynLib.self_process()?                     # POSIX: the program + libc
+mut n = me.call_int("strlen", [dylib_cstr_addr("hello")])?
+lib.close()
+```
+
+`DynLib.open(path)?` / `open_with(path, DL_GLOBAL | DL_LAZY)?`, `self_process()?` (POSIX), `symbol(name)?`
+(address), `has(name)`, `close()`. Helpers: `dylib_filename("m")` (`libm.so` / `libm.dylib` / `m.dll`),
+`dylib_extension()`, `dylib_cstr_addr(s)` (a `const char*` argument), `dylib_read_cstr(addr)`,
+`dylib_call_int_ptr(fn, args)?`, `dylib_call_float_ptr(fn, args)?`. Strings returned by a library
+are copied, so they stay valid after the library is closed.
+
+### Plugins
+
+A plugin is a shared library, usually built with `tauraroc plugin.tr --lib -o plugins/name`,
+that exports:
+
+```tauraro
+export def tauraro_plugin_abi() -> int:      return 1          # PLUGIN_ABI, required
+export def tauraro_plugin_name() -> str:     return "markdown" # required, unique
+export def tauraro_plugin_version() -> str:  return "1.0.0"    # optional
+export def tauraro_plugin_init() -> int:     return 0          # optional, non-zero refuses loading
+export def tauraro_plugin_shutdown() -> int: return 0          # optional, runs on unload
+
+export def render(src: str) -> str:                            # whatever the host calls
+    return "<p>" + src + "</p>"
+```
+
+```tauraro
+from std.sys.plugin import PluginHost
+
+mut host = PluginHost.init()
+host.discover("plugins")                   # every .so / .dylib / .dll in the directory
+for err in host.errors: print(err)         # libraries that were not valid plugins
+mut md = host.find("markdown")?
+print(md.call_str("render", ["hi"])?)
+mut results = host.broadcast_str_int("on_event", "startup", [])   # each plugin exporting the hook
+host.reload("markdown")?                    # pick up a rebuilt library
+host.unload_all()
+```
+
+`PluginHost`: `load(path)?`, `discover(dir)`, `find(name)?`, `has_plugin(name)`, `names()`, `count()`,
+`unload(name)?`, `reload(name)?`, `unload_all()`, `broadcast_int(fn, args)`,
+`broadcast_str_int(fn, s, args)`, plus `plugins` and `errors`. `Plugin`: `name`, `version`, `path`,
+`lib`, and the `call_*` / `has` / `symbol` methods of `DynLib`. Loading is refused when the ABI
+number differs, the name is already loaded, or `tauraro_plugin_init` returns non-zero.
+
+Each plugin carries its own copy of the Tauraro runtime. Pass plain values (`int`, `float`, `str`)
+across the boundary, not class instances or collections.
+
+Tested by `tests/lang/118_dylib_plugin.tr`.
+
+---
+
+## Sandboxing — `std.sys.sandbox`
+
+Drop the privileges a process does not need. On Linux, promises become a seccomp-BPF filter and
+`Unveil` becomes a Landlock ruleset (kernel 5.13+). On OpenBSD the module calls `pledge(2)` and
+`unveil(2)`. On other platforms `Sandbox.supported()` is false and the calls raise. Restrictions
+are permanent and inherited by child processes.
+
+```tauraro
+from std.sys.sandbox import Sandbox, Unveil
+
+mut u = Unveil.init()?
+u.allow("/srv/www", "r")?                    # r read, w write, x execute, c create/remove
+u.allow("/var/log/myapp", "rwc")?
+u.lock()?
+Sandbox.pledge("stdio rpath wpath cpath inet error")?
+```
+
+| Promise | Allows |
+|---|---|
+| `stdio` | I/O on descriptors already open, memory, time, signals, polling, pipes, send/recv on held sockets |
+| `rpath` | opening files read-only, stat / access / readlink, directory listing, chdir |
+| `wpath` | opening existing files for writing (no `O_CREAT`) |
+| `cpath` | creating, removing and renaming files and directories |
+| `fattr`, `flock` | chmod / chown / utimes; file locks |
+| `inet`, `unix` | IPv4/IPv6 or AF_UNIX sockets (`socket` is checked by address family), connect, bind, listen, accept |
+| `dns` | what name resolution needs; combine with `rpath` for `/etc/resolv.conf` |
+| `proc`, `thread`, `exec`, `id` | fork/wait/kill; creating threads (Linux); execve; setuid family |
+| `tty` | accepted (terminal ioctls are part of `stdio` on Linux) |
+| `error` | denied calls fail with `EPERM` instead of killing the process with SIGSYS |
+
+| API | Description |
+|---|---|
+| `Sandbox.backend()`, `supported()`, `landlock_abi()` | `"seccomp"`, `"pledge"` or `"none"`; Landlock ABI version (0 = unavailable). |
+| `Sandbox.pledge(promises)?` | Keep only the listed promises. Unknown names raise before anything is installed. |
+| `Sandbox.deny_syscalls(names, err_code)?` / `allow_only_syscalls(names, err_code)?` | Custom seccomp lists (Linux); `err_code` 0 kills instead of failing the call. |
+| `Sandbox.syscall_number(name)` | Syscall number on this architecture, or -1. |
+| `Sandbox.run_isolated(promises, body)?` | Fork; the child applies the promises and returns `body()` as its exit code. Returns that code, `-N` when signal N ended the child (`-31` = SIGSYS, a forbidden call), or 125 when the promises could not be applied. POSIX only. |
+| `Unveil.init()?`, `allow(path, perms)?`, `lock()?` | Restrict the visible filesystem to the allowed paths. |
+
+Linux filters cover x86-64, AArch64, i386, ARM and RISC-V 64, and reject syscalls from other ABIs
+(x32). Path promises check `open` / `openat` flags; `openat2` is only allowed with `cpath`.
+
+Tested by `tests/lang/119_sandbox.tr`.

@@ -49,6 +49,7 @@ bootstrap/*.zip
 # The ownership fuzzer generator and the bare-metal platform harness are source,
 # not build artifacts. (git check-ignore was hiding them from CI.)
 !tests/fuzz/gen.py
+!scripts/gen_unicode_tables.py
 !tests/freestanding/platform.c
 # The native backend's runtime shim + leak probe are hand-written source (extern entry
 # points / a destructor), not generated C — must be tracked despite the broad *.c rule.
@@ -57,6 +58,12 @@ bootstrap/*.zip
 !runtime/coro_stub.c
 # Stage 2 in-process LLVM shim (hand-written llvm-c wrapper; --link'd into the compiler).
 !runtime/tauraro_llvm.c
+# C kernels shipped with std modules (linked via `# tauraro-cpp-shim:`)
+!std/**/*_native.c
+# Vendored third-party C decoders for std.compress (see std/compress/vendor/README.md)
+!std/compress/vendor/**/*.c
+# Vendored third-party C decoders for std.audio (see std/audio/vendor/README.md)
+!std/audio/vendor/**/*.c
 # Python bytecode is never source:
 __pycache__/
 *.pyc

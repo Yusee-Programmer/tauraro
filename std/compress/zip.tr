@@ -22,10 +22,10 @@
 # keep their natural names.) `std.compress.mod` re-exports ZipFileWriter/
 # ZipFileReader alongside Zip/ZipEntry/ZipMethod.
 #
-# Compression goes through the same runtime routines std.compress.zlib.Zlib
-# wraps (_tr_deflate/_tr_inflate, via std.io.archive's ZipWriter.add_file())
-# for ZipMethod.Deflate, or no compression at all for ZipMethod.Stored. No
-# new C runtime primitive is introduced here.
+# Compression goes through std.compress.flate's built-in raw DEFLATE codec
+# (via std.io.archive's ZipWriter.add_file(); no -lz needed) for
+# ZipMethod.Deflate, or no compression at all for ZipMethod.Stored. Deflated
+# entries written by other tools are inflated the same way.
 #
 # Usage:
 #   from std.compress.zip import Zip, ZipMethod
@@ -91,10 +91,9 @@ extend ZipFileWriter:
 
     # Add one entry. `data` is used as a raw byte buffer of exactly
     # `data_len` bytes (embedded NULs are fine — never relies on strlen).
-    # method selects Stored (no compression) or Deflate (via
-    # std.compress.zlib's runtime DEFLATE primitive, falling back to Stored
-    # automatically if the runtime build lacks real zlib support — the
-    # written archive is always valid and round-trips either way).
+    # method selects Stored (no compression) or Deflate (built-in
+    # std.compress.flate; falls back to Stored when compression does not
+    # shrink the data).
     pub def add_file(self, name: str, data: str, data_len: int, method: ZipMethod):
         match method:
             case ZipMethod.Stored:

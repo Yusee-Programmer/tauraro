@@ -46,6 +46,7 @@ extern "C":
     def _tr_c_free(ptr: Pointer[char])
 
 from std.io.archive import ByteBuf, Crc32
+from std.compress.flate import Flate
 from std.string.str import Str
 
 # Legacy: Gzip.compressed_len() used to read a module-global "last length" from this holder
@@ -90,11 +91,11 @@ extend Gzip:
                 mut cstr = _tr_str_wrap_len(compressed, clen)
                 buf.push_bytes(cstr, clen)
             else:
-                # Stub runtime (no -DTAURARO_COMPRESS_ZLIB) or deflate
-                # failure: fall back to raw DEFLATE "stored block(s)"
-                # so the member is still a spec-valid, self-decompressing
-                # gzip stream instead of silently losing data.
-                _deflate_stored_blocks(buf, input, ilen)
+                # Runtime built without zlib: use the built-in encoder
+                # (std.compress.flate); stored blocks only if that fails.
+                mut fz = Flate.deflate(_gz_slice(input, 0, ilen), 6)
+                if fz.len() > 0: buf.push_bytes(fz, fz.len())
+                else: _deflate_stored_blocks(buf, input, ilen)
         else:
             # Empty payload: a single empty stored final block.
             _deflate_stored_blocks(buf, input, 0)
@@ -164,8 +165,14 @@ extend Gzip:
             mut pl_n = 0
             unsafe: pl_n = pl_len_buf.read() as int
             _tr_c_free(pl_len_buf as Pointer[char])
-            if pl_raw as int != 0:
+            if pl_raw as int != 0 and pl_n > 0:
                 plain = _tr_str_wrap_len(pl_raw, pl_n)
+            else:
+                # runtime built without zlib (its stub returns an empty buffer):
+                # the built-in decoder
+                if pl_raw as int != 0: _tr_c_free(pl_raw)
+                mut fr: Result[str, str] = Flate.inflate_max(body, max_out)
+                if fr.is_ok: plain = fr.ok
         # else: empty compressed body -> empty output ("" already)
 
         mut expect_crc   = _rd_u32(input, footer_off)

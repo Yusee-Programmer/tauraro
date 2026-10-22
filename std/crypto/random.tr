@@ -1,0 +1,71 @@
+# std.crypto.random -- cryptographically secure random bytes and numbers.
+#
+# Backed by the OS generator: getrandom(2) on Linux (falling back to
+# /dev/urandom), /dev/urandom on other POSIX systems, BCryptGenRandom on
+# Windows. Unlike std.math.random (a fast, seedable PRNG for simulations),
+# everything here is suitable for keys, salts, nonces and tokens. If the OS
+# generator is unavailable the calls raise instead of quietly degrading.
+#
+# Usage:
+#   from std.crypto.random import SecureRandom
+#   mut key   = SecureRandom.bytes(32)?        # 32 raw bytes
+#   mut token = SecureRandom.token_hex(16)?    # 32 hex chars
+#   mut url   = SecureRandom.token_urlsafe(24)?
+#   mut die   = SecureRandom.below(6)? + 1     # unbiased 1..6
+
+from std.crypto.native import trc_random, _cn_alloc, _cn_take, _cn_free, _cn_hex, _cn_b64
+
+pub class SecureRandom:
+    _dummy: int
+
+extend SecureRandom:
+    # n raw random bytes.
+    pub def bytes(n: int) throws str -> str:
+        if n < 0: raise("SecureRandom.bytes: negative length")
+        mut p = _cn_alloc(n)
+        if trc_random(p, n) != 0:
+            _cn_free(p)
+            raise("SecureRandom: the OS random generator is unavailable")
+        return _cn_take(p, n)
+
+    # n random bytes as 2n lower-case hex characters.
+    pub def token_hex(n: int) throws str -> str:
+        mut raw = SecureRandom.bytes(n)?
+        return _cn_hex(raw)
+
+    # n random bytes as unpadded URL-safe base64 (RFC 4648 section 5).
+    pub def token_urlsafe(n: int) throws str -> str:
+        mut raw = SecureRandom.bytes(n)?
+        return _cn_b64(1, false, raw)
+
+    # A uniformly random non-negative 63-bit integer.
+    pub def int63() throws str -> int:
+        mut raw = SecureRandom.bytes(8)?
+        mut p = raw as Pointer[char]
+        mut v = 0
+        mut i = 0
+        while i < 8:
+            unsafe:
+                v = (v << 8) | ((p.offset(i).read() as int) & 255)
+            i = i + 1
+        return v & 0x7FFFFFFFFFFFFFFF
+
+    # A uniformly random integer in [0, n) without modulo bias (n >= 1).
+    pub def below(n: int) throws str -> int:
+        if n <= 0: raise("SecureRandom.below: bound must be positive")
+        # Reject the top partial bucket of the 63-bit range.
+        mut limit = 0x7FFFFFFFFFFFFFFF - (0x7FFFFFFFFFFFFFFF % n)
+        while true:
+            mut v = SecureRandom.int63()?
+            if v < limit: return v % n
+        return 0
+
+    # A uniformly random integer in [lo, hi] (inclusive).
+    pub def range(lo: int, hi: int) throws str -> int:
+        if hi < lo: raise("SecureRandom.range: hi < lo")
+        return lo + SecureRandom.below(hi - lo + 1)?
+
+    # A uniform float in [0, 1) with 53 random bits.
+    pub def unit() throws str -> float:
+        mut v = SecureRandom.int63()? >> 10
+        return (v as float) / 9007199254740992.0

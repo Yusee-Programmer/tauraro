@@ -6186,6 +6186,25 @@ static Dict* Dict_new(void) {
     d->cap=0; d->len=0; d->buckets=NULL;
     return d;
 }
+/* Grow the bucket array (x2) once the load factor passes 0.75, so lookups stay O(1)
+ * on average. Without this the 16 initial buckets never grew and a dict with N keys
+ * had chains of N/16 (quadratic bulk inserts). */
+static void _dict_rehash(Dict* d) {
+    size_t ncap = d->cap * 2;
+    _DictNode** nb = (_DictNode**)TAURARO_CALLOC(ncap, sizeof(_DictNode*));
+    if (!nb) return;
+    for (size_t i = 0; i < d->cap; i++) {
+        _DictNode* n = d->buckets[i];
+        while (n) {
+            _DictNode* nx = n->next;
+            size_t j = _dict_hash(n->key, ncap);
+            n->next = nb[j]; nb[j] = n;
+            n = nx;
+        }
+    }
+    _tr_free(d->buckets);
+    d->buckets = nb; d->cap = ncap;
+}
 static void Dict_set(Dict* d, char* key, void* val) {
     if (!d || !key) return;
     if (d->cap==0) { d->cap=16; d->buckets=(_DictNode**)TAURARO_CALLOC(16,sizeof(_DictNode*)); _TR_MEMCOUNT_INC(); }
@@ -6194,6 +6213,7 @@ static void Dict_set(Dict* d, char* key, void* val) {
     while (n) { if (strcmp(n->key,key)==0) { n->value=val; return; } n=n->next; }
     _DictNode* nd=(_DictNode*)malloc(sizeof(_DictNode)); _TR_MEMCOUNT_INC();
     nd->key=strdup(key); _TR_MEMCOUNT_INC(); nd->value=val; nd->next=d->buckets[i]; d->buckets[i]=nd; d->len++;
+    if (d->len > d->cap - (d->cap >> 2)) _dict_rehash(d);
 }
 static void*     Dict_get(Dict* d, char* key) {
     if (!d||!key||d->cap==0) return NULL;
@@ -6310,6 +6330,17 @@ static inline void _tr_idict_set_impl(TrIDict* d, long long k, void* v) {
     _TrIDictNode* nd = (_TrIDictNode*)malloc(sizeof(_TrIDictNode));
     nd->key = k; nd->value = v; nd->next = d->buckets[idx];
     d->buckets[idx] = nd; d->len++;
+    if (d->len > d->cap - (d->cap >> 2)) {   /* keep chains short: grow x2 at 75% load */
+        size_t ncap = d->cap * 2;
+        _TrIDictNode** nb = (_TrIDictNode**)TAURARO_CALLOC(ncap, sizeof(_TrIDictNode*));
+        if (nb) {
+            for (size_t i = 0; i < d->cap; i++) {
+                _TrIDictNode* m = d->buckets[i];
+                while (m) { _TrIDictNode* nx = m->next; size_t j = (size_t)((unsigned long long)m->key % ncap); m->next = nb[j]; nb[j] = m; m = nx; }
+            }
+            free(d->buckets); d->buckets = nb; d->cap = ncap;
+        }
+    }
 }
 #define _tr_idict_set(d, k, v) _tr_idict_set_impl((d), (k), (void*)(uintptr_t)(v))
 static inline void* _tr_idict_get(TrIDict* d, long long k) {
@@ -6319,7 +6350,13 @@ static inline void* _tr_idict_get(TrIDict* d, long long k) {
     while (n) { if (n->key == k) return n->value; n = n->next; }
     return NULL;
 }
-static inline bool   _tr_idict_contains(TrIDict* d, long long k) { return _tr_idict_get(d,k) != NULL; }
+/* Walk the chain itself: a stored 0 / false / NULL value is still present. */
+static inline bool   _tr_idict_contains(TrIDict* d, long long k) {
+    if (!d) return false;
+    _TrIDictNode* n = d->buckets[(size_t)((unsigned long long)k % d->cap)];
+    while (n) { if (n->key == k) return true; n = n->next; }
+    return false;
+}
 static inline void   _tr_idict_remove(TrIDict* d, long long k) {
     if (!d) return;
     size_t idx = (size_t)((unsigned long long)k % d->cap);
@@ -7018,6 +7055,36 @@ static inline List_TrStr* _tr_str_splitv(TrStr s, TrStr sep) {
         TrStr tok = _tr_str_new(i - start);
         memcpy(tok.data, s.data + start, i - start);
         List_TrStr_append_owned(l, tok);
+    }
+    return l;
+}
+/* s.split_exact(sep): Python's str.split(sep) -- `sep` is matched as a whole
+ * substring and empty parts are kept ("a,,b" -> ["a", "", "b"], "" -> [""]).
+ * (split() treats sep as a SET of delimiter bytes and drops empty parts.) */
+static inline List_TrStr* _tr_str_split_exactv(TrStr s, TrStr sep) {
+    List_TrStr* l = List_TrStr_new();
+    size_t sl = s.data ? s.len : 0, pl = sep.data ? sep.len : 0, i = 0, start = 0;
+    if (pl == 0) {
+        TrStr whole = _tr_str_new(sl);
+        if (sl) memcpy(whole.data, s.data, sl);
+        List_TrStr_append_owned(l, whole);
+        return l;
+    }
+    while (i + pl <= sl) {
+        if (memcmp(s.data + i, sep.data, pl) == 0) {
+            TrStr tok = _tr_str_new(i - start);
+            if (i > start) memcpy(tok.data, s.data + start, i - start);
+            List_TrStr_append_owned(l, tok);
+            i += pl;
+            start = i;
+        } else {
+            i++;
+        }
+    }
+    {
+        TrStr last = _tr_str_new(sl - start);
+        if (sl > start) memcpy(last.data, s.data + start, sl - start);
+        List_TrStr_append_owned(l, last);
     }
     return l;
 }
@@ -10216,7 +10283,7 @@ _TR_XLINK void _tr_prof_cpu_stop(void) {
 }
 static char* _tr_prof_symbolize(void* pc) {
     Dl_info info;
-    if (dladdr(pc, &info) && info.dli_sname) return _tr_strdup(info.dli_sname);
+    if (dladdr(pc, &info) && info.dli_sname) return _tr_strdup((char*)info.dli_sname);
     return NULL;
 }
 #endif

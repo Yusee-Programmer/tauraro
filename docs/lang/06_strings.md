@@ -91,12 +91,19 @@ mut null_sep = "key\0value"          # embedded null byte
 | `\"` | Double quote | `0x22` |
 | `\'` | Single quote | `0x27` |
 | `\0` | Null byte | `0x00` |
+| `\xHH` | The byte `HH` (two hex digits) | `0xHH` |
+| `\uXXXX` | Code point U+XXXX, stored as UTF-8 | — |
+| `\UXXXXXXXX` | Code point U+XXXXXXXX (up to U+10FFFF), stored as UTF-8 | — |
+
+`\x`, `\u` and `\U` are escapes only when followed by the full run of hex
+digits (2, 4 or 8); otherwise the backslash is kept as written. Any other
+unrecognised escape also keeps its backslash.
 
 ### Common Mistakes
 
 **Forgetting to escape backslashes in Windows paths:**
 ```python
-mut path = "C:\Users\name"    # \U and \n are interpreted as escape sequences
+mut path = "C:\Users\name"    # \n is a newline (\U is kept: no 8 hex digits follow)
 ```
 Fix: `mut path = "C:\\Users\\name"` or use a raw string: `r"C:\Users\name"`
 
@@ -281,7 +288,13 @@ f"active = {is_active}"
 
 # Type conversion:
 f"hex equivalent = {str(n)}"
+
+# String literals inside the braces (same quotes as the f-string are fine):
+f"first b at {s.find("b")}, cleaned: {s.replace("-", " ")}"
 ```
+
+Write `{{` and `}}` for literal braces (`f"{{id}} = {id}"` gives `{id} = 7`), and
+`\"` for a double quote in the text part.
 
 **Assignment vs. inline use:**
 
@@ -392,7 +405,8 @@ mut ends      = s.ends_with("  ")              # true
 | `.strip()` or `.trim()` | `str` | Remove leading and trailing ASCII whitespace |
 | `.find(sub)` | `int` | Index of first occurrence of `sub`, or −1 |
 | `.replace(old, new)` | `str` | Replace all occurrences of `old` with `new` |
-| `.split(sep)` | `List[str]` | Split on separator `sep`, return list of parts |
+| `.split(sep)` | `List[str]` | Split on any of the bytes in `sep`; empty parts are dropped (`"a,,b"` gives `["a", "b"]`) |
+| `.split_exact(sep)` | `List[str]` | Split on the whole substring `sep`, keeping empty parts, like Python's `str.split(sep)` (`"a,,b"` gives `["a", "", "b"]`) |
 | `.contains(sub)` | `bool` | True if `sub` appears anywhere in the string |
 | `.starts_with(prefix)` | `bool` | True if string starts with `prefix` |
 | `.ends_with(suffix)` | `bool` | True if string ends with `suffix` |

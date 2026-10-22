@@ -1,0 +1,69 @@
+# tauraro-cpp-shim: geo_native.c
+#
+# std.geo.native -- internal bindings to std/geo/geo_native.c (Karney
+# geodesics via the vendored GeographicLib C library, MIT) and the libm
+# functions the std.geo modules share. Not a public API: use std.geo.
+
+extern "C":
+    def trc_geo_inverse(a: float, f: float, lat1: float, lon1: float, lat2: float, lon2: float, out: Pointer[float])
+    def trc_geo_direct(a: float, f: float, lat1: float, lon1: float, azi1: float, s12: float, out: Pointer[float])
+    def trc_geo_polygon_area(a: float, f: float, lats: Pointer[float], lons: Pointer[float], n: int, out: Pointer[float])
+    def trc_geo_polyline_length(a: float, f: float, lats: Pointer[float], lons: Pointer[float], n: int) -> float
+    def trc_geo_line_points(a: float, f: float, lat1: float, lon1: float, lat2: float, lon2: float, n: int, olat: Pointer[float], olon: Pointer[float])
+    def trc_geo_fmt(x: float, out: Pointer[char]) -> int
+    def trc_geo_parse_num(s: Pointer[char], n: int, out: Pointer[float]) -> int
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+    def sin(x: float) -> float
+    def cos(x: float) -> float
+    def tan(x: float) -> float
+    def asin(x: float) -> float
+    def acos(x: float) -> float
+    def atan(x: float) -> float
+    def atan2(y: float, x: float) -> float
+    def sqrt(x: float) -> float
+    def hypot(x: float, y: float) -> float
+    def sinh(x: float) -> float
+    def cosh(x: float) -> float
+    def tanh(x: float) -> float
+    def asinh(x: float) -> float
+    def atanh(x: float) -> float
+    def exp(x: float) -> float
+    def log(x: float) -> float
+    def pow(base: float, ex: float) -> float
+    def floor(x: float) -> float
+    def ceil(x: float) -> float
+    def round(x: float) -> float
+    def fabs(x: float) -> float
+    def fmod(x: float, y: float) -> float
+
+pub const GEO_PI = 3.141592653589793
+pub const GEO_DEG = 0.017453292519943295
+pub const GEO_RAD = 57.29577951308232
+
+pub def geo_zeros(n: int) -> List[float]:
+    mut xs: List[float] = []
+    xs.reserve(n)
+    mut i = 0
+    while i < n:
+        xs.append(0.0)
+        i = i + 1
+    return xs
+
+# Shortest decimal text that round-trips the double (like Python's repr,
+# without a trailing ".0" for integral values: 3.0 -> "3", 0.1 -> "0.1").
+pub def geo_fmt(x: float) -> str:
+    mut p = _tr_c_malloc(40)
+    mut n = trc_geo_fmt(x, p)
+    return _tr_str_wrap_len(p, n)
+
+# Longitude into [-180, 180).
+pub def geo_wrap_lon(lon: float) -> float:
+    mut x = fmod(lon + 180.0, 360.0)
+    if x < 0.0: x = x + 360.0
+    return x - 180.0
+
+pub def geo_clamp(x: float, lo: float, hi: float) -> float:
+    if x < lo: return lo
+    if x > hi: return hi
+    return x

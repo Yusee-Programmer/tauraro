@@ -9,7 +9,28 @@ from std.crypto.sha512 import Sha512
 from std.crypto.chacha20 import ChaCha20, Poly1305
 from std.crypto.kdf import Kdf
 from std.crypto.jwt import Jwt, JwtResult
+from std.crypto.random import SecureRandom
+from std.crypto.ct import ConstantTime
+from std.crypto.digest import Digest, Hasher
+from std.crypto.sha3 import Sha3, Sha3Stream
+from std.crypto.blake2 import Blake2, Blake2bStream
+from std.crypto.blake3 import Blake3, Blake3Stream
+from std.crypto.x25519 import X25519
+from std.crypto.otp import Otp
+from std.crypto.argon2 import Argon2, Argon2Params, Argon2Hash
+from std.crypto.bcrypt import Bcrypt
+from std.crypto.native import ALG_SHA1, ALG_SHA256, ALG_SHA384, ALG_SHA512
+from std.crypto.aead import Aead, AEAD_AES_128_GCM, AEAD_AES_256_GCM, AEAD_CHACHA20_POLY1305
+from std.crypto.pk import PKey, Pem, SIG_PKCS1, SIG_PSS, CURVE_P256, CURVE_P384
+from std.crypto.x509 import Certificate, TrustStore, X509, PURPOSE_SERVER
 ```
+
+> The modules from `random` onward are backed by `std/crypto/crypto_native.c`,
+> a dependency-free C file that `tauraroc` compiles and links automatically
+> (via the `# tauraro-cpp-shim:` pragma in `std/crypto/native.tr`) when any of
+> them is imported. They are all binary-safe: a `str` argument's length is
+> `s.len()`, so embedded NUL bytes count. Digests and keys are returned as RAW
+> bytes; `_hex` variants return lower-case hex.
 
 > SHA-256, HMAC-SHA256, and MD5 are implemented in pure C — no external library required.
 > UUID v4 uses `/dev/urandom` on POSIX and `rand()` on Windows.
@@ -334,7 +355,7 @@ mut key  = Kdf.pbkdf2_str("correct horse battery staple", salt, 600000, 32)
 
 ## JWT — `std.crypto.jwt`
 
-JSON Web Tokens (RFC 7519), **HS256 only** — HMAC-SHA256 signing, no
+JSON Web Tokens (RFC 7519); `Jwt.encode` / `decode` below are the **HS256-only** shared-secret API (for RS/PS/ES/EdDSA tokens and JWKS see the next section) — HMAC-SHA256 signing, no
 RSA/ECDSA ("RS256"/"ES256") or `"alg":"none"` support (asymmetric
 algorithms are out of scope: this stdlib has no public-key crypto
 primitives yet). Claims are `Dict[str, str]` (string-valued claims only).
@@ -395,3 +416,348 @@ match Jwt.decode(token, "wrong-secret"):
     case JwtResult.Err(msg):
         print("rejected: " + msg)    # rejected: signature verification failed
 ```
+
+---
+
+## JWK, JWKS and JWS - `std.crypto.jwk` (and JWK-based JWTs in `std.crypto.jwt`)
+
+```tauraro
+from std.crypto.jwk import Jwk, JwkSet, Jws
+from std.crypto.jwt import Jwt, JwtOptions
+
+mut set = JwkSet.parse(jwks_json)?                 # {"keys":[...]}
+mut key = set.find("2011-04-29")?                  # by kid
+print(key.thumbprint_b64())                         # RFC 7638, SHA-256
+
+mut signer = Jwk.generate_ec(CURVE_P256)?
+signer.kid = "k1"
+mut token = Jwt.sign_jwk("{\"sub\":\"ann\",\"exp\":4000000000}", signer, "ES256")?
+
+mut opts = JwtOptions.init()
+opts.issuer = "https://issuer.example"
+opts.audience = "my-client"
+opts.algorithms.append("ES256")                     # [] = any alg the key supports
+mut claims = Jwt.verify_jwks(token, set, opts)?     # key chosen by kid + alg
+print(claims.subject(), claims.expires_at())
+```
+
+`Jwk` holds one key as raw bytes: `kty` RSA (`n e` + `d p q dp dq qi`), EC P-256 / P-384 (`x y d`), OKP
+Ed25519 / X25519 (`x d`, RFC 8037) and oct (`k`), plus `kid alg key_use key_ops x5c x5t x5t_s256`.
+
+| API | Description |
+|---|---|
+| `Jwk.parse(json)?`, `Jwk.from_json(ref)?`, `to_json()`, `to_public()?`, `to_public_json()?` | Parse / serialize; the public form drops private members (oct keys have none). |
+| `Jwk.from_pkey(key)?`, `to_pkey()?` | Convert to and from `PKey` (RSA/EC any, Ed25519 public). Private RSA keys are checked by a test private operation, EC private keys against x/y. |
+| `Jwk.oct`, `generate_oct`, `generate_ec`, `generate_ed25519`, `ed25519_from_seed`, `x25519_from_private`, `ed25519_public`, `x25519_public` | Constructors. |
+| `thumbprint_b64()`, `thumbprint(alg)?`, `thumbprint_input()`, `thumbprint_uri()` | RFC 7638 / RFC 9278. |
+| `JwkSet.parse`, `add`, `has`, `find(kid)?`, `candidates(kid, alg)`, `to_json`, `to_public_json` | JWK Sets. `parse` skips keys of unsupported kty/crv and counts them in `skipped`. |
+| `Jws.sign(payload, key, alg, typ)?`, `sign_with_header`, `verify(token, key, allowed)?`, `verify_set(token, set, allowed)?`, `decode_unverified` | JWS compact serialization. |
+| `Jwt.sign_jwk`, `verify_jwk`, `verify_jwks`, `decode_unverified` | JWT on top of JWS; `JwtOptions` (`issuer audience subject algorithms leeway now require_exp typ max_age`) and `JwtClaims` (`get_str get_int get_bool get_json audiences subject issuer expires_at`). |
+
+Algorithms: HS256/384/512, RS256/384/512, PS256/384/512, ES256, ES384, EdDSA. A key is only used with algorithms
+of its own type (an RSA public key is never an HMAC secret), honours its own `alg`, `use` and `key_ops`, HMAC keys
+shorter than the hash and RSA keys under 2048 bits are refused, `"none"` and tokens with a `crit` header are
+rejected, and the signature is checked before any claim is trusted. exp / nbf / iat are checked with `leeway`
+(default 60 s); a token without `exp` is refused unless `require_exp = false`.
+
+Tested by `tests/lang/133_jwk.tr` against the examples of RFC 7515 (A.1-A.3), RFC 7517 (A.1-A.3), RFC 7520
+(4.1, 4.2, 4.4, 3.4), RFC 7638 (3.1) and RFC 8037 (A.1-A.5), including byte-exact RS256, HS256 and EdDSA output.
+Limitations: no P-521 / ES512, no RSA private JWKs without the CRT members, no multi-prime RSA (`oth`), no JWE,
+no `x5c` chain validation, no JSON (general / flattened) JWS serialization.
+
+## Secure randomness — `std.crypto.random`
+
+OS CSPRNG (`getrandom`/`/dev/urandom`, `BCryptGenRandom`). Every call raises
+(`throws str`) if the OS generator is unavailable; it never falls back to `rand()`.
+
+| Method | Returns | Description |
+|---|---|---|
+| `SecureRandom.bytes(n)` | `str` | `n` raw random bytes. |
+| `SecureRandom.token_hex(n)` | `str` | `n` bytes as `2n` hex chars. |
+| `SecureRandom.token_urlsafe(n)` | `str` | `n` bytes as unpadded base64url. |
+| `SecureRandom.int63()` | `int` | Uniform non-negative 63-bit integer. |
+| `SecureRandom.below(n)` | `int` | Uniform in `[0, n)`, no modulo bias. |
+| `SecureRandom.range(lo, hi)` | `int` | Uniform in `[lo, hi]`. |
+| `SecureRandom.unit()` | `float` | Uniform in `[0, 1)` (53 bits). |
+
+## Constant-time comparison — `std.crypto.ct`
+
+| Method | Description |
+|---|---|
+| `ConstantTime.eq(a, b) -> bool` | Equal bytes? Time depends only on the lengths. |
+| `ConstantTime.eq_n(a, b, n) -> bool` | Compare the first `n` bytes. |
+| `ConstantTime.select(cond, a, b) -> int` | `a` if `cond` else `b`, without a data-dependent branch. |
+
+## Binary-safe SHA-1/SHA-2 — `std.crypto.digest`
+
+`Digest.sha1/sha256/sha384/sha512(data)` return raw digests; `*_hex` return hex;
+`Digest.compute(alg, data)` takes an `ALG_*` id. `Hasher.init(alg)` → `update(data)` →
+`finish()` / `finish_hex()` hashes incrementally (call `dispose()` to abandon one).
+
+## HMAC additions — `std.crypto.hmac`
+
+`Hmac.compute(alg, key, msg)` (raw tag, any `ALG_*`), `Hmac.sha1_raw/sha256_raw/sha384_raw/sha512_raw(key, msg)`,
+`Hmac.compute_hex(...)`, and `Hmac.verify(alg, key, msg, tag) -> bool` (constant time; accepts tags truncated to
+≥ 10 bytes). The original `Hmac.sha256(key, klen, msg)` is unchanged.
+
+## HKDF and PBKDF2 additions — `std.crypto.kdf`
+
+| Method | Description |
+|---|---|
+| `Kdf.hkdf(alg, ikm, salt, info, length)` | RFC 5869 extract-then-expand. |
+| `Kdf.hkdf_extract(alg, salt, ikm)` / `Kdf.hkdf_expand(alg, prk, info, length)` | The two halves. |
+| `Kdf.pbkdf2_hmac(alg, password, salt, iterations, dklen)` | PBKDF2 with HMAC-SHA1/256/384/512, binary-safe, in C. |
+
+## SHA-3 and SHAKE — `std.crypto.sha3`
+
+`Sha3.sha3_224/256/384/512(data)` (+ `_hex`), `Sha3.shake128(data, n)` / `shake256(data, n)` (+ `_hex`).
+`Sha3Stream.sha3(bits)?`, `Sha3Stream.shake128()`, `Sha3Stream.shake256()` → `update(data)?` →
+`finish()` (SHA-3) or repeated `squeeze(n)` (SHAKE, continues the same output stream) → `dispose()`.
+
+## BLAKE2 — `std.crypto.blake2`
+
+`Blake2.b512(data)`, `Blake2.b(data, outlen)?` (1–64), `Blake2.b_keyed(data, key, outlen)?` (key ≤ 64 bytes —
+a keyed BLAKE2b is a MAC), `Blake2.s256(data)`, `Blake2.s(data, outlen)?`, `Blake2.s_keyed(...)?`, plus `_hex`
+forms. `Blake2bStream.init(outlen, key)?` hashes incrementally.
+
+## BLAKE3 — `std.crypto.blake3`
+
+`Blake3.hash(data)` / `hash_hex`, `Blake3.hash_xof(data, n)`, `Blake3.keyed(key32, data)?`,
+`Blake3.keyed_xof(...)?`, `Blake3.derive_key(context, material, n)`. `Blake3Stream.init()` /
+`init_keyed(key)?` / `init_derive_key(context)` → `update` → `finish(n)` (repeatable) → `dispose()`.
+
+## X25519 — `std.crypto.x25519`
+
+```tauraro
+from std.crypto.x25519 import X25519
+from std.crypto.kdf import Kdf
+from std.crypto.native import ALG_SHA256
+
+mut mine = X25519.generate_private()?
+mut my_pub = X25519.public_key(mine)?          # send to the peer
+mut shared = X25519.shared_secret(mine, peer_pub)?   # raises on a low-order peer key
+mut key = Kdf.hkdf(ALG_SHA256, shared, "", "my protocol v1", 32)?
+```
+
+Also `X25519.scalar_mult(scalar, point)?`, `X25519.to_hex(key)`, `X25519.from_hex(hex)?`.
+
+## One-time passwords — `std.crypto.otp`
+
+| Method | Description |
+|---|---|
+| `Otp.hotp(secret, counter, digits, alg)?` | RFC 4226 code (6–10 digits, SHA-1/256/512). |
+| `Otp.totp(secret, unix_time, step, digits, alg)?` | RFC 6238 code. |
+| `Otp.verify_totp(secret, code, unix_time, step, digits, alg, window) -> bool` | Accepts ±`window` steps, constant-time compare. |
+| `Otp.verify_hotp(secret, code, counter, digits, alg, look_ahead) -> int` | Next counter to store, or -1. |
+| `Otp.totp_counter(unix_time, step)` | The time step (store it to block replays). |
+| `Otp.generate_secret(nbytes)?` | Random secret (≥ 10 bytes). |
+| `Otp.secret_to_base32(raw)` / `Otp.secret_from_base32(text)?` | Authenticator-app encoding. |
+| `Otp.provisioning_uri(b32, account, issuer, alg, digits, period)` | `otpauth://totp/...` for QR codes (`provisioning_uri_hotp` for HOTP). |
+
+## Argon2 — `std.crypto.argon2`
+
+Argon2d / Argon2i / Argon2id (RFC 9106, version 0x13) with PHC strings
+(`$argon2id$v=19$m=19456,t=2,p=1$salt$hash`) compatible with other Argon2 libraries.
+Defaults (`Argon2Params.default()`): Argon2id, 19 MiB, t = 2, p = 1 (OWASP). Lanes run sequentially.
+
+| Method | Description |
+|---|---|
+| `Argon2.hash(password)?` | PHC string with defaults and a random salt. |
+| `Argon2.hash_with(password, params)?` / `hash_with_salt(password, salt, params)?` | Custom costs. |
+| `Argon2.verify(encoded, password) -> bool` | Constant-time; false for malformed strings. |
+| `Argon2.needs_rehash(encoded, params) -> bool` | True when the stored costs differ. |
+| `Argon2.decode(encoded)? -> Argon2Hash` / `Argon2.encode(...)` | PHC parsing / formatting. |
+| `Argon2.hash_raw(variant, password, salt, t, m_kib, p, outlen)?` | Raw KDF output. |
+| `Argon2.hash_raw_keyed(variant, password, salt, secret, ad, t, m_kib, p, outlen)?` | With secret key K and associated data X. |
+
+Variants: `ARGON2D`, `ARGON2I`, `ARGON2ID`.
+
+## bcrypt — `std.crypto.bcrypt`
+
+`Bcrypt.hash(password, cost)?` → `$2b$<cost>$...` (60 chars), `Bcrypt.hash_with_salt(password, salt16, cost)?`,
+`Bcrypt.verify(password, hashed) -> bool` (accepts `$2a$`/`$2b$`/`$2y$`), `Bcrypt.cost_of(hashed)`,
+`Bcrypt.needs_rehash(hashed, cost)`. `hash` refuses passwords over 72 bytes instead of silently truncating;
+`verify` truncates at 72 bytes for compatibility with hashes made elsewhere.
+
+Tested in `tests/lang/105_crypto_modern.tr` against the RFC/FIPS vectors and hashes produced by
+argon2-cffi and pyca/bcrypt.
+
+## AEAD — `std.crypto.aead`
+
+`Aead.seal(alg, key, nonce12, aad, plaintext)?` → ciphertext ‖ 16-byte tag; `Aead.open(alg, key, nonce12, aad, sealed)?`
+raises on any modification (constant-time tag check). `alg`: `AEAD_AES_128_GCM` (16-byte key), `AEAD_AES_256_GCM`,
+`AEAD_CHACHA20_POLY1305` (32-byte keys). Never reuse a nonce with the same key.
+
+## Public keys and signatures — `std.crypto.pk`
+
+`PKey` holds an RSA or EC (P-256/P-384) key, public or private, parsed from DER/PEM (SPKI, PKCS#8, PKCS#1, SEC1;
+encrypted PEM is not supported) or generated (`PKey.generate_ec(CURVE_P256)?`).
+
+| Method | Description |
+|---|---|
+| `PKey.from_pem(text)?` / `PKey.from_der(der)?` | Parse the first key block / a DER key. |
+| `PKey.ec_from_private(curve, scalar)?`, `ec_from_public(curve, point)?`, `rsa_from_public(n, e)?` | Build from raw parts (points are validated). |
+| `sign(msg, alg, scheme)?` / `verify(msg, sig, alg, scheme)` | RSA: `SIG_PKCS1` or `SIG_PSS` (salt = hash length). EC: DER ECDSA, scheme ignored, deterministic nonces (RFC 6979). |
+| `sign_raw(msg, alg)?` / `verify_raw(msg, sig, alg)` | ECDSA as fixed-size `r‖s` (JOSE/WebAuthn). |
+| `shared_secret(peer_point)?` | ECDH x-coordinate. |
+| `kind()`, `bits()`, `has_private()`, `public_bytes()`, `ec_private_bytes()?`, `dispose()` | Introspection / cleanup. |
+
+`Pem.decode(text, label)?`, `Pem.decode_nth(text, label, i)?`, `Pem.label_of(text, i)`, `Pem.encode(der, label)`.
+SHA-1 is accepted for verification only. Private-key code avoids secret-dependent branches and lookups but has
+not been independently audited for side channels.
+
+## X.509 — `std.crypto.x509`
+
+```tauraro
+from std.crypto.x509 import Certificate, TrustStore, X509, PURPOSE_SERVER
+
+mut chain = Certificate.all_from_pem(read_file("fullchain.pem"))?
+mut code = X509.verify(TrustStore.system(), chain, "example.com", 0, PURPOSE_SERVER)
+if code != 0: print(X509.error_text(code))
+print(chain[0].subject(), chain[0].dns_names(), chain[0].not_after())
+```
+
+`Certificate`: `subject()`, `issuer()`, `serial_hex()`, `dns_names()`, `ip_addresses()`, `not_before()`/`not_after()`
+(Unix time), `is_ca()`, `path_len()`, `key_usage()` (`KU_*` bits, -1 if absent), `ext_key_usage()` (`EKU_*`),
+`signature_algorithm()`, `key_algorithm()`, `key_bits()`, `matches_host(h)`, `is_signed_by(issuer)`,
+`is_self_signed()`, `fingerprint_sha256()`, `der()`, `to_pem()`, `public_key()?`.
+
+`TrustStore.system()` (OS roots: CA bundle files or the Windows ROOT store, loaded once and shared; honours
+`SSL_CERT_FILE`), `TrustStore.empty()`, `system_copy()`, `add_pem(text)`, `add_der(der)?`, `add(cert)?`, `count()`.
+
+`X509.verify(store, chain, host, now, purpose)` / `verify_der(...)` build a path through untrusted intermediates
+(any order) to a trust anchor and check signatures (SHA-1 refused), validity, basicConstraints/pathLen, keyUsage,
+EKU, dNSName name constraints, unknown critical extensions and the host name (RFC 6125: SAN only, single-label
+leftmost wildcards, IP SANs). Returns 0 or a negative code (`X509.error_text`). Revocation is not checked.
+
+Tested by `tests/lang/106_x509_tls.tr`; the TLS client was also checked against OpenSSL `s_server` (every cipher
+suite, HelloRetryRequest, KeyUpdate) and public HTTPS sites.
+
+## DER, keys, CSRs and certificates — `std.crypto.der`, `std.crypto.csr`
+
+`std.crypto.der` encodes and decodes ASN.1 DER: `Der.seq`, `set_of`, `integer`, `uint` (big-endian
+magnitude), `oid("1.2.840.10045.2.1")`, `octets`, `bits`, `utf8`, `ia5`, `boolean`, `null_value`,
+`time(unix)` (UTCTime, GeneralizedTime from 2050), `ctx(n, ...)` / `ctx_prim(n, ...)` for `[n]` tags;
+`Der.parse(der)?` (one element), `Der.children(node)?`, `DerReader` (`next()?`, `expect(tag)?`),
+`Der.oid_text`, `uint_bytes`, `bit_bytes`, `time_value(node)?`.
+
+`std.crypto.csr`:
+
+```tauraro
+from std.crypto.csr import KeyPair, Csr, CertBuilder, name_der
+from std.crypto.pk import CURVE_P256, Pem
+
+mut key = KeyPair.generate_ec(CURVE_P256)?               # or KeyPair.from_pem(text)? (RSA / EC)
+mut csr_pem = Csr.build_pem(key, ["example.com", "www.example.com", "192.0.2.1"])?
+mut csr = Csr.from_pem(csr_pem)?                         # csr.dns_names, csr.ip_addresses, csr.verify()
+
+mut ca = KeyPair.generate_ec(CURVE_P256)?
+mut b = CertBuilder.init()                               # random serial, valid 90 days
+b.subject_cn("Test CA")
+b.is_ca = true
+mut ca_pem = Pem.encode(b.self_signed(ca)?, "CERTIFICATE")
+mut leaf = CertBuilder.init()
+leaf.subject_cn("example.com")
+leaf.issuer = name_der("Test CA")
+leaf.add_name("example.com")
+mut leaf_der = leaf.sign(key.spki(), ca)?                # signed by the CA key
+```
+
+`KeyPair`: `pkey` (a `PKey`), `kind`, `spki()` (SubjectPublicKeyInfo), `private_pem()` (PKCS#8 for EC),
+`public_pem()`, `rsa_n` / `rsa_e` / `ec_x` / `ec_y`, `sign_der(data)?` (X.509 form), `sign_jose(data)?`
+(JWS form), `rsa_from_components(...)?`, `ec_from_scalar(curve, d)?`. `CertBuilder` adds
+subjectAltName, basicConstraints / keyUsage for CAs, keyUsage + serverAuth for leaves, and any
+`add_extension(oid, critical, value_der)`. `cert_extension(der, oid)?` and `cert_names(der)?` read
+extensions back. Signatures: SHA-256 with RSA (PKCS#1 v1.5) and P-256, SHA-384 with P-384. Generated
+CSRs and certificates pass `openssl req -verify` / `openssl verify`. RSA keys cannot be generated.
+## scrypt — `std.crypto.scrypt`
+
+scrypt (RFC 7914), implemented in C. `Scrypt.derive(password, salt, n, r, p, dklen)?` returns `dklen` raw bytes.
+Parameters are validated (`n` a power of two > 1, `r, p >= 1`, `r·p < 2^30`, `n < 2^(16r)`) and the working
+memory (≈ `128·r·n` bytes) is capped at `SCRYPT_DEFAULT_MAX_MEM` (1 GiB); `derive_limited(..., max_mem)?` takes
+an explicit cap, `Scrypt.memory_needed(n, r, p)` reports it.
+
+Password hashes use the PHC-style string also produced by passlib: `$scrypt$ln=17,r=8,p=1$<salt>$<hash>`
+(unpadded base64, `ln = log2(n)`).
+
+| Method | Description |
+|---|---|
+| `Scrypt.hash(password)?` | Defaults (`ScryptParams.default()`): `ln=17, r=8, p=1` (128 MiB, OWASP), 16-byte salt, 32-byte hash. |
+| `Scrypt.hash_with(password, params)?` / `hash_with_salt(password, salt, params)?` | Custom costs (`ScryptParams.init(log_n, r, p)`). |
+| `Scrypt.verify(encoded, password) -> bool` | Constant-time; false for malformed or over-limit strings. |
+| `Scrypt.needs_rehash(encoded, params) -> bool`, `Scrypt.decode(encoded)? -> ScryptHash`, `Scrypt.encode(...)` | |
+
+## age file encryption — `std.crypto.age`
+
+The [age v1 format](https://age-encryption.org/v1), interoperable with `age`/`rage`: X25519 recipients
+(`age1...`) and identities (`AGE-SECRET-KEY-1...`), passphrase (scrypt) recipients, the HMAC-SHA256 header MAC,
+the STREAM payload (ChaCha20-Poly1305, 64 KiB chunks) and ASCII armor.
+
+```tauraro
+from std.crypto.age import Age, AgeIdentity, AgeRecipient
+
+mut id = AgeIdentity.generate()?
+write_file("key.txt", id.to_string() + "\n")
+mut rcpt = id.recipient()?                 # rcpt.to_string() -> "age1..."
+mut rs: List[AgeRecipient] = []
+rs.append(AgeRecipient.parse("age1xmwwc06ly3ee5rytxm9mflaz2u56jjj36s0mypdrwsvlul66mv4q47ryef")?)
+rs.append(rcpt)
+mut ct = Age.encrypt(data, rs)?            # binary; Age.encrypt_armored for text
+mut ids = AgeIdentity.parse_file(read_file("key.txt"))?
+mut pt = Age.decrypt(ct, ids)?             # binary or armored input
+mut sealed = Age.encrypt_passphrase(data, "correct horse")?
+```
+
+| API | Description |
+|---|---|
+| `AgeRecipient.parse(text)?`, `x25519(pub32)`, `passphrase(pw)`, `passphrase_with_work_factor(pw, log_n)`, `to_string()` | Recipients (default scrypt work factor 18). A passphrase recipient must be the only one. |
+| `AgeIdentity.generate()?`, `parse(text)?`, `parse_file(text)?`, `x25519(secret32)`, `passphrase(pw)`, `passphrase_with_max_work_factor(pw, n)`, `recipient()?`, `to_string()` | Identities; passphrase identities accept work factors up to 22 by default. |
+| `Age.encrypt(data, recipients)?`, `encrypt_armored(...)?`, `encrypt_passphrase(data, pw)?` | One-shot encryption. |
+| `Age.decrypt(data, identities)?`, `decrypt_binary(...)?`, `decrypt_passphrase(data, pw)?` | One-shot decryption (armor detected automatically by `decrypt`). |
+| `Age.armor(bin)`, `Age.dearmor(text)?`, `Age.is_armored(data)` | Strict armor: LF or CRLF, 64-column lines, canonical padded base64, whitespace allowed only outside. |
+| `AgeEncryptor.init(recipients)?` → `update(chunk)? -> str`, `finish()? -> str` | Streaming encryption; output is released as soon as each 64 KiB chunk is final. |
+| `AgeDecryptor.init(identities)` → `update(chunk)? -> str`, `finish()? -> str`, `partial()` | Streaming decryption; only authenticated plaintext is released. |
+| `Age.encrypt_file(in, out, recipients)?`, `Age.decrypt_file(in, out, identities)?` | Files in 1 MiB reads (binary format). On a decryption error delete the partial output. |
+
+Decryption is strict and errors are categorised by prefix: `age: header:`, `age: no identity matched`,
+`age: bad header MAC`, `age: payload:`, `age: armor:`. Post-quantum hybrid (`age1pq`) and SSH recipients are not
+supported; their stanzas are ignored like any unknown type.
+
+Tested in `tests/lang/138_crypto_age_ssh.tr` with the 108 small non-hybrid vectors of the C2SP/CCTV age testkit
+(the full 128-vector non-hybrid set, including the multi-megabyte STREAM vectors, passed during development);
+files encrypted here were decrypted by an independent pyca/cryptography implementation.
+
+## SSH keys and signatures — `std.crypto.ssh`
+
+OpenSSH formats for `ssh-ed25519`, `ecdsa-sha2-nistp256`, `ecdsa-sha2-nistp384` and `ssh-rsa` keys.
+
+```tauraro
+from std.crypto.ssh import SshKey, SshSig, SshAuthorizedKey
+
+mut key = SshKey.parse_private(read_file("id_ed25519"), "passphrase or empty")?
+print(key.public_line(), key.fingerprint_sha256())      # as in id_ed25519.pub / ssh-keygen -l
+mut sig = SshSig.sign(key, data, "file")?                # ssh-keygen -Y sign -n file
+mut signer = SshSig.verify(sig, data, "file")?           # returns the signing key
+for ak in SshAuthorizedKey.parse_file(read_file("authorized_keys")): print(ak.options, ak.key.comment)
+```
+
+| API | Description |
+|---|---|
+| `SshKey.parse_public(line)?`, `from_blob(blob, comment)?`, `public_line()`, `blob`, `key_type`, `comment`, `bits()` | Public keys (`type base64 comment`); blobs are validated (EC points on the curve). |
+| `fingerprint_sha256()`, `fingerprint_md5()` | `SHA256:...` / `MD5:aa:bb:...` exactly as `ssh-keygen -l [-E md5]`. |
+| `SshKey.parse_private(text, passphrase)?`, `parse_private_binary(data, pw)?` | `openssh-key-v1`, unencrypted or `aes256-ctr` + `bcrypt` KDF; check bytes, padding and public/private consistency are verified. |
+| `private_pem(passphrase, rounds)?` | Writes `openssh-key-v1` (encrypted with aes256-ctr / bcrypt-pbkdf when `passphrase` is non-empty; OpenSSH uses 16 rounds). |
+| `SshKey.generate_ed25519(comment)?`, `ed25519_from_seed(seed, comment)?`, `generate_ecdsa(curve, comment)?` | New keys. |
+| `SshKey.from_pkey(pk, comment)?`, `to_pkey()?`, `public_key()` | std.crypto.pk conversion (public keys of all types, EC and RSA private keys to PKey, EC private keys from PKey). |
+| `sign_ssh(msg)?`, `verify_ssh(msg, sig_blob, allow_sha1) -> bool` | Raw SSH signature blobs (RSA signs with `rsa-sha2-512`). |
+| `SshSig.sign(key, data, namespace)?`, `SshSig.verify(armored, data, namespace)? -> SshKey`, `SshSig.verify_with(armored, data, namespace, allowed) -> bool` | SSHSIG (`ssh-keygen -Y sign/verify`); SHA-512 for signing, SHA-256/512 accepted. |
+| `SshAuthorizedKey.parse(line)?`, `parse_file(text)`, `options`, `key`, `has_option(name)`, `option(name)` | `authorized_keys` lines with options (`command="..."` quoting, `\"` escapes); `parse_file` skips bad lines like sshd. |
+
+Limitations: Ed25519 keys convert to PKey as public keys only (PKey cannot sign with Ed25519); RSA private keys
+cannot be built from a PKey (no private exponent) or generated here; `aes256-gcm@openssh.com` and
+`chacha20-poly1305@openssh.com` encrypted keys, certificates and `sk-*` security-key types are not supported.
+`std.crypto.native` also exposes `trc_bcrypt_pbkdf` (OpenBSD bcrypt_pbkdf) and `trc_aes_ctr`.
+
+Verified against OpenSSH 10.2 `ssh-keygen`: keys, fingerprints and SSHSIG signatures it made are parsed and
+verified, and keys (unencrypted and encrypted) and signatures written here are accepted by `ssh-keygen -y` and
+`ssh-keygen -Y verify` (`tests/lang/138_crypto_age_ssh.tr`).

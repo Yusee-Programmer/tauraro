@@ -1,6 +1,6 @@
 # std.encoding
 
-Data encoding and decoding: JSON, CSV, TOML, INI, YAML, XML, Base64, Base32, hexadecimal, CBOR, and the Protocol Buffers wire format.
+Data encoding and decoding: JSON, CSV, TOML, INI, YAML, XML, Base64, Base32, hexadecimal, CBOR, the Protocol Buffers wire format, a PDF writer and Excel workbooks (.xlsx).
 
 ## Import
 
@@ -20,6 +20,7 @@ from std.encoding.hex    import Hex
 from std.encoding.base32 import Base32
 from std.encoding.cbor   import CBVal, Cbor
 from std.encoding.protobuf import Proto, ProtoWriter, ProtoReader
+from std.encoding.xlsx   import Workbook, Worksheet, Cell, CellStyle, CellRange
 ```
 
 ---
@@ -637,4 +638,238 @@ while r.next_field()?:
 
 ---
 
+## PDF writer — `std.encoding.pdf`
+
+Writes PDF 1.7 documents with no external libraries: text in the twelve standard Latin fonts or embedded TrueType/OpenType fonts (any Unicode text)
+(Helvetica, Times and Courier families, so nothing is embedded), exact text measurement and
+word-wrapped text boxes, vector graphics, images, links, bookmarks and metadata. Content and image
+streams are Flate-compressed by a built-in deflate encoder (no `-lz` needed).
+
+Coordinates are points (1/72 inch) from the **bottom-left** corner. Text is UTF-8; characters
+outside Windows-1252 (the fonts' WinAnsiEncoding) print as `?`. Metadata and bookmark titles
+accept any Unicode.
+
+```tauraro
+from std.encoding.pdf import PdfDocument, PDF_HELVETICA_BOLD, PDF_TIMES, PDF_FILL, PDF_ALIGN_JUSTIFY
+from std.io.file import File
+
+mut doc = PdfDocument.init()
+doc.title = "Quarterly report"
+doc.author = "Finance"
+
+mut page = doc.add_page_a4()                       # 595.28 x 841.89 pt
+page.set_font(PDF_HELVETICA_BOLD, 24.0)
+page.text(72.0, 770.0, "Quarterly report — Q3")
+page.set_font(PDF_TIMES, 11.0)
+mut body_text = File.read_text("summary.txt")
+mut y = page.text_box(72.0, 740.0, 451.0, body_text, PDF_ALIGN_JUSTIFY, 1.4)
+
+page.set_fill_color(30, 90, 200)
+page.rect(72.0, y - 60.0, 200.0, 40.0, PDF_FILL)
+
+mut logo = doc.add_jpeg(File.read_text("logo.jpg"))?   # embedded as-is
+page.draw_image(logo, 450.0, 760.0, 72.0, 36.0)
+page.link_url(72.0, 760.0, 300.0, 30.0, "https://example.com/q3")
+doc.add_bookmark("Summary", 0, 841.0)
+doc.save("report.pdf")?
+```
+
+| `PdfDocument` | Description |
+|---|---|
+| `PdfDocument.init()` | Empty document. Fields: `title`, `author`, `subject`, `keywords`, `creator`, `producer`, `creation_date` (`"D:YYYYMMDDHHmmSSZ"`, current UTC time when empty), `compress` (default true). |
+| `add_page(w, h)`, `add_page_a4()`, `add_page_letter()`, `page_count()`, `pages` | Pages, in order. |
+| `add_image(img)` | Embed a `std.image` `Image` (RGB, Flate); any non-opaque pixel adds an alpha soft mask. |
+| `add_jpeg(bytes)?` | Embed JPEG data unchanged (DCTDecode): grayscale, RGB or CMYK (Adobe inverted CMYK handled). |
+| `add_bookmark(title, page_index, y)` | Outline entry; the reader opens with the bookmarks panel. |
+| `to_bytes()`, `save(path)?` | Serialize / write the file. |
+
+| `PdfPage` | Description |
+|---|---|
+| `set_font(font, size)`, `text(x, y, s)`, `text_aligned(x, y, s, align)` | Single-line text at a baseline; `align` is `PDF_ALIGN_LEFT` / `CENTER` / `RIGHT`. |
+| `text_box(x, top, width, s, align, line_height)` | Word-wrapped text (newlines start paragraphs, over-long words are broken). `PDF_ALIGN_JUSTIFY` stretches all but each paragraph's last line. Returns the y where the next line would go. |
+| `text_width(s)` | Width in points in the current font. |
+| `set_fill_color(r, g, b)`, `set_stroke_color(r, g, b)`, `set_fill_gray(v)`, `set_stroke_gray(v)` | Colours (0–255, gray 0–1). |
+| `set_line_width`, `set_line_cap`, `set_line_join`, `set_dash(on, off)`, `clear_dash()`, `set_alpha(fill, stroke)` | Graphics state. |
+| `line`, `rect`, `rounded_rect`, `circle`, `ellipse`, `polygon(points, mode)`, `polyline(points)` | Shapes; `mode` is `PDF_STROKE`, `PDF_FILL` or `PDF_FILL_STROKE`. |
+| `move_to`, `line_to`, `curve_to`, `close_path`, `paint(mode)`, `clip()` | Free-form paths. |
+| `save()`, `restore()`, `translate(dx, dy)`, `rotate(degrees)`, `scale(sx, sy)` | Transforms. |
+| `draw_image(img, x, y, w, h)` | Place an image scaled into a rectangle. |
+| `link_url(x, y, w, h, url)`, `link_page(x, y, w, h, page_index, dest_y)` | Link annotations. |
+| `raw(ops)`, `content()` | Append raw content-stream operators / read the stream so far. |
+
+Helpers: `pdf_text_width(font, size, s)`, `pdf_wrap_text(font, size, s, width)`, `pdf_winansi(s)`,
+`pdf_deflate(bytes)` (zlib stream), `pdf_num(f)`, `pdf_font_name(font)`, `pdf_font_by_name(name)`.
+Fonts: `PDF_HELVETICA`, `PDF_HELVETICA_BOLD`, `PDF_HELVETICA_OBLIQUE`, `PDF_HELVETICA_BOLD_OBLIQUE`,
+`PDF_TIMES`, `PDF_TIMES_BOLD`, `PDF_TIMES_ITALIC`, `PDF_TIMES_BOLD_ITALIC`, `PDF_COURIER`,
+`PDF_COURIER_BOLD`, `PDF_COURIER_OBLIQUE`, `PDF_COURIER_BOLD_OBLIQUE`.
+
+### Unicode text with embedded fonts
+
+The standard fonts only cover Windows-1252. For any other text embed a TrueType/OpenType font
+(TTF, OTF with CFF outlines, WOFF, or a face of a .ttc) with `add_font_ttf`; it returns a font id
+that works with `set_font` and every text method.
+
+```tauraro
+from std.io.file import File
+mut doc = PdfDocument.init()
+mut f = doc.add_font_ttf(File.read_text("DejaVuSans.ttf"))?
+mut page = doc.add_page_a4()
+page.set_font(f, 12.0)
+page.text(72.0, 700.0, "Grüße · Ελληνικά · Русский")
+page.text_box(72.0, 680.0, 300.0, long_text, PDF_ALIGN_JUSTIFY, 1.4)   # wraps on UAX #29 boundaries
+doc.save("unicode.pdf")?
+```
+
+Each font is written as a Type0 / CIDFontType2 font with Identity-H encoding, subset to the
+glyphs actually used (glyph ids renumbered; CFF outlines are converted to TrueType quadratics),
+with a `/W` widths array and a ToUnicode CMap, so the text can be searched and copied (checked
+with pdftotext, and rendered with Ghostscript). Text is shaped with `std.font`: cmap, `liga`
+ligatures and kerning are applied through the TJ array. `text_width`, `text_aligned`, `text_box`
+(including justification) and `wrap_text(text, width)` use the font's real metrics; CJK text wraps
+between ideographs.
+
+| Method | Description |
+|---|---|
+| `doc.add_font_ttf(bytes)?` / `add_font_ttf_index(bytes, index)?` | Embed a font; returns a font id (100 and up). Raises for unparsable fonts and fonts whose OS/2 `fsType` forbids embedding. |
+| `doc.add_font(font)` | Embed an already-loaded `std.font.Font` (keep it alive until saved). |
+| `doc.ttf_font(id)` | The `Font` behind an id, for measuring. |
+| `page.wrap_text(text, width)` | Lines that fit `width` in the current font (standard or embedded). |
+
+Limitations: no complex-script shaping (Arabic joining, Indic reordering), no vertical writing,
+no colour/emoji glyph tables (monochrome outlines only), no font variations.
+
+Not supported: reading or editing existing PDFs, forms, encryption, PDF/A.
+
+---
+
+## Excel workbooks — `std.encoding.xlsx`
+
+Reads and writes `.xlsx` files (Office Open XML SpreadsheetML) in pure Tauraro: the ZIP
+container goes through `std.io.archive` with the built-in DEFLATE codec, so no `-lz` is needed.
+Files written by Excel, LibreOffice and openpyxl are read; files written here open in Excel and
+LibreOffice (checked against openpyxl 3.1.5). Rows and columns are **1-based** everywhere.
+
+```tauraro
+from std.encoding.xlsx import Workbook, Worksheet, CellStyle
+
+def report() throws str:
+    mut wb = Workbook.init()
+    mut ws = wb.add_sheet("Sales")?
+    ws.set_str("A1", "Item")?
+    ws.set_str("B1", "Total")?
+    ws.set_str("A2", "Widgets")?
+    ws.set_float("B2", 1234.5)?
+    ws.set_date("C2", 2024, 3, 31)?          # gets a yyyy-mm-dd format automatically
+    ws.set_formula("B3", "SUM(B2:B2)")?       # computed by Excel / LibreOffice on open
+    mut head = CellStyle.init()
+    head.bold = true
+    head.fill_color = "DDEBF7"
+    head.set_border("thin")
+    ws.set_range_style("A1:C1", head)?
+    ws.set_column_width(1, 24.0)
+    ws.freeze_panes("A2")?
+    ws.set_auto_filter("A1:C2")?
+    wb.save("sales.xlsx")?
+
+def read() throws str:
+    mut book = Workbook.open("sales.xlsx")?
+    mut ws = book.sheet("Sales")?
+    mut c = ws.cell("B2")
+    if c.is_number(): print(c.as_float())
+    mut r = 1
+    while r <= ws.max_row():
+        for v in ws.row_values(r): print(v)     # display text of columns 1..max_col()
+        r = r + 1
+    print(ws.to_csv())
+```
+
+### Reading
+
+`Workbook.open(path)?` / `Workbook.from_bytes(data)?` load the whole workbook. Supported: the
+sheet list with visibility (`state`: `"visible"`, `"hidden"`, `"veryHidden"`) and the active tab;
+shared strings including rich-text runs (phonetic runs skipped), inline strings, `_xHHHH_`
+escapes and character references; numbers, booleans, error codes, ISO `t="d"` dates; formulas
+with their cached values (`t="str"` string results included) and shared formulas expanded into
+each cell with relative references moved; dates recognised from the cell's number format
+(built-in ids 14–22, 27–36, 45–47, 50–58 and any custom code with date/time tokens outside quotes
+and `[..]` sections) in the 1900 or 1904 system; merged cells, column widths, row heights, freeze
+panes, auto-filter, hyperlinks (external targets from the sheet rels, in-workbook locations),
+`<dimension>`, cell styles (font, fill, borders, number format, alignment), docProps title /
+creator / subject / keywords / description. Rows or cells without `r=` and namespace prefixes
+(`<x:c>`) are handled.
+
+### Types
+
+| `Cell` field / method | Description |
+|---|---|
+| `row`, `col`, `ref()` | Position. |
+| `kind`, `kind_name()` | `XLSX_EMPTY`, `XLSX_STRING`, `XLSX_NUMBER`, `XLSX_BOOL`, `XLSX_ERROR`, `XLSX_DATE`. |
+| `text`, `num`, `formula`, `rich` | String / error code, numeric value or date serial, formula without `=`, rich-text flag. |
+| `is_empty()`, `is_string()`, `is_number()`, `is_bool()`, `is_error()`, `is_date()`, `has_formula()` | Kind tests. A formula without a cached value is an empty cell with `formula` set. |
+| `display()` | Text as shown: numbers in shortest round-trip form, `TRUE` / `FALSE`, dates as `YYYY-MM-DD`, `HH:MM:SS` or `YYYY-MM-DD HH:MM:SS`. Number formats other than dates are not applied. |
+| `as_float()`, `as_int()`, `as_bool()` | Lenient conversions (strings are parsed, `as_int` truncates). |
+| `as_date()` → `XlsxDate`, `as_datetime()` → `DateTime` | Date parts (the DateTime holds the wall-clock fields, tagged UTC). |
+
+| `Worksheet` | Description |
+|---|---|
+| `name`, `state`, `is_hidden()`, `dimension`, `freeze_rows`, `freeze_cols`, `auto_filter`, `merged`, `links`, `columns`, `row_info` | Sheet properties as read or set. |
+| `cell(ref)`, `cell_at(row, col)`, `has_cell(row, col)` | Look up a cell (an empty `Cell` when unset or the reference is invalid). |
+| `set_str / set_int / set_float / set_bool / set_error / set_formula(ref, v)?`, `set_date(ref, y, m, d)?`, `set_datetime(ref, dt)?` | Set by reference; each also has an `_at(row, col, ...)` form (plus `set_date_serial_at`). Non-finite floats become `#NUM!`. |
+| `set_style(ref, st)?`, `set_style_at`, `set_range_style(range, st)?`, `style_of(ref)`, `number_format(ref)` | Styles (stored per sheet, deduplicated). |
+| `rich_runs(ref)` → `List[TextRun]` | Runs of a rich-text string (`text`, `bold`, `italic`, `underline`, `strike`, `color`, `font`, `size`). |
+| `merge(range)?`, `merged_ranges()`, `merged_range_at(row, col)` | Merged cells (overlaps are rejected). |
+| `set_column_width(col, w)`, `set_columns_width(c1, c2, w)`, `column_width(col)`, `column_hidden(col)` | Widths in characters (0.0 = default). |
+| `set_row_height(row, h)`, `row_height(row)`, `row_hidden(row)` | Heights in points. |
+| `freeze_panes(ref)?`, `set_auto_filter(range)?`, `add_link(ref, url)?`, `add_internal_link(ref, "Sheet2!A1")?`, `link_at(ref)` | Views, filter, hyperlinks. |
+| `max_row()`, `max_col()`, `min_row()`, `min_col()`, `used_range()`, `cell_count()` | Extent of cells holding a value or formula (styled empty cells do not count). |
+| `all_cells()`, `rows()`, `row_values(row)`, `values()` | Iteration: `rows()` is rows 1..`max_row()` by columns 1..`max_col()` with empty cells filled in. Bind a row to a local (`mut row = rows[i]`) before indexing or iterating it: nested `List[List[T]]` element access currently miscompiles. |
+| `to_csv()`, `to_csv_with_delimiter(d)` | RFC 4180 CSV (CRLF) of the same grid, using `display()`. |
+
+| `Workbook` | Description |
+|---|---|
+| `Workbook.init()`, `Workbook.open(path)?`, `Workbook.from_bytes(data)?` | New / read. |
+| `sheets`, `sheet_count()`, `sheet_names()`, `has_sheet(name)`, `sheet(name)?` (exact, then case-insensitive), `sheet_at(i)?` | Sheets. |
+| `add_sheet(name)?`, `remove_sheet(name)?` | Names are 1–31 characters without `: \ / ? * [ ]`, unique ignoring case. |
+| `date1904`, `active`, `title`, `creator`, `subject`, `keywords`, `description` | Workbook properties. |
+| `save(path)?`, `to_bytes()?` | Write the `.xlsx`. |
+
+`CellStyle` fields: `bold`, `italic`, `underline`, `strike`, `font_name`, `font_size`,
+`font_color`, `fill_color` (`"RRGGBB"` / `"AARRGGBB"`, `#` accepted), `num_fmt` (format code;
+codes matching a built-in format use its id), `border_left` / `right` / `top` / `bottom`
+(`"thin"`, `"medium"`, `"thick"`, `"dashed"`, `"dotted"`, `"double"`, ...) with `set_border(s)`
+for all four, `border_color`, `h_align`, `v_align`, `wrap`, `indent`; `clone()`, `key()`.
+
+Helpers: `xlsx_col_name(28)` → `"AB"`, `xlsx_col_index("AB")`, `xlsx_ref(row, col)`,
+`xlsx_abs_ref`, `xlsx_ref_row(ref)`, `xlsx_ref_col(ref)`, `xlsx_ref_valid(ref)`;
+`CellRange.parse("A1:C10")?` / `CellRange.init(r1, c1, r2, c2)` with `to_string()`,
+`to_abs_string()`, `contains(row, col)`, `overlaps(r)`, `row_count()`, `col_count()`;
+`xlsx_date_serial(y, m, d, h, mi, s, date1904)`, `XlsxDate.from_serial(serial, date1904)`,
+`xlsx_is_date_format(code)`, `xlsx_builtin_format(id)`, `xlsx_num_str(f)`,
+`xlsx_shift_formula(f, dr, dc)`, `xlsx_unescape_ooxml(s)`.
+
+### Writing
+
+The package holds `[Content_Types].xml`, `_rels/.rels`, `docProps/core.xml` and `app.xml`,
+`xl/workbook.xml` (with `_xlnm._FilterDatabase` names for auto-filters and
+`fullCalcOnLoad`, so formulas are computed on open), its rels, `styles.xml`, a shared strings
+table and one part per sheet (plus hyperlink rels). Date cells without a date format get
+`yyyy-mm-dd`, `hh:mm:ss` or `yyyy-mm-dd hh:mm:ss`. A workbook read from a file can be changed and
+saved again; values, merges, widths, links and the modelled style properties are kept.
+
+Not supported: charts, images, comments, tables, conditional formatting, data validation, pivot
+tables, defined names other than the filter database, cached values for written formulas, rich
+text on write, `.xls` / `.xlsb`, encrypted workbooks and ZIP64 archives. Theme and indexed
+colours are read as "no colour"; number formats other than dates are kept but not applied by
+`display()`.
+
+---
+
 *See `TAURARO_MASTER_SPECIFICATION.md` for the full language specification.*
+
+## Bech32 — `std.encoding.bech32`
+
+Bech32 (BIP 173) and Bech32m (BIP 350): `Bech32.encode(hrp, data)?`, `Bech32.encode_m(hrp, data)?`,
+`Bech32.encode_variant(hrp, data, variant)?`, `Bech32.decode(s)? -> Bech32Data` (`hrp` lower-cased, `data` bytes,
+`variant` = `BECH32` or `BECH32M`), `Bech32.decode_limited(s, max_len)?`. Decoding rejects mixed case, bad
+checksums and non-zero padding. There is no 90-character limit by default (age keys exceed it). Used by
+`std.crypto.age` for `age1...` / `AGE-SECRET-KEY-1...` keys.

@@ -245,7 +245,26 @@ backends — see the note above — so array-heavy firmware stays heap-free ever
 |---|---|
 | `tauraroc fmt [-w] <file>` | Format source (to stdout, or in place with `-w`). |
 | `tauraroc lint <file>` | Analyze and report warnings/errors (like `--check`). |
+| `tauraroc doc <file-or-dir>... [-o DIR] [--html]` | API documentation from source: every `pub const` / `def` / `class` (fields and `extend` methods) / `enum` / `interface` with the comment block above it and the module's leading comment. Markdown on stdout, or one page per module plus an index in `DIR` (`--html` writes HTML, default `docs/api`). |
+| `tauraroc cov <file> [--lcov FILE] [--include-std] [options]` | Build with coverage instrumentation, run, and print per-file line coverage with the missed lines; `--lcov` also writes an LCOV tracefile (for genhtml, Codecov, editors). `std/` modules are left out unless `--include-std`. |
 | `tauraroc --version` | Print the compiler version. |
+
+### Coverage
+
+`--coverage` builds with the C compiler's gcov instrumentation at `-O0` and emits `#line` directives,
+so gcov reports `.tr` line numbers; `tauraroc cov` adds the run and the report:
+
+```text
+$ tauraroc cov app.tr --lcov coverage.info
+...program output...
+
+File       Lines   Hit  Cover  Missing
+app.tr        12     8  66.7%  3, 9-11
+TOTAL         12     8  66.7%
+```
+
+Requires `gcov` (GCC) or `llvm-cov gcov` (clang). Whether a line ran is exact; execution counts can
+include a loop's condition re-check on the line after it.
 
 ---
 
@@ -295,6 +314,30 @@ tauraroc app.tr --backend llvm -o app.ll # textual LLVM IR
 ```
 
 ---
+
+## Build speed
+
+Tauraro's front end (parse, type-check, emit C) takes a fraction of a second; almost all of a
+build is the C compiler. The driver is built around that:
+
+| What | How it helps |
+|------|--------------|
+| **Parallel C compile** | The generated modules and the C/C++ shims (TLS, crypto, ...) compile on a worker pool. A cold build of a program that pulls in HTTP + TLS + crypto went from ~18 s serial to ~7 s on 8 cores. Output is replayed in module order so diagnostics stay deterministic. |
+| **Per-module object cache** | `build/` keeps each module's `.o`. Editing a function body rebuilds in ~0.6 s; only changed modules recompile. (Changing a class or other shared type regenerates the shared header and rebuilds every module.) |
+| **Precompiled header** | With gcc on Linux/macOS-gcc the shared runtime header is precompiled once per build directory and reused by every module (~5-13% faster). Falls back automatically if it cannot be built. |
+| **`--dev`** | Fast-iteration profile: `-O1` unless you pass an explicit `-O` level, ~30% less C-compile time than `-O2` (a cold build of the program above: ~4 s). Use `-O2`/`-O3` for release builds. |
+
+Environment variables:
+
+* `TAURARO_JOBS=N` -- worker count for the C compile pool. Default: CPU count, capped at 16.
+  `TAURARO_JOBS=1` forces a serial build (handy for readable logs or very small CI runners).
+* `TAURARO_NO_PCH=1` -- do not use a precompiled header.
+
+```sh
+tauraroc app.tr --dev --run          # quickest edit-compile-run loop
+tauraroc app.tr -O3 -o app           # release build
+TAURARO_JOBS=4 tauraroc app.tr       # limit parallelism
+```
 
 ## Troubleshooting
 

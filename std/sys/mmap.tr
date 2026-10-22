@@ -1,0 +1,127 @@
+# std.sys.mmap -- memory-mapped files and anonymous memory.
+#
+# A `MemoryMap` gives byte-level access to a file's contents without reading
+# it into a string first; writes to a MAP_READ_WRITE map go straight to the
+# file (call flush() to force them to disk). MAP_COPY_ON_WRITE maps are private:
+# writes are visible only to this process. Anonymous maps are zero-filled
+# scratch memory. Offsets are bounds-checked; out-of-range access raises.
+#
+# 64-bit atomics (atomic_add / atomic_cas / ...) work at 8-byte aligned
+# offsets and are meant for maps shared between processes (std.sys.shm).
+#
+# Usage:
+#   from std.sys.mmap import MemoryMap, MAP_READ, MAP_READ_WRITE
+#   mut m = MemoryMap.open("data.bin", MAP_READ)?
+#   mut header = m.read(0, 16)?
+#   mut at = m.find("needle", 0)
+#   m.close()
+
+from std.sys.ipc import trc_mmap_file, trc_mmap_anon, trc_map_len, trc_map_writable, trc_map_read, trc_map_write, trc_map_find
+from std.sys.ipc import trc_map_atomic_load, trc_map_atomic_store, trc_map_atomic_add, trc_map_atomic_cas, trc_map_flush, trc_map_close
+from std.sys.ipc import _ipc_error, _ipc_cstr, _ipc_null
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free
+
+pub const MAP_READ = 0
+pub const MAP_READ_WRITE = 1
+pub const MAP_COPY_ON_WRITE = 2
+
+pub class MemoryMap:
+    _h: Pointer[char]
+    pub size: int
+
+extend MemoryMap:
+    pub def _wrap(h: Pointer[char]) -> MemoryMap:
+        mut m = MemoryMap()
+        m._h = h
+        m.size = trc_map_len(h)
+        return m
+
+    # Map a whole file (it must exist and be non-empty).
+    pub def open(path: str, mode: int) throws str -> MemoryMap:
+        return MemoryMap.open_range(path, mode, 0, 0)?
+
+    # Map `length` bytes starting at `offset` (length 0 = to the end).
+    pub def open_range(path: str, mode: int, offset: int, length: int) throws str -> MemoryMap:
+        if mode < 0 or mode > 2: raise("mmap: mode must be MAP_READ, MAP_READ_WRITE or MAP_COPY_ON_WRITE")
+        mut p = _ipc_cstr(path)
+        mut pp = p as Pointer[char]
+        mut h = trc_mmap_file(pp, mode, offset, length)
+        if _ipc_null(h):
+            mut e = _ipc_error()
+            raise(e)
+        return MemoryMap._wrap(h)
+
+    # Zero-filled private memory of `size` bytes.
+    pub def anonymous(size: int) throws str -> MemoryMap:
+        mut h = trc_mmap_anon(size)
+        if _ipc_null(h):
+            mut e = _ipc_error()
+            raise(e)
+        return MemoryMap._wrap(h)
+
+    pub def len(self) -> int: return self.size
+    pub def is_writable(self) -> bool: return trc_map_writable(self._h) == 1
+
+    # `n` bytes at `offset` (binary-safe copy).
+    pub def read(self, offset: int, n: int) throws str -> str:
+        if n < 0 or offset < 0 or offset + n > self.size: raise("mmap: read outside the mapping")
+        mut out = _cn_alloc(n)
+        trc_map_read(self._h, offset, out, n)
+        return _cn_take(out, n)
+
+    # The whole mapping as a string.
+    pub def read_all(self) -> str:
+        mut out = _cn_alloc(self.size)
+        trc_map_read(self._h, 0, out, self.size)
+        return _cn_take(out, self.size)
+
+    pub def write(self, offset: int, data: str) throws str:
+        mut dp = data as Pointer[char]
+        if trc_map_write(self._h, offset, dp, data.len()) < 0:
+            mut e = _ipc_error()
+            raise(e)
+
+    # Byte value 0..255 at `i`, or -1 when out of range.
+    pub def byte_at(self, i: int) -> int:
+        if i < 0 or i >= self.size: return -1
+        mut out = _cn_alloc(1)
+        trc_map_read(self._h, i, out, 1)
+        mut v = 0
+        unsafe: v = (out.read() as int) & 255
+        _cn_free(out)
+        return v
+
+    pub def set_byte(self, i: int, v: int) throws str:
+        mut b = _cn_alloc(1)
+        unsafe: b.write((v & 255) as char)
+        mut r = trc_map_write(self._h, i, b, 1)
+        _cn_free(b)
+        if r < 0:
+            mut e = _ipc_error()
+            raise(e)
+
+    # First offset >= `start` where `needle` occurs, or -1.
+    pub def find(self, needle: str, start: int) -> int:
+        mut np = needle as Pointer[char]
+        return trc_map_find(self._h, np, needle.len(), start)
+
+    # Atomic 64-bit operations at an 8-byte aligned offset.
+    pub def atomic_load(self, offset: int) -> int: return trc_map_atomic_load(self._h, offset)
+    pub def atomic_store(self, offset: int, v: int): trc_map_atomic_store(self._h, offset, v)
+    # Adds `v` and returns the previous value.
+    pub def atomic_add(self, offset: int, v: int) -> int: return trc_map_atomic_add(self._h, offset, v)
+    # Sets `desired` if the slot holds `expect`; true on success.
+    pub def atomic_cas(self, offset: int, expect: int, desired: int) -> bool:
+        return trc_map_atomic_cas(self._h, offset, expect, desired) == 1
+
+    # Write dirty pages of a file mapping back to disk.
+    pub def flush(self) throws str:
+        if trc_map_flush(self._h) < 0:
+            mut e = _ipc_error()
+            raise(e)
+
+    pub def close(self):
+        if not _ipc_null(self._h):
+            trc_map_close(self._h)
+            self._h = 0 as Pointer[char]
+            self.size = 0

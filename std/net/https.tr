@@ -1,13 +1,11 @@
-# std.net.https — TLS/HTTPS client built on OpenSSL.
+# std.net.https — HTTPS client with certificate verification.
 #
-# Works out of the box: the runtime loads the system's OpenSSL shared
-# library (libssl/libcrypto) via dlopen/LoadLibrary at first use -- no
-# -DTAURARO_TLS_OPENSSL, no -lssl/-lcrypto, no OpenSSL dev headers needed
-# to build. If no OpenSSL library is found on the host at runtime, methods
-# degrade to a safe stub response (status=0) instead of crashing.
-#
-# (Opt-out: build the runtime with -DTAURARO_TLS_OPENSSL_STATIC -lssl
-# -lcrypto for a conventional compile-time-linked OpenSSL instead.)
+# Requests go over std.net.tls, the built-in TLS 1.3 client: the server's
+# certificate chain and host name are verified against the system trust store
+# (no OpenSSL needed). set_verify(false) disables verification for testing;
+# set_ca_pem() adds private roots. Each request uses a fresh connection and
+# reads the whole response (HTTP/1.0). For redirects, cookies, chunked bodies
+# and streaming use std.net.client's HttpSession.
 #
 # Usage:
 #   from std.net.https import HttpsClient
@@ -20,17 +18,15 @@ from std.net.http import HttpClientResponse
 from std.string.str import Str
 from std.string.fmt import Fmt
 from std.core.map import Map
+from std.net.tls import TlsStream, TlsOptions
 
-extern "C":
-    def _tr_tls_connect(host: str, port: int) -> Pointer[char]
-    def _tr_tls_send(handle: Pointer[char], data: str) -> int
-    def _tr_tls_recv(handle: Pointer[char], cap: int) -> str
-    def _tr_tls_close(handle: Pointer[char])
 
 pub class HttpsClient:
     pub host:     str
     pub port:     int
     pub timeout:  int
+    pub verify:   bool
+    pub ca_pem:   str
     pub _headers: Map[str, str]
 
 extend HttpsClient:
@@ -39,6 +35,8 @@ extend HttpsClient:
         c.host      = host
         c.port      = port
         c.timeout   = 10000
+        c.verify    = true
+        c.ca_pem    = ""
         c._headers  = Map[str, str].init(16)
         return c
 
@@ -48,6 +46,14 @@ extend HttpsClient:
 
     pub def set_timeout(self, ms: int):
         self.timeout = ms
+
+    # Turn certificate verification off (testing only) or back on.
+    pub def set_verify(self, v: bool):
+        self.verify = v
+
+    # Trust these PEM roots in addition to the system store.
+    pub def set_ca_pem(self, pem: str):
+        self.ca_pem = pem
 
     def _build_headers(self) -> str:
         mut sb = StringBuilder.init(256)
@@ -126,15 +132,28 @@ extend HttpsClient:
 
     # Send req over a fresh TLS connection and parse the response. Consumes (frees) `req`.
     def _do_request(self, req: str) -> HttpClientResponse:
-        mut conn = _tr_tls_connect(self.host, self.port)
-        if conn as int == 0:
+        mut opts = TlsOptions.default()
+        opts.verify = self.verify
+        opts.timeout_ms = self.timeout
+        opts.ca_pem = self.ca_pem
+        mut cr: Result[TlsStream, str] = TlsStream.connect_with(self.host, self.port, opts)
+        if cr.is_err:
             unsafe: _tr_c_free(req as Pointer[char])
-            return HttpClientResponse.init(0, "tls connect failed")
-        _tr_tls_send(conn, req)
+            return HttpClientResponse.init(0, cr.err)
+        mut conn = cr.ok
+        mut wr: Result[bool, str] = HttpsClient._send(conn, req)
         unsafe: _tr_c_free(req as Pointer[char])
-        mut raw = _tr_tls_recv(conn, 131072)
-        _tr_tls_close(conn)
-        return HttpsClient._parse_response(raw)
+        if wr.is_err:
+            conn.close()
+            return HttpClientResponse.init(0, wr.err)
+        mut rr: Result[str, str] = conn.read_all()
+        conn.close()
+        if rr.is_err: return HttpClientResponse.init(0, rr.err)
+        return HttpsClient._parse_response(rr.ok)
+
+    def _send(conn: TlsStream, data: str) throws str -> bool:
+        conn.write(data)?
+        return true
 
     pub def get(self, path: str) -> HttpClientResponse:
         mut sb = StringBuilder.init(512)

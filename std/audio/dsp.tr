@@ -1,0 +1,169 @@
+# std.audio.dsp -- spectral analysis and filtering of AudioBuffers.
+#
+# Glue between std.audio and std.math.fft / std.math.dsp. Analysis functions
+# work on the mono mix-down; filters run on every channel independently and
+# return a new buffer (resampling stays in AudioBuffer.resample).
+#
+# Usage:
+#   from std.audio import Audio
+#   from std.audio.dsp import AudioDsp
+#   mut tone = Audio.sine(440.0, 1.0, 48000, 0.5)
+#   mut f = AudioDsp.dominant_frequency(tone)?          # ~440.0
+#   mut quiet = AudioDsp.lowpass(tone, 200.0, 0.7071)
+#   mut sg = AudioDsp.spectrogram(tone, 1024, 256, "db")?
+
+from std.audio import AudioBuffer
+from std.math.fft import rfft, rfftfreq, fft_zeros
+from std.math.dsp import hann, spectrogram, welch_window, Spectrogram, Psd, Biquad, lfilter, filtfilt, convolve
+
+extern "C":
+    def sqrt(x: float) -> float
+
+def _channel(buf: AudioBuffer, c: int) -> List[float]:
+    mut n = buf.frames()
+    mut out = fft_zeros(n)
+    mut i = 0
+    while i < n:
+        out[i] = buf.samples[i * buf.channels + c]
+        i = i + 1
+    return out
+
+def _put_channel(buf: AudioBuffer, c: int, xs: List[float]):
+    mut i = 0
+    while i < len(xs):
+        buf.samples[i * buf.channels + c] = xs[i]
+        i = i + 1
+
+pub class Spectrum:
+    pub freqs:      List[float]
+    pub magnitudes: List[float]
+
+extend Spectrum:
+    # Bin with the largest magnitude, refined by parabolic interpolation.
+    pub def peak_freq(self) -> float:
+        mut best = 1
+        mut i = 1
+        while i < len(self.magnitudes):
+            if self.magnitudes[i] > self.magnitudes[best]: best = i
+            i = i + 1
+        if len(self.magnitudes) < 3: return self.freqs[0]
+        if best <= 0 or best >= len(self.magnitudes) - 1: return self.freqs[best]
+        mut a = self.magnitudes[best - 1]
+        mut b = self.magnitudes[best]
+        mut c = self.magnitudes[best + 1]
+        mut den = a - 2.0 * b + c
+        mut off = 0.0
+        if den != 0.0: off = 0.5 * (a - c) / den
+        mut step = self.freqs[1] - self.freqs[0]
+        return self.freqs[best] + off * step
+
+pub class AudioDsp:
+    _dummy: int
+
+extend AudioDsp:
+    # Mono mix-down as a plain signal.
+    pub def mono_samples(buf: AudioBuffer) -> List[float]:
+        mut m = buf.to_mono()
+        return m.samples
+
+    # Magnitude spectrum of the whole (mono) buffer through a periodic Hann
+    # window, scaled so a full-scale sine reads ~1.0 at its frequency.
+    pub def spectrum(buf: AudioBuffer) throws str -> Spectrum:
+        mut x = AudioDsp.mono_samples(buf)
+        mut n = len(x)
+        if n < 2: raise("AudioDsp.spectrum: buffer is too short")
+        mut w = hann(n, false)
+        mut sw = 0.0
+        mut i = 0
+        while i < n:
+            x[i] = x[i] * w[i]
+            sw = sw + w[i]
+            i = i + 1
+        mut spec = rfft(x)?
+        mut s = Spectrum()
+        s.freqs = rfftfreq(n, 1.0 / (buf.sample_rate as float))
+        s.magnitudes = fft_zeros(n / 2 + 1)
+        i = 0
+        while i < n / 2 + 1:
+            mut re = spec[2 * i]
+            mut im = spec[2 * i + 1]
+            s.magnitudes[i] = 2.0 * sqrt(re * re + im * im) / sw
+            i = i + 1
+        return s
+
+    # Frequency (Hz) of the strongest component.
+    pub def dominant_frequency(buf: AudioBuffer) throws str -> float:
+        mut s = AudioDsp.spectrum(buf)?
+        return s.peak_freq()
+
+    # Spectrogram of the mono mix with a periodic Hann window of nperseg.
+    pub def spectrogram(buf: AudioBuffer, nperseg: int, hop: int, mode: str) throws str -> Spectrogram:
+        mut x = AudioDsp.mono_samples(buf)
+        return spectrogram(x, buf.sample_rate as float, hann(nperseg, false), hop, nperseg, mode)?
+
+    # Welch PSD of the mono mix (Hann, 50% overlap, density scaling).
+    pub def welch(buf: AudioBuffer, nperseg: int) throws str -> Psd:
+        mut x = AudioDsp.mono_samples(buf)
+        mut n = nperseg
+        if n > len(x): n = len(x)
+        return welch_window(x, buf.sample_rate as float, hann(n, false), n / 2, n, true, "density")?
+
+    # Run a biquad over every channel (fresh state per channel).
+    pub def biquad(buf: AudioBuffer, bq: Biquad) -> AudioBuffer:
+        mut out = buf.copy()
+        mut c = 0
+        while c < buf.channels:
+            mut y = bq.filter(_channel(buf, c))
+            _put_channel(out, c, y)
+            c = c + 1
+        return out
+
+    # Causal IIR/FIR filter b/a on every channel.
+    pub def lfilter(buf: AudioBuffer, b: List[float], a: List[float]) throws str -> AudioBuffer:
+        mut out = buf.copy()
+        mut c = 0
+        while c < buf.channels:
+            mut y = lfilter(b, a, _channel(buf, c))?
+            _put_channel(out, c, y)
+            c = c + 1
+        return out
+
+    # Zero-phase filter b/a on every channel.
+    pub def filtfilt(buf: AudioBuffer, b: List[float], a: List[float]) throws str -> AudioBuffer:
+        mut out = buf.copy()
+        mut c = 0
+        while c < buf.channels:
+            mut y = filtfilt(b, a, _channel(buf, c))?
+            _put_channel(out, c, y)
+            c = c + 1
+        return out
+
+    # FIR taps on every channel. Linear-phase FIRs delay by (len(taps)-1)/2;
+    # with compensate the output is re-aligned ("same" convolution).
+    pub def fir(buf: AudioBuffer, taps: List[float], compensate: bool) throws str -> AudioBuffer:
+        mut out = buf.copy()
+        mut n = buf.frames()
+        if n == 0: return out
+        mut c = 0
+        while c < buf.channels:
+            mut full = convolve(_channel(buf, c), taps, "full")?
+            mut start = 0
+            if compensate: start = (len(taps) - 1) / 2
+            mut y = fft_zeros(n)
+            mut i = 0
+            while i < n:
+                y[i] = full[start + i]
+                i = i + 1
+            _put_channel(out, c, y)
+            c = c + 1
+        return out
+
+    pub def lowpass(buf: AudioBuffer, cutoff: float, q: float) -> AudioBuffer:
+        return AudioDsp.biquad(buf, Biquad.lowpass(buf.sample_rate as float, cutoff, q))
+
+    pub def highpass(buf: AudioBuffer, cutoff: float, q: float) -> AudioBuffer:
+        return AudioDsp.biquad(buf, Biquad.highpass(buf.sample_rate as float, cutoff, q))
+
+    # Peaking EQ band.
+    pub def eq(buf: AudioBuffer, freq: float, q: float, gain_db: float) -> AudioBuffer:
+        return AudioDsp.biquad(buf, Biquad.peaking(buf.sample_rate as float, freq, q, gain_db))

@@ -1,0 +1,341 @@
+# tests/lang/107_http2.tr
+# std.net.http2: HPACK against RFC 7541 appendix C, Huffman, header lists,
+# and the client end to end against a small h2c server written here with raw
+# frames and the Hpack class (cleartext, prior knowledge, loopback only).
+# Live https/h2 was checked manually against nghttp2.org, Google and
+# Cloudflare, and against python-h2 for flow control / CONTINUATION / RST.
+
+from std.test import TestRunner
+from std.net.http2 import Http2Client, Http2Options, Http2Response, H2Headers, Hpack, Huffman
+from std.net.tcp import TcpStream, TcpListener
+from std.crypto.native import _cn_hex, _cn_unhex
+from std.core.string import StringBuilder
+from std.sys.time import Clock
+
+def unhex(h: str) -> str:
+    mut r: Result[str, str] = _cn_unhex(h)
+    return r.ok
+
+def hx(s: str) -> str:
+    return _cn_hex(s)
+
+def byte_at(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+# ── HPACK ────────────────────────────────────────────────────────────────────
+
+def req_headers(scheme: str, path: str, extra_name: str, extra_value: str) -> H2Headers:
+    mut h = H2Headers.init()
+    h.add(":method", "GET")
+    h.add(":scheme", scheme)
+    h.add(":path", path)
+    h.add(":authority", "www.example.com")
+    if extra_name.len() > 0: h.add(extra_name, extra_value)
+    return h
+
+def enc(e: Hpack, h: H2Headers) -> str:
+    mut r: Result[str, str] = e.encode(h)
+    if r.is_err: return "ERR"
+    return hx(r.ok)
+
+def dec(d: Hpack, hexblock: str) -> H2Headers:
+    mut r: Result[H2Headers, str] = d.decode(unhex(hexblock))
+    if r.is_err: return H2Headers.init()
+    return r.ok
+
+def test_hpack(t: TestRunner):
+    t.section("HPACK decoding (RFC 7541 C.3, no Huffman)")
+    mut d = Hpack.init(4096)
+    mut h1 = dec(d, "828684410f7777772e6578616d706c652e636f6d")
+    t.assert_eq_int(h1.len(), 4, "C.3.1 header count")
+    t.assert_eq_str(h1.get(":authority"), "www.example.com", "C.3.1 :authority")
+    t.assert_eq_int(d.table_size(), 57, "C.3.1 table size")
+    mut h2 = dec(d, "828684be58086e6f2d6361636865")
+    t.assert_eq_str(h2.get("cache-control"), "no-cache", "C.3.2 cache-control")
+    t.assert_eq_str(h2.get(":authority"), "www.example.com", "C.3.2 indexed from dynamic table")
+    t.assert_eq_int(d.table_size(), 110, "C.3.2 table size")
+    mut h3 = dec(d, "828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565")
+    t.assert_eq_str(h3.get("custom-key"), "custom-value", "C.3.3 custom header")
+    t.assert_eq_str(h3.get(":scheme"), "https", "C.3.3 :scheme")
+    t.assert_eq_int(d.table_size(), 164, "C.3.3 table size")
+    t.assert_eq_int(d.table_entries(), 3, "C.3.3 entries")
+    d.dispose()
+
+    t.section("HPACK encoding (RFC 7541 C.4, Huffman)")
+    mut e = Hpack.init(4096)
+    t.assert_eq_str(enc(e, req_headers("http", "/", "", "")), "828684418cf1e3c2e5f23a6ba0ab90f4ff", "C.4.1")
+    t.assert_eq_str(enc(e, req_headers("http", "/", "cache-control", "no-cache")), "828684be5886a8eb10649cbf", "C.4.2")
+    t.assert_eq_str(enc(e, req_headers("https", "/index.html", "custom-key", "custom-value")), "828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf", "C.4.3")
+    t.assert_eq_int(e.table_size(), 164, "encoder table size matches the RFC")
+    e.dispose()
+
+    t.section("HPACK round trips")
+    mut e2 = Hpack.init(4096)
+    mut d2 = Hpack.init(4096)
+    mut i = 0
+    mut all_ok = true
+    while i < 30:
+        mut h = H2Headers.init()
+        h.add(":status", "200")
+        h.add("content-type", "text/plain")
+        h.add("x-seq", f"{i}")
+        h.add("authorization", "Bearer secret")
+        mut r: Result[str, str] = e2.encode(h)
+        mut back: Result[H2Headers, str] = d2.decode(r.ok)
+        if back.is_err or back.ok.get("x-seq") != f"{i}" or back.ok.get("authorization") != "Bearer secret": all_ok = false
+        i = i + 1
+    t.assert_true(all_ok, "30 blocks through a shared encoder/decoder pair")
+    e2.set_max_table(0)
+    mut z = H2Headers.init()
+    z.add("x-after", "shrink")
+    mut zr: Result[str, str] = e2.encode(z)
+    t.assert_eq_int(byte_at(zr.ok, 0), 32, "size update to 0 is announced first")
+    mut zb: Result[H2Headers, str] = d2.decode(zr.ok)
+    t.assert_eq_str(zb.ok.get("x-after"), "shrink", "decoder applies the size update")
+    t.assert_eq_int(d2.table_entries(), 0, "decoder table emptied")
+    mut bad: Result[H2Headers, str] = d2.decode(unhex("ff"))
+    t.assert_true(bad.is_err, "truncated integer rejected")
+    mut badidx: Result[H2Headers, str] = d2.decode(unhex("bf"))
+    t.assert_true(badidx.is_err, "index past the tables rejected")
+
+    t.section("Huffman (RFC 7541 C.4.1)")
+    t.assert_eq_str(hx(Huffman.encode("www.example.com")), "f1e3c2e5f23a6ba0ab90f4ff", "encode")
+    mut hd: Result[str, str] = Huffman.decode(unhex("f1e3c2e5f23a6ba0ab90f4ff"))
+    t.assert_eq_str(hd.ok, "www.example.com", "decode")
+    mut hbad: Result[str, str] = Huffman.decode(unhex("f1e3c2e5f23a6ba0ab90f400"))
+    t.assert_true(hbad.is_err, "bad padding rejected")
+
+    t.section("H2Headers")
+    mut hh = H2Headers.init()
+    hh.add("Content-Type", "a")
+    hh.add("x", "1")
+    hh.set("content-type", "b")
+    t.assert_eq_str(hh.get("CONTENT-TYPE"), "b", "case-insensitive get after set")
+    t.assert_eq_int(hh.len(), 2, "set replaced instead of adding")
+    mut rt = H2Headers.from_blob(hh.to_blob())
+    t.assert_eq_str(rt.get("x"), "1", "blob round trip")
+
+# ── loopback h2c server ──────────────────────────────────────────────────────
+
+extern "C":
+    def _tr_tcp_send_raw(fd: int, buf: Pointer[char], len: int) -> int
+
+class H2Srv implements Sendable:
+    pub port: Atomic[int]
+    pub served: Atomic[int]
+
+extend H2Srv:
+    pub def init() -> H2Srv:
+        mut s = H2Srv()
+        s.port = Atomic.new(0)
+        s.served = Atomic.new(0)
+        return s
+
+def frame(ftype: int, flags: int, sid: int, payload: str) -> str:
+    mut n = payload.len()
+    mut sb = StringBuilder.init(n + 16)
+    sb.append_char((n >> 16) & 255)
+    sb.append_char((n >> 8) & 255)
+    sb.append_char(n & 255)
+    sb.append_char(ftype)
+    sb.append_char(flags)
+    sb.append_char((sid >> 24) & 127)
+    sb.append_char((sid >> 16) & 255)
+    sb.append_char((sid >> 8) & 255)
+    sb.append_char(sid & 255)
+    sb.append(payload)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+def send_all(s: TcpStream, data: str):
+    mut p = data as Pointer[char]
+    mut off = 0
+    while off < data.len():
+        mut r = 0
+        unsafe: r = _tr_tcp_send_raw(s.fd, p.offset(off), data.len() - off)
+        if r <= 0: return
+        off = off + r
+
+class Conn:
+    pub s: TcpStream
+    pub buf: str
+    pub dec: Hpack
+    pub enc: Hpack
+
+extend Conn:
+    # Ensure at least n buffered bytes; false on EOF.
+    pub def need(self, n: int) -> bool:
+        while self.buf.len() < n:
+            mut chunk = self.s.recv(65536)
+            if chunk.len() == 0: return false
+            self.buf = self.buf + chunk
+        return true
+
+    pub def take(self, n: int) -> str:
+        mut head = self.buf.slice(0, n)
+        self.buf = self.buf.slice(n, self.buf.len())
+        return head
+
+def respond(c: Conn, sid: int, path: str, body: str):
+    # (reset first: encoding a block we do not send would desync the HPACK tables)
+    if path == "/reset":
+        send_all(c.s, frame(3, 0, sid, unhex("00000008")))
+        return
+    mut h = H2Headers.init()
+    h.add(":status", "200")
+    h.add("content-type", "text/plain")
+    h.add("x-path", path)
+    mut block: Result[str, str] = c.enc.encode(h)
+    mut payload = "echo:" + path + ":" + body
+    if path == "/trailers":
+        send_all(c.s, frame(1, 4, sid, block.ok))
+        send_all(c.s, frame(0, 0, sid, "grpc-body"))
+        mut tr = H2Headers.init()
+        tr.add("grpc-status", "0")
+        tr.add("grpc-message", "done")
+        mut tb: Result[str, str] = c.enc.encode(tr)
+        send_all(c.s, frame(1, 5, sid, tb.ok))
+        return
+    send_all(c.s, frame(1, 4, sid, block.ok))
+    # body in two DATA frames, the second with END_STREAM
+    mut half = payload.len() / 2
+    send_all(c.s, frame(0, 0, sid, payload.slice(0, half)))
+    send_all(c.s, frame(0, 1, sid, payload.slice(half, payload.len())))
+
+def srv_run(st: Shared[H2Srv]):
+    mut l = TcpListener.listen("127.0.0.1", 19870)
+    mut tries = 0
+    while not l.is_listening() and tries < 30:
+        tries = tries + 1
+        l = TcpListener.listen("127.0.0.1", 19870 + tries)
+    if not l.is_listening():
+        st.port.store(-1)
+        return
+    st.port.store(l.port)
+    mut s = l.accept()
+    mut c = Conn()
+    c.s = s
+    c.buf = ""
+    c.dec = Hpack.init(4096)
+    c.enc = Hpack.init(4096)
+    if not c.need(24):
+        l.close()
+        return
+    mut preface = c.take(24)
+    send_all(s, frame(4, 0, 0, ""))
+    mut paths: List[str] = []
+    mut sids: List[int] = []
+    mut bodies: List[str] = []
+    mut guard = Clock.now_ms() + 10000
+    while Clock.now_ms() < guard:
+        if not c.need(9): break
+        mut hdr = c.take(9)
+        mut flen = (byte_at(hdr, 0) << 16) | (byte_at(hdr, 1) << 8) | byte_at(hdr, 2)
+        mut ftype = byte_at(hdr, 3)
+        mut flags = byte_at(hdr, 4)
+        mut sid = ((byte_at(hdr, 5) & 127) << 24) | (byte_at(hdr, 6) << 16) | (byte_at(hdr, 7) << 8) | byte_at(hdr, 8)
+        if not c.need(flen): break
+        mut payload = c.take(flen)
+        if ftype == 4 and (flags & 1) == 0:
+            send_all(s, frame(4, 1, 0, ""))            # ACK the client's SETTINGS
+        elif ftype == 1:
+            mut hr: Result[H2Headers, str] = c.dec.decode(payload)
+            if hr.is_err: break
+            paths.append(hr.ok.get(":path"))
+            sids.append(sid)
+            bodies.append("")
+            if (flags & 1) != 0:
+                respond(c, sid, hr.ok.get(":path"), "")
+                st.served.add(1)
+        elif ftype == 0:
+            mut k = 0
+            while k < len(sids):
+                if sids[k] == sid:
+                    bodies[k] = bodies[k] + payload
+                    if (flags & 1) != 0:
+                        respond(c, sid, paths[k], bodies[k])
+                        st.served.add(1)
+                k = k + 1
+        elif ftype == 7:
+            break
+    send_all(s, frame(7, 0, 0, unhex("0000000000000000")))
+    s.close()
+    l.close()
+
+def test_client(t: TestRunner):
+    t.section("Http2Client against a loopback h2c server")
+    shared st = H2Srv.init()
+    mut th = Thread.spawn(srv_run, st)
+    mut waited = 0
+    while st.port.load() == 0 and waited < 3000:
+        Clock.sleep_ms(10)
+        waited = waited + 10
+    mut port = st.port.load()
+    t.assert_gt_int(port, 0, "server bound a port")
+    if port <= 0:
+        th.join()
+        return
+    mut opts = Http2Options.cleartext()
+    opts.timeout_ms = 5000
+    mut cr: Result[Http2Client, str] = Http2Client.connect_with("127.0.0.1", port, opts)
+    t.assert_true(cr.is_ok, "connected (h2c prior knowledge)")
+    if cr.is_err:
+        print(cr.err)
+        th.join()
+        return
+    mut c = cr.ok
+    mut h = H2Headers.init()
+    h.add("x-test", "1")
+    mut body = "binary" + unhex("00ff00") + "tail"
+    mut a: Result[int, str] = c.submit("GET", "/a", h, "", false)
+    mut b: Result[int, str] = c.submit("POST", "/b", h, body, true)
+    mut tr: Result[int, str] = c.submit("GET", "/trailers", h, "", false)
+    mut rs: Result[int, str] = c.submit("GET", "/reset", h, "", false)
+    t.assert_eq_int(a.ok, 1, "first stream id is 1")
+    t.assert_eq_int(b.ok, 3, "client stream ids are odd")
+    mut w: Result[bool, str] = wait_all(c)
+    t.assert_true(w.is_ok, "wait_all")
+    mut ra = c.response(a.ok)
+    t.assert_eq_int(ra.status, 200, "GET status")
+    t.assert_eq_str(ra.body, "echo:/a:", "GET body (two DATA frames)")
+    t.assert_eq_str(ra.headers.get("x-path"), "/a", "response header")
+    t.assert_true(ra.ok(), "ok()")
+    mut rb = c.response(b.ok)
+    t.assert_true(rb.body == "echo:/b:" + body, "POST body round trip (binary)")
+    mut rt = c.response(tr.ok)
+    t.assert_eq_str(rt.body, "grpc-body", "body before trailers")
+    t.assert_eq_str(rt.trailers.get("grpc-status"), "0", "trailers")
+    t.assert_eq_str(rt.trailers.get("grpc-message"), "done", "trailer message")
+    mut rr = c.response(rs.ok)
+    t.assert_eq_int(rr.status, 0, "reset stream has no status")
+    t.assert_starts_with(rr.error, "HTTP/2: stream reset", "reset reported")
+    c.release(a.ok)
+    c.release(b.ok)
+    mut one: Result[Http2Response, str] = c.get("/c")
+    t.assert_eq_str(one.ok.body, "echo:/c:", "get() convenience on the same connection")
+    t.assert_eq_int(one.ok.stream_id, 9, "next stream id")
+    c.close()
+    th.join()
+    t.assert_eq_int(st.served.load(), 5, "server answered every stream")
+
+def wait_all(c: Http2Client) throws str -> bool:
+    c.wait_all()?
+    return true
+
+def test_errors(t: TestRunner):
+    t.section("connection errors")
+    mut o = Http2Options.cleartext()
+    o.timeout_ms = 2000
+    mut r: Result[Http2Client, str] = Http2Client.connect_with("127.0.0.1", 1, o)
+    t.assert_true(r.is_err, "refused port")
+    t.assert_starts_with(r.err, "HTTP/2:", "error prefix")
+
+def main():
+    mut t = TestRunner.init("107_http2")
+    test_hpack(t)
+    test_client(t)
+    test_errors(t)
+    t.summary()

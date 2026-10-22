@@ -1,0 +1,2456 @@
+# tauraro-cpp-shim: mqtt_native.c
+#
+# std.net.mqtt -- MQTT 3.1.1 and 5.0 client, packet codec, topic matching and
+# a small embeddable broker.
+#
+# Client (`MqttClient`): CONNECT with clean start / persistent session,
+# keep-alive (PINGREQ), will message, username / password and, on MQTT 5,
+# CONNECT properties (session expiry, receive maximum, topic alias maximum,
+# maximum packet size, user properties) and reason codes on every ack.
+# PUBLISH at QoS 0 / 1 / 2 with the full PUBACK / PUBREC / PUBREL / PUBCOMP
+# flows in both directions, packet-id management, retained messages, the
+# server's receive maximum, and outgoing / incoming topic aliases (MQTT 5).
+# SUBSCRIBE with QoS and the MQTT 5 options (no-local, retain-as-published,
+# retain handling, subscription identifier), UNSUBSCRIBE, DISCONNECT with a
+# reason code. Automatic reconnect with exponential backoff resends in-flight
+# QoS 1 / 2 messages (DUP set) and PUBRELs, and re-subscribes when the
+# server lost the session. Messages arrive through a callback (`on_message`)
+# or poll-style with `next_message(timeout_ms)`.
+#
+# Transports: plain TCP (mqtt://, 1883), TLS 1.3 via std.net.tls
+# (mqtts://, 8883) and MQTT over WebSocket via std.net.websocket (ws://,
+# subprotocol "mqtt").
+#
+# Broker (`MqttBroker`): a single-threaded broker for tests and local use:
+# MQTT 3.1.1 and 5.0 clients over TCP (or WebSocket), wildcard
+# subscriptions, QoS 0 / 1 / 2 delivery within a connection, retained
+# messages, will messages, client takeover, persistent subscriptions for
+# clean_start = false sessions, optional username / password check.
+#
+# Usage:
+#   from std.net.mqtt import MqttClient, MqttOptions, MQTT_V5
+#   mut o = MqttOptions.from_url("mqtt://127.0.0.1:1883")?
+#   o.version = MQTT_V5
+#   o.client_id = "sensor-1"
+#   mut c = MqttClient.connect(o)?
+#   c.subscribe("home/+/temp", 1)?
+#   c.publish("home/kitchen/temp", "21.5", 1, true)?
+#   mut m = c.next_message(5000)?
+#   if m.valid: print(m.topic + " = " + m.payload)
+#   c.disconnect()
+
+from std.core.string import StringBuilder
+from std.net.tcp import TcpStream, TcpListener
+from std.net.tls import TlsStream, TlsOptions
+from std.net.websocket import WsConn, WsMessage, WebSocketServer, _WsRng, ws_generate_key, ws_accept_value, _header_lookup
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free
+# tauraro-cpp-shim pragma lives in std/net/udpx.tr; importing it links trc_net_recv/send.
+from std.net.udpx import unix_ms
+
+extern "C":
+    def trc_net_recv(fd: int, buf: Pointer[char], cap: int, timeout_ms: int) -> int
+    def trc_net_send(fd: int, d: Pointer[char], n: int) -> int
+    def trc_mqtt_now_ms() -> int
+    def trc_mqtt_poll(fds: Pointer[int], n: int, timeout_ms: int, ready: Pointer[int]) -> int
+    def trc_mqtt_readable(fd: int, timeout_ms: int) -> int
+    def _tr_next_seed_counter() -> int
+
+# ── Protocol constants ───────────────────────────────────────────────────────
+
+pub const MQTT_V311 = 4
+pub const MQTT_V5 = 5
+
+pub const MQTT_CONNECT = 1
+pub const MQTT_CONNACK = 2
+pub const MQTT_PUBLISH = 3
+pub const MQTT_PUBACK = 4
+pub const MQTT_PUBREC = 5
+pub const MQTT_PUBREL = 6
+pub const MQTT_PUBCOMP = 7
+pub const MQTT_SUBSCRIBE = 8
+pub const MQTT_SUBACK = 9
+pub const MQTT_UNSUBSCRIBE = 10
+pub const MQTT_UNSUBACK = 11
+pub const MQTT_PINGREQ = 12
+pub const MQTT_PINGRESP = 13
+pub const MQTT_DISCONNECT = 14
+pub const MQTT_AUTH = 15
+
+# Retain handling (MQTT 5 subscription option).
+pub const MQTT_RH_SEND = 0           # send retained messages on subscribe
+pub const MQTT_RH_SEND_IF_NEW = 1    # only if the subscription did not exist
+pub const MQTT_RH_NEVER = 2          # never send retained messages on subscribe
+
+pub def mqtt_packet_name(t: int) -> str:
+    if t == MQTT_CONNECT: return "CONNECT"
+    if t == MQTT_CONNACK: return "CONNACK"
+    if t == MQTT_PUBLISH: return "PUBLISH"
+    if t == MQTT_PUBACK: return "PUBACK"
+    if t == MQTT_PUBREC: return "PUBREC"
+    if t == MQTT_PUBREL: return "PUBREL"
+    if t == MQTT_PUBCOMP: return "PUBCOMP"
+    if t == MQTT_SUBSCRIBE: return "SUBSCRIBE"
+    if t == MQTT_SUBACK: return "SUBACK"
+    if t == MQTT_UNSUBSCRIBE: return "UNSUBSCRIBE"
+    if t == MQTT_UNSUBACK: return "UNSUBACK"
+    if t == MQTT_PINGREQ: return "PINGREQ"
+    if t == MQTT_PINGRESP: return "PINGRESP"
+    if t == MQTT_DISCONNECT: return "DISCONNECT"
+    if t == MQTT_AUTH: return "AUTH"
+    return f"TYPE{t}"
+
+# MQTT 5 reason code names (OASIS MQTT 5.0 section 2.4).
+pub def mqtt_reason_name(code: int) -> str:
+    if code == 0x00: return "Success"
+    if code == 0x01: return "Granted QoS 1"
+    if code == 0x02: return "Granted QoS 2"
+    if code == 0x04: return "Disconnect with Will Message"
+    if code == 0x10: return "No matching subscribers"
+    if code == 0x11: return "No subscription existed"
+    if code == 0x18: return "Continue authentication"
+    if code == 0x19: return "Re-authenticate"
+    if code == 0x80: return "Unspecified error"
+    if code == 0x81: return "Malformed Packet"
+    if code == 0x82: return "Protocol Error"
+    if code == 0x83: return "Implementation specific error"
+    if code == 0x84: return "Unsupported Protocol Version"
+    if code == 0x85: return "Client Identifier not valid"
+    if code == 0x86: return "Bad User Name or Password"
+    if code == 0x87: return "Not authorized"
+    if code == 0x88: return "Server unavailable"
+    if code == 0x89: return "Server busy"
+    if code == 0x8A: return "Banned"
+    if code == 0x8B: return "Server shutting down"
+    if code == 0x8C: return "Bad authentication method"
+    if code == 0x8D: return "Keep Alive timeout"
+    if code == 0x8E: return "Session taken over"
+    if code == 0x8F: return "Topic Filter invalid"
+    if code == 0x90: return "Topic Name invalid"
+    if code == 0x91: return "Packet Identifier in use"
+    if code == 0x92: return "Packet Identifier not found"
+    if code == 0x93: return "Receive Maximum exceeded"
+    if code == 0x94: return "Topic Alias invalid"
+    if code == 0x95: return "Packet too large"
+    if code == 0x96: return "Message rate too high"
+    if code == 0x97: return "Quota exceeded"
+    if code == 0x98: return "Administrative action"
+    if code == 0x99: return "Payload format invalid"
+    if code == 0x9A: return "Retain not supported"
+    if code == 0x9B: return "QoS not supported"
+    if code == 0x9C: return "Use another server"
+    if code == 0x9D: return "Server moved"
+    if code == 0x9E: return "Shared Subscriptions not supported"
+    if code == 0x9F: return "Connection rate exceeded"
+    if code == 0xA0: return "Maximum connect time"
+    if code == 0xA1: return "Subscription Identifiers not supported"
+    if code == 0xA2: return "Wildcard Subscriptions not supported"
+    return f"reason 0x{_mq_hex2(code)}"
+
+# MQTT 3.1.1 CONNACK return codes (section 3.2.2.3).
+pub def mqtt_connack_v3_name(code: int) -> str:
+    if code == 0: return "Connection Accepted"
+    if code == 1: return "unacceptable protocol version"
+    if code == 2: return "identifier rejected"
+    if code == 3: return "server unavailable"
+    if code == 4: return "bad user name or password"
+    if code == 5: return "not authorized"
+    return f"return code {code}"
+
+def _mq_hex2(v: int) -> str:
+    mut d = "0123456789ABCDEF"
+    mut hi = (v >> 4) & 15
+    mut lo = v & 15
+    return d.slice(hi, hi + 1) + d.slice(lo, lo + 1)
+
+# Subscription options byte: QoS | no-local | retain-as-published | retain handling.
+pub def mqtt_sub_options(qos: int, no_local: bool, retain_as_published: bool, retain_handling: int) -> int:
+    mut o = qos & 3
+    if no_local: o = o | 4
+    if retain_as_published: o = o | 8
+    o = o | ((retain_handling & 3) << 4)
+    return o
+
+# ── Topic names and filters ─────────────────────────────────────────────────
+
+# True when `topic` (a topic name) matches `filter` (which may contain the
+# single-level wildcard "+" and the multi-level wildcard "#"). Topics that
+# start with "$" (e.g. "$SYS/...") are not matched by a filter whose first
+# level is a wildcard (MQTT section 4.7.2).
+pub def mqtt_topic_matches(filter: str, topic: str) -> bool:
+    if filter.len() == 0 or topic.len() == 0: return false
+    mut fl = filter.split_exact("/")
+    mut tl = topic.split_exact("/")
+    if topic.starts_with("$"):
+        if fl[0] == "+" or fl[0] == "#": return false
+    mut i = 0
+    while i < len(fl):
+        mut f = fl[i]
+        if f == "#": return i == len(fl) - 1
+        if i >= len(tl): return false
+        if f != "+" and f != tl[i]: return false
+        i = i + 1
+    return i == len(tl)
+
+# A valid topic filter: non-empty, "#" only as the whole last level, "+" only
+# as a whole level, no NUL byte.
+pub def mqtt_valid_filter(filter: str) -> bool:
+    if filter.len() == 0 or filter.len() > 65535: return false
+    if filter.find("\x00") >= 0: return false
+    mut fl = filter.split_exact("/")
+    mut i = 0
+    while i < len(fl):
+        mut f = fl[i]
+        if f.find("#") >= 0:
+            if f != "#" or i != len(fl) - 1: return false
+        if f.find("+") >= 0 and f != "+": return false
+        i = i + 1
+    return true
+
+# A valid topic name for PUBLISH: non-empty, no wildcards, no NUL byte.
+pub def mqtt_valid_topic(topic: str) -> bool:
+    if topic.len() == 0 or topic.len() > 65535: return false
+    if topic.find("+") >= 0 or topic.find("#") >= 0: return false
+    if topic.find("\x00") >= 0: return false
+    return true
+
+# ── Byte helpers ─────────────────────────────────────────────────────────────
+
+def _mq_b(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return (p.offset(i).read() as int) & 255
+
+def _mq_put16(sb: StringBuilder, v: int):
+    sb.append_char((v >> 8) & 255)
+    sb.append_char(v & 255)
+
+def _mq_put32(sb: StringBuilder, v: int):
+    sb.append_char((v >> 24) & 255)
+    sb.append_char((v >> 16) & 255)
+    sb.append_char((v >> 8) & 255)
+    sb.append_char(v & 255)
+
+# Length-prefixed string / binary data.
+def _mq_put_str(sb: StringBuilder, s: str):
+    _mq_put16(sb, s.len())
+    sb.append(s)
+
+# Variable Byte Integer (1-4 bytes, 7 bits each, low group first).
+pub def _mq_put_varint(sb: StringBuilder, v: int):
+    mut x = v
+    while true:
+        mut b = x & 127
+        x = x >> 7
+        if x > 0: b = b | 128
+        sb.append_char(b)
+        if x == 0: break
+
+pub def mqtt_encode_varint(v: int) -> str:
+    mut sb = StringBuilder.init(8)
+    _mq_put_varint(sb, v)
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# Total length (fixed header + body) of the first packet in `buf`: 0 when
+# more bytes are needed, -1 when the remaining-length field is malformed.
+pub def mqtt_frame_len(buf: str) -> int:
+    mut n = buf.len()
+    if n < 2: return 0
+    mut mult = 1
+    mut val = 0
+    mut i = 1
+    while true:
+        if i >= n: return 0
+        if i > 4: return -1
+        mut b = _mq_b(buf, i)
+        val = val + (b & 127) * mult
+        mult = mult * 128
+        i = i + 1
+        if (b & 128) == 0: break
+    mut total = i + val
+    if n < total: return 0
+    return total
+
+# Cursor over a packet body; every read raises on truncation.
+pub class _MqRd:
+    pub s: str
+    pub pos: int
+    pub end: int
+
+extend _MqRd:
+    pub def init(s: str, pos: int, end: int) -> _MqRd:
+        mut r = _MqRd()
+        r.s = s
+        r.pos = pos
+        r.end = end
+        return r
+
+    pub def left(self) -> int: return self.end - self.pos
+
+    pub def u8(self) throws str -> int:
+        if self.pos + 1 > self.end: raise("MQTT: malformed packet (truncated)")
+        mut v = _mq_b(self.s, self.pos)
+        self.pos = self.pos + 1
+        return v
+
+    pub def u16(self) throws str -> int:
+        if self.pos + 2 > self.end: raise("MQTT: malformed packet (truncated)")
+        mut v = (_mq_b(self.s, self.pos) << 8) | _mq_b(self.s, self.pos + 1)
+        self.pos = self.pos + 2
+        return v
+
+    pub def u32(self) throws str -> int:
+        mut hi = self.u16()?
+        mut lo = self.u16()?
+        return (hi << 16) | lo
+
+    pub def varint(self) throws str -> int:
+        mut mult = 1
+        mut val = 0
+        mut k = 0
+        while true:
+            if k >= 4: raise("MQTT: malformed variable byte integer")
+            mut b = self.u8()?
+            val = val + (b & 127) * mult
+            mult = mult * 128
+            k = k + 1
+            if (b & 128) == 0: break
+        return val
+
+    pub def bytes(self, n: int) throws str -> str:
+        if n < 0 or self.pos + n > self.end: raise("MQTT: malformed packet (truncated)")
+        mut out = self.s.slice(self.pos, self.pos + n)
+        self.pos = self.pos + n
+        return out
+
+    # Two-byte length + data (UTF-8 string or binary data).
+    pub def lstr(self) throws str -> str:
+        mut n = self.u16()?
+        return self.bytes(n)?
+
+    pub def rest(self) -> str:
+        mut out = self.s.slice(self.pos, self.end)
+        self.pos = self.end
+        return out
+
+# ── MQTT 5 properties ───────────────────────────────────────────────────────
+
+# Integer properties are -1 and string properties "" when absent.
+pub class MqttProps:
+    pub payload_format: int           # 0x01 (0 = bytes, 1 = UTF-8)
+    pub message_expiry: int           # 0x02 seconds
+    pub content_type: str             # 0x03
+    pub response_topic: str           # 0x08
+    pub correlation_data: str         # 0x09
+    pub subscription_ids: List[int]   # 0x0B
+    pub session_expiry: int           # 0x11 seconds
+    pub assigned_client_id: str       # 0x12
+    pub server_keep_alive: int        # 0x13 seconds
+    pub auth_method: str              # 0x15
+    pub auth_data: str                # 0x16
+    pub request_problem_info: int     # 0x17
+    pub will_delay: int               # 0x18 seconds
+    pub request_response_info: int    # 0x19
+    pub response_info: str            # 0x1A
+    pub server_reference: str         # 0x1C
+    pub reason_string: str            # 0x1F
+    pub receive_maximum: int          # 0x21
+    pub topic_alias_max: int          # 0x22
+    pub topic_alias: int              # 0x23
+    pub maximum_qos: int              # 0x24
+    pub retain_available: int         # 0x25
+    pub user_keys: List[str]          # 0x26 (pairs, in order)
+    pub user_values: List[str]
+    pub max_packet_size: int          # 0x27
+    pub wildcard_sub_available: int   # 0x28
+    pub sub_id_available: int         # 0x29
+    pub shared_sub_available: int     # 0x2A
+
+extend MqttProps:
+    pub def new() -> MqttProps:
+        mut p = MqttProps()
+        p.payload_format = -1
+        p.message_expiry = -1
+        p.content_type = ""
+        p.response_topic = ""
+        p.correlation_data = ""
+        p.subscription_ids = []
+        p.session_expiry = -1
+        p.assigned_client_id = ""
+        p.server_keep_alive = -1
+        p.auth_method = ""
+        p.auth_data = ""
+        p.request_problem_info = -1
+        p.will_delay = -1
+        p.request_response_info = -1
+        p.response_info = ""
+        p.server_reference = ""
+        p.reason_string = ""
+        p.receive_maximum = -1
+        p.topic_alias_max = -1
+        p.topic_alias = -1
+        p.maximum_qos = -1
+        p.retain_available = -1
+        p.user_keys = []
+        p.user_values = []
+        p.max_packet_size = -1
+        p.wildcard_sub_available = -1
+        p.sub_id_available = -1
+        p.shared_sub_available = -1
+        return p
+
+    # Add a user property (name, value); names may repeat.
+    pub def add_user(self, key: str, value: str):
+        self.user_keys.append(key)
+        self.user_values.append(value)
+
+    # First user property named `key`, or "".
+    pub def user(self, key: str) -> str:
+        mut i = 0
+        while i < len(self.user_keys):
+            if self.user_keys[i] == key: return self.user_values[i]
+            i = i + 1
+        return ""
+
+    # The application-message properties a server forwards with a PUBLISH.
+    pub def message_copy(self) -> MqttProps:
+        mut p = MqttProps.new()
+        p.payload_format = self.payload_format
+        p.message_expiry = self.message_expiry
+        p.content_type = self.content_type
+        p.response_topic = self.response_topic
+        p.correlation_data = self.correlation_data
+        mut i = 0
+        while i < len(self.user_keys):
+            p.add_user(self.user_keys[i], self.user_values[i])
+            i = i + 1
+        return p
+
+    # Encoded property block (length prefix + properties).
+    pub def encode(self) -> str:
+        mut sb = StringBuilder.init(32)
+        if self.payload_format >= 0:
+            sb.append_char(0x01)
+            sb.append_char(self.payload_format)
+        if self.message_expiry >= 0:
+            sb.append_char(0x02)
+            _mq_put32(sb, self.message_expiry)
+        if self.content_type.len() > 0:
+            sb.append_char(0x03)
+            _mq_put_str(sb, self.content_type)
+        if self.response_topic.len() > 0:
+            sb.append_char(0x08)
+            _mq_put_str(sb, self.response_topic)
+        if self.correlation_data.len() > 0:
+            sb.append_char(0x09)
+            _mq_put_str(sb, self.correlation_data)
+        mut i = 0
+        while i < len(self.subscription_ids):
+            sb.append_char(0x0B)
+            _mq_put_varint(sb, self.subscription_ids[i])
+            i = i + 1
+        if self.session_expiry >= 0:
+            sb.append_char(0x11)
+            _mq_put32(sb, self.session_expiry)
+        if self.assigned_client_id.len() > 0:
+            sb.append_char(0x12)
+            _mq_put_str(sb, self.assigned_client_id)
+        if self.server_keep_alive >= 0:
+            sb.append_char(0x13)
+            _mq_put16(sb, self.server_keep_alive)
+        if self.auth_method.len() > 0:
+            sb.append_char(0x15)
+            _mq_put_str(sb, self.auth_method)
+        if self.auth_data.len() > 0:
+            sb.append_char(0x16)
+            _mq_put_str(sb, self.auth_data)
+        if self.request_problem_info >= 0:
+            sb.append_char(0x17)
+            sb.append_char(self.request_problem_info)
+        if self.will_delay >= 0:
+            sb.append_char(0x18)
+            _mq_put32(sb, self.will_delay)
+        if self.request_response_info >= 0:
+            sb.append_char(0x19)
+            sb.append_char(self.request_response_info)
+        if self.response_info.len() > 0:
+            sb.append_char(0x1A)
+            _mq_put_str(sb, self.response_info)
+        if self.server_reference.len() > 0:
+            sb.append_char(0x1C)
+            _mq_put_str(sb, self.server_reference)
+        if self.reason_string.len() > 0:
+            sb.append_char(0x1F)
+            _mq_put_str(sb, self.reason_string)
+        if self.receive_maximum >= 0:
+            sb.append_char(0x21)
+            _mq_put16(sb, self.receive_maximum)
+        if self.topic_alias_max >= 0:
+            sb.append_char(0x22)
+            _mq_put16(sb, self.topic_alias_max)
+        if self.topic_alias >= 0:
+            sb.append_char(0x23)
+            _mq_put16(sb, self.topic_alias)
+        if self.maximum_qos >= 0:
+            sb.append_char(0x24)
+            sb.append_char(self.maximum_qos)
+        if self.retain_available >= 0:
+            sb.append_char(0x25)
+            sb.append_char(self.retain_available)
+        i = 0
+        while i < len(self.user_keys):
+            sb.append_char(0x26)
+            _mq_put_str(sb, self.user_keys[i])
+            _mq_put_str(sb, self.user_values[i])
+            i = i + 1
+        if self.max_packet_size >= 0:
+            sb.append_char(0x27)
+            _mq_put32(sb, self.max_packet_size)
+        if self.wildcard_sub_available >= 0:
+            sb.append_char(0x28)
+            sb.append_char(self.wildcard_sub_available)
+        if self.sub_id_available >= 0:
+            sb.append_char(0x29)
+            sb.append_char(self.sub_id_available)
+        if self.shared_sub_available >= 0:
+            sb.append_char(0x2A)
+            sb.append_char(self.shared_sub_available)
+        mut body = sb.to_owned()
+        sb.free()
+        mut out = StringBuilder.init(body.len() + 4)
+        _mq_put_varint(out, body.len())
+        out.append(body)
+        mut res = out.to_owned()
+        out.free()
+        return res
+
+    # Decode a property block (length prefix + properties) at the cursor.
+    pub def decode(r: _MqRd) throws str -> MqttProps:
+        mut p = MqttProps.new()
+        mut plen = r.varint()?
+        if plen > r.left(): raise("MQTT: malformed properties (length)")
+        mut stop = r.pos + plen
+        while r.pos < stop:
+            mut id = r.varint()?
+            if id == 0x01: p.payload_format = r.u8()?
+            elif id == 0x02: p.message_expiry = r.u32()?
+            elif id == 0x03: p.content_type = r.lstr()?
+            elif id == 0x08: p.response_topic = r.lstr()?
+            elif id == 0x09: p.correlation_data = r.lstr()?
+            elif id == 0x0B:
+                mut sid = r.varint()?
+                p.subscription_ids.append(sid)
+            elif id == 0x11: p.session_expiry = r.u32()?
+            elif id == 0x12: p.assigned_client_id = r.lstr()?
+            elif id == 0x13: p.server_keep_alive = r.u16()?
+            elif id == 0x15: p.auth_method = r.lstr()?
+            elif id == 0x16: p.auth_data = r.lstr()?
+            elif id == 0x17: p.request_problem_info = r.u8()?
+            elif id == 0x18: p.will_delay = r.u32()?
+            elif id == 0x19: p.request_response_info = r.u8()?
+            elif id == 0x1A: p.response_info = r.lstr()?
+            elif id == 0x1C: p.server_reference = r.lstr()?
+            elif id == 0x1F: p.reason_string = r.lstr()?
+            elif id == 0x21: p.receive_maximum = r.u16()?
+            elif id == 0x22: p.topic_alias_max = r.u16()?
+            elif id == 0x23: p.topic_alias = r.u16()?
+            elif id == 0x24: p.maximum_qos = r.u8()?
+            elif id == 0x25: p.retain_available = r.u8()?
+            elif id == 0x26:
+                mut k = r.lstr()?
+                mut v = r.lstr()?
+                p.add_user(k, v)
+            elif id == 0x27: p.max_packet_size = r.u32()?
+            elif id == 0x28: p.wildcard_sub_available = r.u8()?
+            elif id == 0x29: p.sub_id_available = r.u8()?
+            elif id == 0x2A: p.shared_sub_available = r.u8()?
+            else: raise(f"MQTT: unknown property identifier {id}")
+        if r.pos != stop: raise("MQTT: malformed properties (overrun)")
+        return p
+
+# ── Packets ──────────────────────────────────────────────────────────────────
+
+# One control packet, decoded or to be encoded. Only the fields relevant to
+# `ptype` are meaningful.
+pub class MqttPacket:
+    pub ptype: int
+    pub flags: int               # low nibble of the fixed header (as received)
+    pub version: int             # protocol level (4 = 3.1.1, 5 = 5.0)
+    pub packet_id: int
+    pub reason_code: int         # CONNACK / acks / DISCONNECT / AUTH (v3 CONNACK: return code)
+    pub props: MqttProps
+    # CONNECT
+    pub clean_start: bool
+    pub keep_alive: int
+    pub client_id: str
+    pub has_will: bool
+    pub will_topic: str
+    pub will_payload: str
+    pub will_qos: int
+    pub will_retain: bool
+    pub will_props: MqttProps
+    pub has_username: bool
+    pub username: str
+    pub has_password: bool
+    pub password: str
+    # CONNACK
+    pub session_present: bool
+    # PUBLISH
+    pub topic: str
+    pub payload: str
+    pub qos: int
+    pub retain: bool
+    pub dup: bool
+    # SUBSCRIBE / UNSUBSCRIBE / SUBACK / UNSUBACK
+    pub filters: List[str]
+    pub sub_options: List[int]
+    pub reason_codes: List[int]
+
+extend MqttPacket:
+    pub def new(ptype: int) -> MqttPacket:
+        mut p = MqttPacket()
+        p.ptype = ptype
+        p.flags = 0
+        p.version = MQTT_V311
+        p.packet_id = 0
+        p.reason_code = 0
+        p.props = MqttProps.new()
+        p.clean_start = true
+        p.keep_alive = 0
+        p.client_id = ""
+        p.has_will = false
+        p.will_topic = ""
+        p.will_payload = ""
+        p.will_qos = 0
+        p.will_retain = false
+        p.will_props = MqttProps.new()
+        p.has_username = false
+        p.username = ""
+        p.has_password = false
+        p.password = ""
+        p.session_present = false
+        p.topic = ""
+        p.payload = ""
+        p.qos = 0
+        p.retain = false
+        p.dup = false
+        p.filters = []
+        p.sub_options = []
+        p.reason_codes = []
+        return p
+
+    pub def publish(topic: str, payload: str, qos: int, retain: bool) -> MqttPacket:
+        mut p = MqttPacket.new(MQTT_PUBLISH)
+        p.topic = topic
+        p.payload = payload
+        p.qos = qos
+        p.retain = retain
+        return p
+
+    # PUBACK / PUBREC / PUBREL / PUBCOMP / UNSUBACK-style packet with an id.
+    pub def ack(ptype: int, packet_id: int, reason: int) -> MqttPacket:
+        mut p = MqttPacket.new(ptype)
+        p.packet_id = packet_id
+        p.reason_code = reason
+        return p
+
+    pub def name(self) -> str: return mqtt_packet_name(self.ptype)
+
+    def _has_props(p: MqttProps) -> bool:
+        mut e = p.encode()
+        return e.len() > 1
+
+    # Wire bytes for protocol `version` (CONNECT uses its own .version).
+    pub def encode(self, version: int) -> str:
+        mut v5 = version == MQTT_V5
+        mut t = self.ptype
+        mut first = t << 4
+        mut sb = StringBuilder.init(64 + self.payload.len() + self.topic.len())
+        if t == MQTT_CONNECT:
+            v5 = self.version == MQTT_V5
+            _mq_put_str(sb, "MQTT")
+            sb.append_char(self.version)
+            mut cf = 0
+            if self.has_username: cf = cf | 0x80
+            if self.has_password: cf = cf | 0x40
+            if self.has_will:
+                cf = cf | 0x04 | ((self.will_qos & 3) << 3)
+                if self.will_retain: cf = cf | 0x20
+            if self.clean_start: cf = cf | 0x02
+            sb.append_char(cf)
+            _mq_put16(sb, self.keep_alive)
+            if v5: sb.append(self.props.encode())
+            _mq_put_str(sb, self.client_id)
+            if self.has_will:
+                if v5: sb.append(self.will_props.encode())
+                _mq_put_str(sb, self.will_topic)
+                _mq_put_str(sb, self.will_payload)
+            if self.has_username: _mq_put_str(sb, self.username)
+            if self.has_password: _mq_put_str(sb, self.password)
+        elif t == MQTT_CONNACK:
+            mut ack = 0
+            if self.session_present: ack = 1
+            sb.append_char(ack)
+            sb.append_char(self.reason_code)
+            if v5: sb.append(self.props.encode())
+        elif t == MQTT_PUBLISH:
+            if self.dup: first = first | 8
+            first = first | ((self.qos & 3) << 1)
+            if self.retain: first = first | 1
+            _mq_put_str(sb, self.topic)
+            if self.qos > 0: _mq_put16(sb, self.packet_id)
+            if v5: sb.append(self.props.encode())
+            sb.append(self.payload)
+        elif t == MQTT_PUBACK or t == MQTT_PUBREC or t == MQTT_PUBREL or t == MQTT_PUBCOMP:
+            if t == MQTT_PUBREL: first = first | 2
+            _mq_put16(sb, self.packet_id)
+            if v5:
+                mut hp = MqttPacket._has_props(self.props)
+                if self.reason_code != 0 or hp: sb.append_char(self.reason_code)
+                if hp: sb.append(self.props.encode())
+        elif t == MQTT_SUBSCRIBE:
+            first = first | 2
+            _mq_put16(sb, self.packet_id)
+            if v5: sb.append(self.props.encode())
+            mut i = 0
+            while i < len(self.filters):
+                _mq_put_str(sb, self.filters[i])
+                mut o = 0
+                if i < len(self.sub_options): o = self.sub_options[i]
+                if not v5: o = o & 3
+                sb.append_char(o)
+                i = i + 1
+        elif t == MQTT_SUBACK or t == MQTT_UNSUBACK:
+            _mq_put16(sb, self.packet_id)
+            if v5: sb.append(self.props.encode())
+            if v5 or t == MQTT_SUBACK:
+                mut j = 0
+                while j < len(self.reason_codes):
+                    sb.append_char(self.reason_codes[j])
+                    j = j + 1
+        elif t == MQTT_UNSUBSCRIBE:
+            first = first | 2
+            _mq_put16(sb, self.packet_id)
+            if v5: sb.append(self.props.encode())
+            mut k = 0
+            while k < len(self.filters):
+                _mq_put_str(sb, self.filters[k])
+                k = k + 1
+        elif t == MQTT_DISCONNECT or t == MQTT_AUTH:
+            if v5:
+                mut hp2 = MqttPacket._has_props(self.props)
+                if self.reason_code != 0 or hp2 or t == MQTT_AUTH: sb.append_char(self.reason_code)
+                if hp2 or t == MQTT_AUTH: sb.append(self.props.encode())
+        # PINGREQ / PINGRESP: no body
+        mut body = sb.to_owned()
+        sb.free()
+        mut out = StringBuilder.init(body.len() + 5)
+        out.append_char(first)
+        _mq_put_varint(out, body.len())
+        out.append(body)
+        mut wire = out.to_owned()
+        out.free()
+        return wire
+
+    # Decode exactly one packet (`data` holds the whole packet, as delimited
+    # by mqtt_frame_len). `version` selects the 3.1.1 or 5.0 layout; a
+    # CONNECT carries its own protocol level.
+    pub def decode(data: str, version: int) throws str -> MqttPacket:
+        mut total = mqtt_frame_len(data)
+        if total <= 0 or total != data.len(): raise("MQTT: malformed packet (length)")
+        mut b0 = _mq_b(data, 0)
+        mut t = b0 >> 4
+        mut fl = b0 & 15
+        mut hdr = 2
+        while (_mq_b(data, hdr - 1) & 128) != 0: hdr = hdr + 1
+        mut r = _MqRd.init(data, hdr, total)
+        mut p = MqttPacket.new(t)
+        p.flags = fl
+        p.version = version
+        mut v5 = version == MQTT_V5
+        if t < 1 or t > 15: raise("MQTT: reserved packet type 0")
+        if t == MQTT_PUBREL or t == MQTT_SUBSCRIBE or t == MQTT_UNSUBSCRIBE:
+            if fl != 2: raise(f"MQTT: malformed {mqtt_packet_name(t)} (fixed header flags)")
+        elif t != MQTT_PUBLISH:
+            if fl != 0: raise(f"MQTT: malformed {mqtt_packet_name(t)} (fixed header flags)")
+        if t == MQTT_CONNECT:
+            mut pname = r.lstr()?
+            if pname != "MQTT": raise("MQTT: unsupported protocol name")
+            p.version = r.u8()?
+            v5 = p.version == MQTT_V5
+            mut cf = r.u8()?
+            if (cf & 1) != 0: raise("MQTT: malformed CONNECT (reserved flag)")
+            p.clean_start = (cf & 2) != 0
+            p.has_will = (cf & 4) != 0
+            p.will_qos = (cf >> 3) & 3
+            p.will_retain = (cf & 0x20) != 0
+            p.has_password = (cf & 0x40) != 0
+            p.has_username = (cf & 0x80) != 0
+            if p.will_qos == 3: raise("MQTT: malformed CONNECT (will QoS 3)")
+            if not p.has_will and (p.will_qos != 0 or p.will_retain): raise("MQTT: malformed CONNECT (will flags)")
+            p.keep_alive = r.u16()?
+            if p.version != MQTT_V311 and p.version != MQTT_V5 and p.version != 3:
+                return p            # caller answers "unsupported protocol version"
+            if v5: p.props = MqttProps.decode(r)?
+            p.client_id = r.lstr()?
+            if p.has_will:
+                if v5: p.will_props = MqttProps.decode(r)?
+                p.will_topic = r.lstr()?
+                p.will_payload = r.lstr()?
+            if p.has_username: p.username = r.lstr()?
+            if p.has_password: p.password = r.lstr()?
+        elif t == MQTT_CONNACK:
+            mut af = r.u8()?
+            if (af & 0xFE) != 0: raise("MQTT: malformed CONNACK (flags)")
+            p.session_present = (af & 1) != 0
+            p.reason_code = r.u8()?
+            if v5 and r.left() > 0: p.props = MqttProps.decode(r)?
+        elif t == MQTT_PUBLISH:
+            p.dup = (fl & 8) != 0
+            p.qos = (fl >> 1) & 3
+            p.retain = (fl & 1) != 0
+            if p.qos == 3: raise("MQTT: malformed PUBLISH (QoS 3)")
+            p.topic = r.lstr()?
+            if p.qos > 0:
+                p.packet_id = r.u16()?
+                if p.packet_id == 0: raise("MQTT: malformed PUBLISH (packet id 0)")
+            if v5: p.props = MqttProps.decode(r)?
+            p.payload = r.rest()
+        elif t == MQTT_PUBACK or t == MQTT_PUBREC or t == MQTT_PUBREL or t == MQTT_PUBCOMP:
+            p.packet_id = r.u16()?
+            if v5 and r.left() > 0:
+                p.reason_code = r.u8()?
+                if r.left() > 0: p.props = MqttProps.decode(r)?
+        elif t == MQTT_SUBSCRIBE:
+            p.packet_id = r.u16()?
+            if v5: p.props = MqttProps.decode(r)?
+            while r.left() > 0:
+                mut f = r.lstr()?
+                mut o = r.u8()?
+                if v5:
+                    if (o & 0xC0) != 0 or ((o >> 4) & 3) == 3: raise("MQTT: malformed SUBSCRIBE (options)")
+                elif (o & 0xFC) != 0: raise("MQTT: malformed SUBSCRIBE (options)")
+                if (o & 3) == 3: raise("MQTT: malformed SUBSCRIBE (QoS 3)")
+                p.filters.append(f)
+                p.sub_options.append(o)
+            if len(p.filters) == 0: raise("MQTT: SUBSCRIBE without topic filters")
+        elif t == MQTT_SUBACK or t == MQTT_UNSUBACK:
+            p.packet_id = r.u16()?
+            if v5: p.props = MqttProps.decode(r)?
+            while r.left() > 0:
+                mut c = r.u8()?
+                p.reason_codes.append(c)
+        elif t == MQTT_UNSUBSCRIBE:
+            p.packet_id = r.u16()?
+            if v5: p.props = MqttProps.decode(r)?
+            while r.left() > 0:
+                mut uf = r.lstr()?
+                p.filters.append(uf)
+            if len(p.filters) == 0: raise("MQTT: UNSUBSCRIBE without topic filters")
+        elif t == MQTT_DISCONNECT or t == MQTT_AUTH:
+            if v5 and r.left() > 0:
+                p.reason_code = r.u8()?
+                if r.left() > 0: p.props = MqttProps.decode(r)?
+        if r.left() != 0: raise(f"MQTT: malformed {mqtt_packet_name(t)} (trailing bytes)")
+        return p
+
+# ── Transport: TCP, TLS or WebSocket ─────────────────────────────────────────
+
+pub const MQTT_TCP = 0
+pub const MQTT_TLS = 1
+pub const MQTT_WS = 2
+
+pub class _MqConn:
+    pub kind: int
+    pub tcp: TcpStream
+    pub tls: TlsStream
+    pub ws: WsConn
+    pub open: bool
+    pub buf: str
+
+extend _MqConn:
+    def _blank(kind: int) -> _MqConn:
+        mut c = _MqConn()
+        c.kind = kind
+        c.open = false
+        c.buf = ""
+        return c
+
+    pub def open_tcp(host: str, port: int) throws str -> _MqConn:
+        mut c = _MqConn._blank(MQTT_TCP)
+        c.tcp = TcpStream.connect(host, port)
+        if not c.tcp.connected: raise(f"MQTT: cannot connect to {host}:{port}")
+        c.open = true
+        return c
+
+    pub def open_tls(host: str, port: int, opts: TlsOptions) throws str -> _MqConn:
+        mut c = _MqConn._blank(MQTT_TLS)
+        c.tls = TlsStream.connect_with(host, port, opts)?
+        c.open = true
+        return c
+
+    # WebSocket client handshake with the "mqtt" subprotocol, then binary frames.
+    pub def open_ws(host: str, port: int, path: str) throws str -> _MqConn:
+        mut c = _MqConn._blank(MQTT_WS)
+        mut s = TcpStream.connect(host, port)
+        if not s.connected: raise(f"MQTT: cannot connect to {host}:{port}")
+        mut key = ws_generate_key()
+        mut expected = ws_accept_value(key)
+        mut req = "GET " + path + " HTTP/1.1\r\nHost: " + host + f":{port}" + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: mqtt\r\n\r\n"
+        mut rp = req as Pointer[char]
+        if trc_net_send(s.fd, rp, req.len()) < 0:
+            s.close()
+            raise("MQTT: WebSocket handshake send failed")
+        mut resp = ""
+        while resp.find("\r\n\r\n") < 0:
+            mut buf = _cn_alloc(4096)
+            mut n = trc_net_recv(s.fd, buf, 4096, 10000)
+            if n <= 0:
+                _cn_free(buf)
+                s.close()
+                raise("MQTT: no WebSocket handshake response")
+            mut chunk = _cn_take(buf, n)
+            resp = resp + chunk
+            if resp.len() > 16384:
+                s.close()
+                raise("MQTT: WebSocket handshake response too long")
+        mut sp = resp.find(" ")
+        if sp < 0 or resp.slice(sp + 1, sp + 4) != "101":
+            s.close()
+            mut line = resp.slice(0, resp.find("\r\n"))
+            raise("MQTT: WebSocket upgrade refused: " + line)
+        mut accept = _header_lookup(resp, "Sec-WebSocket-Accept")
+        if accept != expected:
+            s.close()
+            raise("MQTT: Sec-WebSocket-Accept mismatch")
+        mut extra = resp.slice(resp.find("\r\n\r\n") + 4, resp.len())
+        c.ws = WsConn.init(s, true)
+        c.open = true
+        c.buf = extra      # (servers do not send frames before CONNECT; kept anyway)
+        return c
+
+    # An accepted server-side connection.
+    pub def accepted_tcp(s: TcpStream) -> _MqConn:
+        mut c = _MqConn._blank(MQTT_TCP)
+        c.tcp = s
+        c.open = s.connected
+        return c
+
+    pub def accepted_ws(w: WsConn) -> _MqConn:
+        mut c = _MqConn._blank(MQTT_WS)
+        c.ws = w
+        c.open = w.ok
+        return c
+
+    pub def fd(self) -> int:
+        if self.kind == MQTT_TLS: return self.tls.fd()
+        if self.kind == MQTT_WS: return self.ws.stream.fd
+        return self.tcp.fd
+
+    pub def write(self, data: str) throws str:
+        if not self.open: raise("MQTT: connection is closed")
+        if self.kind == MQTT_TLS:
+            mut r: Result[bool, str] = _mq_tls_write(self.tls, data)
+            if r.is_err:
+                self.open = false
+                raise("MQTT: write failed: " + r.err)
+            return
+        if self.kind == MQTT_WS:
+            mut dp = data as Pointer[char]
+            if not self.ws.send_binary_ptr(dp, data.len()):
+                self.open = false
+                raise("MQTT: WebSocket write failed")
+            return
+        mut p = data as Pointer[char]
+        if trc_net_send(self.tcp.fd, p, data.len()) < 0:
+            self.open = false
+            raise("MQTT: connection write failed")
+
+    # Read more bytes into .buf, waiting up to timeout_ms (-1 = forever).
+    # Returns false on timeout; raises when the connection is closed or fails.
+    pub def fill(self, timeout_ms: int) throws str -> bool:
+        if not self.open: raise("MQTT: connection is closed")
+        if self.kind == MQTT_TLS:
+            # The TLS layer may hold decrypted bytes the socket no longer shows,
+            # so wait inside the TLS read itself (0 there means "forever").
+            mut t = timeout_ms
+            if t < 0: t = 0
+            elif t < 20: t = 20
+            self.tls.set_timeout(t)
+            mut r: Result[str, str] = self.tls.read(16384)
+            if r.is_err:
+                if r.err.find("timed out") >= 0: return false
+                self.open = false
+                raise("MQTT: " + r.err)
+            if r.ok.len() == 0:
+                self.open = false
+                raise("MQTT: connection closed by peer")
+            self.buf = self.buf + r.ok
+            return true
+        if self.kind == MQTT_WS:
+            if timeout_ms >= 0:
+                mut rd = trc_mqtt_readable(self.ws.stream.fd, timeout_ms)
+                if rd == 0: return false
+            mut m = self.ws.recv()
+            if not m.ok:
+                self.open = false
+                raise("MQTT: WebSocket connection closed")
+            if m.is_close():
+                m.free()
+                self.open = false
+                raise("MQTT: WebSocket closed by peer")
+            if m.is_binary() or m.is_text():
+                mut chunk = _mq_copy_bytes(m.data, m.len)
+                self.buf = self.buf + chunk
+            m.free()
+            return true
+        mut buf = _cn_alloc(16384)
+        mut n = trc_net_recv(self.tcp.fd, buf, 16384, timeout_ms)
+        if n == -2:
+            _cn_free(buf)
+            return false
+        if n <= 0:
+            _cn_free(buf)
+            self.open = false
+            raise("MQTT: connection closed by peer")
+        mut chunk2 = _cn_take(buf, n)
+        self.buf = self.buf + chunk2
+        return true
+
+    # Next complete packet in the buffer as raw bytes ("" = need more).
+    pub def take_frame(self) throws str -> str:
+        mut n = mqtt_frame_len(self.buf)
+        if n < 0: raise("MQTT: malformed packet (remaining length)")
+        if n == 0: return ""
+        mut f = self.buf.slice(0, n)
+        self.buf = self.buf.slice(n, self.buf.len())
+        return f
+
+    # graceful: WebSocket close handshake / TLS close_notify.
+    pub def close(self, graceful: bool):
+        if not self.open and self.kind == MQTT_TCP and self.tcp.fd < 0: return
+        self.open = false
+        if self.kind == MQTT_TLS:
+            self.tls.close()
+        elif self.kind == MQTT_WS:
+            if graceful and not self.ws.closed: self.ws.close()
+            else: self.ws.stream.close()
+        else:
+            self.tcp.close()
+
+def _mq_tls_write(t: TlsStream, data: str) throws str -> bool:
+    t.write(data)?
+    return true
+
+def _mq_copy_bytes(p: Pointer[char], n: int) -> str:
+    mut out = _cn_alloc(n)
+    mut i = 0
+    unsafe:
+        while i < n:
+            out.offset(i).write(p.offset(i).read())
+            i = i + 1
+    return _cn_take(out, n)
+
+# ── Client ───────────────────────────────────────────────────────────────────
+
+# A received application message. `valid` is false when next_message timed out.
+pub class MqttMessage:
+    pub valid: bool
+    pub topic: str
+    pub payload: str
+    pub qos: int
+    pub retain: bool
+    pub dup: bool
+    pub packet_id: int
+    pub props: MqttProps          # MQTT 5: content type, user properties, subscription ids...
+
+extend MqttMessage:
+    pub def empty() -> MqttMessage:
+        mut m = MqttMessage()
+        m.valid = false
+        m.topic = ""
+        m.payload = ""
+        m.qos = 0
+        m.retain = false
+        m.dup = false
+        m.packet_id = 0
+        m.props = MqttProps.new()
+        return m
+
+    pub def from_packet(p: MqttPacket) -> MqttMessage:
+        mut m = MqttMessage()
+        m.valid = true
+        m.topic = p.topic
+        m.payload = p.payload
+        m.qos = p.qos
+        m.retain = p.retain
+        m.dup = p.dup
+        m.packet_id = p.packet_id
+        m.props = p.props
+        return m
+
+# Connection settings. Build with MqttOptions.new(host, port) or from_url().
+pub class MqttOptions:
+    pub host: str
+    pub port: int
+    pub transport: int             # MQTT_TCP / MQTT_TLS / MQTT_WS
+    pub ws_path: str               # WebSocket path (default "/mqtt")
+    pub tls: TlsOptions
+    pub version: int               # MQTT_V311 (default) or MQTT_V5
+    pub client_id: str             # "" = server-assigned (v5) / generated (3.1.1)
+    pub clean_start: bool          # default true
+    pub keep_alive: int            # seconds (default 60, 0 = off)
+    pub username: str
+    pub password: str
+    pub has_username: bool
+    pub has_password: bool
+    pub has_will: bool
+    pub will_topic: str
+    pub will_payload: str
+    pub will_qos: int
+    pub will_retain: bool
+    pub will_props: MqttProps      # v5 will properties (will delay, content type, ...)
+    pub connect_props: MqttProps   # v5 CONNECT properties (session expiry, receive maximum, ...)
+    pub timeout_ms: int            # CONNACK / SUBACK / UNSUBACK wait (default 10000)
+    pub auto_reconnect: bool       # default false
+    pub reconnect_min_ms: int      # first backoff delay (default 250)
+    pub reconnect_max_ms: int      # backoff cap (default 30000)
+    pub max_reconnect_attempts: int  # per outage, 0 = unlimited (default 0)
+    pub resubscribe: bool          # re-send subscriptions when the session was lost (default true)
+    pub topic_aliases: bool        # v5: use outgoing topic aliases when the server allows them
+
+extend MqttOptions:
+    pub def new(host: str, port: int) -> MqttOptions:
+        mut o = MqttOptions()
+        o.host = host
+        o.port = port
+        o.transport = MQTT_TCP
+        o.ws_path = "/mqtt"
+        o.tls = TlsOptions.default()
+        o.version = MQTT_V311
+        o.client_id = ""
+        o.clean_start = true
+        o.keep_alive = 60
+        o.username = ""
+        o.password = ""
+        o.has_username = false
+        o.has_password = false
+        o.has_will = false
+        o.will_topic = ""
+        o.will_payload = ""
+        o.will_qos = 0
+        o.will_retain = false
+        o.will_props = MqttProps.new()
+        o.connect_props = MqttProps.new()
+        o.timeout_ms = 10000
+        o.auto_reconnect = false
+        o.reconnect_min_ms = 250
+        o.reconnect_max_ms = 30000
+        o.max_reconnect_attempts = 0
+        o.resubscribe = true
+        o.topic_aliases = false
+        return o
+
+    # mqtt://host[:1883]  mqtts://host[:8883]  ws://host[:80][/path]
+    # Optional user[:password]@ before the host.
+    pub def from_url(url: str) throws str -> MqttOptions:
+        mut rest = url
+        mut kind = MQTT_TCP
+        mut port = 1883
+        if url.starts_with("mqtt://") or url.starts_with("tcp://"):
+            rest = url.slice(url.find("://") + 3, url.len())
+        elif url.starts_with("mqtts://") or url.starts_with("ssl://") or url.starts_with("tls://"):
+            rest = url.slice(url.find("://") + 3, url.len())
+            kind = MQTT_TLS
+            port = 8883
+        elif url.starts_with("ws://"):
+            rest = url.slice(5, url.len())
+            kind = MQTT_WS
+            port = 80
+        else:
+            raise("MQTT: unsupported URL scheme in " + url + " (mqtt://, mqtts://, ws://)")
+        mut path = "/mqtt"
+        mut slash = rest.find("/")
+        if slash >= 0:
+            path = rest.slice(slash, rest.len())
+            rest = rest.slice(0, slash)
+        mut user = ""
+        mut pw = ""
+        mut has_u = false
+        mut has_p = false
+        mut at = rest.rfind("@")
+        if at >= 0:
+            mut cred = rest.slice(0, at)
+            rest = rest.slice(at + 1, rest.len())
+            has_u = true
+            mut colon = cred.find(":")
+            if colon >= 0:
+                user = cred.slice(0, colon)
+                pw = cred.slice(colon + 1, cred.len())
+                has_p = true
+            else:
+                user = cred
+        mut host = rest
+        if rest.starts_with("["):
+            mut rb = rest.find("]")
+            if rb < 0: raise("MQTT: bad IPv6 host in " + url)
+            host = rest.slice(1, rb)
+            if rb + 1 < rest.len() and rest.slice(rb + 1, rb + 2) == ":":
+                port = _mq_parse_port(rest.slice(rb + 2, rest.len()))?
+        else:
+            mut pc = rest.rfind(":")
+            if pc >= 0:
+                host = rest.slice(0, pc)
+                port = _mq_parse_port(rest.slice(pc + 1, rest.len()))?
+        if host.len() == 0: raise("MQTT: no host in " + url)
+        mut o = MqttOptions.new(host, port)
+        o.transport = kind
+        if slash >= 0: o.ws_path = path
+        if has_u:
+            o.username = user
+            o.has_username = true
+        if has_p:
+            o.password = pw
+            o.has_password = true
+        return o
+
+    pub def set_auth(self, username: str, password: str):
+        self.username = username
+        self.password = password
+        self.has_username = true
+        self.has_password = true
+
+    pub def set_will(self, topic: str, payload: str, qos: int, retain: bool):
+        self.has_will = true
+        self.will_topic = topic
+        self.will_payload = payload
+        self.will_qos = qos
+        self.will_retain = retain
+
+def _mq_parse_port(s: str) throws str -> int:
+    if s.len() == 0 or s.len() > 5: raise("MQTT: bad port '" + s + "'")
+    mut v = 0
+    mut i = 0
+    while i < s.len():
+        mut d = _mq_b(s, i) - 48
+        if d < 0 or d > 9: raise("MQTT: bad port '" + s + "'")
+        v = v * 10 + d
+        i = i + 1
+    if v < 1 or v > 65535: raise("MQTT: bad port '" + s + "'")
+    return v
+
+# An outgoing QoS 1/2 message not yet fully acknowledged.
+pub class _MqInflight:
+    pub pid: int
+    pub qos: int
+    pub stage: int          # 1 = awaiting PUBACK / PUBREC, 2 = PUBREL sent, awaiting PUBCOMP
+    pub pkt: MqttPacket
+
+pub class MqttClient:
+    pub opts: MqttOptions
+    pub connected: bool
+    pub client_id: str             # as used (or assigned by the server)
+    pub session_present: bool      # from the last CONNACK
+    pub connack_props: MqttProps   # v5 CONNACK properties
+    pub reconnects: int            # successful automatic reconnects
+    pub disconnect_reason: int     # reason of a server DISCONNECT (v5), -1 if none
+    pub last_ack_reason: int       # reason code of the last PUBACK / PUBREC / PUBCOMP
+    pub server_receive_max: int
+    pub server_topic_alias_max: int
+    pub server_max_qos: int
+    pub server_retain_available: bool
+    pub server_max_packet: int     # 0 = no limit
+    pub keep_alive: int            # effective (server keep alive overrides on v5)
+    _conn: _MqConn
+    _version: int
+    _next_pid: int
+    _inflight: List[_MqInflight]
+    _waiting: List[int]            # SUBSCRIBE / UNSUBSCRIBE ids awaiting their ack
+    _acks: List[MqttPacket]        # arrived SUBACK / UNSUBACK for _waiting ids
+    _qos2_in: List[int]            # incoming QoS 2 ids between PUBREC and PUBREL
+    _queue: List[MqttMessage]
+    _qhead: int
+    _sub_filters: List[str]
+    _sub_opts: List[int]
+    _alias_in: Dict[int, str]
+    _alias_out: Dict[str, int]
+    _alias_next: int
+    _last_send: int
+    _ping_out: bool
+    _ping_sent: int
+    _cb: def(MqttMessage) -> void
+    _has_cb: bool
+    _closing: bool
+    _delivered: int
+
+extend MqttClient:
+    # Connect (TCP / TLS / WebSocket per opts.transport) and wait for CONNACK.
+    # Raises with the server's reason when the connection is refused.
+    pub def connect(opts: MqttOptions) throws str -> MqttClient:
+        mut c = MqttClient()
+        c.opts = opts
+        c.connected = false
+        c.client_id = opts.client_id
+        c.session_present = false
+        c.connack_props = MqttProps.new()
+        c.reconnects = 0
+        c.disconnect_reason = -1
+        c.last_ack_reason = -1
+        c._version = opts.version
+        c._next_pid = 1
+        c._inflight = []
+        c._waiting = []
+        c._acks = []
+        c._qos2_in = []
+        c._queue = []
+        c._qhead = 0
+        c._sub_filters = []
+        c._sub_opts = []
+        c._alias_in = {}
+        c._alias_out = {}
+        c._alias_next = 1
+        c._ping_out = false
+        c._has_cb = false
+        c._closing = false
+        c._delivered = 0
+        if c.client_id.len() == 0 and opts.version != MQTT_V5:
+            mut rng = _WsRng.new(_tr_next_seed_counter() + trc_mqtt_now_ms())
+            mut id = "tauraro-"
+            mut i = 0
+            while i < 12:
+                mut d = rng.next_byte() & 15
+                id = id + "0123456789abcdef".slice(d, d + 1)
+                i = i + 1
+            c.client_id = id
+        c._open_session()?
+        return c
+
+    # Deliver messages to `cb` instead of the next_message() queue.
+    pub def on_message(self, cb: def(MqttMessage) -> void):
+        self._cb = cb
+        self._has_cb = true
+
+    def _now() -> int: return trc_mqtt_now_ms()
+
+    def _open_session(self) throws str:
+        mut o = self.opts
+        if o.transport == MQTT_TLS:
+            self._conn = _MqConn.open_tls(o.host, o.port, o.tls)?
+        elif o.transport == MQTT_WS:
+            self._conn = _MqConn.open_ws(o.host, o.port, o.ws_path)?
+        else:
+            self._conn = _MqConn.open_tcp(o.host, o.port)?
+        mut p = MqttPacket.new(MQTT_CONNECT)
+        p.version = o.version
+        p.clean_start = o.clean_start
+        p.keep_alive = o.keep_alive
+        p.client_id = self.client_id
+        p.props = o.connect_props
+        if o.has_will:
+            p.has_will = true
+            p.will_topic = o.will_topic
+            p.will_payload = o.will_payload
+            p.will_qos = o.will_qos
+            p.will_retain = o.will_retain
+            p.will_props = o.will_props
+        p.has_username = o.has_username
+        p.username = o.username
+        p.has_password = o.has_password
+        p.password = o.password
+        mut wire = p.encode(o.version)
+        mut wr: Result[bool, str] = _mq_conn_write(self._conn, wire)
+        if wr.is_err:
+            self._conn.close(false)
+            raise(wr.err)
+        self._last_send = MqttClient._now()
+        mut deadline = MqttClient._now() + o.timeout_ms
+        mut ack = MqttPacket.new(0)
+        while ack.ptype == 0:
+            mut left = deadline - MqttClient._now()
+            if left <= 0:
+                self._conn.close(false)
+                raise("MQTT: no CONNACK from server")
+            mut rr: Result[MqttPacket, str] = self._read_packet(left)
+            if rr.is_err:
+                self._conn.close(false)
+                raise(rr.err)
+            ack = rr.ok
+        if ack.ptype != MQTT_CONNACK:
+            self._conn.close(false)
+            raise("MQTT: expected CONNACK, got " + ack.name())
+        if ack.reason_code != 0:
+            self._conn.close(false)
+            if o.version == MQTT_V5:
+                mut why = mqtt_reason_name(ack.reason_code)
+                if ack.props.reason_string.len() > 0: why = why + ": " + ack.props.reason_string
+                raise(f"MQTT: connection refused (0x{_mq_hex2(ack.reason_code)} {why})")
+            raise("MQTT: connection refused (" + mqtt_connack_v3_name(ack.reason_code) + ")")
+        self.connected = true
+        self.session_present = ack.session_present
+        self.connack_props = ack.props
+        self.disconnect_reason = -1
+        self.server_receive_max = 65535
+        self.server_topic_alias_max = 0
+        self.server_max_qos = 2
+        self.server_retain_available = true
+        self.server_max_packet = 0
+        self.keep_alive = o.keep_alive
+        if o.version == MQTT_V5:
+            mut cp = ack.props
+            if cp.assigned_client_id.len() > 0: self.client_id = cp.assigned_client_id
+            if cp.receive_maximum > 0: self.server_receive_max = cp.receive_maximum
+            if cp.topic_alias_max > 0: self.server_topic_alias_max = cp.topic_alias_max
+            if cp.maximum_qos >= 0: self.server_max_qos = cp.maximum_qos
+            if cp.retain_available == 0: self.server_retain_available = false
+            if cp.max_packet_size > 0: self.server_max_packet = cp.max_packet_size
+            if cp.server_keep_alive >= 0: self.keep_alive = cp.server_keep_alive
+        self._alias_in = {}
+        self._alias_out = {}
+        self._alias_next = 1
+        self._ping_out = false
+        if not self.session_present: self._qos2_in = []
+
+    # Next packet within wait_ms (ptype 0 = nothing complete yet).
+    def _read_packet(self, wait_ms: int) throws str -> MqttPacket:
+        mut f = self._conn.take_frame()?
+        if f.len() == 0:
+            mut got = self._conn.fill(wait_ms)?
+            if not got: return MqttPacket.new(0)
+            f = self._conn.take_frame()?
+            if f.len() == 0: return MqttPacket.new(0)
+        return MqttPacket.decode(f, self._version)?
+
+    def _send(self, wire: str) throws str:
+        if not self.connected: raise("MQTT: not connected")
+        self._conn.write(wire)?
+        self._last_send = MqttClient._now()
+
+    # Send; on a broken connection reconnect (if enabled), which resends
+    # in-flight messages itself.
+    def _send_or_recover(self, wire: str) throws str:
+        mut r: Result[bool, str] = _mq_client_send(self, wire)
+        if r.is_err: self._recover(r.err)?
+
+    def _drop_conn(self):
+        if self.connected or self._conn.open: self._conn.close(false)
+        self.connected = false
+
+    # Connection lost: reconnect with exponential backoff, or raise `err`.
+    def _recover(self, err: str) throws str:
+        self._drop_conn()
+        if not self.opts.auto_reconnect or self._closing: raise(err)
+        mut delay = self.opts.reconnect_min_ms
+        if delay < 1: delay = 1
+        mut attempt = 0
+        mut last = err
+        while self.opts.max_reconnect_attempts == 0 or attempt < self.opts.max_reconnect_attempts:
+            Thread.sleep(delay)
+            attempt = attempt + 1
+            mut r: Result[bool, str] = _mq_client_reopen(self)
+            if r.is_ok:
+                self.reconnects = self.reconnects + 1
+                return
+            last = r.err
+            self._drop_conn()
+            delay = delay * 2
+            if delay > self.opts.reconnect_max_ms: delay = self.opts.reconnect_max_ms
+        raise(f"MQTT: reconnect failed after {attempt} attempts: {last}")
+
+    # After a reconnect: resend in-flight messages and, if the server lost
+    # the session, the subscriptions.
+    def _resume(self) throws str:
+        mut i = 0
+        while i < len(self._inflight):
+            mut f = self._inflight[i]
+            if f.stage == 1:
+                f.pkt.dup = true
+                mut w = f.pkt.encode(self._version)
+                self._send(w)?
+            else:
+                mut rel = MqttPacket.ack(MQTT_PUBREL, f.pid, 0)
+                mut w2 = rel.encode(self._version)
+                self._send(w2)?
+            i = i + 1
+        if not self.session_present and self.opts.resubscribe and len(self._sub_filters) > 0:
+            mut s = MqttPacket.new(MQTT_SUBSCRIBE)
+            s.packet_id = self._alloc_pid()?
+            mut k = 0
+            while k < len(self._sub_filters):
+                s.filters.append(self._sub_filters[k])
+                s.sub_options.append(self._sub_opts[k])
+                k = k + 1
+            mut w3 = s.encode(self._version)
+            self._send(w3)?
+
+    def _pid_used(self, pid: int) -> bool:
+        mut i = 0
+        while i < len(self._inflight):
+            if self._inflight[i].pid == pid: return true
+            i = i + 1
+        return self._waiting.contains(pid)
+
+    def _alloc_pid(self) throws str -> int:
+        mut tries = 0
+        while tries < 65535:
+            mut pid = self._next_pid
+            self._next_pid = self._next_pid + 1
+            if self._next_pid > 65535: self._next_pid = 1
+            if not self._pid_used(pid): return pid
+            tries = tries + 1
+        raise("MQTT: no free packet identifier")
+
+    def _deliver(self, p: MqttPacket):
+        mut m = MqttMessage.from_packet(p)
+        self._delivered = self._delivered + 1
+        if self._has_cb:
+            self._cb(m)
+        else:
+            self._queue.append(m)
+
+    def _protocol_error(self, why: str) throws str:
+        if self._version == MQTT_V5:
+            mut d = MqttPacket.ack(MQTT_DISCONNECT, 0, 0x82)
+            d.props.reason_string = why
+            mut w = d.encode(self._version)
+            mut r: Result[bool, str] = _mq_client_send(self, w)
+        raise("MQTT: protocol error: " + why)
+
+    def _remove_inflight(self, pid: int):
+        mut keep: List[_MqInflight] = []
+        mut i = 0
+        while i < len(self._inflight):
+            if self._inflight[i].pid != pid: keep.append(self._inflight[i])
+            i = i + 1
+        self._inflight = keep
+
+    def _find_inflight(self, pid: int) -> int:
+        mut i = 0
+        while i < len(self._inflight):
+            if self._inflight[i].pid == pid: return i
+            i = i + 1
+        return -1
+
+    def _handle(self, p: MqttPacket) throws str:
+        mut t = p.ptype
+        if t == MQTT_PUBLISH:
+            if self._version == MQTT_V5 and p.props.topic_alias >= 0:
+                mut a = p.props.topic_alias
+                if a == 0 or a > 65535: self._protocol_error("topic alias 0")?
+                if p.topic.len() > 0:
+                    self._alias_in[a] = p.topic
+                elif self._alias_in.contains(a):
+                    p.topic = self._alias_in[a]
+                else:
+                    self._protocol_error(f"unknown topic alias {a}")?
+            if p.qos == 0:
+                self._deliver(p)
+            elif p.qos == 1:
+                self._deliver(p)
+                mut ack = MqttPacket.ack(MQTT_PUBACK, p.packet_id, 0)
+                self._send(ack.encode(self._version))?
+            else:
+                if not self._qos2_in.contains(p.packet_id):
+                    self._qos2_in.append(p.packet_id)
+                    self._deliver(p)
+                mut rec = MqttPacket.ack(MQTT_PUBREC, p.packet_id, 0)
+                self._send(rec.encode(self._version))?
+        elif t == MQTT_PUBACK:
+            mut i = self._find_inflight(p.packet_id)
+            if i >= 0 and self._inflight[i].qos == 1:
+                self.last_ack_reason = p.reason_code
+                self._remove_inflight(p.packet_id)
+        elif t == MQTT_PUBREC:
+            mut j = self._find_inflight(p.packet_id)
+            if j >= 0 and self._inflight[j].qos == 2:
+                self.last_ack_reason = p.reason_code
+                if p.reason_code >= 0x80:
+                    self._remove_inflight(p.packet_id)
+                    return
+                self._inflight[j].stage = 2
+                mut rel = MqttPacket.ack(MQTT_PUBREL, p.packet_id, 0)
+                self._send(rel.encode(self._version))?
+            else:
+                mut rel2 = MqttPacket.ack(MQTT_PUBREL, p.packet_id, 0x92)
+                self._send(rel2.encode(self._version))?
+        elif t == MQTT_PUBREL:
+            mut code = 0
+            if self._qos2_in.contains(p.packet_id):
+                mut keep: List[int] = []
+                mut k = 0
+                while k < len(self._qos2_in):
+                    if self._qos2_in[k] != p.packet_id: keep.append(self._qos2_in[k])
+                    k = k + 1
+                self._qos2_in = keep
+            else:
+                code = 0x92
+            mut comp = MqttPacket.ack(MQTT_PUBCOMP, p.packet_id, code)
+            self._send(comp.encode(self._version))?
+        elif t == MQTT_PUBCOMP:
+            mut x = self._find_inflight(p.packet_id)
+            if x >= 0:
+                self.last_ack_reason = p.reason_code
+                self._remove_inflight(p.packet_id)
+        elif t == MQTT_SUBACK or t == MQTT_UNSUBACK:
+            if self._waiting.contains(p.packet_id): self._acks.append(p)
+        elif t == MQTT_PINGRESP:
+            self._ping_out = false
+        elif t == MQTT_DISCONNECT:
+            self.disconnect_reason = p.reason_code
+            mut why = mqtt_reason_name(p.reason_code)
+            if p.props.reason_string.len() > 0: why = why + ": " + p.props.reason_string
+            raise("MQTT: server sent DISCONNECT (" + why + ")")
+        elif t == MQTT_AUTH:
+            self._protocol_error("enhanced authentication (AUTH) is not supported")?
+        else:
+            self._protocol_error("unexpected " + p.name() + " from server")?
+
+    def _keepalive(self) throws str:
+        if self.keep_alive <= 0: return
+        mut now = MqttClient._now()
+        mut ka = self.keep_alive * 1000
+        if self._ping_out:
+            if now - self._ping_sent > ka: raise("MQTT: keep-alive timeout (no PINGRESP)")
+            return
+        if now - self._last_send >= ka:
+            mut ping = MqttPacket.new(MQTT_PINGREQ)
+            self._send(ping.encode(self._version))?
+            self._ping_out = true
+            self._ping_sent = now
+
+    # Wait up to wait_ms for one packet and handle it (no recovery).
+    def _service(self, wait_ms: int) throws str -> bool:
+        self._keepalive()?
+        mut w = wait_ms
+        if self.keep_alive > 0:
+            mut due = self._last_send + self.keep_alive * 1000 - MqttClient._now()
+            if self._ping_out: due = self._ping_sent + self.keep_alive * 1000 - MqttClient._now() + 1
+            if due < 0: due = 0
+            if w < 0 or due < w: w = due
+        mut p = self._read_packet(w)?
+        if p.ptype == 0:
+            self._keepalive()?
+            return false
+        self._handle(p)?
+        return true
+
+    # One step with automatic recovery.
+    def _step(self, wait_ms: int) throws str -> bool:
+        if not self.connected:
+            self._recover("MQTT: not connected")?
+            return false
+        mut r: Result[bool, str] = _mq_client_service(self, wait_ms)
+        if r.is_err:
+            self._recover(r.err)?
+            return false
+        return r.ok
+
+    # ── Public API ──────────────────────────────────────────────────────────
+
+    # Publish; returns the packet id (0 for QoS 0). QoS 1/2 messages stay
+    # in flight until acknowledged (see wait_published / inflight_count).
+    pub def publish(self, topic: str, payload: str, qos: int, retain: bool) throws str -> int:
+        mut p = MqttProps.new()
+        return self.publish_with(topic, payload, qos, retain, p)?
+
+    pub def publish_with(self, topic: str, payload: str, qos: int, retain: bool, props: MqttProps) throws str -> int:
+        if not mqtt_valid_topic(topic): raise("MQTT: invalid topic name '" + topic + "'")
+        if qos < 0 or qos > 2: raise(f"MQTT: invalid QoS {qos}")
+        if qos > self.server_max_qos: raise(f"MQTT: server maximum QoS is {self.server_max_qos}")
+        if retain and not self.server_retain_available: raise("MQTT: server does not support retained messages")
+        mut p = MqttPacket.publish(topic, payload, qos, retain)
+        p.props = props
+        if qos > 0:
+            mut deadline = MqttClient._now() + self.opts.timeout_ms
+            while len(self._inflight) >= self.server_receive_max:
+                mut left = deadline - MqttClient._now()
+                if left <= 0: raise("MQTT: receive maximum reached and no acknowledgement arrived")
+                self._step(left)?
+            p.packet_id = self._alloc_pid()?
+        # Outgoing topic alias (v5), only for this transmission.
+        mut use_alias = false
+        mut alias = 0
+        if self._version == MQTT_V5 and self.opts.topic_aliases and self.server_topic_alias_max > 0 and props.topic_alias < 0:
+            if self._alias_out.contains(topic):
+                alias = self._alias_out[topic]
+                use_alias = true
+                p.topic = ""
+            elif self._alias_next <= self.server_topic_alias_max:
+                alias = self._alias_next
+                self._alias_next = self._alias_next + 1
+                self._alias_out[topic] = alias
+                use_alias = true
+        if use_alias: p.props.topic_alias = alias
+        mut wire = p.encode(self._version)
+        if use_alias:
+            p.props.topic_alias = -1
+            p.topic = topic
+        if self.server_max_packet > 0 and wire.len() > self.server_max_packet:
+            raise(f"MQTT: packet of {wire.len()} bytes exceeds the server maximum {self.server_max_packet}")
+        if qos > 0:
+            mut f = _MqInflight()
+            f.pid = p.packet_id
+            f.qos = qos
+            f.stage = 1
+            f.pkt = p
+            self._inflight.append(f)
+        if not self.connected:
+            self._recover("MQTT: not connected")?
+            return p.packet_id
+        self._send_or_recover(wire)?
+        return p.packet_id
+
+    # Wait until the QoS 1/2 message `pid` is fully acknowledged.
+    pub def wait_published(self, pid: int, timeout_ms: int) throws str -> bool:
+        if pid == 0: return true
+        mut deadline = MqttClient._now() + timeout_ms
+        while self._find_inflight(pid) >= 0:
+            mut left = deadline - MqttClient._now()
+            if timeout_ms >= 0 and left <= 0: return false
+            if timeout_ms < 0: left = -1
+            self._step(left)?
+        return true
+
+    # Wait until every in-flight message is acknowledged.
+    pub def flush(self, timeout_ms: int) throws str -> bool:
+        mut deadline = MqttClient._now() + timeout_ms
+        while len(self._inflight) > 0:
+            mut left = deadline - MqttClient._now()
+            if left <= 0: return false
+            self._step(left)?
+        return true
+
+    pub def inflight_count(self) -> int: return len(self._inflight)
+
+    # Subscribe; returns the granted QoS. Raises when the server refuses.
+    pub def subscribe(self, filter: str, qos: int) throws str -> int:
+        mut o = mqtt_sub_options(qos, false, false, 0)
+        mut p = MqttProps.new()
+        return self.subscribe_opts(filter, o, p)?
+
+    # Subscribe with an options byte (see mqtt_sub_options) and v5
+    # properties (subscription identifier, user properties).
+    pub def subscribe_opts(self, filter: str, options: int, props: MqttProps) throws str -> int:
+        mut fs: List[str] = [filter]
+        mut os: List[int] = [options]
+        mut codes = self.subscribe_many(fs, os, props)?
+        mut c = codes[0]
+        if c >= 0x80:
+            if self._version == MQTT_V5: raise(f"MQTT: subscription to '{filter}' refused (0x{_mq_hex2(c)} {mqtt_reason_name(c)})")
+            raise(f"MQTT: subscription to '{filter}' refused")
+        return c
+
+    # Subscribe to several filters in one packet; returns the SUBACK reason
+    # codes (granted QoS 0-2, or >= 0x80 for a refused filter).
+    pub def subscribe_many(self, filters: List[str], options: List[int], props: MqttProps) throws str -> List[int]:
+        if len(filters) == 0 or len(filters) != len(options): raise("MQTT: subscribe needs one options value per filter")
+        mut i = 0
+        while i < len(filters):
+            if not mqtt_valid_filter(filters[i]): raise("MQTT: invalid topic filter '" + filters[i] + "'")
+            i = i + 1
+        mut s = MqttPacket.new(MQTT_SUBSCRIBE)
+        s.packet_id = self._alloc_pid()?
+        s.props = props
+        i = 0
+        while i < len(filters):
+            s.filters.append(filters[i])
+            s.sub_options.append(options[i])
+            i = i + 1
+        mut ack = self._request(s)?
+        mut codes = ack.reason_codes
+        if len(codes) != len(filters): raise("MQTT: SUBACK has the wrong number of reason codes")
+        i = 0
+        while i < len(filters):
+            if codes[i] < 0x80: self._remember_sub(filters[i], options[i])
+            i = i + 1
+        return codes
+
+    def _remember_sub(self, filter: str, options: int):
+        mut i = self._sub_filters.index_of(filter)
+        if i >= 0:
+            self._sub_opts[i] = options
+            return
+        self._sub_filters.append(filter)
+        self._sub_opts.append(options)
+
+    # Unsubscribe; returns the reason code (0 on 3.1.1).
+    pub def unsubscribe(self, filter: str) throws str -> int:
+        mut fs: List[str] = [filter]
+        mut codes = self.unsubscribe_many(fs)?
+        if len(codes) == 0: return 0
+        return codes[0]
+
+    pub def unsubscribe_many(self, filters: List[str]) throws str -> List[int]:
+        mut u = MqttPacket.new(MQTT_UNSUBSCRIBE)
+        u.packet_id = self._alloc_pid()?
+        mut i = 0
+        while i < len(filters):
+            u.filters.append(filters[i])
+            i = i + 1
+        # Forget them first so a reconnect does not resubscribe.
+        mut kf: List[str] = []
+        mut ko: List[int] = []
+        mut k = 0
+        while k < len(self._sub_filters):
+            if not filters.contains(self._sub_filters[k]):
+                kf.append(self._sub_filters[k])
+                ko.append(self._sub_opts[k])
+            k = k + 1
+        self._sub_filters = kf
+        self._sub_opts = ko
+        mut ack = self._request(u)?
+        return ack.reason_codes
+
+    # Send a SUBSCRIBE / UNSUBSCRIBE and wait for its ack (re-sent after a reconnect).
+    def _request(self, req: MqttPacket) throws str -> MqttPacket:
+        mut pid = req.packet_id
+        self._waiting.append(pid)
+        mut wire = req.encode(self._version)
+        mut r: Result[MqttPacket, str] = _mq_client_request(self, pid, wire)
+        mut keep: List[int] = []
+        mut i = 0
+        while i < len(self._waiting):
+            if self._waiting[i] != pid: keep.append(self._waiting[i])
+            i = i + 1
+        self._waiting = keep
+        if r.is_err: raise(r.err)
+        return r.ok
+
+    def _await_ack(self, pid: int, wire: str) throws str -> MqttPacket:
+        mut epoch = self.reconnects
+        self._send_or_recover(wire)?
+        mut deadline = MqttClient._now() + self.opts.timeout_ms
+        while true:
+            mut i = 0
+            while i < len(self._acks):
+                if self._acks[i].packet_id == pid:
+                    mut found = self._acks[i]
+                    mut rest: List[MqttPacket] = []
+                    mut j = 0
+                    while j < len(self._acks):
+                        if j != i: rest.append(self._acks[j])
+                        j = j + 1
+                    self._acks = rest
+                    return found
+                i = i + 1
+            if self.reconnects != epoch:
+                epoch = self.reconnects
+                self._send_or_recover(wire)?
+                deadline = MqttClient._now() + self.opts.timeout_ms
+            mut left = deadline - MqttClient._now()
+            if left <= 0: raise("MQTT: no acknowledgement from server")
+            self._step(left)?
+        return MqttPacket.new(0)
+
+    # Next message, waiting up to timeout_ms (-1 = forever). Check .valid:
+    # false means the wait timed out. Keep-alive and acks are handled while
+    # waiting.
+    pub def next_message(self, timeout_ms: int) throws str -> MqttMessage:
+        mut deadline = MqttClient._now() + timeout_ms
+        mut first = true
+        while true:
+            if self._qhead < len(self._queue):
+                mut m = self._queue[self._qhead]
+                self._qhead = self._qhead + 1
+                if self._qhead >= len(self._queue):
+                    self._queue = []
+                    self._qhead = 0
+                return m
+            mut left = -1
+            if timeout_ms >= 0:
+                left = deadline - MqttClient._now()
+                if left <= 0:
+                    if not first: return MqttMessage.empty()
+                    left = 0
+            first = false
+            self._step(left)?
+        return MqttMessage.empty()
+
+    # Messages waiting in the next_message() queue.
+    pub def pending(self) -> int: return len(self._queue) - self._qhead
+
+    # Process traffic (dispatching on_message callbacks) for `ms` milliseconds;
+    # returns the number of messages delivered meanwhile.
+    pub def run_for(self, ms: int) throws str -> int:
+        mut start = self._delivered
+        mut deadline = MqttClient._now() + ms
+        while true:
+            mut left = deadline - MqttClient._now()
+            if left <= 0: break
+            self._step(left)?
+        return self._delivered - start
+
+    # Process traffic until the connection ends (raises then, unless it was
+    # closed by disconnect()).
+    pub def run_forever(self) throws str:
+        while not self._closing:
+            self._step(-1)?
+
+    # One wait of at most timeout_ms; true when a packet was handled.
+    pub def poll(self, timeout_ms: int) throws str -> bool:
+        return self._step(timeout_ms)?
+
+    # Send PINGREQ and wait for PINGRESP.
+    pub def ping(self, timeout_ms: int) throws str -> bool:
+        mut p = MqttPacket.new(MQTT_PINGREQ)
+        self._send(p.encode(self._version))?
+        self._ping_out = true
+        self._ping_sent = MqttClient._now()
+        mut deadline = MqttClient._now() + timeout_ms
+        while self._ping_out:
+            mut left = deadline - MqttClient._now()
+            if left <= 0: return false
+            self._step(left)?
+        return true
+
+    # Clean DISCONNECT (the server discards the will message).
+    pub def disconnect(self):
+        mut p = MqttProps.new()
+        self.disconnect_with(0, p)
+
+    # DISCONNECT with an MQTT 5 reason code (0x04 = publish my will anyway)
+    # and properties (e.g. session_expiry).
+    pub def disconnect_with(self, reason: int, props: MqttProps):
+        self._closing = true
+        if self.connected:
+            mut d = MqttPacket.ack(MQTT_DISCONNECT, 0, reason)
+            d.props = props
+            mut w = d.encode(self._version)
+            mut r: Result[bool, str] = _mq_client_send(self, w)
+            self._conn.close(true)
+        self.connected = false
+
+    # Drop the connection without DISCONNECT (the server publishes the will).
+    pub def close(self):
+        self._closing = true
+        self._drop_conn()
+
+def _mq_conn_write(c: _MqConn, wire: str) throws str -> bool:
+    c.write(wire)?
+    return true
+
+def _mq_client_send(c: MqttClient, wire: str) throws str -> bool:
+    c._send(wire)?
+    return true
+
+def _mq_client_reopen(c: MqttClient) throws str -> bool:
+    c._open_session()?
+    c._resume()?
+    return true
+
+def _mq_client_service(c: MqttClient, wait_ms: int) throws str -> bool:
+    return c._service(wait_ms)?
+
+def _mq_client_request(c: MqttClient, pid: int, wire: str) throws str -> MqttPacket:
+    return c._await_ack(pid, wire)?
+
+# ── Broker ───────────────────────────────────────────────────────────────────
+
+pub class _MqPeer:
+    pub conn: _MqConn
+    pub id: str
+    pub version: int
+    pub ready: bool
+    pub dead: bool
+    pub clean: bool
+    pub keep_alive: int
+    pub last_ms: int
+    pub sub_f: List[str]
+    pub sub_o: List[int]
+    pub sub_id: List[int]
+    pub qos2_in: List[int]
+    pub next_pid: int
+    pub has_will: bool
+    pub will: MqttPacket
+    pub alias_in: Dict[int, str]
+
+pub class _MqSession:
+    pub id: str
+    pub sub_f: List[str]
+    pub sub_o: List[int]
+    pub sub_id: List[int]
+
+# Single-threaded MQTT broker: call poll() in a loop (e.g. on its own thread).
+pub class MqttBroker:
+    pub host: str
+    pub port: int
+    pub websocket: bool
+    pub routed: int                # application messages delivered to subscribers
+    pub topic_alias_max: int       # offered to v5 clients (default 10)
+    _l: TcpListener
+    _peers: List[_MqPeer]
+    _sessions: List[_MqSession]
+    _ret_topics: List[str]
+    _ret_msgs: List[MqttPacket]
+    _auth: bool
+    _user: str
+    _pass: str
+    _ids: int
+
+extend MqttBroker:
+    pub def listen(host: str, port: int) throws str -> MqttBroker:
+        mut b = MqttBroker()
+        b.host = host
+        b.port = port
+        b.websocket = false
+        b.routed = 0
+        b.topic_alias_max = 10
+        b._peers = []
+        b._sessions = []
+        b._ret_topics = []
+        b._ret_msgs = []
+        b._auth = false
+        b._user = ""
+        b._pass = ""
+        b._ids = 0
+        b._l = TcpListener.listen(host, port)
+        if not b._l.listening: raise(f"MQTT broker: cannot listen on {host}:{port}")
+        return b
+
+    # MQTT over WebSocket (any path; frames are binary).
+    pub def listen_ws(host: str, port: int) throws str -> MqttBroker:
+        mut b = MqttBroker.listen(host, port)?
+        b.websocket = true
+        return b
+
+    # Require this username / password in CONNECT.
+    pub def require_auth(self, username: str, password: str):
+        self._auth = true
+        self._user = username
+        self._pass = password
+
+    pub def client_count(self) -> int:
+        mut n = 0
+        mut i = 0
+        while i < len(self._peers):
+            if self._peers[i].ready and not self._peers[i].dead: n = n + 1
+            i = i + 1
+        return n
+
+    pub def retained_count(self) -> int: return len(self._ret_topics)
+
+    # Drop a client's connection abruptly (as a network failure would): its
+    # will message is published. Returns false when no such client.
+    pub def kick(self, client_id: str) -> bool:
+        mut i = 0
+        while i < len(self._peers):
+            mut c = self._peers[i]
+            if c.ready and not c.dead and c.id == client_id:
+                self._drop(c, true)
+                self._reap()
+                return true
+            i = i + 1
+        return false
+
+    # Handle whatever is ready within timeout_ms; returns the number of
+    # sockets serviced.
+    pub def poll(self, timeout_ms: int) -> int:
+        mut n = len(self._peers)
+        mut fds: List[int] = [self._l.fd]
+        mut ready: List[int] = [0]
+        mut i = 0
+        while i < n:
+            fds.append(self._peers[i].conn.fd())
+            ready.append(0)
+            i = i + 1
+        mut fp = fds as Pointer[int]
+        mut rp = ready as Pointer[int]
+        mut got = trc_mqtt_poll(fp, n + 1, timeout_ms, rp)
+        if got > 0:
+            if ready[0] != 0: self._accept()
+            i = 0
+            while i < n:
+                if ready[i + 1] != 0: self._read_peer(self._peers[i])
+                i = i + 1
+        mut now = trc_mqtt_now_ms()
+        i = 0
+        while i < len(self._peers):
+            mut c = self._peers[i]
+            if not c.dead and c.ready and c.keep_alive > 0 and now - c.last_ms > c.keep_alive * 1500:
+                self._drop(c, true)
+            if not c.dead and not c.ready and now - c.last_ms > 10000:
+                self._drop(c, false)
+            i = i + 1
+        self._reap()
+        if got < 0: return 0
+        return got
+
+    # Serve for `ms` milliseconds.
+    pub def serve_for(self, ms: int):
+        mut deadline = trc_mqtt_now_ms() + ms
+        while trc_mqtt_now_ms() < deadline: self.poll(20)
+
+    pub def close(self):
+        mut i = 0
+        while i < len(self._peers):
+            self._peers[i].dead = true
+            self._peers[i].conn.close(false)
+            i = i + 1
+        self._peers = []
+        self._l.close()
+
+    def _reap(self):
+        mut keep: List[_MqPeer] = []
+        mut i = 0
+        while i < len(self._peers):
+            if not self._peers[i].dead: keep.append(self._peers[i])
+            i = i + 1
+        self._peers = keep
+
+    def _accept(self):
+        mut s = self._l.accept()
+        if not s.connected: return
+        mut c = _MqPeer()
+        if self.websocket:
+            mut w = WebSocketServer.accept_upgrade(s)
+            if not w.ok:
+                s.close()
+                return
+            c.conn = _MqConn.accepted_ws(w)
+        else:
+            c.conn = _MqConn.accepted_tcp(s)
+        c.id = ""
+        c.version = MQTT_V311
+        c.ready = false
+        c.dead = false
+        c.clean = true
+        c.keep_alive = 0
+        c.last_ms = trc_mqtt_now_ms()
+        c.sub_f = []
+        c.sub_o = []
+        c.sub_id = []
+        c.qos2_in = []
+        c.next_pid = 1
+        c.has_will = false
+        c.will = MqttPacket.new(MQTT_PUBLISH)
+        c.alias_in = {}
+        self._peers.append(c)
+
+    def _out(self, c: _MqPeer, p: MqttPacket):
+        if c.dead: return
+        mut w = p.encode(c.version)
+        mut r: Result[bool, str] = _mq_conn_write(c.conn, w)
+        if r.is_err: self._drop(c, true)
+
+    # abnormal: publish the will.
+    def _drop(self, c: _MqPeer, abnormal: bool):
+        if c.dead: return
+        c.dead = true
+        c.conn.close(false)
+        if c.ready and not c.clean:
+            self._save_session(c)
+        if abnormal and c.ready and c.has_will:
+            c.has_will = false
+            self._route(c, c.will)
+
+    def _save_session(self, c: _MqPeer):
+        self._forget_session(c.id)
+        mut s = _MqSession()
+        s.id = c.id
+        s.sub_f = c.sub_f
+        s.sub_o = c.sub_o
+        s.sub_id = c.sub_id
+        self._sessions.append(s)
+
+    def _forget_session(self, id: str):
+        mut keep: List[_MqSession] = []
+        mut i = 0
+        while i < len(self._sessions):
+            if self._sessions[i].id != id: keep.append(self._sessions[i])
+            i = i + 1
+        self._sessions = keep
+
+    def _read_peer(self, c: _MqPeer):
+        if c.dead: return
+        mut r: Result[bool, str] = c.conn.fill(0)
+        if r.is_err:
+            self._drop(c, true)
+            return
+        c.last_ms = trc_mqtt_now_ms()
+        while not c.dead:
+            mut fr: Result[str, str] = c.conn.take_frame()
+            if fr.is_err:
+                self._kill(c, 0x81)
+                return
+            if fr.ok.len() == 0: return
+            mut pr: Result[MqttPacket, str] = MqttPacket.decode(fr.ok, c.version)
+            if pr.is_err:
+                self._kill(c, 0x81)
+                return
+            self._on_packet(c, pr.ok)
+
+    # Protocol violation: v5 DISCONNECT with a reason, then drop (will published).
+    def _kill(self, c: _MqPeer, reason: int):
+        if c.ready and c.version == MQTT_V5:
+            mut d = MqttPacket.ack(MQTT_DISCONNECT, 0, reason)
+            self._out(c, d)
+        self._drop(c, true)
+
+    def _connack(self, c: _MqPeer, code: int, present: bool, props: MqttProps):
+        mut a = MqttPacket.new(MQTT_CONNACK)
+        a.reason_code = code
+        a.session_present = present
+        a.props = props
+        self._out(c, a)
+
+    def _on_connect(self, c: _MqPeer, p: MqttPacket):
+        c.version = p.version
+        if p.version != MQTT_V311 and p.version != MQTT_V5:
+            c.version = MQTT_V311
+            mut e = MqttProps.new()
+            self._connack(c, 1, false, e)
+            self._drop(c, false)
+            return
+        mut v5 = c.version == MQTT_V5
+        if self._auth:
+            if not (p.has_username and p.has_password and p.username == self._user and p.password == self._pass):
+                mut e2 = MqttProps.new()
+                if v5: self._connack(c, 0x86, false, e2)
+                else: self._connack(c, 4, false, e2)
+                self._drop(c, false)
+                return
+        mut props = MqttProps.new()
+        mut id = p.client_id
+        if id.len() == 0:
+            if not v5 and not p.clean_start:
+                mut e3 = MqttProps.new()
+                self._connack(c, 2, false, e3)
+                self._drop(c, false)
+                return
+            self._ids = self._ids + 1
+            id = f"auto-{self._ids}"
+            if v5: props.assigned_client_id = id
+        # Session takeover.
+        mut i = 0
+        while i < len(self._peers):
+            mut o = self._peers[i]
+            if o.ready and not o.dead and o.id == id:
+                if o.version == MQTT_V5:
+                    mut d = MqttPacket.ack(MQTT_DISCONNECT, 0, 0x8E)
+                    self._out(o, d)
+                self._drop(o, true)
+            i = i + 1
+        c.id = id
+        # 3.1.1: the session outlives the connection unless clean_start.
+        # 5.0: only when the client asked for a session expiry interval > 0.
+        c.clean = p.clean_start
+        if v5: c.clean = p.props.session_expiry <= 0
+        c.keep_alive = p.keep_alive
+        mut present = false
+        if p.clean_start:
+            self._forget_session(id)
+        else:
+            mut k = 0
+            while k < len(self._sessions):
+                mut s = self._sessions[k]
+                if s.id == id:
+                    c.sub_f = s.sub_f
+                    c.sub_o = s.sub_o
+                    c.sub_id = s.sub_id
+                    present = true
+                k = k + 1
+            self._forget_session(id)
+        if p.has_will:
+            c.has_will = true
+            c.will = MqttPacket.publish(p.will_topic, p.will_payload, p.will_qos, p.will_retain)
+            if v5: c.will.props = p.will_props.message_copy()
+        if v5:
+            props.topic_alias_max = self.topic_alias_max
+            props.retain_available = 1
+            props.wildcard_sub_available = 1
+            props.sub_id_available = 1
+            props.shared_sub_available = 0
+        c.ready = true
+        self._connack(c, 0, present, props)
+
+    def _on_packet(self, c: _MqPeer, p: MqttPacket):
+        mut t = p.ptype
+        if not c.ready:
+            if t != MQTT_CONNECT:
+                self._drop(c, false)
+                return
+            self._on_connect(c, p)
+            return
+        if t == MQTT_CONNECT:
+            self._kill(c, 0x82)
+        elif t == MQTT_PUBLISH:
+            if c.version == MQTT_V5 and p.props.topic_alias >= 0:
+                mut a = p.props.topic_alias
+                if a == 0 or a > self.topic_alias_max:
+                    self._kill(c, 0x94)
+                    return
+                if p.topic.len() > 0:
+                    c.alias_in[a] = p.topic
+                elif c.alias_in.contains(a):
+                    p.topic = c.alias_in[a]
+                else:
+                    self._kill(c, 0x82)
+                    return
+                p.props.topic_alias = -1
+            if not mqtt_valid_topic(p.topic):
+                self._kill(c, 0x90)
+                return
+            if p.qos == 0:
+                self._route(c, p)
+            elif p.qos == 1:
+                self._route(c, p)
+                self._out(c, MqttPacket.ack(MQTT_PUBACK, p.packet_id, 0))
+            else:
+                if not c.qos2_in.contains(p.packet_id):
+                    c.qos2_in.append(p.packet_id)
+                    self._route(c, p)
+                self._out(c, MqttPacket.ack(MQTT_PUBREC, p.packet_id, 0))
+        elif t == MQTT_PUBREL:
+            mut code = 0x92
+            if c.qos2_in.contains(p.packet_id):
+                code = 0
+                mut keep: List[int] = []
+                mut i = 0
+                while i < len(c.qos2_in):
+                    if c.qos2_in[i] != p.packet_id: keep.append(c.qos2_in[i])
+                    i = i + 1
+                c.qos2_in = keep
+            self._out(c, MqttPacket.ack(MQTT_PUBCOMP, p.packet_id, code))
+        elif t == MQTT_PUBREC:
+            self._out(c, MqttPacket.ack(MQTT_PUBREL, p.packet_id, 0))
+        elif t == MQTT_PUBACK or t == MQTT_PUBCOMP:
+            return
+        elif t == MQTT_SUBSCRIBE:
+            self._on_subscribe(c, p)
+        elif t == MQTT_UNSUBSCRIBE:
+            mut ua = MqttPacket.ack(MQTT_UNSUBACK, p.packet_id, 0)
+            mut j = 0
+            while j < len(p.filters):
+                mut idx = c.sub_f.index_of(p.filters[j])
+                if idx >= 0:
+                    c.sub_f.remove(idx)
+                    c.sub_o.remove(idx)
+                    c.sub_id.remove(idx)
+                    ua.reason_codes.append(0)
+                else:
+                    ua.reason_codes.append(0x11)
+                j = j + 1
+            self._out(c, ua)
+        elif t == MQTT_PINGREQ:
+            self._out(c, MqttPacket.new(MQTT_PINGRESP))
+        elif t == MQTT_DISCONNECT:
+            if c.version == MQTT_V5 and p.reason_code == 0x04:
+                self._drop(c, true)
+            else:
+                c.has_will = false
+                self._drop(c, false)
+        else:
+            self._kill(c, 0x82)
+
+    def _on_subscribe(self, c: _MqPeer, p: MqttPacket):
+        mut v5 = c.version == MQTT_V5
+        mut sid = 0
+        if len(p.props.subscription_ids) > 0: sid = p.props.subscription_ids[0]
+        mut ack = MqttPacket.ack(MQTT_SUBACK, p.packet_id, 0)
+        mut existed_list: List[int] = []
+        mut i = 0
+        while i < len(p.filters):
+            mut f = p.filters[i]
+            mut o = p.sub_options[i]
+            if not mqtt_valid_filter(f):
+                existed_list.append(0)
+                if v5: ack.reason_codes.append(0x8F)
+                else: ack.reason_codes.append(0x80)
+            elif f.starts_with("$share/"):
+                existed_list.append(0)
+                if v5: ack.reason_codes.append(0x9E)
+                else: ack.reason_codes.append(0x80)
+            else:
+                mut q = o & 3
+                ack.reason_codes.append(q)
+                mut idx = c.sub_f.index_of(f)
+                mut existed = idx >= 0
+                if existed: existed_list.append(1)
+                else: existed_list.append(0)
+                if existed:
+                    c.sub_o[idx] = o
+                    c.sub_id[idx] = sid
+                else:
+                    c.sub_f.append(f)
+                    c.sub_o.append(o)
+                    c.sub_id.append(sid)
+            i = i + 1
+        self._out(c, ack)
+        # Retained messages for the new subscriptions.
+        i = 0
+        while i < len(p.filters):
+            if ack.reason_codes[i] < 0x80:
+                mut rh = (p.sub_options[i] >> 4) & 3
+                if rh == 0 or (rh == 1 and existed_list[i] == 0):
+                    mut k = 0
+                    while k < len(self._ret_topics):
+                        if mqtt_topic_matches(p.filters[i], self._ret_topics[k]):
+                            mut m = self._ret_msgs[k]
+                            mut q2 = m.qos
+                            if (p.sub_options[i] & 3) < q2: q2 = p.sub_options[i] & 3
+                            mut out = MqttPacket.publish(m.topic, m.payload, q2, true)
+                            if c.version == MQTT_V5:
+                                out.props = m.props.message_copy()
+                                if sid > 0: out.props.subscription_ids.append(sid)
+                            if q2 > 0: out.packet_id = self._pid(c)
+                            self._out(c, out)
+                            self.routed = self.routed + 1
+                        k = k + 1
+            i = i + 1
+
+    def _pid(self, c: _MqPeer) -> int:
+        mut pid = c.next_pid
+        c.next_pid = c.next_pid + 1
+        if c.next_pid > 65535: c.next_pid = 1
+        return pid
+
+    def _route(self, src: _MqPeer, p: MqttPacket):
+        if p.retain:
+            mut idx = self._ret_topics.index_of(p.topic)
+            if p.payload.len() == 0:
+                if idx >= 0:
+                    mut kt: List[str] = []
+                    mut km: List[MqttPacket] = []
+                    mut j = 0
+                    while j < len(self._ret_topics):
+                        if j != idx:
+                            kt.append(self._ret_topics[j])
+                            km.append(self._ret_msgs[j])
+                        j = j + 1
+                    self._ret_topics = kt
+                    self._ret_msgs = km
+            else:
+                mut keep = MqttPacket.publish(p.topic, p.payload, p.qos, true)
+                keep.props = p.props.message_copy()
+                if idx >= 0: self._ret_msgs[idx] = keep
+                else:
+                    self._ret_topics.append(p.topic)
+                    self._ret_msgs.append(keep)
+        mut i = 0
+        while i < len(self._peers):
+            mut c = self._peers[i]
+            if c.ready and not c.dead:
+                mut best = -1
+                mut rap = false
+                mut ids: List[int] = []
+                mut k = 0
+                while k < len(c.sub_f):
+                    if mqtt_topic_matches(c.sub_f[k], p.topic):
+                        mut o = c.sub_o[k]
+                        mut skip = (o & 4) != 0 and c.id == src.id
+                        if not skip:
+                            mut q = o & 3
+                            if p.qos < q: q = p.qos
+                            if q > best: best = q
+                            if (o & 8) != 0: rap = true
+                            if c.sub_id[k] > 0: ids.append(c.sub_id[k])
+                    k = k + 1
+                if best >= 0:
+                    mut out = MqttPacket.publish(p.topic, p.payload, best, p.retain and rap)
+                    if c.version == MQTT_V5:
+                        out.props = p.props.message_copy()
+                        out.props.subscription_ids = ids
+                    if best > 0: out.packet_id = self._pid(c)
+                    self._out(c, out)
+                    self.routed = self.routed + 1
+            i = i + 1

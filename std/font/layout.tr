@@ -1,0 +1,102 @@
+# std.font.layout -- line breaking with real glyph metrics.
+#
+# wrap_text breaks text at UAX #29 word boundaries (std.unicode.segment):
+# between words, after spaces and punctuation, and between ideographs, so
+# CJK text wraps without spaces. Explicit newlines start a new paragraph;
+# a word wider than the line is broken between grapheme clusters. Spaces at
+# the end of a wrapped line are dropped.
+#
+#   from std.font import Font, wrap_text
+#   mut lines = wrap_text(f, text, 12.0, 200.0)   # each fits 200 units wide
+
+from std.font.mod import Font
+from std.unicode.segment import word_offsets, grapheme_offsets
+
+def _is_space_seg(s: str) -> bool:
+    mut i = 0
+    while i < s.len():
+        mut p = s as Pointer[char]
+        mut c = 0
+        unsafe: c = (p.offset(i).read() as int) & 255
+        if c != 32 and c != 9: return false
+        i = i + 1
+    return s.len() > 0
+
+def _rstrip_spaces(s: str) -> str:
+    mut e = s.len()
+    mut p = s as Pointer[char]
+    while e > 0:
+        mut c = 0
+        unsafe: c = (p.offset(e - 1).read() as int) & 255
+        if c != 32 and c != 9: break
+        e = e - 1
+    return s.slice(0, e)
+
+def _wrap_para(font: Font, para: str, size: float, width: float, out: List[str]):
+    if para.len() == 0:
+        out.append("")
+        return
+    mut src = para
+    mut offs = word_offsets(src)
+    mut line = ""
+    mut k = 0
+    while k + 1 < len(offs):
+        mut seg = src.slice(offs[k], offs[k + 1])
+        mut cand = line + seg
+        if font.measure(_rstrip_spaces(cand), size) <= width:
+            line = cand
+            k = k + 2
+            continue
+        if _is_space_seg(seg):
+            # spaces never start a line
+            line = cand
+            k = k + 2
+            continue
+        if line.len() > 0:
+            out.append(_rstrip_spaces(line))
+            line = ""
+            continue
+        # one segment wider than the line: break between graphemes
+        mut go = grapheme_offsets(seg)
+        mut cut = 0
+        mut j = 0
+        while j + 1 < len(go):
+            if font.measure(seg.slice(0, go[j + 1]), size) <= width or j == 0:
+                cut = go[j + 1]
+            else:
+                break
+            j = j + 2
+        out.append(seg.slice(0, cut))
+        mut rest = seg.slice(cut, seg.len())
+        if rest.len() == 0:
+            k = k + 2
+        else:
+            # re-segment the remainder in place of this segment
+            mut tail = rest + src.slice(offs[k + 1], src.len())
+            src = tail
+            offs = word_offsets(src)
+            k = 0
+    out.append(_rstrip_spaces(line))
+
+# Break `text` into lines no wider than `width` at `size` per em.
+pub def wrap_text(font: Font, text: str, size: float, width: float) -> List[str]:
+    mut out: List[str] = []
+    mut start = 0
+    mut i = 0
+    mut p = text as Pointer[char]
+    while i <= text.len():
+        mut c = 10
+        if i < text.len():
+            unsafe: c = (p.offset(i).read() as int) & 255
+        if c == 10:
+            mut para = text.slice(start, i)
+            if para.ends_with("\r"): para = para.slice(0, para.len() - 1)
+            _wrap_para(font, para, size, width, out)
+            start = i + 1
+        i = i + 1
+    return out
+
+# Height of `lines` lines at `size` with the font's line spacing scaled by
+# `spacing` (1.0 = the font's own ascent - descent + line gap).
+pub def text_lines_height(font: Font, lines: int, size: float, spacing: float) -> float:
+    return (lines as float) * font.line_height(size) * spacing

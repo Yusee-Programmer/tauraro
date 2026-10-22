@@ -10,7 +10,39 @@ from std.compress.gzip import Gzip
 
 ---
 
+## std.compress.flate — built-in DEFLATE, zlib and gzip
+
+A DEFLATE decoder and encoder in C (no `-lz`), with raw, zlib (RFC 1950) and gzip (RFC 1952)
+framing. `std.compress.zlib` and `std.compress.gzip` fall back to it when the runtime is built
+without zlib, and `HttpSession` uses it for `Content-Encoding: gzip` / `deflate`.
+
+```tauraro
+from std.compress.flate import Flate
+
+mut z = Flate.zlib_compress(data, 6)          # level 1..9
+mut back = Flate.zlib_decompress(z)?
+mut page = Flate.decompress_auto(body)?       # gzip, zlib or raw, sniffed
+```
+
+| Method | Description |
+|---|---|
+| `inflate(data)?`, `inflate_max(data, max)?`, `deflate(data, level)` | Raw DEFLATE (RFC 1951). |
+| `zlib_decompress(data)?`, `zlib_decompress_max(data, max)?`, `zlib_compress(data, level)` | zlib streams; the Adler-32 is checked. |
+| `gunzip(data)?`, `gunzip_max(data, max)?`, `gzip(data, level)` | gzip; every member is decoded and CRC-32 / ISIZE checked. |
+| `decompress_auto(data)?`, `decompress_auto_max(data, max)?` | Detect gzip / zlib / raw from the first bytes. |
+| `crc32(data)`, `adler32(data)`, `is_gzip(data)` | Checksums and sniffing. |
+
+Decoding raises on corrupt, truncated or checksum-failing input, and when the output would pass
+the limit (`FLATE_DEFAULT_MAX_OUT` = 1 GiB for the plain variants; `max <= 0` = unlimited). The
+encoder uses LZ77 with hash chains and picks fixed or dynamic Huffman per block; output is within
+a few percent of zlib at the same level.
+
+---
+
 ## std.compress.zlib — Zlib
+
+Uses the system zlib when the runtime is built with `-DTAURARO_COMPRESS_ZLIB -lz`, otherwise
+`std.compress.flate` (same output format).
 
 | Method | Signature | Returns | Description |
 |---|---|---|---|
@@ -152,3 +184,100 @@ d.free()
 ```
 
 `Compress.algorithms() -> List[str]`, `Compress.supports(name) -> bool`, `Compress.compress_with(name, data, n, checksum)`. `"lz4-block"` has no framing — keep the original size and pass it (or an upper bound) as `max_out`. Unknown names return `ok == false`.
+
+The by-name API also accepts `"bzip2"` (compress and decompress) and, for
+`decompress` only, `"xz"`, `"lzma"` and `"brotli"` (the native codecs below).
+`Compress.detect(data) -> str` names the format from its magic bytes
+(`"zstd"`, `"lz4"`, `"bzip2"`, `"xz"`, `"gzip"`, or `""`; brotli and raw LZ4
+blocks have no magic). Note that importing `std.compress` links all of the
+native codecs; import a sub-module directly to link only one.
+
+---
+
+## Native codecs: bzip2, xz / LZMA, Brotli
+
+```tauraro
+from std.compress.bzip2  import Bzip2, Bzip2Decoder, Bzip2Encoder
+from std.compress.xz     import Xz, XzDecoder, Lzma, LzmaDecoder
+from std.compress.brotli import Brotli, BrotliDecoder
+```
+
+Vendored, permissively licensed C codecs compiled into each module's
+`*_native.c` shim (see `std/compress/vendor/README.md`). **No external library
+and no build flag**; they build with gcc, clang and MinGW on Linux, macOS and
+Windows.
+
+| Module | Codec | Licence |
+|---|---|---|
+| `std.compress.bzip2` | libbzip2 1.0.8 (decode + encode) | bzip2 licence (BSD-style) |
+| `std.compress.xz` | XZ Embedded 2024-12-30 for `.xz`; a small built-in decoder for `.lzma` | 0BSD |
+| `std.compress.brotli` | Google brotli 1.2.0 decoder, with the RFC 7932 static dictionary | MIT |
+
+The API is the same for every codec. Inputs and outputs are binary `str`s
+(length-tracked, NUL bytes preserved); errors are raised (`throws str`).
+
+| Call | Description |
+|---|---|
+| `X.decompress(data) throws str -> str` | Decode a complete input; output limited to 1 GiB (`COMPRESS_DEFAULT_MAX_OUT`). |
+| `X.decompress_max(data, max_out) throws str -> str` | Same with an explicit limit (decompression-bomb guard); `max_out <= 0` means unlimited. Exceeding it raises `"... exceeds the max_out limit"`. |
+| `XDecoder.init(max_out) throws str -> XDecoder` | Streaming decoder. |
+| `dec.feed(chunk) throws str -> str` | Decode the next chunk (any size, even 1 byte) and return the output it completed. |
+| `dec.finish() throws str -> str` | End of input: returns the remaining output, frees the decoder, raises if the input was truncated. |
+| `dec.close()` | Free the decoder early (after an error it is already closed). |
+| `Bzip2.compress(data, level) throws str -> str` | One bzip2 stream; `level` 1..9 = 100..900 KB blocks. Output is byte-identical to Python's `bz2.compress`. |
+| `Bzip2Encoder.init(level)`, `enc.feed(chunk) -> str`, `enc.finish() -> str` | Streaming bzip2 encoder. |
+| `Bzip2.is_bzip2(data)`, `Xz.is_xz(data)` | Magic-number checks. |
+| `Bzip2Decoder.streams()` | Number of complete bzip2 streams decoded so far. |
+
+Streaming decoders keep their output in a buffer that `feed` empties, so
+memory stays bounded by the chunk sizes (plus the codec's window: up to
+900 KB for bzip2, the dictionary size declared by `.xz` / `.lzma` files, up
+to 16 MiB for brotli). One-shot calls grow their output geometrically (no
+quadratic copying).
+
+What is supported:
+
+- **bzip2**: block and stream CRCs are verified; concatenated streams
+  (`cat a.bz2 b.bz2`, pbzip2 output) decode to the concatenated data; garbage
+  after a stream raises. Empty input decodes to `""` (as in Python).
+- **xz**: LZMA2; CRC32, CRC64 and SHA-256 checks (verified; unknown check IDs
+  are rejected); multiple blocks; concatenated streams and stream padding;
+  BCJ filters x86, ARM, ARM-Thumb, ARM64, PowerPC, IA-64, SPARC and RISC-V.
+  Not supported: the Delta filter, and dictionaries above 1.5 GiB.
+- **lzma** (`.lzma`, "LZMA alone"): lc/lp/pb up to 8/4/4, known or unknown
+  uncompressed size, with or without end-of-payload marker.
+- **brotli**: the complete RFC 7932 format, including the static dictionary
+  and transforms. A brotli stream has no magic number; data after its end
+  raises. Large-window brotli (non-RFC) is not enabled.
+
+Compression is provided for bzip2 only.
+
+Corrupt and truncated inputs raise; they never crash (the shims were fuzzed
+under ASan/UBSan with randomly corrupted Python-produced streams).
+
+```tauraro
+from std.compress.bzip2 import Bzip2
+from std.compress.xz import Xz
+from std.io.tar import TarReader
+
+def open_tarball(data: str, name: str) throws str -> TarReader:
+    mut raw = data
+    if name.ends_with(".tar.bz2") or name.ends_with(".tbz2"):
+        raw = Bzip2.decompress(data)?
+    elif name.ends_with(".tar.xz") or name.ends_with(".txz"):
+        raw = Xz.decompress(data)?
+    return TarReader.open(raw, raw.len())
+```
+
+Decoding an HTTP `Content-Encoding: br` body:
+
+```tauraro
+from std.compress.brotli import Brotli
+mut html = Brotli.decompress_max(body, 64 << 20)?
+```
+
+Throughput (one-shot decode of a 26.6 MB text corpus, x86-64, shim at -O2,
+compared with Python 3.14's `bz2` / `lzma` / `brotli` 1.2.0 C extensions):
+bzip2 decode 26 MB/s (Python 31), bzip2 `-9` encode 10.7 MB/s (10.1), xz
+decode 39 MB/s (79; XZ Embedded is smaller and slower than liblzma), `.lzma`
+decode 42 MB/s (85), brotli decode 167-173 MB/s (250-278).

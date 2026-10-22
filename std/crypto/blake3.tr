@@ -1,0 +1,101 @@
+# std.crypto.blake3 -- the BLAKE3 hash function.
+#
+# Three modes from the BLAKE3 spec, all with extendable output:
+#   * hash        -- plain hashing (default 32-byte output)
+#   * keyed       -- a MAC / PRF under a 32-byte key
+#   * derive_key  -- KDF: a hard-coded, application-unique context string
+#                    plus secret key material
+# Inputs are binary-safe. Functions return RAW bytes; `_hex` forms give hex.
+# This is the portable single-threaded implementation.
+#
+# Usage:
+#   from std.crypto.blake3 import Blake3, Blake3Stream
+#   Blake3.hash_hex("abc")                          # "6437b3ac..."
+#   mut mac = Blake3.keyed(key32, msg)?
+#   mut sub = Blake3.derive_key("myapp 2026-10 session keys", master, 32)
+#   mut st = Blake3Stream.init()
+#   st.update(chunk)
+#   mut d = st.finish(32)
+
+from std.crypto.native import trc_blake3, trc_blake3_state_size, trc_blake3_begin, trc_blake3_update, trc_blake3_finish
+from std.crypto.native import _cn_alloc, _cn_take, _cn_free, _cn_hex
+
+def _b3(mode: int, key: str, data: str, outlen: int) -> str:
+    mut n = outlen
+    if n < 0: n = 0
+    mut p = _cn_alloc(n)
+    mut kp = key as Pointer[char]
+    mut dp = data as Pointer[char]
+    trc_blake3(mode, kp, key.len(), dp, data.len(), p, n)
+    return _cn_take(p, n)
+
+pub class Blake3:
+    _dummy: int
+
+extend Blake3:
+    # 32-byte BLAKE3 hash.
+    pub def hash(data: str) -> str: return _b3(0, "", data, 32)
+    pub def hash_hex(data: str) -> str:
+        mut d = _b3(0, "", data, 32)
+        return _cn_hex(d)
+
+    # Extendable output: any number of bytes (the first 32 equal hash()).
+    pub def hash_xof(data: str, outlen: int) -> str: return _b3(0, "", data, outlen)
+
+    # Keyed hash (MAC/PRF). key must be exactly 32 bytes.
+    pub def keyed(key: str, data: str) throws str -> str:
+        if key.len() != 32: raise("BLAKE3: keyed mode needs a 32-byte key")
+        return _b3(1, key, data, 32)
+
+    pub def keyed_xof(key: str, data: str, outlen: int) throws str -> str:
+        if key.len() != 32: raise("BLAKE3: keyed mode needs a 32-byte key")
+        return _b3(1, key, data, outlen)
+
+    # Key derivation: `context` should be a hard-coded, globally unique,
+    # application-specific string; `material` is the secret input.
+    pub def derive_key(context: str, material: str, outlen: int) -> str:
+        return _b3(2, context, material, outlen)
+
+# Incremental BLAKE3. finish(n) may be called repeatedly (it does not consume
+# the state); call dispose() when done.
+pub class Blake3Stream:
+    _st: Pointer[char]
+    _live: bool
+
+extend Blake3Stream:
+    def _make(mode: int, key: str) -> Blake3Stream:
+        mut s = Blake3Stream()
+        s._st = _cn_alloc(trc_blake3_state_size())
+        mut kp = key as Pointer[char]
+        trc_blake3_begin(s._st, mode, kp, key.len())
+        s._live = true
+        return s
+
+    pub def init() -> Blake3Stream: return Blake3Stream._make(0, "")
+
+    pub def init_keyed(key: str) throws str -> Blake3Stream:
+        if key.len() != 32: raise("BLAKE3: keyed mode needs a 32-byte key")
+        return Blake3Stream._make(1, key)
+
+    pub def init_derive_key(context: str) -> Blake3Stream: return Blake3Stream._make(2, context)
+
+    pub def update(self, data: str):
+        if not self._live: return
+        mut dp = data as Pointer[char]
+        trc_blake3_update(self._st, dp, data.len())
+
+    pub def finish(self, outlen: int) -> str:
+        mut n = outlen
+        if n < 0: n = 0
+        mut p = _cn_alloc(n)
+        if self._live: trc_blake3_finish(self._st, p, n)
+        return _cn_take(p, n)
+
+    pub def finish_hex(self) -> str:
+        mut d = self.finish(32)
+        return _cn_hex(d)
+
+    pub def dispose(self):
+        if self._live:
+            _cn_free(self._st)
+            self._live = false

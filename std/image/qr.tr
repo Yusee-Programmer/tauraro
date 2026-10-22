@@ -1,0 +1,214 @@
+# tauraro-cpp-shim: qr_native.c
+#
+# std.image.qr -- QR Code (ISO/IEC 18004) encoder.
+#
+# Versions 1-40, error correction L / M / Q / H, numeric / alphanumeric / byte
+# segments chosen automatically (a dynamic program that minimises the bit
+# length, switching modes inside a message when that is shorter), mask chosen
+# by the standard penalty score, Reed-Solomon error correction. Kanji and ECI
+# segments are not generated; text is encoded as UTF-8 bytes. The result
+# decodes in ZXing / Pillow-free readers (checked against zxing-cpp for every
+# version and level).
+#
+# A QrCode is a square module matrix (`get(x, y)`; true = dark). Render it with
+# to_image (Image, any scale and quiet zone, optional Colors), to_svg (a
+# single <path>) or to_text (UTF-8 half blocks, two rows per line, for
+# terminals).
+#
+# Usage:
+#   from std.image.qr import QrCode, QR_ECC_M
+#   mut qr = QrCode.encode("https://tauraro.dev", QR_ECC_M)?
+#   print(qr.to_text(2))
+#   mut img = qr.to_image(8, 4)
+#   mut svg = qr.to_svg(4)
+
+from std.image.mod import Image
+from std.image.native import _im_alloc
+from std.color import Color
+from std.core.string import StringBuilder
+from std.core.vec import Vec
+from std.string.str import Str
+
+extern "C":
+    def trc_qr_encode(text: Pointer[char], tlen: int, ecc: int, minver: int, maxver: int, mask: int, boost: int, force_mode: int, out: Pointer[char], info: Pointer[int]) -> int
+
+pub const QR_ECC_L: int = 0   # ~7 % of codewords recoverable
+pub const QR_ECC_M: int = 1   # ~15 %
+pub const QR_ECC_Q: int = 2   # ~25 %
+pub const QR_ECC_H: int = 3   # ~30 %
+
+pub const QR_MODE_AUTO: int = 0
+pub const QR_MODE_NUMERIC: int = 1
+pub const QR_MODE_ALNUM: int = 2
+pub const QR_MODE_BYTE: int = 3
+
+pub class QrCode:
+    pub size: int            # modules per side (17 + 4 * version)
+    pub version: int         # 1..40
+    pub ecc: int             # QR_ECC_* actually used (may be higher than requested when boosted)
+    pub mask: int            # 0..7
+    pub modules: Vec[u8]     # size * size, row-major, 1 = dark
+
+extend QrCode:
+    # Smallest version that fits `text` (UTF-8), at error correction `ecc`; the
+    # level is raised automatically while the version does not grow.
+    pub def encode(text: str, ecc: int) throws str -> QrCode:
+        return QrCode.encode_opts(text, text.len(), ecc, 1, 40, -1, true, QR_MODE_AUTO)?
+
+    # Binary-safe form: the first `len_` bytes of `data`.
+    pub def encode_bytes(data: str, len_: int, ecc: int) throws str -> QrCode:
+        return QrCode.encode_opts(data, len_, ecc, 1, 40, -1, true, QR_MODE_AUTO)?
+
+    # Full control: version range, mask (-1 = best), boost (raise ECC for free),
+    # and force_mode (QR_MODE_*; fails if the text cannot be written in it).
+    pub def encode_opts(data: str, len_: int, ecc: int, min_version: int, max_version: int, mask: int, boost: bool, force_mode: int) throws str -> QrCode:
+        if ecc < 0 or ecc > 3: raise("QR: ecc must be QR_ECC_L..QR_ECC_H")
+        mut out = Vec[u8].init(177 * 177)
+        out.reserve(177 * 177)
+        out.len = 177 * 177
+        mut info = [0, 0, 0, 0]
+        mut ip = info as Pointer[int]
+        mut b = 0
+        if boost: b = 1
+        mut rc = trc_qr_encode(data as Pointer[char], len_, ecc, min_version, max_version, mask, b, force_mode, out.data, ip)
+        if rc == -1: raise("QR: data too long for the requested version range / error correction")
+        if rc == -2: raise("QR: invalid argument, or text not representable in the forced mode")
+        if rc != 0: raise("QR: out of memory")
+        mut q = QrCode()
+        q.size = info[0]
+        q.version = info[1]
+        q.mask = info[2]
+        q.ecc = info[3]
+        q.modules = out
+        return q
+
+    # Module at column x, row y; false outside the symbol.
+    pub def get(self, x: int, y: int) -> bool:
+        if x < 0 or y < 0 or x >= self.size or y >= self.size: return false
+        return self.modules.get(y * self.size + x) as int == 1
+
+    # RGBA image: each module is `scale` x `scale` pixels, `border` modules of
+    # quiet zone (the standard asks for 4). Black on white.
+    pub def to_image(self, scale: int, border: int) -> Image:
+        return self.to_image_colors(scale, border, Color.black(), Color.white())
+
+    pub def to_image_colors(self, scale: int, border: int, fg: Color, bg: Color) -> Image:
+        mut s = scale
+        if s < 1: s = 1
+        mut bd = border
+        if bd < 0: bd = 0
+        mut dim = (self.size + 2 * bd) * s
+        mut img = _im_alloc(dim, dim)
+        mut fr = fg.r8()
+        mut fgc = fg.g8()
+        mut fb = fg.b8()
+        mut fa = fg.a8()
+        mut br = bg.r8()
+        mut bgc = bg.g8()
+        mut bb = bg.b8()
+        mut ba = bg.a8()
+        mut y = 0
+        while y < dim:
+            mut my = y / s - bd
+            mut x = 0
+            while x < dim:
+                mut mx = x / s - bd
+                if self.get(mx, my): img.set_pixel(x, y, fr, fgc, fb, fa)
+                else: img.set_pixel(x, y, br, bgc, bb, ba)
+                x = x + 1
+            y = y + 1
+        return img
+
+    # SVG document: a background rectangle and one <path> for all dark modules.
+    pub def to_svg(self, border: int) -> str:
+        return self.to_svg_colors(border, Color.black(), Color.white())
+
+    pub def to_svg_colors(self, border: int, fg: Color, bg: Color) -> str:
+        mut bd = border
+        if bd < 0: bd = 0
+        mut dim = self.size + 2 * bd
+        mut sb = StringBuilder.init(self.size * self.size * 6 + 512)
+        sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+        sb.append("<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" viewBox=\"0 0 ")
+        sb.append_int(dim)
+        sb.append(" ")
+        sb.append_int(dim)
+        sb.append("\" stroke=\"none\" shape-rendering=\"crispEdges\">\n")
+        sb.append("<rect width=\"100%\" height=\"100%\" fill=\"" + bg.to_hex() + "\"")
+        if bg.a < 0.999: sb.append(" fill-opacity=\"" + _svg_opacity(bg.a) + "\"")
+        sb.append("/>\n<path fill=\"" + fg.to_hex() + "\"")
+        if fg.a < 0.999: sb.append(" fill-opacity=\"" + _svg_opacity(fg.a) + "\"")
+        sb.append(" d=\"")
+        mut first = true
+        mut y = 0
+        while y < self.size:
+            mut x = 0
+            while x < self.size:
+                if self.get(x, y):
+                    mut run = 1
+                    while self.get(x + run, y): run = run + 1
+                    if not first: sb.append(" ")
+                    first = false
+                    sb.append("M")
+                    sb.append_int(x + bd)
+                    sb.append(",")
+                    sb.append_int(y + bd)
+                    sb.append("h")
+                    sb.append_int(run)
+                    sb.append("v1h-")
+                    sb.append_int(run)
+                    sb.append("z")
+                    x = x + run
+                else:
+                    x = x + 1
+            y = y + 1
+        sb.append("\"/>\n</svg>\n")
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # Terminal text, two module rows per line using half blocks. By default the
+    # light modules (and quiet zone) are the filled cells, which reads correctly
+    # on a dark terminal; with invert true the dark modules are filled instead.
+    pub def to_text(self, border: int) -> str:
+        return self.to_text_opts(border, false)
+
+    pub def to_text_opts(self, border: int, invert: bool) -> str:
+        mut bd = border
+        if bd < 0: bd = 0
+        mut sb = StringBuilder.init(self.size * self.size * 2 + 256)
+        mut y = 0 - bd
+        while y < self.size + bd:
+            mut x = 0 - bd
+            while x < self.size + bd:
+                mut top = not self.get(x, y)
+                mut bot = not self.get(x, y + 1)
+                if invert:
+                    top = not top
+                    bot = not bot
+                # default: light modules are the filled cells (dark terminal)
+                if top and bot: sb.append("█")
+                elif top: sb.append("▀")
+                elif bot: sb.append("▄")
+                else: sb.append(" ")
+                x = x + 1
+            sb.append("\n")
+            y = y + 2
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+def _svg_opacity(a: float) -> str:
+    mut v = (a * 1000.0 + 0.5) as int
+    if v >= 1000: return "1"
+    if v < 0: v = 0
+    mut digits = StringBuilder.init(8)
+    digits.append_char(48 + v / 100)
+    digits.append_char(48 + (v / 10) % 10)
+    digits.append_char(48 + v % 10)
+    mut d = digits.to_owned()
+    digits.free()
+    mut n = 3
+    while n > 0 and Str.char_at(d, n - 1) == 48: n = n - 1
+    if n == 0: return "0"
+    return "0." + Str.slice(d, 0, n)

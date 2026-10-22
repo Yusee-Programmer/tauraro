@@ -1,0 +1,198 @@
+# tauraro-cpp-shim: xz_native.c
+#
+# std.compress.xz — .xz and .lzma (LZMA / LZMA2) decompression.
+#
+#   .xz    via XZ Embedded (vendored in std/compress/vendor/xz, public domain /
+#          0BSD): LZMA2; CRC32, CRC64 and SHA-256 integrity checks (all
+#          verified); multiple blocks; concatenated streams and stream
+#          padding; BCJ filters for x86, ARM, ARM-Thumb, ARM64, PowerPC,
+#          IA-64, SPARC and RISC-V executables.
+#   .lzma  the legacy "LZMA alone" format (`xz --format=lzma`, `lzma`, 7-Zip's
+#          LZMA SDK, Python's lzma.FORMAT_ALONE): a small LZMA decoder in
+#          xz_native.c. Known or unknown size, with or without end marker.
+#
+# No external library; identical on Linux, macOS and Windows.
+#
+# Usage:
+#   from std.compress.xz import Xz, XzDecoder, Lzma, LzmaDecoder
+#
+#   mut plain = Xz.decompress(data)?              # at most 1 GiB of output
+#   mut small = Xz.decompress_max(data, 65536)?   # raise beyond 64 KiB
+#   mut old   = Lzma.decompress(lzma_data)?
+#
+#   mut d = XzDecoder.init(0)?                     # 0 = no output limit
+#   mut part = d.feed(chunk)?                      # decoded bytes so far
+#   mut rest = d.finish()?                         # raises if truncated
+#
+# Compression is not provided (decoders only).
+
+from std.compress.common import codec_status_message, COMPRESS_DEFAULT_MAX_OUT
+
+extern "C":
+    def trc_xzd_new(max_out: int) -> int
+    def trc_xzd_feed(h: int, data: Pointer[char], n: int) -> int
+    def trc_xzd_finish(h: int) -> int
+    def trc_xzd_avail(h: int) -> int
+    def trc_xzd_take(h: int, dst: Pointer[char])
+    def trc_xzd_free(h: int)
+    def trc_lzd_new(max_out: int) -> int
+    def trc_lzd_feed(h: int, data: Pointer[char], n: int) -> int
+    def trc_lzd_finish(h: int) -> int
+    def trc_lzd_avail(h: int) -> int
+    def trc_lzd_take(h: int, dst: Pointer[char])
+    def trc_lzd_free(h: int)
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+
+def _byte_at(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe:
+        return p.offset(i).read() as int & 0xFF
+
+# Incremental .xz decoder.
+pub class XzDecoder:
+    pub handle: int
+    pub done: bool
+
+extend XzDecoder:
+    # `max_out` bounds the total decompressed size (<= 0: unlimited).
+    pub def init(max_out: int) throws str -> XzDecoder:
+        mut h = trc_xzd_new(max_out)
+        if h == 0: raise("xz: out of memory")
+        mut d = XzDecoder()
+        d.handle = h
+        d.done = false
+        return d
+
+    def _take(self) -> str:
+        mut n = trc_xzd_avail(self.handle)
+        mut p = _tr_c_malloc(n + 1)
+        trc_xzd_take(self.handle, p)
+        unsafe: p.offset(n).write('\0')
+        return _tr_str_wrap_len(p, n)
+
+    # Decode a chunk of compressed input; returns the output it completed.
+    pub def feed(self, chunk: str) throws str -> str:
+        if self.handle == 0:
+            raise("xz: decoder is closed")
+        mut st = trc_xzd_feed(self.handle, chunk as Pointer[char], chunk.len())
+        if st < 0:
+            mut msg = codec_status_message("xz", st)
+            self.close()
+            raise(msg)
+        return self._take()
+
+    # Signal end of input: returns the remaining output and frees the decoder;
+    # raises when the last stream is incomplete.
+    pub def finish(self) throws str -> str:
+        if self.handle == 0:
+            raise("xz: decoder is closed")
+        mut st = trc_xzd_finish(self.handle)
+        if st < 0:
+            mut msg = codec_status_message("xz", st)
+            self.close()
+            raise(msg)
+        mut out = self._take()
+        self.done = true
+        self.close()
+        return out
+
+    pub def close(self):
+        if self.handle != 0:
+            trc_xzd_free(self.handle)
+            self.handle = 0
+
+pub class Xz:
+    _dummy: int
+
+extend Xz:
+    # Decompress a .xz file (one or more streams; at most 1 GiB of output).
+    pub def decompress(data: str) throws str -> str:
+        return Xz.decompress_max(data, COMPRESS_DEFAULT_MAX_OUT)?
+
+    # Decompress with an explicit output limit (`max_out` <= 0: unlimited).
+    pub def decompress_max(data: str, max_out: int) throws str -> str:
+        mut d = XzDecoder.init(max_out)?
+        mut st = trc_xzd_feed(d.handle, data as Pointer[char], data.len())
+        if st >= 0: st = trc_xzd_finish(d.handle)
+        if st < 0:
+            mut msg = codec_status_message("xz", st)
+            d.close()
+            raise(msg)
+        mut out = d._take()
+        d.close()
+        return out
+
+    # True when `data` starts with the .xz magic FD 37 7A 58 5A 00.
+    pub def is_xz(data: str) -> bool:
+        if data.len() < 6: return false
+        return _byte_at(data, 0) == 0xFD and _byte_at(data, 1) == 0x37 and _byte_at(data, 2) == 0x7A and _byte_at(data, 3) == 0x58 and _byte_at(data, 4) == 0x5A and _byte_at(data, 5) == 0
+
+# Incremental .lzma ("LZMA alone") decoder.
+pub class LzmaDecoder:
+    pub handle: int
+    pub done: bool
+
+extend LzmaDecoder:
+    pub def init(max_out: int) throws str -> LzmaDecoder:
+        mut h = trc_lzd_new(max_out)
+        if h == 0: raise("lzma: out of memory")
+        mut d = LzmaDecoder()
+        d.handle = h
+        d.done = false
+        return d
+
+    def _take(self) -> str:
+        mut n = trc_lzd_avail(self.handle)
+        mut p = _tr_c_malloc(n + 1)
+        trc_lzd_take(self.handle, p)
+        unsafe: p.offset(n).write('\0')
+        return _tr_str_wrap_len(p, n)
+
+    pub def feed(self, chunk: str) throws str -> str:
+        if self.handle == 0:
+            raise("lzma: decoder is closed")
+        mut st = trc_lzd_feed(self.handle, chunk as Pointer[char], chunk.len())
+        if st < 0:
+            mut msg = codec_status_message("lzma", st)
+            self.close()
+            raise(msg)
+        return self._take()
+
+    pub def finish(self) throws str -> str:
+        if self.handle == 0:
+            raise("lzma: decoder is closed")
+        mut st = trc_lzd_finish(self.handle)
+        if st < 0:
+            mut msg = codec_status_message("lzma", st)
+            self.close()
+            raise(msg)
+        mut out = self._take()
+        self.done = true
+        self.close()
+        return out
+
+    pub def close(self):
+        if self.handle != 0:
+            trc_lzd_free(self.handle)
+            self.handle = 0
+
+pub class Lzma:
+    _dummy: int
+
+extend Lzma:
+    # Decompress a .lzma file (at most 1 GiB of output).
+    pub def decompress(data: str) throws str -> str:
+        return Lzma.decompress_max(data, COMPRESS_DEFAULT_MAX_OUT)?
+
+    pub def decompress_max(data: str, max_out: int) throws str -> str:
+        mut d = LzmaDecoder.init(max_out)?
+        mut st = trc_lzd_feed(d.handle, data as Pointer[char], data.len())
+        if st >= 0: st = trc_lzd_finish(d.handle)
+        if st < 0:
+            mut msg = codec_status_message("lzma", st)
+            d.close()
+            raise(msg)
+        mut out = d._take()
+        d.close()
+        return out

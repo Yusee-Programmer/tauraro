@@ -16,7 +16,76 @@ spec, automated regression suite + CI, incremental compilation, and a batch of
 codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
+### Changed
+- `std.io.archive` (and so `std.compress.zip`) compresses and inflates entries with the built-in
+  DEFLATE codec (`std.compress.flate`), so deflated ZIP entries written by other tools read
+  correctly without `-lz`; the runtime zlib stub used to return nothing and fail the CRC check.
+  `ZipReader` also rejects central-directory and local-header offsets past the end of the data.
+- `HttpConn.close()` only closes the socket; the request and response state are released with
+  the reference-counted `HttpConn`. Freeing them in `close()` as well was a use-after-free in the
+  documented `accept` / `close` loop.
+- `std.sys.subprocess`: on Windows, `env_clear()` keeps `SystemRoot` unless it is set or removed
+  explicitly (child processes cannot initialise without it). `std.net.mime` tolerates a CRLF
+  checkout; `.gitattributes` now keeps `*.tr` files LF on every platform.
+- `SmtpClient.data()` no longer drops blank lines from the message (it split the body with
+  `Str.split`, which skips empty pieces, so the header/body separator was lost).
+- `File.write`, `File.append` and `File.write_text` / `append_text` write the string's real
+  length instead of stopping at the first NUL byte, so binary files are written intact.
+- `UdpSocket.send_to` sends the string's real length instead of stopping at the first NUL byte.
+- `TcpStream.send` / `send_nb` / `send_async` send the string's real length instead of stopping
+  at the first NUL byte (binary protocols such as HTTP/2 frames were truncated).
+- `std.net.client`'s `HttpSession`, `std.net.https`'s `HttpsClient` and `std.net.smtp` now use
+  `std.net.tls`: https is verified by default instead of being refused (`HttpSession`) or
+  silently unverified (`HttpsClient`). `set_allow_unverified_tls(true)` / `set_verify(false)`
+  opt out. `SmtpClient.starttls()` now really upgrades the connection. TLS 1.2-only servers are
+  not reachable through these clients any more.
+
 ### Compiler limitations closed
+- Comparing strings with `==` / `!=` frees a fresh operand (a call result, slice, concat or
+  f-string); `if a != b.slice(...)` in a loop used to leak every slice.
+- String concatenation no longer shadows user locals named `_cl`, `_cr` or `_cres` (the generated
+  C used those names for its own temporaries).
+- Results returned by `throws` functions no longer leak: a `Result` local frees its boxed `str`
+  (or value-type) payload and its `str` error at scope exit, `?` frees the box it unwraps, and
+  `raise` / `return` box an owned reference (borrowed fields, parameters and list elements are
+  retained). Each one-shot `decompress(data)?`-style call used to leak its whole output.
+- A `throws` function can return a `@value_type` (the payload is boxed); it used to generate a
+  struct-to-pointer cast.
+- Class fields, parameters and locals named like C keywords or header macros (`stdout`,
+  `stderr`, `stdin`, `errno`, `inline`, `unix`, `linux`, `i386`, `near`, `far`, `small`,
+  `interface`, ...) get C-safe names; they used to break the C build (some only on Windows or
+  macOS).
+- Declaring the same local twice in one block is a sema error (`[N-2]`) instead of a C
+  "redefinition" error; shadowing in an inner block stays legal.
+- Calling a method `str` does not have is a sema error (`[E-1]`) instead of an undeclared C
+  function.
+- f-strings: string literals inside a placeholder (`f"{s.find("b")}"`), `{{` / `}}` for literal
+  braces, and `\"` in the text part all work; an f-string used as an operand of `+` is freed.
+- An empty `[]` passed to a `List[T]` / `Vec[T]` parameter takes the parameter's element type.
+- Compiled C shims are cached per compiler command, so a `--target` cross build no longer links
+  an object compiled for the host.
+- `export def` functions keep their exact name in the shared library and its header unless it is a
+  C keyword or a name libc declares. Names such as `count`, `new` and `delete` used to be exported
+  as `_tr_fn_<name>`, and a call to such an export from inside the library referenced the
+  unprefixed, undefined symbol.
+- `mut w = words[i]` (and `w = words[i]`) on a `List` / `Vec` / `Array` of `str` aliased the
+  element without retaining it, yet released the local at scope exit, so each loop iteration
+  dropped one of the list's references (use-after-free once elements were heap strings, e.g. any
+  `split` or `slice` result). The local now retains the element.
+- Incremental builds: when one module's C failed to compile, later changed modules were left
+  with their previous objects, and the next build reused those stale `.o` files (their `.c`
+  already matched), producing link errors or a wrong binary. Their objects are now dropped.
+- An untyped lambda passed to a `def(float) -> float` (or any function-typed) parameter now takes
+  its parameter types from that signature; it used to compile them as `int`, so the call read
+  garbage through the mismatched C ABI.
+- `return f"...{local}..."` released `local` before the f-string was built (use-after-free):
+  f-string parts now count as reads of the returned expression.
+- `xs[i] = s` inside a generic class whose `List[T]` is instantiated with `T = str` generated an
+  assignment to an rvalue; it now uses `List_TrStr_set` as well.
+- `xs[i] = s` on a `List[str]` generated a `char*` store into the refcounted `List_TrStr` and
+  did not compile; it now uses `List_TrStr_set` (old element released, fresh values not leaked).
+- A static `init` that `throws` no longer gets `malloc`/`returns_nonnull` attributes (it returns a
+  `Result` struct, so the generated C failed to compile).
 - **`[F-4]`** a `throws` function value where a plain `def(...) -> R` is expected (or the
   reverse) is a compile error with a fix hint; no hidden wrapper is generated.
 - **Closure return types are inferred.** `lambda x: x * 2.5`, `lambda: "s"`, class results and
@@ -29,6 +98,337 @@ added here as each phase lands.
 - `from` stays a reserved word (it starts import statements and lifetime clauses).
 
 ### Added
+- Build driver: the generated C modules and the C/C++ shims now compile in parallel (worker pool; `TAURARO_JOBS=N`, default = CPU count) and the compile output is replayed in module order — a cold HTTP+TLS+crypto build drops from ~18 s to ~7 s on 8 cores. gcc builds precompile the shared runtime header (`TAURARO_NO_PCH=1` disables). New `--dev` flag selects `-O1` for fast iteration (~4 s cold). See docs/lang/22.
+- `std.audio` decodes Ogg Vorbis and Ogg Opus: `Ogg.decode` / `Vorbis.decode` / `Opus.decode`, and
+  `Audio.decode` now sniffs `OggS`. New `std.audio.ogg` with `OggFile.info` (codec, exact length from
+  granule positions, Vorbis/Opus comments, OpusHead pre-skip and gain, multiplexed stream list),
+  `OggFile.open` (sample-exact `seek` / `read`), `OggFile.pages` / `packets` (CRC-checked RFC 3533
+  structure) and a streaming `OggDecoder` (`feed` / `pull`). Vorbis uses vendored stb_vorbis 1.22
+  (public domain / MIT, with bounds checks on hostile comment lengths); Opus uses the vendored libopus
+  1.5.2 decoder (BSD-3-Clause, float build, no SIMD) covering SILK, CELT and hybrid, RFC 7845 mapping
+  families 0/1/2/255. Output verified against libvorbis / libopus; corrupted files fuzzed under ASan.
+- **`std.otel`**: OpenTelemetry for Tauraro. Traces (`TracerProvider`/`Tracer`/`Span` with kinds,
+  attributes, events, links, status, limits; always-on / always-off / parent-based /
+  trace-id-ratio samplers; ids from `std.crypto.random`), W3C `traceparent` / `tracestate` /
+  `baggage` parse, format, inject and extract, and a per-thread current context with a
+  `with ctx.activate()` / `with tracer.start_as_current(...)` scope. Metrics (`MeterProvider`/`Meter`,
+  Counter, UpDownCounter, explicit-bucket Histogram, Gauge, observable instruments, cumulative /
+  delta / low-memory temporality, periodic reader). Logs (OTLP log records with trace correlation and
+  a `LogBridge` for `std.log`). OTLP/HTTP JSON export (proto3 JSON mapping: lowerCamelCase, hex ids,
+  int64 as strings) via `std.net.client` with headers, timeout and retry/backoff, plus console,
+  memory and callback exporters, and a thread-safe batch processor (bounded queue, max batch,
+  schedule delay, force flush, drop counting). `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`,
+  `OTEL_EXPORTER_OTLP_*`, `OTEL_TRACES_SAMPLER(_ARG)`, `OTEL_BSP_*`, `OTEL_BLRP_*` and
+  `OTEL_METRICS_EXPORTER` style variables are honoured by `Otel.init_from_env`. Opt-in
+  `TracedHttpClient` (client span + traceparent injection around `HttpSession`) and
+  `ServerInstrumentation` (server span from the incoming traceparent). C shim `otel_native.c`
+  (wall clock, thread-local context stack, MPSC export queue). Test: `tests/lang/148_otel.tr`.
+- `std.log.Logger.set_hook` / `clear_hook`: optional per-record callback (used by the otel bridge).
+- **`std.font`**: TrueType / OpenType fonts, with a bounds-checked C core (`font_native.c`).
+  - Parses TTF, OTF with CFF or CFF2 outlines (Type 2 charstrings, subroutines, CID fonts), TTC
+    collections and WOFF 1.0; tables head, hhea, maxp, hmtx, cmap (formats 0, 4, 6, 10, 12, 13 and
+    14 variation sequences), name, OS/2, post, loca/glyf (simple and composite glyphs), kern,
+    GPOS pair kerning (formats 1 and 2) and GSUB ligatures.
+  - Metrics, `measure(text, size)`, left-to-right shaping (cmap, ligatures, kerning), UAX #29 line
+    breaking (`wrap_text`), anti-aliased signed-area rasterizer (`draw_text`, `draw_glyph`,
+    `render_text`, `render_glyph`) into `std.image` images, glyph outlines, `FontSubset`
+    (standalone TrueType subsets; CFF converted to quadratics) and best-effort system font lookup
+    (`find_system_font`).
+  - Checked against fontTools (metrics, cmaps, advances, bounds, kerning, subsets) on DejaVu,
+    Liberation, Ubuntu, Noto (incl. CJK .ttc) and URW fonts, and against Pillow coverage.
+- **`std.encoding.pdf`**: Unicode text through embedded TrueType/OpenType fonts
+  (`PdfDocument.add_font_ttf`): subset CIDFontType2 / Identity-H fonts with `/W` widths and a
+  ToUnicode CMap (searchable text), shaping with kerning and ligatures, and `text_width`,
+  `text_aligned`, `text_box` and `wrap_text` that use real font metrics.
+- `std.image.webp`: WebP decode (lossy VP8 with ALPH alpha, lossless VP8L, animated ANIM/ANMF composited like
+  libwebp) bit-identical to libwebp/Pillow, and lossless VP8L encode (palette or subtract-green + predictor, LZ77,
+  Huffman) plus an animated `WebpEncoder`. `std.image.tiff`: baseline TIFF decode (strips/tiles, chunky/planar,
+  none/PackBits/LZW/Deflate, predictor 2, 1-16 bit, gray/RGB/RGBA/palette/CMYK, multi-page) and uncompressed/LZW
+  encode (`TiffEncoder` for several pages). `std.image.decode()` sniffs both.
+- `std.image.qr`: QR Code encoder (versions 1-40, L/M/Q/H with free ECC boost, optimal numeric/alphanumeric/byte
+  segmentation, penalty-scored masks) with `to_image`, `to_svg` and half-block `to_text` renderers; verified with
+  zxing-cpp for every version and level.
+- `std.color`: `Color` with sRGB/linear/HSL/HSV/HWB/Lab/LCH/OKLab/OKLCH/XYZ conversions, hex and CSS Color 4
+  parsing, compositing, interpolation in any space, WCAG contrast, delta E 76/94/2000 (Sharma-verified) and palette
+  helpers. `Image.get_color/set_color/filled/fill_color` and `PdfPage.set_fill_color_c/set_stroke_color_c` take it.
+- **`std.net.http2_server`**: HTTP/2 server (RFC 9113) over h2c or TLS 1.3 with ALPN `h2`. Preface,
+  SETTINGS, HPACK, HEADERS/CONTINUATION, DATA with connection and stream flow control, WINDOW_UPDATE,
+  PING, RST_STREAM, GOAWAY (graceful `shutdown()`), request and response trailers, concurrent streams;
+  protocol violations are answered with the proper error codes. `Http2Server` / `H2ServerRequest`
+  (streaming reads, `respond` / `send` / `send_trailers` / `reply`, cancellation detection).
+  `std.net.http2.Http2Client` gains streaming request bodies and response reads (`open_stream`,
+  `send_data`, `read_data`, `wait_headers`, `reset`); the native client no longer deadlocks when both
+  sides write large bodies at once.
+- **`std.net.grpc`**: gRPC over HTTP/2 on raw message bytes: client (`GrpcChannel`: unary, server-,
+  client- and bidirectional streaming, deadlines, cancellation, metadata incl. `-bin`, gzip, h2c and
+  TLS) and server (`GrpcServer`: unary and streaming handlers, status/trailers, deadline propagation,
+  built-in `grpc.health.v1` Check/Watch). Tested against Python grpcio in both directions.
+- `std.geo`: geodesy, location encodings, projections and geometry. Haversine and sphere bearings/destination/
+  midpoint/cross-track/bounding boxes (pole and antimeridian aware); ellipsoid distances with Karney's algorithm
+  (vendored GeographicLib C 2.2, MIT; exact for antipodal and polar pairs, direct/inverse, geodesic area and path length)
+  and a pure-Tauraro Vincenty inverse/direct that raises instead of returning a wrong answer near antipodes; geohash
+  (neighbours), Open Location Code (encode/decode/shorten/recover, verified against the open-location-code CSVs),
+  UTM (Krueger series, Norway/Svalbard zones) and MGRS; Web Mercator, slippy tiles and quadkeys, ECEF and ENU/AER;
+  `Geometry` with point-in-polygon (holes, multipolygons), spherical and ellipsoidal area, Douglas-Peucker, WKT and GeoJSON
+  (FeatureCollection/Feature/Multi*) read and write. Checked against GeographicLib, PROJ and `mgrs` (tests/lang/146_geo.tr).
+- `std.kv`: an embedded crash-safe key-value store (Bitcask style): append-only log with a CRC per record, in-memory hash
+  index plus a skip list for sorted `iter_prefix`, hint file for fast start-up, per-key TTL, atomic batch records, compaction
+  by atomic rename, fsync policies (always / interval / never), size limits, and an exclusive lock file (flock / LockFileEx).
+  Torn or corrupt tails are discarded on open; tests cut the log at every byte of the last record and flip every byte of it
+  (tests/lang/147_kv.tr).
+- **`std.encoding.xlsx`**: Excel workbooks (Office Open XML SpreadsheetML), pure Tauraro.
+  - Reads sheets (names, visibility), shared strings with rich-text runs, inline strings, numbers,
+    booleans, errors, formulas with cached values (shared formulas expanded per cell), dates from
+    built-in and custom number formats in the 1900 and 1904 systems, merged cells, column widths,
+    row heights, freeze panes, auto-filter, hyperlinks and dimensions; `Workbook.open(path)?`,
+    `Workbook.from_bytes(data)?`, `sheet.cell("B3")`, `rows()`, typed accessors, `to_csv()`.
+  - Writes workbooks with several sheets, str / int / float / bool / date / formula / error cells,
+    styles (font, number format, fill, borders, alignment, wrap), column widths, row heights,
+    freeze panes, merges, auto-filter, URL and in-workbook hyperlinks, a shared strings table and
+    docProps. Output checked with openpyxl 3.1.5; workbooks written by openpyxl are read back.
+  - Cell reference helpers (`xlsx_col_name`, `xlsx_ref`, `CellRange.parse`, ...) and
+    `std.encoding.xlsx_xml`, the small pull XML reader it uses.
+- **`std.net.acme`** — ACME client (RFC 8555) for Let's Encrypt and other CAs: accounts with
+  ES256 / ES384 / RS256 keys, contacts, External Account Binding, key rollover and deactivation;
+  orders for DNS names (wildcards) and IP addresses (RFC 8738); http-01, dns-01 (hook) and
+  tls-alpn-01 (RFC 8737) with built-in responders or hooks; nonce handling with badNonce retry,
+  Retry-After polling, alternate chains, revocation, `needs_renewal`, and
+  `AcmeClient.obtain(names, type)?` returning cert + key PEM for `TlsServerConfig`. Tested
+  against a fake CA and checked against Pebble.
+- **`std.crypto.der`** (ASN.1 DER encoder / decoder) and **`std.crypto.csr`** (`KeyPair` with
+  SPKI / PKCS#8 encodings, PKCS#10 CSR build / parse / verify, `CertBuilder` for self-signed and
+  CA-signed X.509 certificates).
+- `TlsServerConfig.add_route(server_name, alpn, other)` selects another certificate by SNI and / or
+  ALPN (e.g. `acme-tls/1`).
+- **TLS 1.3 server** in `std.net.tls`:
+  - `TlsServerConfig` (PEM chain + RSA / EC key, ALPN), `TlsListener` and `TlsStream.accept_fd`;
+    certificates RSA-PSS and ECDSA P-256 / P-384, key exchange X25519 / P-256 / P-384 with
+    HelloRetryRequest, all three cipher suites, ALPN and SNI. Checked against OpenSSL clients.
+  - `HttpServer.enable_tls(cfg)` serves HTTPS with no OpenSSL.
+- **`std.compress.flate`** — built-in DEFLATE decoder and encoder with raw / zlib / gzip framing,
+  checksums, multi-member gzip and output limits. `std.compress.zlib` and `std.compress.gzip` now
+  work without `-lz` (they used to return empty strings on such builds).
+- **HTTP compression** — `HttpSession` sends `Accept-Encoding: gzip, deflate, br` for in-memory
+  requests and decodes the body (`reply.content_encoding`, `set_decompress(false)`); downloads and
+  streaming keep the raw bytes.
+- **`std.net.mqtt`** — MQTT 3.1.1 and 5.0 client over TCP, TLS 1.3 (`std.net.tls`) or
+  WebSocket: CONNECT with clean start / sessions, keep-alive, will, credentials and v5
+  properties (session expiry, receive maximum, topic alias maximum, user properties); PUBLISH at
+  QoS 0 / 1 / 2 with the full PUBACK / PUBREC / PUBREL / PUBCOMP flows both ways, packet-id
+  management, retained messages, outgoing and incoming topic aliases; SUBSCRIBE with v5 options
+  (no-local, retain-as-published, retain handling, subscription ids) and UNSUBSCRIBE; reason codes;
+  DISCONNECT with reason; automatic reconnect with backoff that resends in-flight messages and
+  re-subscribes; `next_message(timeout)` or `on_message` callbacks. Public packet codec, topic
+  filter matching (`+`, `#`, `$` topics) and `MqttBroker`, a small single-threaded broker for
+  tests and local use (wildcards, QoS 0-2, retained and will messages, takeover, persistent
+  subscriptions, WebSocket listener). Checked against test.mosquitto.org, broker.emqx.io and the
+  paho-mqtt client.
+- **`std.version`** — Semantic Versioning 2.0.0: `Version.parse` (exact spec grammar),
+  `parse_loose`, precedence (`compare`, `compare_build`, `sort`), npm-style `bump_major` /
+  `bump_minor` / `bump_patch` / `bump_prerelease`; `VersionReq` requirements with node-semver
+  semantics (`^`, `~`/`~>`, x-ranges, hyphen ranges, comparators, space or comma AND, `||` OR,
+  pre-release rule, `parse_opts(s, true)` for includePrerelease, `parse_cargo` for bare = caret),
+  `matches`, `max_satisfying` / `min_satisfying` / `filter`, normalized `to_str`. Includes the
+  taupkg `semver` API (`Version.init`, `satisfies`, `best_match`). Checked against the semver.org
+  test lists and node-semver range fixtures.
+- **`std.config`** — layered configuration: defaults < TOML / YAML / JSON / INI / `.env` files <
+  environment (`APP_DB__HOST` → `db.host`) < command line (`load_args` from an argparse
+  `Namespace`, or `load_flags`) < overrides. Dotted-path typed getters (`get_bool` word forms,
+  `get_duration_ms`, `get_bytes`, `get_list`), `require_*` errors naming the key and the layer
+  (`source_of`), lazy `${VAR}` / `${other.key}` / `${x:-fallback}` interpolation with cycle
+  detection, `expect(...)` specs with `validate` / `check`, `unknown_keys`,
+  `validate_schema` (std.validate.schema), masked `dump()`, `reload()` and `ConfigWatcher`
+  (std.io.watch).
+- `std.crypto.scrypt`: scrypt (RFC 7914) in C with parameter validation and a memory cap
+  (1 GiB by default), plus `$scrypt$ln=..,r=..,p=..$salt$hash` password hashing (passlib-compatible).
+- `std.crypto.age`: age v1 file encryption -- X25519 (`age1...` / `AGE-SECRET-KEY-1...`) and
+  passphrase recipients, header MAC, STREAM payload, ASCII armor, one-shot, streaming
+  (`AgeEncryptor` / `AgeDecryptor`) and file APIs. Passes the C2SP/CCTV age testkit (non-hybrid).
+- `std.crypto.ssh`: OpenSSH public key lines, `openssh-key-v1` private keys (unencrypted and
+  bcrypt-pbkdf + aes256-ctr, read and write), SHA256/MD5 fingerprints, `authorized_keys` options,
+  PKey conversion and SSHSIG signatures compatible with `ssh-keygen -Y sign/verify`.
+- `std.encoding.bech32`: Bech32 / Bech32m. `PKey.rsa_exponent()`. C kernels for bcrypt_pbkdf,
+  AES-CTR and age STREAM chunks in `std/crypto/crypto_native.c`.
+- `std.html`: forgiving HTML5 parser and toolkit. WHATWG tokenizer (all 2231 named character references via a C table plus numeric forms and legacy no-semicolon names, raw-text/RCDATA/script-data states, CDATA in foreign content), a tree builder with the insertion modes, adoption agency algorithm, foster parenting and SVG/MathML foreign content (identical to html5lib on 5000 fuzzed and hand-made inputs apart from a few documented quirks), `HtmlDocument`/`HtmlNode` DOM with serialization, CSS selectors (`select`, `select_one`, combinators, attribute operators, `:nth-child(an+b)`, `:not`, `:is`, `:has`, ...), `html_escape`/`html_unescape`, `html_to_text`/`html_strip_tags`, `html_links` (via `std.net.url`) and an allow-list sanitizer (`HtmlPolicy`, `html_sanitize`).
+- **`std.crypto.jwk`** - JSON Web Keys (RFC 7517/7518/8037): parse / serialize RSA, EC
+  (P-256, P-384), OKP (Ed25519, X25519) and oct keys with kid / alg / use / key_ops / x5c;
+  `JwkSet` (`parse`, `find(kid)`, `candidates(kid, alg)`, public-only export, unsupported keys
+  skipped); JWK <-> `PKey` conversion; RFC 7638 thumbprints (+ RFC 9278 URI); JWS compact
+  sign / verify (`Jws`) for HS256/384/512, RS256/384/512, PS256/384/512, ES256/384 and EdDSA with
+  key-type / alg / use / key_ops enforcement, "none" and `crit` rejected. `std.crypto.jwt` gains
+  `Jwt.sign_jwk`, `verify_jwk`, `verify_jwks` (key chosen by kid/alg) and `JwtOptions` / `JwtClaims`
+  (exp / nbf / iat / aud / iss / sub / typ / max_age checks with leeway). Tested against the RFC
+  7515, 7517, 7520, 7638 and 8037 vectors. `PKey.rsa_from_parts` / `rsa_part` added.
+- **`std.net.oauth`** - OAuth 2.0 / OpenID Connect client: authorization code + PKCE (S256) with
+  state / nonce, refresh, client credentials, device authorization grant (RFC 8628), revocation
+  (RFC 7009), introspection (RFC 7662); client_secret_basic / client_secret_post / none /
+  private_key_jwt (RFC 7523) client authentication; OIDC discovery, cached JWKS, ID token
+  validation (signature, iss, aud / azp, exp, nonce, at_hash), UserInfo; `OAuthToken` expiry
+  tracking, `ensure_fresh`, and `AuthorizedSession` (Bearer header, refresh before expiry and
+  once after a 401).
+- **`std.net.proxy`** - SOCKS5 (RFC 1928/1929: IPv4 / IPv6 / domain targets, username/password,
+  remote DNS via `socks5h://`), SOCKS4 / SOCKS4a and HTTP CONNECT (with Proxy-Authorization basic)
+  clients returning a `TcpStream` usable with `TlsStream.wrap_fd`; proxy URLs; `NoProxy` (names,
+  suffixes, IPv4 / IPv6 addresses and CIDRs, host:port, `*`) and `ProxyEnv` (http_proxy /
+  https_proxy / all_proxy / no_proxy). `HttpSession.set_proxy(url)`, `set_no_proxy`,
+  opt-in `use_env_proxy()`, `proxy_for(url)`: plain http through an HTTP proxy uses
+  absolute-form targets, https is tunnelled with TLS end to end.
+- `std.encoding.json` decodes `\uXXXX` escapes (including surrogate pairs) to UTF-8 and escapes
+  other control characters when writing.
+- String escapes `\xHH` (a byte), `\uXXXX` and `\UXXXXXXXX` (a code point as UTF-8); `str.rfind`
+  (alias of `last_index_of`); `str.split_exact(sep)`, Python-style splitting on a whole substring
+  that keeps empty parts (`split` splits on any byte of `sep` and drops empty parts).
+- **`std.sys.subprocess`** — run programs from an argv list (`Command.new("git").arg("status")`)
+  or explicitly through the shell; stdin / stdout / stderr each inherited, piped, null, or
+  redirected to a file (truncate / append), stderr mergeable into stdout; environment inherit /
+  clear / set / remove and working directory; `output()`, `output_with_input()`, `status()` with
+  an optional timeout, and `spawn()` returning a `Child` (`write_stdin`, `close_stdin`, chunked and
+  whole-stream reads, `communicate`, `wait`, `wait_timeout`, `try_wait`, `kill`, `send_signal`,
+  `pid`). `ExitStatus` has `code`, `signal` and `success()`. Capturing both pipes never deadlocks
+  (poll on POSIX; PeekNamedPipe and a writer thread on Windows). POSIX: fork + execve with a PATH
+  lookup before forking, close-on-exec on every other descriptor and a CLOEXEC error pipe; Windows:
+  CreateProcessW with MSVCRT argument quoting, UTF-16 conversion and an inherited-handle list.
+  Tested by `tests/lang/120_subprocess.tr`.
+- **`std.sys.tz`** — real IANA time zones. `Tz.load("America/New_York")?` parses TZif files
+  (RFC 8536 v1–v4, 64-bit data, POSIX footer for instants past the last transition) from
+  `$TZDIR` / `/usr/share/zoneinfo` / `/usr/lib/zoneinfo` / `/usr/share/lib/zoneinfo`; POSIX TZ
+  strings (`EST5EDT,M3.2.0,M11.1.0`, `<+0330>-3:30`, `Jn`/`n` dates, −167..167 h times) work
+  anywhere a name does; without tzdata (Windows) an embedded table of all 486 zones' current rules
+  is used (`scripts/gen_tz_table.py`). `Tz.local()` (`$TZ`, Windows
+  `GetDynamicTimeZoneInformation`, `/etc/localtime`), `Tz.utc()`, `Tz.available()`,
+  `offset_at(ts) -> (offset, is_dst, abbr)`, `to_local`/`convert`/`add`, `from_local` /
+  `from_local_later` / `local_to_unix(..., TZ_EARLIER|TZ_LATER|TZ_RAISE)` for DST gaps and
+  overlaps, `classify_local`, `next_transition`. Verified against Python's `zoneinfo`.
+  `std.sys.datetime`: `TimeZone.zone` (IANA name of the snapshot), `DateTime.isoformat()`,
+  `DateTime.to_string_tz()`.
+- **`std.unicode` normalization, case folding and segmentation** (Unicode 16.0 data, generated
+  into `std/unicode/unicode_native.c` by `scripts/gen_unicode_tables.py`).
+  `std.unicode.normalize`: NFC / NFD / NFKC / NFKD (canonical and compatibility decomposition,
+  canonical ordering, composition with exclusions, algorithmic Hangul), `is_normalized` quick
+  check, `canonical_eq`. `std.unicode.casemap`: full `to_upper` / `to_lower` (SpecialCasing,
+  Greek final sigma) / `to_title`, full `casefold`, `caseless_eq`. `std.unicode.segment`:
+  extended grapheme clusters (emoji ZWJ sequences, flags, Hangul, Indic conjuncts),
+  `grapheme_count`, word and sentence boundaries, `words`, and terminal `display_width` /
+  `truncate_width` / `pad_width`. Passes the full NormalizationTest, GraphemeBreakTest,
+  WordBreakTest and SentenceBreakTest conformance files; NFC of 1 MB of text takes ~13 ms.
+  `Unicode.to_upper` / `to_lower` / `upper` / `lower` / `is_letter` / `is_digit_cp` / `category`
+  now use the full Unicode tables (previously Latin-1 / a few scripts only; tab and newline are
+  now category `"C"`), and `Unicode.general_category`, `Unicode.chr`, `Unicode.char_width` are new.
+- **`std.net.mime`** — media types: an extension table of ~420 extensions / ~320 types (Python
+  `mimetypes` + Debian media-types + modern types such as wasm, avif, jxl, woff2, mjs, jsonld,
+  webmanifest, toml, yaml, heic) with `type_for_path`, `extension_for_type`, `content_type_for`
+  (charset for text types); WHATWG-style content sniffing (images, audio/video, fonts, archives,
+  wasm, PDF, HTML/XML/JSON, BOMs, binary test); `MediaType` parsing/formatting with RFC 2045 /
+  9110 token and quoted-string rules, RFC 2231 continuations and charsets, `matches("image/*")`;
+  charset conversion to UTF-8 (UTF-8, US-ASCII, ISO-8859-1/-15, Windows-1252, UTF-16).
+- **`std.net.email`** — MIME email messages (RFC 5322 / 2045-2049 / 2047 / 2231 / 6532).
+  `EmailMessage` builds messages (address lists with encoded display names, Subject/Date/
+  Message-ID/In-Reply-To/References, text + HTML alternative, inline images with Content-ID in
+  multipart/related, attachments in multipart/mixed, automatic 7bit / quoted-printable / base64,
+  folding at 78 columns, CRLF, unique boundaries) and parses them (header unfolding, B/Q encoded
+  words, RFC 2231 filenames, nested multiparts, `text_body()`, `html_body()`, `attachments()`,
+  address groups / quoted local parts / comments, RFC 5322 dates). Verified against Python's
+  `email` package in both directions. `SmtpClient.send_message(msg)` sends one (envelope from
+  Sender/From, recipients To + Cc + Bcc, Bcc never written, BODY=8BITMIME / SMTPUTF8 when
+  needed); `ImapClient.fetch_email(uid)` and `Pop3Client.retr_email(n)` return parsed messages.
+- **`std.math.fft`** — FFT of any length in O(n log n): radix-4/2/3/5 Stockham passes, a generic odd radix and
+  Bluestein for large prime factors, in C (`std/math/fft_native.c`). Complex (interleaved) and real transforms
+  (`fft`, `ifft`, `rfft`, `irfft`, `fft2`, `ifft2`) with NumPy's `backward`/`ortho`/`forward` norms, per-thread
+  plan caching plus explicit `FftPlan` / `RfftPlan`, `fftfreq`, `rfftfreq`, `fftshift`, `next_fast_len`. Matches
+  NumPy to ~1e-16 and is on par with or faster than `np.fft` at n = 1024, 4096, 1000, 1009 and 2^20.
+  **`std.math.dsp`** — windows (Hann, Hamming, Blackman, Blackman-Harris, flat-top, Kaiser, Tukey), FFT/direct
+  `convolve` / `correlate`, `lfilter`, `lfilter_zi`, `filtfilt`, `freqz`, `firwin` FIR design, RBJ cookbook
+  `Biquad`s, STFT / ISTFT, spectrograms (with `Tensor` export), Welch PSD, Goertzel, `resample_poly`, `find_peaks`
+  — checked against SciPy. **`std.audio.dsp`** — `AudioDsp` spectra, dominant frequency and per-channel filters
+  for `AudioBuffer`s.
+- **`std.compress.bzip2`, `std.compress.xz`, `std.compress.brotli`** — bzip2 compression and
+  decompression (libbzip2 1.0.8), `.xz` decompression (XZ Embedded: LZMA2, CRC32/CRC64/SHA-256,
+  multiple blocks and streams, BCJ filters), `.lzma` ("LZMA alone") decompression, and Brotli
+  decompression (Google's decoder with the RFC 7932 dictionary), all vendored under
+  `std/compress/vendor/` with no external library. One-shot `decompress(data)?` /
+  `decompress_max(data, max_out)?` (decompression-bomb limit, 1 GiB by default) and streaming
+  `feed` / `finish` decoders; corrupt or truncated input raises. `Compress` accepts the new
+  names and gains `Compress.detect(data)`.
+- **`tauraroc doc`** — API documentation from source (public constants, functions, classes with
+  their fields and `extend` methods, enums, interfaces, and their comments) as Markdown or HTML,
+  per file or for whole directory trees. **`tauraroc cov`** / **`--coverage`** — line coverage:
+  gcov instrumentation with `#line` mapping to `.tr` sources, a per-file report with missed lines,
+  and LCOV output. (`tauraroc fmt` already covers formatting.)
+- **`std.sys.sandbox`** — pledge-style promises (`stdio rpath wpath cpath inet unix dns proc
+  thread exec id error ...`) enforced with seccomp-BPF on Linux (open flags and socket families
+  checked), custom syscall allow / deny lists, filesystem `Unveil` via Landlock, and native
+  `pledge` / `unveil` on OpenBSD; `Sandbox.run_isolated` runs a function in a sandboxed child.
+- **`std.sys.dylib`, `std.sys.plugin`** — load shared libraries at run time (`dlopen` /
+  `LoadLibraryW`) and call int / double / `str` functions through exact-prototype trampolines;
+  a plugin convention on top (`tauraro_plugin_abi` / `_name` / `_version` / `_init` / `_shutdown`
+  exports from a `tauraroc --lib` library) with directory discovery, ABI checks, hook broadcast,
+  reload and unload.
+- **`std.encoding.pdf`** — PDF 1.7 writer: standard-14 Latin fonts with exact metrics, word-wrapped
+  and justified text boxes, shapes / paths / dashes / transparency / transforms, images (RGBA with
+  soft masks, JPEG pass-through), URL and page links, bookmarks, Unicode metadata, and a built-in
+  deflate encoder (fixed or dynamic Huffman per block) for FlateDecode without libz.
+- **`std.net.imap`, `std.net.pop3`** — IMAP4rev1 client (LOGIN / AUTHENTICATE PLAIN, STARTTLS,
+  LIST, SELECT / EXAMINE, SEARCH / UID SEARCH, FETCH with exact `{n}` literal handling, STORE,
+  COPY / MOVE, EXPUNGE, CREATE / DELETE / RENAME, APPEND, raw `command`) and POP3 client (USER /
+  PASS, APOP, AUTH PLAIN, STLS, CAPA, STAT, LIST, UIDL, RETR / TOP with dot-unstuffing, DELE,
+  RSET, QUIT), both over verified TLS or plaintext + STARTTLS via the new
+  `std.net.linestream.LineStream`.
+- **`std.net.dnsmsg`** — DNS wire format: query encoding (EDNS0), response parsing with name
+  compression for A, AAAA, NS, CNAME, PTR, MX, TXT, SRV, SOA; `Dns.lookup(server, name, type)`.
+- **`std.net.mdns`** — one-shot multicast DNS queries, host resolution and DNS-SD service
+  browsing. **`std.net.ntp`** — SNTPv4 client (offset, delay, stratum, reference ID).
+- **`std.net.udpx`** — `UdpEndpoint`: IPv4/IPv6 UDP with receive timeouts, sender address, and
+  multicast membership; `unix_ms()` wall clock.
+- **`std.audio`** — `AudioBuffer` with WAV decode/encode (PCM 8–32-bit, float, A-law/μ-law,
+  extensible), MP3 and FLAC decoding (vendored public-domain minimp3 and dr_flac), windowed-sinc
+  resampling, channel mixing, gain/normalize/fades/trim/concat/mix, and tone/noise generators.
+  Tested by `tests/lang/115_audio.tr`. Opus/Vorbis are not supported.
+- **`std.image.jpeg`, `std.image.gif`, `std.image.ops`** — JPEG decode (baseline + progressive,
+  all subsamplings, CMYK, EXIF orientation) and encode; GIF decode with animation compositing
+  and encode with median-cut quantisation, dithering and animation; resizing (nearest, box,
+  bilinear, bicubic, Lanczos-3), colour adjustments, blur/sharpen/edges/convolution, flips,
+  rotations, crop and compositing. Cross-checked against Pillow; tested by
+  `tests/lang/114_image2.tr`.
+- **`std.math.tensor`** — n-dimensional float64 arrays with NumPy-style broadcasting, strided views
+  (reshape/transpose/permute/slice/select/broadcast_to), elementwise math, axis reductions,
+  softmax, batched matmul, concat/stack and linalg interop; kernels in C. Tested by
+  `tests/lang/113_tensor.tr`.
+- **`std.math.decimal`, `std.math.rational`, `std.math.bigfloat`** — exact decimal arithmetic
+  with seven rounding modes (quantize, significant digits, sqrt, money allocation), exact
+  fractions (`limit_denominator`, floor/ceil/round), and arbitrary-precision decimal floating
+  point with sqrt/exp/ln/pow, pi and e. Tested by `tests/lang/112_decimal_rational.tr`
+  against Python's `decimal` and `fractions`.
+- **`std.collections` additions** — `BitSet`, `RingBuffer[T]`, `SkipList[K, V]`, `IntervalTree[V]`,
+  `Rope`, `SlotMap[T]` (generation-checked handles), `Arena` (bump/region allocator) and `Slab`
+  (fixed-size block allocator). Tested by `tests/lang/111_collections3.tr`.
+- **`std.cli.argparse`** — declarative CLI parsing: typed/validated values with choices, env-var
+  fallbacks and defaults, counted and repeatable options, variadic positionals, negatable flags,
+  argument groups, mutually-exclusive / required-one-of groups, nested subcommands with aliases,
+  `@file` response files, "did you mean" suggestions, wrapped help and bash/zsh/fish completion
+  scripts. **`std.text.shlex`** — POSIX and Windows command-line splitting/quoting.
+  Tested by `tests/lang/110_argparse_shlex.tr`.
+- **IPC: `std.sys.mmap`, `std.sys.shm`, `std.sys.pipe`, `std.sys.unix_socket`** — memory-mapped
+  files and anonymous maps (with cross-process 64-bit atomics), named shared memory and named
+  semaphores, anonymous pipes and FIFOs, Unix-domain stream sockets with socketpair and
+  descriptor passing. POSIX and Windows. Tested by `tests/lang/109_sys_ipc.tr`.
+- **`std.net.http2`** — HTTP/2 client with stream multiplexing over verified TLS (ALPN `h2`) or
+  h2c prior knowledge: flow control, CONTINUATION, trailers, RST_STREAM/GOAWAY handling, plus a
+  standalone `Hpack` codec (dynamic table, Huffman) and `H2Headers`. Tested by
+  `tests/lang/107_http2.tr` (RFC 7541 appendix C vectors and a loopback h2c server).
+- **Verified TLS without OpenSSL.** `std.net.tls` is a TLS 1.3 client (X25519/P-256/P-384,
+  AES-GCM, ChaCha20-Poly1305, ECDSA/RSA-PSS) that verifies the certificate chain and host name;
+  it can also upgrade an existing socket (STARTTLS). `std.crypto.x509` parses certificates and
+  verifies chains against `TrustStore.system()` (CA bundles / Windows ROOT store);
+  `std.crypto.pk` adds RSA (PKCS#1 v1.5, PSS) and ECDSA P-256/P-384 (RFC 6979) signing and
+  verification, ECDH and PEM/DER key parsing; `std.crypto.aead` adds AES-GCM and
+  ChaCha20-Poly1305. Tested by `tests/lang/106_x509_tls.tr`.
+- **`std.crypto` additions** — `SecureRandom` (OS CSPRNG, raises instead of degrading),
+  `ConstantTime`, binary-safe `Digest`/`Hasher` (SHA-1/256/384/512), `Hmac.compute/verify`
+  (all SHA variants), `Kdf.hkdf*` (RFC 5869) and `Kdf.pbkdf2_hmac`, `Sha3`/`Sha3Stream`
+  (SHA3-224..512, SHAKE128/256), `Blake2` (2b/2s, keyed), `Blake3` (hash/keyed/derive_key, XOF),
+  `X25519` (RFC 7748), `Otp` (HOTP/TOTP + `otpauth://` URIs), `Argon2` (d/i/id, PHC strings) and
+  `Bcrypt` ($2a/$2b/$2y). Kernels live in `std/crypto/crypto_native.c`, linked automatically via
+  the module shim pragma. Tested by `tests/lang/105_crypto_modern.tr`.
 - **`std.async.retry`** — `RetryPolicy` (max attempts, fixed/exponential backoff
   with cap, optional jitter, retry-on predicate, overall deadline, per-attempt
   timeout), `call_with_timeout` / `call_bool_with_timeout`, and a thread-safe
@@ -49,6 +449,12 @@ added here as each phase lands.
   layer does not verify certificates.
 
 ### Fixed
+- Runtime: `Dict` / `Map` / `Set` (string keys), the int-keyed dict and typed inline dicts now grow their bucket array (x2 at 75% load); the fixed 16 buckets made bulk inserts quadratic (160k string keys: 40 s -> 0.12 s). `StringBuilder.to_owned()` is typed `str`.
+- Compiler: `Thread.spawn` assigned to a field compiles; `shared x = f()` with `f -> Shared[T]` works and a `Shared[T]` field co-owns (clones) its handle and drops it with the object; `List[Interface]` stores boxed fat pointers (append, index, iterate, dispatch); `throws E -> (A, B)` wraps and unwraps tuples through `?`, `return` and destructuring; `mut (a, b) = ...` destructuring; `List.slice(a, b)`; `with` calls `__exit__` with the declared number of arguments; `?` in a non-throwing function is a clear diagnostic; keywords used as names are named in the error; top-level names that collide with C keywords / libc identifiers / Windows macros are rejected.
+- `std.net.tls`: a read timeout part-way through a record keeps the bytes already read (no stream desync on the next read).
+- Compiler: a user method named `as_str` is no longer treated as the builtin cast; `Dict[int, V].has` is true for a stored 0; `return list[i]` / `self.f = list[i]` of a str retain the element; an owned class local or list slot reassigned from a list element retains it; `List[List[T]]` element reads and slot assignment compile; nested f-string format specs (`f"{x:.{p}g}"`, `{s:>{w}}`) are applied.
+- TLS server: ClientHellos listing more than 16 cipher suites (Go's crypto/tls lists 19, the TLS 1.3
+  ones last) failed with handshake_failure, so Go clients such as ACME validators could not connect.
 - `std.net.http` / `std.net.https` declared `Map[str]` (one type argument) for
   the response/header maps, which fails to compile
   (`'V' undeclared` in `HttpClientResponse_header`) as soon as the module is

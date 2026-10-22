@@ -1,0 +1,195 @@
+# std.math.bigfloat -- arbitrary-precision decimal floating point.
+#
+# A `BigFloat` is a Decimal rounded to `prec` significant digits after every
+# operation (ROUND_HALF_EVEN), like a calculator with as many digits as you
+# ask for. Besides + - * / it provides sqrt, exp, ln, pow, and the constants
+# pi and e to any precision. Internal steps use guard digits, so results are
+# correctly rounded in practice (the last digit may differ by one in rare
+# cases, as with most multi-precision libraries).
+#
+# Usage:
+#   from std.math.bigfloat import BigFloat
+#   mut p = 50
+#   BigFloat.pi(p).to_str()                               # 3.1415926535897932384626433832795028841971693993751
+#   mut two = BigFloat.parse("2", p)?
+#   two.sqrt()?.to_str()                                  # 1.4142135623730950488016887242096980785696718753769
+#   BigFloat.parse("10", p)?.ln()?.to_str()
+
+from std.math.bigint import BigInt
+from std.math.decimal import Decimal, ROUND_HALF_EVEN, ROUND_DOWN, _dc_pow10
+
+pub class BigFloat:
+    pub v:    Decimal
+    pub prec: int
+
+extend BigFloat:
+    pub def make(v: Decimal, prec: int) -> BigFloat:
+        mut b = BigFloat()
+        mut p = prec
+        if p < 1: p = 1
+        b.v = v.round_sig(p, ROUND_HALF_EVEN)
+        b.prec = p
+        return b
+
+    pub def parse(text: str, prec: int) throws str -> BigFloat:
+        mut d = Decimal.parse(text)?
+        return BigFloat.make(d, prec)
+
+    pub def from_int(n: int, prec: int) -> BigFloat:
+        return BigFloat.make(Decimal.from_int(n), prec)
+
+    pub def from_decimal(d: Decimal, prec: int) -> BigFloat:
+        return BigFloat.make(d, prec)
+
+    def _p(self, o: BigFloat) -> int:
+        if o.prec > self.prec: return o.prec
+        return self.prec
+
+    pub def add(self, o: BigFloat) -> BigFloat: return BigFloat.make(self.v.add(o.v), self._p(o))
+    pub def sub(self, o: BigFloat) -> BigFloat: return BigFloat.make(self.v.sub(o.v), self._p(o))
+    pub def mul(self, o: BigFloat) -> BigFloat: return BigFloat.make(self.v.mul(o.v), self._p(o))
+
+    pub def div(self, o: BigFloat) throws str -> BigFloat:
+        mut p = self._p(o)
+        mut q = self.v.div_sig(o.v, p + 3, ROUND_HALF_EVEN)?
+        return BigFloat.make(q, p)
+
+    pub def neg(self) -> BigFloat: return BigFloat.make(self.v.neg(), self.prec)
+    pub def abs(self) -> BigFloat: return BigFloat.make(self.v.abs(), self.prec)
+    pub def cmp(self, o: BigFloat) -> int: return self.v.cmp(o.v)
+    pub def is_zero(self) -> bool: return self.v.is_zero()
+    pub def with_prec(self, prec: int) -> BigFloat: return BigFloat.make(self.v, prec)
+
+    # Decimal string with all `prec` significant digits (plain notation).
+    pub def to_str(self) -> str: return self.v.to_str()
+    pub def to_sci_str(self) -> str: return self.v.to_sci_str()
+    pub def to_decimal(self) -> Decimal: return self.v
+    pub def to_float(self) -> float: return self.v.to_float()
+
+    # Decimal places needed for `prec` significant digits of a value near 10^mag.
+    def _places_for(prec: int, v: Decimal) -> int:
+        if v.is_zero(): return prec
+        mut mag = v.coef.abs().to_str().len() + v.exp
+        return prec - mag + 1
+
+    pub def sqrt(self) throws str -> BigFloat:
+        if self.v.is_negative(): raise("BigFloat: square root of a negative number")
+        if self.v.is_zero(): return self
+        mut places = BigFloat._places_for(self.prec + 4, self.v) / 2 + self.prec / 2 + 4
+        if places < self.prec + 4: places = self.prec + 4
+        mut r = self.v.sqrt(places)?
+        return BigFloat.make(r, self.prec)
+
+    # e^x (Taylor series after halving the argument until it is small).
+    pub def exp(self) throws str -> BigFloat:
+        mut wp = self.prec + 12
+        mut x = BigFloat.make(self.v, wp)
+        mut halvings = 0
+        mut half = BigFloat.parse("0.5", wp)?
+        mut lim = Decimal.parse("0.01")?
+        while x.v.abs().cmp(lim) > 0:
+            x = x.mul(half)
+            halvings = halvings + 1
+        # sum x^k / k!
+        mut term = BigFloat.from_int(1, wp)
+        mut sum = BigFloat.from_int(1, wp)
+        mut k = 1
+        mut eps = Decimal.make(BigInt.from_int(1), 0 - (wp + 2))
+        while k < 10000:
+            mut kk = BigFloat.from_int(k, wp)
+            term = term.mul(x).div(kk)?
+            sum = sum.add(term)
+            if term.v.abs().cmp(eps) < 0: break
+            k = k + 1
+        mut i = 0
+        while i < halvings:
+            sum = sum.mul(sum)
+            i = i + 1
+        return BigFloat.make(sum.v, self.prec)
+
+    # Natural logarithm (raises for x <= 0). ln x = 2 atanh((x-1)/(x+1)) after
+    # scaling x by powers of 10 (ln 10 computed the same way).
+    pub def ln(self) throws str -> BigFloat:
+        if self.v.sign() <= 0: raise("BigFloat: logarithm of a non-positive number")
+        mut wp = self.prec + 12
+        # x = m * 10^k with m in [0.1, 1)
+        mut digits = self.v.coef.abs().to_str().len()
+        mut k = self.v.exp + digits
+        mut m = Decimal.make(self.v.coef, self.v.exp - k)
+        mut lm = BigFloat._ln_small(BigFloat.make(m, wp))?
+        if k == 0: return BigFloat.make(lm.v, self.prec)
+        mut l10 = BigFloat._ln10(wp)?
+        mut kk = BigFloat.from_int(k, wp)
+        return BigFloat.make(lm.add(l10.mul(kk)).v, self.prec)
+
+    def _ln10(wp: int) throws str -> BigFloat:
+        # ln 10 = 3 ln 2 + ln 1.25, both from the atanh series
+        mut l2 = BigFloat._ln_small(BigFloat.from_int(2, wp))?
+        mut l125 = BigFloat._ln_small(BigFloat.parse("1.25", wp)?)?
+        return l2.mul(BigFloat.from_int(3, wp)).add(l125)
+
+    # ln x for x near 1 (works for any x > 0, converging fastest near 1).
+    def _ln_small(x: BigFloat) throws str -> BigFloat:
+        mut wp = x.prec
+        mut one = BigFloat.from_int(1, wp)
+        mut y = x.sub(one).div(x.add(one))?
+        mut y2 = y.mul(y)
+        mut term = y
+        mut sum = y
+        mut n = 1
+        mut eps = Decimal.make(BigInt.from_int(1), 0 - (wp + 2))
+        while n < 100000:
+            term = term.mul(y2)
+            mut d = BigFloat.from_int(2 * n + 1, wp)
+            mut add = term.div(d)?
+            sum = sum.add(add)
+            if add.v.abs().cmp(eps) < 0: break
+            n = n + 1
+        return sum.mul(BigFloat.from_int(2, wp))
+
+    # self^y = exp(y ln self) (self > 0), or exact repeated multiplication
+    # for a non-negative integer exponent via pow_int.
+    pub def pow(self, y: BigFloat) throws str -> BigFloat:
+        mut l = self.ln()?
+        mut wp = self.prec + 6
+        mut prod = BigFloat.make(l.v, wp).mul(BigFloat.make(y.v, wp))
+        mut r = prod.exp()?
+        return BigFloat.make(r.v, self._p(y))
+
+    pub def pow_int(self, n: int) throws str -> BigFloat:
+        if n >= 0: return BigFloat.make(self.v.pow(n), self.prec)
+        mut one = BigFloat.from_int(1, self.prec)
+        mut pos = BigFloat.make(self.v.pow(0 - n), self.prec + 4)
+        return one.div(pos)?
+
+    # pi to `prec` significant digits (Machin's formula in fixed point).
+    pub def pi(prec: int) -> BigFloat:
+        mut guard = prec + 10
+        mut unity = _dc_pow10(guard)
+        mut a = BigFloat._arctan_inv(5, unity)
+        mut b = BigFloat._arctan_inv(239, unity)
+        mut pi_fixed = a.mul(BigInt.from_int(16)).sub(b.mul(BigInt.from_int(4)))
+        return BigFloat.make(Decimal.make(pi_fixed, 0 - guard), prec)
+
+    def _arctan_inv(x: int, unity: BigInt) -> BigInt:
+        mut xx = BigInt.from_int(x)
+        mut x2 = BigInt.from_int(x * x)
+        mut term = unity.div(xx)
+        mut total = term
+        mut n = 1
+        mut sign = -1
+        while not term.is_zero():
+            term = term.div(x2)
+            mut t = term.div(BigInt.from_int(2 * n + 1))
+            if sign < 0: total = total.sub(t)
+            else: total = total.add(t)
+            sign = 0 - sign
+            n = n + 1
+        return total
+
+    # e to `prec` significant digits.
+    pub def e(prec: int) -> BigFloat:
+        mut one = BigFloat.from_int(1, prec)
+        mut r: Result[BigFloat, str] = one.exp()
+        if r.is_err: return one
+        return r.ok

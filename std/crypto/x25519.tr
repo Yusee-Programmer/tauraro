@@ -1,0 +1,70 @@
+# std.crypto.x25519 -- X25519 Diffie-Hellman key exchange (RFC 7748).
+#
+# Keys are 32 RAW bytes (use the `_hex` helpers for printable forms). The
+# private key is any 32 random bytes; clamping happens inside the scalar
+# multiplication, as RFC 7748 specifies. The ladder is constant-time.
+#
+# shared_secret() rejects an all-zero result, which a malicious peer can force
+# by sending a low-order point (RFC 7748 section 6.1). Feed the shared secret
+# through a KDF (e.g. Kdf.hkdf) before using it as a key.
+#
+# Usage:
+#   from std.crypto.x25519 import X25519
+#   mut a_priv = X25519.generate_private()?
+#   mut a_pub  = X25519.public_key(a_priv)?
+#   ... exchange public keys ...
+#   mut shared = X25519.shared_secret(a_priv, b_pub)?
+
+from std.crypto.native import trc_x25519, _cn_alloc, _cn_take, _cn_free, _cn_hex, _cn_unhex
+from std.crypto.random import SecureRandom
+
+def _x25519_base() -> str:
+    mut p = _cn_alloc(32)
+    unsafe: p.offset(0).write(9 as char)
+    return _cn_take(p, 32)
+
+pub class X25519:
+    _dummy: int
+
+extend X25519:
+    # 32 random bytes from the OS CSPRNG.
+    pub def generate_private() throws str -> str:
+        return SecureRandom.bytes(32)?
+
+    # The public key (scalar * base point 9) for a 32-byte private key.
+    pub def public_key(private_key: str) throws str -> str:
+        if private_key.len() != 32: raise("X25519: private key must be 32 bytes")
+        mut base = _x25519_base()
+        mut p = _cn_alloc(32)
+        mut kp = private_key as Pointer[char]
+        mut bp = base as Pointer[char]
+        trc_x25519(p, kp, bp)
+        return _cn_take(p, 32)
+
+    # The raw 32-byte shared secret with a peer's public key.
+    pub def shared_secret(private_key: str, peer_public: str) throws str -> str:
+        if private_key.len() != 32: raise("X25519: private key must be 32 bytes")
+        if peer_public.len() != 32: raise("X25519: public key must be 32 bytes")
+        mut p = _cn_alloc(32)
+        mut kp = private_key as Pointer[char]
+        mut pp = peer_public as Pointer[char]
+        if trc_x25519(p, kp, pp) != 0:
+            _cn_free(p)
+            raise("X25519: peer public key is a low-order point (all-zero shared secret)")
+        return _cn_take(p, 32)
+
+    # The raw scalar multiplication (no zero check), for test vectors.
+    pub def scalar_mult(scalar: str, point: str) throws str -> str:
+        if scalar.len() != 32 or point.len() != 32: raise("X25519: inputs must be 32 bytes")
+        mut p = _cn_alloc(32)
+        mut sp = scalar as Pointer[char]
+        mut pp = point as Pointer[char]
+        trc_x25519(p, sp, pp)
+        return _cn_take(p, 32)
+
+    pub def to_hex(key: str) -> str: return _cn_hex(key)
+
+    pub def from_hex(h: str) throws str -> str:
+        mut raw = _cn_unhex(h)?
+        if raw.len() != 32: raise("X25519: a key is 64 hex characters")
+        return raw

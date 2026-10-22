@@ -1,0 +1,183 @@
+# tauraro-cpp-shim: webp_native.c
+#
+# std.image.webp -- WebP decode (lossy, lossless, alpha, animation) and
+# lossless encode (still and animated).
+#
+# decode_webp returns the first frame (the composited canvas for animated
+# files); decode_webp_animation returns every frame composited exactly like
+# libwebp's WebPAnimDecoder (blending, disposal), with per-frame durations
+# in milliseconds and the loop count (0 = forever). Lossy VP8 output is
+# bit-identical to libwebp / Pillow (same fancy chroma upsampling and
+# fixed-point YUV->RGB conversion).
+#
+# encode_webp writes lossless VP8L (subtract-green + predictor transforms,
+# or a palette for images with <= 256 colours; LZ77 + Huffman). The result
+# decodes back to exactly the input pixels. Lossy encoding is not provided.
+#
+# Usage:
+#   from std.image.webp import decode_webp, decode_webp_animation, encode_webp, WebpEncoder
+#   mut img = decode_webp(bytes, n)              # img.width == -1 on error
+#   mut (out, len_) = encode_webp(img)
+#   mut enc = WebpEncoder.init(w, h, 0)          # animated, loop forever
+#   enc.add_frame(frame1, 100)?
+#   mut (anim, alen) = enc.finish()
+
+from std.image.mod import Image
+from std.image.native import _im_alloc, _im_bad
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+    def trc_webp_decode(data: Pointer[char], n: int) -> Pointer[char]
+    def trc_webp_free(h: Pointer[char])
+    def trc_webp_ok(h: Pointer[char]) -> int
+    def trc_webp_w(h: Pointer[char]) -> int
+    def trc_webp_h(h: Pointer[char]) -> int
+    def trc_webp_nframes(h: Pointer[char]) -> int
+    def trc_webp_delay(h: Pointer[char], i: int) -> int
+    def trc_webp_loop(h: Pointer[char]) -> int
+    def trc_webp_has_alpha(h: Pointer[char]) -> int
+    def trc_webp_lossless(h: Pointer[char]) -> int
+    def trc_webp_animated(h: Pointer[char]) -> int
+    def trc_webp_error(h: Pointer[char], out: Pointer[char], cap: int) -> int
+    def trc_webp_frame_copy(h: Pointer[char], i: int, out: Pointer[char])
+    def trc_webp_buf_free(p: Pointer[char])
+    def trc_webp_encode_lossless(rgba: Pointer[char], w: int, h: int, out_len: Pointer[int]) -> Pointer[char]
+    def trc_webp_anim_begin(w: int, h: int, loop_count: int) -> Pointer[char]
+    def trc_webp_anim_add(a: Pointer[char], rgba: Pointer[char], duration_ms: int) -> int
+    def trc_webp_anim_finish(a: Pointer[char], out_len: Pointer[int]) -> Pointer[char]
+
+pub class WebpAnimation:
+    pub width:  int
+    pub height: int
+    pub frames: List[Image]
+    pub delays: List[int]     # milliseconds per frame
+    pub loop_count: int       # 0 = forever
+
+# Summary of a WebP file without keeping the pixels.
+pub class WebpInfo:
+    pub width: int
+    pub height: int
+    pub frames: int
+    pub has_alpha: bool
+    pub lossless: bool
+    pub animated: bool
+
+def _wp_frame(h: Pointer[char], i: int) -> Image:
+    mut img = _im_alloc(trc_webp_w(h), trc_webp_h(h))
+    trc_webp_frame_copy(h, i, img.pixels.data)
+    return img
+
+def _wp_err(h: Pointer[char]) -> str:
+    mut out = _tr_c_malloc(201)
+    mut n = trc_webp_error(h, out, 200)
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap_len(out, n)
+
+def _wp_take(p: Pointer[char], n: int) -> str:
+    mut out = _tr_c_malloc(n + 1)
+    _tr_c_memcpy(out, p, n)
+    unsafe: out.offset(n).write('\0')
+    trc_webp_buf_free(p)
+    return _tr_str_wrap_len(out, n)
+
+def _wp_open(data: str, len_: int) throws str -> Pointer[char]:
+    mut dp = data as Pointer[char]
+    mut h = trc_webp_decode(dp, len_)
+    if (h as usize) == (0 as usize): raise("WebP: out of memory")
+    if trc_webp_ok(h) != 1:
+        mut e = _wp_err(h)
+        trc_webp_free(h)
+        raise(e)
+    return h
+
+# First frame; width == -1 on malformed or unsupported input.
+pub def decode_webp(data: str, len_: int) -> Image:
+    mut r: Result[Pointer[char], str] = _wp_open(data, len_)
+    if r.is_err: return _im_bad()
+    mut h = r.ok
+    mut img = _wp_frame(h, 0)
+    trc_webp_free(h)
+    return img
+
+# First frame, raising with the reason on failure.
+pub def decode_webp_checked(data: str, len_: int) throws str -> Image:
+    mut h = _wp_open(data, len_)?
+    mut img = _wp_frame(h, 0)
+    trc_webp_free(h)
+    return img
+
+# Every frame (a still image gives one frame with delay 0).
+pub def decode_webp_animation(data: str, len_: int) throws str -> WebpAnimation:
+    mut h = _wp_open(data, len_)?
+    mut a = WebpAnimation()
+    a.frames = []
+    a.delays = []
+    mut n = trc_webp_nframes(h)
+    mut i = 0
+    while i < n:
+        a.frames.append(_wp_frame(h, i))
+        a.delays.append(trc_webp_delay(h, i))
+        i = i + 1
+    a.width = trc_webp_w(h)
+    a.height = trc_webp_h(h)
+    a.loop_count = trc_webp_loop(h)
+    trc_webp_free(h)
+    return a
+
+pub def webp_info(data: str, len_: int) throws str -> WebpInfo:
+    mut h = _wp_open(data, len_)?
+    mut info = WebpInfo()
+    info.width = trc_webp_w(h)
+    info.height = trc_webp_h(h)
+    info.frames = trc_webp_nframes(h)
+    info.has_alpha = trc_webp_has_alpha(h) == 1
+    info.lossless = trc_webp_lossless(h) == 1
+    info.animated = trc_webp_animated(h) == 1
+    trc_webp_free(h)
+    return info
+
+# Lossless WebP. Returns (bytes, length); length 0 on failure (e.g. a side > 16384).
+pub def encode_webp(img: Image) -> (str, int):
+    mut lenbox = [0]
+    mut lp = lenbox as Pointer[int]
+    mut p = trc_webp_encode_lossless(img.pixels.data, img.width, img.height, lp)
+    if (p as usize) == (0 as usize): return ("", 0)
+    mut n = lenbox[0]
+    mut out = _wp_take(p, n)
+    return (out, n)
+
+# Animated lossless WebP, written frame by frame (every frame covers the canvas).
+pub class WebpEncoder:
+    _h: Pointer[char]
+    pub width:  int
+    pub height: int
+
+extend WebpEncoder:
+    # loop_count: 0 = forever, n = play n times.
+    pub def init(width: int, height: int, loop_count: int) -> WebpEncoder:
+        mut e = WebpEncoder()
+        e._h = trc_webp_anim_begin(width, height, loop_count)
+        e.width = width
+        e.height = height
+        return e
+
+    pub def add_frame(self, img: Image, duration_ms: int) throws str -> bool:
+        if (self._h as usize) == (0 as usize): raise("WebP: encoder finished or invalid size")
+        if img.width != self.width or img.height != self.height: raise("WebP: frame size differs from the canvas")
+        if trc_webp_anim_add(self._h, img.pixels.data, duration_ms) != 0: raise("WebP: encoding failed")
+        return true
+
+    # The finished file as (bytes, length); length 0 if no frame was added.
+    pub def finish(self) -> (str, int):
+        if (self._h as usize) == (0 as usize): return ("", 0)
+        mut lenbox = [0]
+        mut lp = lenbox as Pointer[int]
+        mut p = trc_webp_anim_finish(self._h, lp)
+        self._h = 0 as Pointer[char]
+        if (p as usize) == (0 as usize): return ("", 0)
+        mut n = lenbox[0]
+        mut out = _wp_take(p, n)
+        return (out, n)

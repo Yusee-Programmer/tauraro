@@ -84,9 +84,7 @@ extend TcpStream:
         if (self.tls as usize) != 0: return _tr_tls_send(self.tls, data)
         if self.async_mode: return self.send_async(data)
         if not self.connected: return -1
-        mut p = data as Pointer[char]
-        mut n = 0
-        while p.offset(n).read() as int != 0: n = n + 1
+        mut n = data.len()      # real length: binary data may contain NUL bytes
         return _tr_tcp_send(self.fd, data, n)
 
     # Receive up to cap bytes (blocking, or cooperative non-blocking in async_mode).
@@ -147,9 +145,7 @@ extend TcpStream:
     pub def send_nb(self, data: str) -> int:
         self._wb = false
         if not self.connected: return -1
-        mut p = data as Pointer[char]
-        mut n = 0
-        while p.offset(n).read() as int != 0: n = n + 1
+        mut n = data.len()
         mut r = _tr_tcp_send_nb(self.fd, data, n)
         if r == -2: self._wb = true
         return r
@@ -194,9 +190,7 @@ extend TcpStream:
     # slicing the remainder, and that slice is freed to avoid a per-call leak.
     pub def send_async(self, data: str) -> int:
         if not self.nonblocking: self.set_nonblocking()
-        mut p = data as Pointer[char]
-        mut total = 0
-        while p.offset(total).read() as int != 0: total = total + 1
+        mut total = data.len()
         mut n0 = self.send_nb(data)
         if not self._wb and n0 >= total: return n0
         mut sent = 0

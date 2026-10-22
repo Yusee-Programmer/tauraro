@@ -1,0 +1,81 @@
+# tauraro-cpp-shim: image_native.c
+#
+# std.image.native -- internal bindings to std/image/image_native.c (JPEG and
+# GIF codecs, resampling, filters), shared by std.image.jpeg, std.image.gif
+# and std.image.ops.
+
+from std.image.mod import Image
+from std.core.vec import Vec
+
+extern "C":
+    def _tr_c_malloc(size: int) -> Pointer[char]
+    def _tr_c_memcpy(dst: Pointer[char], src: Pointer[char], n: int)
+    def _tr_c_memset(dst: Pointer[char], c: int, n: int)
+    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
+    def trc_jpeg_decode(data: Pointer[char], n: int) -> Pointer[char]
+    def trc_gif_decode(data: Pointer[char], n: int) -> Pointer[char]
+    def trc_img_free(h: Pointer[char])
+    def trc_img_ok(h: Pointer[char]) -> int
+    def trc_img_w(h: Pointer[char]) -> int
+    def trc_img_h(h: Pointer[char]) -> int
+    def trc_img_nframes(h: Pointer[char]) -> int
+    def trc_img_delay(h: Pointer[char], i: int) -> int
+    def trc_img_loop(h: Pointer[char]) -> int
+    def trc_img_orientation(h: Pointer[char]) -> int
+    def trc_img_error(h: Pointer[char], out: Pointer[char], cap: int) -> int
+    def trc_img_frame_copy(h: Pointer[char], i: int, out: Pointer[char])
+    def trc_img_buf_free(p: Pointer[char])
+    def trc_jpeg_encode(rgba: Pointer[char], w: int, h: int, quality: int, subsample: int, gray: int, out_len: Pointer[int]) -> Pointer[char]
+    def trc_gif_begin(w: int, h: int, loop_count: int) -> Pointer[char]
+    def trc_gif_add_frame(g: Pointer[char], rgba: Pointer[char], delay_ms: int, dither: int, max_colors: int) -> int
+    def trc_gif_finish(g: Pointer[char], out_len: Pointer[int]) -> Pointer[char]
+    def trc_img_resize(src: Pointer[char], sw: int, sh: int, dst: Pointer[char], dw: int, dh: int, filter: int) -> int
+    def trc_img_point(op: int, src: Pointer[char], n: int, dst: Pointer[char], p1: float)
+    def trc_img_convolve(src: Pointer[char], w: int, h: int, dst: Pointer[char], kernel: Pointer[float], k: int, divisor: float, bias: float) -> int
+    def trc_img_blur(src: Pointer[char], w: int, h: int, dst: Pointer[char], kind: int, amount: float) -> int
+    def trc_img_unsharp(src: Pointer[char], w: int, h: int, dst: Pointer[char], sigma: float, amount: float, threshold: float) -> int
+    def trc_img_sobel(src: Pointer[char], w: int, h: int, dst: Pointer[char]) -> int
+    def trc_img_geom(op: int, src: Pointer[char], w: int, h: int, dst: Pointer[char], cx: int, cy: int, cw: int, ch: int) -> int
+    def trc_img_blend(base: Pointer[char], bw: int, bh: int, top: Pointer[char], tw: int, th: int, ox: int, oy: int, opacity: float)
+
+# A w x h image whose pixel bytes are uninitialised (fill them before use).
+pub def _im_alloc(w: int, h: int) -> Image:
+    mut img = Image()
+    img.width = w
+    img.height = h
+    mut n = w * h * 4
+    if n < 1: n = 1
+    img.pixels = Vec[u8].init(n)
+    img.pixels.reserve(n)          # init(n) does not pre-allocate
+    img.pixels.len = w * h * 4
+    return img
+
+pub def _im_bad() -> Image:
+    mut bad = Image()
+    bad.width = -1
+    bad.height = -1
+    bad.pixels = Vec[u8].init(1)
+    return bad
+
+pub def _im_ptr(img: Image) -> Pointer[char]:
+    return img.pixels.data
+
+# Frame i of a decoded result as an Image.
+pub def _im_frame(h: Pointer[char], i: int) -> Image:
+    mut img = _im_alloc(trc_img_w(h), trc_img_h(h))
+    trc_img_frame_copy(h, i, img.pixels.data)
+    return img
+
+pub def _im_err(h: Pointer[char]) -> str:
+    mut out = _tr_c_malloc(201)
+    mut n = trc_img_error(h, out, 200)
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap_len(out, n)
+
+# Copy an encoder's C buffer into an owned str and free the buffer.
+pub def _im_take_buf(p: Pointer[char], n: int) -> str:
+    mut out = _tr_c_malloc(n + 1)
+    _tr_c_memcpy(out, p, n)
+    unsafe: out.offset(n).write('\0')
+    trc_img_buf_free(p)
+    return _tr_str_wrap_len(out, n)

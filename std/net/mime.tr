@@ -1,0 +1,1285 @@
+# std.net.mime — media (MIME) types: extension table, content sniffing,
+# media-type parsing/formatting and charset conversion to UTF-8.
+#
+#   from std.net.mime import Mime, MediaType
+#
+#   Mime.type_for_path("site/app.wasm")        # "application/wasm"
+#   Mime.type_for_path("notes")                # "application/octet-stream"
+#   Mime.guess_type("x.unknown")               # "" (no default)
+#   Mime.content_type_for("index.html")        # "text/html; charset=utf-8"
+#   Mime.extension_for_type("image/jpeg")      # "jpg"
+#   Mime.extensions_for_type("image/jpeg")     # ["jpg", "jfif", "jpe", ...]
+#   Mime.sniff(first_bytes)                    # "image/png", "text/html", ...
+#   Mime.matches("image/webp", "image/*")      # true
+#
+#   mut mt = Mime.parse("Text/HTML; Charset=\"UTF-8\"")?   # throws str
+#   mt.essence()                               # "text/html"
+#   mt.param("charset")                        # "UTF-8"
+#   mt.charset()                               # "utf-8" (normalised)
+#   mt.set_param("q", "a b")
+#   mt.to_str()                                # "text/html; charset=UTF-8; q=\"a b\""
+#
+#   Mime.to_utf8(bytes, "windows-1252")?       # transcode to UTF-8 (throws on unknown)
+#   Mime.decode_text(bytes, "iso-8859-1")      # lenient: unknown charset -> bytes unchanged
+#
+# The extension table (~420 extensions, ~320 types) is Python 3.14's built-in
+# `mimetypes` table merged with the Debian media-types list (IANA + Apache
+# mime.types) and hand-picked modern types (wasm, avif, jxl, woff2, mjs,
+# jsonld, webmanifest, toml, yaml, heic, ...). Each type's first extension is
+# its preferred one. ".tr" maps to text/x-tauraro (not troff).
+#
+# Sniffing follows the WHATWG MIME Sniffing standard's "identify an unknown
+# MIME type" (HTML/XML/PDF/PostScript, BOMs, image, audio/video, font and
+# archive signatures, binary-byte test) with additions: wasm, FLAC, MP4/HEIC/
+# AVIF brands, OGG codecs, ZIP containers that name their type (EPUB, ODF),
+# 7z/xz/bzip2/zstd/tar, ELF/PE, SQLite, TIFF and a JSON heuristic.
+#
+# Parsing follows RFC 2045 §5.1 / RFC 9110 §8.3.1 (token / quoted-string
+# parameters, case-insensitive type and parameter names) and decodes RFC 2231
+# extended parameters (name*=utf-8''%E2%82%AC, name*0*=..., name*1=...),
+# converting the declared charset to UTF-8. Values that are not valid tokens or
+# quoted strings are accepted leniently up to the next ';'.
+
+from std.core.string import StringBuilder
+
+# ─── byte helpers ─────────────────────────────────────────────────────────────
+
+def _mb(s: str, i: int) -> int:
+    mut p = s as Pointer[char]
+    unsafe: return (p.offset(i).read() as int) & 255
+
+def _hexv(c: int) -> int:
+    if c >= 48 and c <= 57: return c - 48
+    if c >= 65 and c <= 70: return c - 55
+    if c >= 97 and c <= 102: return c - 87
+    return -1
+
+def _hexd(v: int) -> int:
+    if v < 10: return 48 + v
+    return 55 + v
+
+# RFC 9110 tchar.
+def _is_tchar(c: int) -> bool:
+    if c >= 48 and c <= 57: return true
+    if c >= 65 and c <= 90: return true
+    if c >= 97 and c <= 122: return true
+    if c == 33 or c == 35 or c == 36 or c == 37 or c == 38 or c == 39 or c == 42: return true
+    if c == 43 or c == 45 or c == 46 or c == 94 or c == 95 or c == 96 or c == 124 or c == 126: return true
+    return false
+
+def _is_ws(c: int) -> bool:
+    return c == 32 or c == 9 or c == 10 or c == 13 or c == 12
+
+# Append the UTF-8 encoding of code point cp.
+def _put_utf8(sb: StringBuilder, cp: int):
+    if cp < 128:
+        sb.append_char(cp)
+    elif cp < 2048:
+        sb.append_char(192 | (cp >> 6))
+        sb.append_char(128 | (cp & 63))
+    elif cp < 65536:
+        sb.append_char(224 | (cp >> 12))
+        sb.append_char(128 | ((cp >> 6) & 63))
+        sb.append_char(128 | (cp & 63))
+    else:
+        sb.append_char(240 | (cp >> 18))
+        sb.append_char(128 | ((cp >> 12) & 63))
+        sb.append_char(128 | ((cp >> 6) & 63))
+        sb.append_char(128 | (cp & 63))
+
+# Windows-1252 0x80..0x9F -> Unicode (undefined slots map to the C1 control,
+# as in the WHATWG index).
+def _cp1252_hi(b: int) -> int:
+    if b == 128: return 8364
+    if b == 130: return 8218
+    if b == 131: return 402
+    if b == 132: return 8222
+    if b == 133: return 8230
+    if b == 134: return 8224
+    if b == 135: return 8225
+    if b == 136: return 710
+    if b == 137: return 8240
+    if b == 138: return 352
+    if b == 139: return 8249
+    if b == 140: return 338
+    if b == 142: return 381
+    if b == 145: return 8216
+    if b == 146: return 8217
+    if b == 147: return 8220
+    if b == 148: return 8221
+    if b == 149: return 8226
+    if b == 150: return 8211
+    if b == 151: return 8212
+    if b == 152: return 732
+    if b == 153: return 8482
+    if b == 154: return 353
+    if b == 155: return 8250
+    if b == 156: return 339
+    if b == 158: return 382
+    if b == 159: return 376
+    return b
+
+def _latin9(b: int) -> int:
+    if b == 164: return 8364
+    if b == 166: return 352
+    if b == 168: return 353
+    if b == 180: return 381
+    if b == 184: return 382
+    if b == 188: return 338
+    if b == 189: return 339
+    if b == 190: return 376
+    return b
+
+# The extension table: "\n" + one "type ext ext ...\n" line per type, the
+# preferred extension first. Generated from Python 3.14 mimetypes + Debian
+# media-types (/etc/mime.types) + a hand-curated modern list.
+def _mime_table() -> str:
+    return """
+application/atom+xml atom
+application/avro avro
+application/bson bson
+application/cbor cbor
+application/dash+xml mpd
+application/epub+zip epub
+application/geo+json geojson
+application/gpx+xml gpx
+application/graphql graphql gql
+application/gzip gz tgz
+application/java-archive jar ear war
+application/java-vm class
+application/json json har map topojson
+application/jsonl jsonl
+application/ld+json jsonld
+application/manifest+json webmanifest
+application/mathematica ma
+application/mbox mbox
+application/msgpack msgpack
+application/msword doc dot
+application/n-quads nq
+application/n-triples nt
+application/octet-stream bin a dylib fbx img ipa o onnx so
+application/oda oda
+application/ogg ogx
+application/onenote one
+application/pdf pdf
+application/pgp-encrypted gpg
+application/pgp-signature asc sig
+application/pkcs10 csr
+application/pkcs7-mime p7m p7c
+application/pkcs7-signature p7s
+application/pkcs8 p8
+application/pkix-cert cer
+application/pkix-crl crl
+application/postscript ps ai eps
+application/rdf+xml rdf
+application/rss+xml rss
+application/rtf rtf
+application/sql sql
+application/toml toml
+application/trig trig
+application/vnd.amazon.ebook azw
+application/vnd.amazon.mobi8-ebook azw3
+application/vnd.android.package-archive apk
+application/vnd.apache.arrow.file arrow
+application/vnd.apache.parquet parquet
+application/vnd.appimage appimage
+application/vnd.apple.keynote key
+application/vnd.apple.mpegurl m3u8
+application/vnd.apple.numbers numbers
+application/vnd.apple.pages pages
+application/vnd.citationstyles.style+xml csl
+application/vnd.comicbook+zip cbz
+application/vnd.comicbook-rar cbr
+application/vnd.debian.binary-package deb
+application/vnd.flatpak flatpak
+application/vnd.google-earth.kml+xml kml
+application/vnd.google-earth.kmz kmz
+application/vnd.microsoft.portable-executable exe dll
+application/vnd.ms-asf asf
+application/vnd.ms-cab-compressed cab
+application/vnd.ms-excel xls
+application/vnd.ms-excel.sheet.binary.macroenabled.12 xlsb
+application/vnd.ms-excel.sheet.macroenabled.12 xlsm
+application/vnd.ms-excel.template.macroenabled.12 xltm
+application/vnd.ms-fontobject eot
+application/vnd.ms-powerpoint ppt pot pps
+application/vnd.ms-powerpoint.presentation.macroenabled.12 pptm
+application/vnd.ms-word.document.macroenabled.12 docm
+application/vnd.ms-word.template.macroenabled.12 dotm
+application/vnd.oasis.opendocument.chart odc
+application/vnd.oasis.opendocument.formula odf
+application/vnd.oasis.opendocument.graphics odg
+application/vnd.oasis.opendocument.graphics-template otg
+application/vnd.oasis.opendocument.image odi
+application/vnd.oasis.opendocument.presentation odp
+application/vnd.oasis.opendocument.presentation-template otp
+application/vnd.oasis.opendocument.spreadsheet ods
+application/vnd.oasis.opendocument.spreadsheet-template ots
+application/vnd.oasis.opendocument.text odt
+application/vnd.oasis.opendocument.text-master odm
+application/vnd.oasis.opendocument.text-template ott
+application/vnd.openxmlformats-officedocument.presentationml.presentation pptx
+application/vnd.openxmlformats-officedocument.presentationml.slideshow ppsx
+application/vnd.openxmlformats-officedocument.presentationml.template potx
+application/vnd.openxmlformats-officedocument.spreadsheetml.sheet xlsx
+application/vnd.openxmlformats-officedocument.spreadsheetml.template xltx
+application/vnd.openxmlformats-officedocument.wordprocessingml.document docx
+application/vnd.openxmlformats-officedocument.wordprocessingml.template dotx
+application/vnd.rar rar
+application/vnd.snap snap
+application/vnd.sqlite3 sqlite db
+application/vnd.visio vsd
+application/vnd.wolfram.mathematica nb
+application/wasm wasm
+application/x-7z-compressed 7z
+application/x-apple-diskimage dmg
+application/x-bcpio bcpio
+application/x-bittorrent torrent
+application/x-brotli br
+application/x-bzip2 bz2 tbz2
+application/x-chrome-extension crx
+application/x-cpio cpio
+application/x-csh csh
+application/x-dvi dvi
+application/x-fictionbook+xml fb2
+application/x-gtar gtar
+application/x-hdf hdf
+application/x-hdf5 h5
+application/x-httpd-php php
+application/x-ipynb+json ipynb
+application/x-iso9660-image iso
+application/x-latex latex
+application/x-lha lha
+application/x-lz4 lz4
+application/x-lzh lzh
+application/x-lzip lz
+application/x-lzma lzma
+application/x-mif mif
+application/x-mobipocket-ebook mobi
+application/x-msi msi
+application/x-mspublisher pub
+application/x-ndjson ndjson
+application/x-netcdf nc cdf
+application/x-pem-file pem
+application/x-pkcs12 p12 pfx
+application/x-plist plist
+application/x-pn-realaudio ram
+application/x-protobuf pb
+application/x-python-code pyc pyo
+application/x-rpm rpm
+application/x-sh sh bash
+application/x-shar shar
+application/x-shockwave-flash swf
+application/x-subrip srt
+application/x-sv4cpio sv4cpio
+application/x-sv4crc sv4crc
+application/x-tar tar
+application/x-tcl tcl
+application/x-tex tex
+application/x-texinfo texinfo texi
+application/x-troff roff t
+application/x-troff-man man
+application/x-troff-me me
+application/x-troff-ms ms
+application/x-ustar ustar
+application/x-wais-source src
+application/x-x509-ca-cert crt der
+application/x-xpinstall xpi
+application/x-xz xz txz
+application/xhtml+xml xhtml xht
+application/xml xml wsdl xpdl xsd
+application/xml-dtd dtd
+application/xslt+xml xsl xslt
+application/xspf+xml xspf
+application/yaml yaml yml
+application/zip zip whl
+application/zstd zst
+audio/3gpp 3gpp
+audio/3gpp2 3gpp2
+audio/aac aac adts loas
+audio/aiff aiff aif
+audio/amr amr
+audio/amr-wb awb
+audio/basic au snd
+audio/flac flac
+audio/midi mid midi
+audio/mp4 m4a
+audio/mpeg mp3 mp2 mpga
+audio/ogg ogg oga spx
+audio/opus opus
+audio/wav wav
+audio/webm weba
+audio/x-aiff aifc
+audio/x-caf caf
+audio/x-matroska mka
+audio/x-mpegurl m3u
+audio/x-ms-wax wax
+audio/x-ms-wma wma
+audio/x-pn-realaudio ra
+audio/x-scpls pls
+font/collection ttc otc
+font/otf otf
+font/sfnt sfnt
+font/ttf ttf
+font/woff woff
+font/woff2 woff2
+image/apng apng
+image/avif avif
+image/bmp bmp dib
+image/emf emf
+image/fits fits
+image/g3fax g3
+image/gif gif
+image/heic heic
+image/heic-sequence heics
+image/heif heif
+image/heif-sequence heifs
+image/ief ief
+image/jp2 jp2
+image/jpeg jpg jfif jpe jpeg pjp pjpeg
+image/jpm jpm
+image/jpx jpx
+image/jxl jxl
+image/jxr jxr
+image/ktx ktx
+image/ktx2 ktx2
+image/png png
+image/qoi qoi
+image/svg+xml svg svgz
+image/t38 t38
+image/tiff tiff tif
+image/tiff-fx tfx
+image/vnd.adobe.photoshop psd
+image/vnd.djvu djvu djv
+image/vnd.microsoft.icon ico
+image/vnd.ms-dds dds
+image/vnd.radiance hdr
+image/vnd.zbrush.pcx pcx
+image/webp webp
+image/wmf wmf
+image/x-adobe-dng dng
+image/x-canon-cr2 cr2
+image/x-cmu-raster ras
+image/x-exr exr
+image/x-icon cur
+image/x-nikon-nef nef
+image/x-olympus-orf orf
+image/x-panasonic-raw raw
+image/x-portable-anymap pnm
+image/x-portable-bitmap pbm
+image/x-portable-graymap pgm
+image/x-portable-pixmap ppm
+image/x-rgb rgb
+image/x-tga tga
+image/x-xbitmap xbm
+image/x-xcf xcf
+image/x-xpixmap xpm
+image/x-xwindowdump xwd
+message/rfc822 eml mht mhtml
+model/3mf 3mf
+model/gltf+json gltf
+model/gltf-binary glb
+model/obj obj
+model/step step stp
+model/stl stl
+model/vnd.usdz+zip usdz
+model/x-ply ply
+text/asciidoc adoc
+text/cache-manifest appcache manifest
+text/calendar ics ifb
+text/coffeescript coffee
+text/css css
+text/csv csv
+text/html html htm
+text/javascript js cjs mjs
+text/jsx jsx
+text/markdown md markdown
+text/mdx mdx
+text/n3 n3
+text/plain txt bat cfg cmd conf ini ksh log proto ps1 text wat zsh
+text/richtext rtx
+text/tab-separated-values tsv
+text/tsx tsx
+text/vcard vcf vcard
+text/vnd.dvb.subtitle sub
+text/vtt vtt
+text/x-asm asm s
+text/x-bibtex bib
+text/x-c c h
+text/x-c++ cpp cc cxx hh hpp
+text/x-clojure clj
+text/x-csharp cs
+text/x-dart dart
+text/x-diff diff patch
+text/x-elixir ex exs
+text/x-erlang erl
+text/x-fortran f90
+text/x-go go
+text/x-haskell hs
+text/x-java java
+text/x-julia jl
+text/x-kotlin kt
+text/x-less less
+text/x-lua lua
+text/x-nim nim
+text/x-ocaml ml
+text/x-org org
+text/x-perl pl pm
+text/x-python py
+text/x-r r
+text/x-rst rst
+text/x-ruby rb
+text/x-rust rs
+text/x-sass sass
+text/x-scala scala
+text/x-scss scss
+text/x-setext etx
+text/x-sgml sgml sgm
+text/x-svelte svelte
+text/x-swift swift
+text/x-tauraro tr
+text/x-vcalendar vcs
+text/x-vue vue
+text/x-zig zig
+video/3gpp 3gp
+video/3gpp2 3g2
+video/mp2t ts m2ts mts
+video/mp4 mp4 m4v
+video/mpeg mpeg m1v mpa mpe mpg
+video/ogg ogv
+video/quicktime mov qt
+video/vnd.mpegurl mxu
+video/webm webm
+video/x-flv flv
+video/x-matroska mkv
+video/x-matroska-3d mk3d
+video/x-ms-wm wm
+video/x-ms-wmv wmv
+video/x-ms-wvx wvx
+video/x-msvideo avi
+video/x-sgi-movie movie
+""".replace("\r", "")
+
+# ─── MediaType ────────────────────────────────────────────────────────────────
+
+# A parsed media type: lower-cased type and subtype, parameter names
+# lower-cased, values unquoted (and RFC 2231-decoded to UTF-8).
+pub class MediaType:
+    pub type_:   str
+    pub subtype: str
+    pub names:   List[str]
+    pub values:  List[str]
+
+extend MediaType:
+    pub def init(type_: str, subtype: str) -> MediaType:
+        mut m = MediaType()
+        m.type_ = type_.lower()
+        m.subtype = subtype.lower()
+        mut n: List[str] = []
+        mut v: List[str] = []
+        m.names = n
+        m.values = v
+        return m
+
+    # Parse "type/subtype; name=value; ..." (throws on a malformed type/subtype).
+    pub def parse(s: str) throws str -> MediaType:
+        mut n = s.len()
+        mut i = 0
+        while i < n and _is_ws(_mb(s, i)): i = i + 1
+        mut ts = i
+        while i < n and _is_tchar(_mb(s, i)): i = i + 1
+        if i == ts: raise("media type: missing type in '" + s + "'")
+        if i >= n or _mb(s, i) != 47: raise("media type: missing '/' in '" + s + "'")
+        mut tp = s.slice(ts, i)
+        i = i + 1
+        mut ss = i
+        while i < n and _is_tchar(_mb(s, i)): i = i + 1
+        if i == ss: raise("media type: missing subtype in '" + s + "'")
+        mut sub = s.slice(ss, i)
+        while i < n and _is_ws(_mb(s, i)): i = i + 1
+        if i < n and _mb(s, i) != 59: raise("media type: unexpected text after subtype in '" + s + "'")
+        mut m = MediaType.init(tp, sub)
+        mut rest = s.slice(i, n)
+        mut p = MediaType.parse_params(rest)
+        m.names = p.names
+        m.values = p.values
+        return m
+
+    # Parse a parameter list ("; a=1; b=\"two\"" — a leading ';' is optional)
+    # into a MediaType with empty type/subtype. Malformed parameters are
+    # skipped; RFC 2231 continuations and charsets are decoded.
+    pub def parse_params(s: str) -> MediaType:
+        mut raw_n: List[str] = []
+        mut raw_v: List[str] = []
+        mut n = s.len()
+        mut i = 0
+        while i < n:
+            mut c = _mb(s, i)
+            if c == 59 or _is_ws(c):
+                i = i + 1
+                continue
+            mut ns = i
+            while i < n and _mb(s, i) != 61 and _mb(s, i) != 59: i = i + 1
+            mut name = s.slice(ns, i).strip().lower()
+            if i >= n or _mb(s, i) == 59:
+                continue    # a bare word without '=' — ignore
+            i = i + 1       # '='
+            while i < n and (_mb(s, i) == 32 or _mb(s, i) == 9): i = i + 1
+            mut value = ""
+            if i < n and _mb(s, i) == 34:
+                i = i + 1
+                mut sb = StringBuilder.init(32)
+                while i < n:
+                    mut q = _mb(s, i)
+                    if q == 92 and i + 1 < n:
+                        sb.append_char(_mb(s, i + 1))
+                        i = i + 2
+                        continue
+                    if q == 34:
+                        i = i + 1
+                        break
+                    sb.append_char(q)
+                    i = i + 1
+                value = sb.to_owned()
+                sb.free()
+                while i < n and _mb(s, i) != 59: i = i + 1
+            else:
+                mut vs = i
+                while i < n and _mb(s, i) != 59: i = i + 1
+                value = s.slice(vs, i).strip()
+            if name.len() == 0: continue
+            raw_n.append(name)
+            raw_v.append(value)
+        mut out = MediaType.init("", "")
+        _mt_fold_2231(raw_n, raw_v, out)
+        return out
+
+    # "type/subtype" (lower case, no parameters).
+    pub def essence(self) -> str:
+        return self.type_ + "/" + self.subtype
+
+    # Structured-syntax suffix: "json" for application/ld+json, else "".
+    pub def suffix(self) -> str:
+        mut k = self.subtype.find("+")
+        if k < 0: return ""
+        return self.subtype.slice(k + 1, self.subtype.len())
+
+    pub def has_param(self, name: str) -> bool:
+        mut ln = name.lower()
+        mut i = 0
+        while i < len(self.names):
+            if self.names[i] == ln: return true
+            i = i + 1
+        return false
+
+    # The value of parameter `name` (case-insensitive), "" when absent.
+    pub def param(self, name: str) -> str:
+        mut ln = name.lower()
+        mut i = 0
+        while i < len(self.names):
+            if self.names[i] == ln: return self.values[i]
+            i = i + 1
+        return ""
+
+    pub def set_param(self, name: str, value: str):
+        mut ln = name.lower()
+        mut i = 0
+        while i < len(self.names):
+            if self.names[i] == ln:
+                self.values[i] = value
+                return
+            i = i + 1
+        self.names.append(ln)
+        self.values.append(value)
+
+    pub def remove_param(self, name: str):
+        mut ln = name.lower()
+        mut nn: List[str] = []
+        mut nv: List[str] = []
+        mut i = 0
+        while i < len(self.names):
+            if self.names[i] != ln:
+                nn.append(self.names[i])
+                nv.append(self.values[i])
+            i = i + 1
+        self.names = nn
+        self.values = nv
+
+    # The charset parameter, normalised ("utf-8", "iso-8859-1", ...), or "".
+    pub def charset(self) -> str:
+        mut cs = self.param("charset")
+        if cs.len() == 0: return ""
+        return Mime.normalize_charset(cs)
+
+    pub def is_multipart(self) -> bool:
+        return self.type_ == "multipart"
+
+    pub def is_text(self) -> bool:
+        return Mime.is_text(self.essence())
+
+    # Pattern match on the essence: "*/*", "*", "image/*", "text/html".
+    pub def matches(self, pattern: str) -> bool:
+        return Mime.matches(self.essence(), pattern)
+
+    # "type/subtype; name=value; ..." — values quoted when not tokens; values
+    # with non-ASCII bytes use RFC 2231 (name*=utf-8''%XX..).
+    pub def to_str(self) -> str:
+        mut sb = StringBuilder.init(64)
+        if self.type_.len() > 0:
+            sb.append(self.type_)
+            sb.append("/")
+            sb.append(self.subtype)
+        mut i = 0
+        while i < len(self.names):
+            sb.append("; ")
+            mut seg = Mime.format_param(self.names[i], self.values[i])
+            sb.append(seg)
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+# Combine RFC 2231 sections (name*0, name*1*, ...) and extended values
+# (name*=charset'lang'%XX) of the raw parameter lists into `out`.
+def _mt_fold_2231(raw_n: List[str], raw_v: List[str], out: MediaType):
+    mut i = 0
+    mut cnt = len(raw_n)
+    while i < cnt:
+        mut nm = raw_n[i]
+        mut star = nm.find("*")
+        if star < 0:
+            if not out.has_param(nm): out.set_param(nm, raw_v[i])
+            i = i + 1
+            continue
+        mut base = nm.slice(0, star)
+        if out.has_param(base):
+            i = i + 1
+            continue
+        # Gather every section of `base` in order 0, 1, 2, ... (sections may
+        # appear in any order in the header).
+        mut charset = ""
+        mut sb = StringBuilder.init(64)
+        if nm == base + "*":
+            # Single extended value.
+            mut v = raw_v[i]
+            mut a1 = v.find("'")
+            if a1 >= 0:
+                mut rest = v.slice(a1 + 1, v.len())
+                mut a2 = rest.find("'")
+                if a2 >= 0:
+                    charset = v.slice(0, a1)
+                    v = rest.slice(a2 + 1, rest.len())
+            mut dec = _pct_decode(v)
+            sb.append(dec)
+        else:
+            mut sec = 0
+            while true:
+                mut found = false
+                mut j = 0
+                while j < cnt:
+                    mut plain = base + "*" + sec.to_str()
+                    mut ext = plain + "*"
+                    if raw_n[j] == plain:
+                        sb.append(raw_v[j])
+                        found = true
+                        break
+                    if raw_n[j] == ext:
+                        mut v = raw_v[j]
+                        if sec == 0:
+                            mut a1 = v.find("'")
+                            if a1 >= 0:
+                                mut rest = v.slice(a1 + 1, v.len())
+                                mut a2 = rest.find("'")
+                                if a2 >= 0:
+                                    charset = v.slice(0, a1)
+                                    v = rest.slice(a2 + 1, rest.len())
+                        mut dec = _pct_decode(v)
+                        sb.append(dec)
+                        found = true
+                        break
+                    j = j + 1
+                if not found: break
+                sec = sec + 1
+        mut joined = sb.to_owned()
+        sb.free()
+        if charset.len() > 0:
+            joined = Mime.decode_text(joined, charset)
+        out.set_param(base, joined)
+        i = i + 1
+
+def _pct_decode(s: str) -> str:
+    mut n = s.len()
+    mut sb = StringBuilder.init(n + 1)
+    mut i = 0
+    while i < n:
+        mut c = _mb(s, i)
+        if c == 37 and i + 2 < n and _hexv(_mb(s, i + 1)) >= 0 and _hexv(_mb(s, i + 2)) >= 0:
+            sb.append_char(_hexv(_mb(s, i + 1)) * 16 + _hexv(_mb(s, i + 2)))
+            i = i + 3
+            continue
+        sb.append_char(c)
+        i = i + 1
+    mut out = sb.to_owned()
+    sb.free()
+    return out
+
+# ─── Mime ─────────────────────────────────────────────────────────────────────
+
+pub class Mime:
+    _dummy: int
+
+extend Mime:
+    # ── extension table ──────────────────────────────────────────────────────
+
+    # Content type for an extension ("png", ".PNG"), or "" when unknown.
+    pub def type_for_ext(ext: str) -> str:
+        mut e = ext.lower()
+        if e.starts_with("."): e = e.slice(1, e.len())
+        if e.len() == 0: return ""
+        mut i = 0
+        while i < e.len():
+            mut c = _mb(e, i)
+            if c == 32 or c == 10 or c == 47: return ""
+            i = i + 1
+        mut tab = _mime_table()
+        mut pos = tab.find(" " + e + "\n")
+        mut p2 = tab.find(" " + e + " ")
+        if pos < 0 or (p2 >= 0 and p2 < pos): pos = p2
+        if pos < 0: return ""
+        mut ls = pos
+        while ls > 0 and _mb(tab, ls - 1) != 10: ls = ls - 1
+        mut te = ls
+        while _mb(tab, te) != 32: te = te + 1
+        return tab.slice(ls, te)
+
+    # Content type guessed from a file name / path / URL path, or "" when the
+    # extension is unknown (or there is none).
+    pub def guess_type(path: str) -> str:
+        mut p = path
+        mut q = p.find("?")
+        if q >= 0: p = p.slice(0, q)
+        mut h = p.find("#")
+        if h >= 0: p = p.slice(0, h)
+        mut n = p.len()
+        mut i = n - 1
+        while i >= 0:
+            mut c = _mb(p, i)
+            if c == 47 or c == 92: return ""
+            if c == 46:
+                if i == 0 or _mb(p, i - 1) == 47 or _mb(p, i - 1) == 92:
+                    # dot-file such as ".bashrc": the whole name is no extension
+                    return ""
+                return Mime.type_for_ext(p.slice(i + 1, n))
+            i = i - 1
+        return ""
+
+    # Like guess_type but "application/octet-stream" when unknown.
+    pub def type_for_path(path: str) -> str:
+        mut t = Mime.guess_type(path)
+        if t.len() == 0: return "application/octet-stream"
+        return t
+
+    # type_for_path plus "; charset=utf-8" for textual types (a ready-made
+    # HTTP Content-Type value).
+    pub def content_type_for(path: str) -> str:
+        mut t = Mime.type_for_path(path)
+        mut cs = Mime.default_charset(t)
+        if cs.len() > 0: return t + "; charset=" + cs
+        return t
+
+    # Preferred extension (no dot) for a content type, or "".
+    pub def extension_for_type(content_type: str) -> str:
+        mut all = Mime.extensions_for_type(content_type)
+        if len(all) == 0: return ""
+        return all[0]
+
+    # Every known extension for a type, preferred first.
+    pub def extensions_for_type(content_type: str) -> List[str]:
+        mut out: List[str] = []
+        mut t = Mime.essence_of(content_type)
+        if t.len() == 0: return out
+        mut tab = _mime_table()
+        mut pos = tab.find("\n" + t + " ")
+        if pos < 0: return out
+        mut i = pos + 1 + t.len() + 1
+        mut n = tab.len()
+        mut start = i
+        while i < n:
+            mut c = _mb(tab, i)
+            if c == 32 or c == 10:
+                if i > start: out.append(tab.slice(start, i))
+                start = i + 1
+                if c == 10: break
+            i = i + 1
+        return out
+
+    # Number of extensions in the table.
+    pub def table_size() -> int:
+        mut tab = _mime_table()
+        mut cnt = 0
+        mut i = 0
+        while i < tab.len():
+            if _mb(tab, i) == 32: cnt = cnt + 1
+            i = i + 1
+        return cnt
+
+    # "Text/HTML; charset=x" -> "text/html" ("" when not a valid type).
+    pub def essence_of(content_type: str) -> str:
+        mut r: Result[MediaType, str] = MediaType.parse(content_type)
+        if r.is_err: return ""
+        return r.ok.essence()
+
+    # ── classification ───────────────────────────────────────────────────────
+
+    # True for types whose payload is text: text/*, JSON, XML, JavaScript,
+    # YAML/TOML, *+json, *+xml and message/rfc822-ish types.
+    pub def is_text(content_type: str) -> bool:
+        mut t = Mime.essence_of(content_type)
+        if t.starts_with("text/"): return true
+        if t.ends_with("+json") or t.ends_with("+xml"): return true
+        if t == "application/json" or t == "application/xml" or t == "application/javascript": return true
+        if t == "application/ecmascript" or t == "application/yaml" or t == "application/toml": return true
+        if t == "application/x-sh" or t == "application/sql" or t == "application/graphql": return true
+        if t == "application/x-ndjson" or t == "application/jsonl" or t == "application/x-subrip": return true
+        if t == "application/xml-dtd" or t == "application/x-tex" or t == "application/x-latex": return true
+        if t == "message/rfc822" or t == "application/mbox": return true
+        return false
+
+    # Charset to advertise by default: "utf-8" for text types, else "".
+    pub def default_charset(content_type: str) -> str:
+        mut t = Mime.essence_of(content_type)
+        if t == "image/svg+xml": return ""
+        if t == "message/rfc822" or t == "application/mbox": return ""
+        if Mime.is_text(t): return "utf-8"
+        return ""
+
+    # Essence match against a pattern: "*", "*/*", "image/*", "*/json"
+    # (suffix-aware: "*/json" also matches application/ld+json) or an exact
+    # type. Case-insensitive; parameters on either side are ignored.
+    pub def matches(content_type: str, pattern: str) -> bool:
+        mut t = Mime.essence_of(content_type)
+        if t.len() == 0: return false
+        mut p = pattern.strip().lower()
+        mut semi = p.find(";")
+        if semi >= 0: p = p.slice(0, semi).strip()
+        if p == "*" or p == "*/*": return true
+        mut slash = p.find("/")
+        if slash < 0: return false
+        mut pt = p.slice(0, slash)
+        mut ps = p.slice(slash + 1, p.len())
+        mut ts = t.find("/")
+        mut tt = t.slice(0, ts)
+        mut tsub = t.slice(ts + 1, t.len())
+        if pt != "*" and pt != tt: return false
+        if ps == "*": return true
+        if ps == tsub: return true
+        if pt == "*" and tsub.ends_with("+" + ps): return true
+        return false
+
+    # ── parse / format ───────────────────────────────────────────────────────
+
+    pub def parse(s: str) throws str -> MediaType:
+        return MediaType.parse(s)?
+
+    # True when s is a non-empty RFC 9110 token.
+    pub def is_token(s: str) -> bool:
+        if s.len() == 0: return false
+        mut i = 0
+        while i < s.len():
+            if not _is_tchar(_mb(s, i)): return false
+            i = i + 1
+        return true
+
+    # A quoted-string: "..." with '"' and '\' backslash-escaped.
+    pub def quote(s: str) -> str:
+        mut sb = StringBuilder.init(s.len() + 2)
+        sb.append_char(34)
+        mut i = 0
+        while i < s.len():
+            mut c = _mb(s, i)
+            if c == 34 or c == 92: sb.append_char(92)
+            if c != 13 and c != 10: sb.append_char(c)
+            i = i + 1
+        sb.append_char(34)
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # One parameter as "name=value": a bare token, a quoted string, or for a
+    # value with non-ASCII bytes the RFC 2231 form name*=utf-8''%XX...
+    pub def format_param(name: str, value: str) -> str:
+        mut i = 0
+        mut ascii = true
+        while i < value.len():
+            mut c = _mb(value, i)
+            if c >= 128 or (c < 32 and c != 9): ascii = false
+            i = i + 1
+        if not ascii: return name + "*=utf-8''" + Mime.pct_encode_2231(value)
+        if Mime.is_token(value): return name + "=" + value
+        return name + "=" + Mime.quote(value)
+
+    # RFC 2231 / RFC 5987 attr-char percent-encoding.
+    pub def pct_encode_2231(value: str) -> str:
+        mut sb = StringBuilder.init(value.len() * 3 + 1)
+        mut i = 0
+        while i < value.len():
+            mut c = _mb(value, i)
+            mut keep = (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+            if c == 33 or c == 35 or c == 36 or c == 38 or c == 43 or c == 45 or c == 46: keep = true
+            if c == 94 or c == 95 or c == 96 or c == 124 or c == 126: keep = true
+            if keep:
+                sb.append_char(c)
+            else:
+                sb.append_char(37)
+                sb.append_char(_hexd(c >> 4))
+                sb.append_char(_hexd(c & 15))
+            i = i + 1
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    # ── charsets ─────────────────────────────────────────────────────────────
+
+    # Canonical lower-case name for common charset labels: "utf-8",
+    # "us-ascii", "iso-8859-1", "iso-8859-15", "windows-1252", "utf-16",
+    # "utf-16le", "utf-16be"; anything else is returned lower-cased.
+    pub def normalize_charset(cs: str) -> str:
+        mut c = cs.strip().lower()
+        if c.starts_with("\"") and c.ends_with("\"") and c.len() >= 2: c = c.slice(1, c.len() - 1)
+        if c == "utf8" or c == "utf-8" or c == "unicode-1-1-utf-8": return "utf-8"
+        if c == "us-ascii" or c == "ascii" or c == "ansi_x3.4-1968" or c == "iso646-us" or c == "us" or c == "646": return "us-ascii"
+        if c == "iso-8859-1" or c == "iso8859-1" or c == "latin1" or c == "latin-1" or c == "l1" or c == "iso_8859-1" or c == "cp819" or c == "iso-ir-100": return "iso-8859-1"
+        if c == "iso-8859-15" or c == "iso8859-15" or c == "latin9" or c == "latin-9" or c == "iso_8859-15" or c == "l9": return "iso-8859-15"
+        if c == "windows-1252" or c == "cp1252" or c == "x-cp1252" or c == "win-1252": return "windows-1252"
+        if c == "utf-16" or c == "utf16": return "utf-16"
+        if c == "utf-16le" or c == "utf16le": return "utf-16le"
+        if c == "utf-16be" or c == "utf16be": return "utf-16be"
+        return c
+
+    # True when to_utf8 can convert from this charset.
+    pub def is_supported_charset(cs: str) -> bool:
+        mut c = Mime.normalize_charset(cs)
+        if c == "utf-8" or c == "us-ascii" or c == "iso-8859-1" or c == "iso-8859-15": return true
+        if c == "windows-1252" or c == "utf-16" or c == "utf-16le" or c == "utf-16be": return true
+        if c.len() == 0: return true
+        return false
+
+    # Convert bytes in `charset` to UTF-8. Invalid UTF-8 sequences become
+    # U+FFFD. Throws for an unsupported charset.
+    pub def to_utf8(data: str, charset: str) throws str -> str:
+        if not Mime.is_supported_charset(charset): raise("unsupported charset: " + charset)
+        return Mime.decode_text(data, charset)
+
+    # Lenient to_utf8: an unsupported charset returns the bytes unchanged.
+    pub def decode_text(data: str, charset: str) -> str:
+        mut c = Mime.normalize_charset(charset)
+        if c == "utf-8" or c == "us-ascii" or c.len() == 0: return Mime.sanitize_utf8(data)
+        if c == "iso-8859-1" or c == "iso-8859-15" or c == "windows-1252":
+            mut n = data.len()
+            mut sb = StringBuilder.init(n + n / 2 + 4)
+            mut i = 0
+            while i < n:
+                mut b = _mb(data, i)
+                if b < 128:
+                    sb.append_char(b)
+                elif c == "windows-1252":
+                    _put_utf8(sb, _cp1252_hi(b))
+                elif c == "iso-8859-15":
+                    _put_utf8(sb, _latin9(b))
+                else:
+                    _put_utf8(sb, b)
+                i = i + 1
+            mut out = sb.to_owned()
+            sb.free()
+            return out
+        if c == "utf-16" or c == "utf-16le" or c == "utf-16be":
+            return _utf16_to_utf8(data, c)
+        return data
+
+    # Replace every invalid UTF-8 sequence with U+FFFD (EF BF BD).
+    pub def sanitize_utf8(data: str) -> str:
+        if Mime.is_valid_utf8(data): return data
+        mut n = data.len()
+        mut sb = StringBuilder.init(n + 8)
+        mut i = 0
+        while i < n:
+            mut k = _utf8_seq_len(data, i)
+            if k <= 0:
+                _put_utf8(sb, 65533)
+                i = i + 1
+            else:
+                mut j = 0
+                while j < k:
+                    sb.append_char(_mb(data, i + j))
+                    j = j + 1
+                i = i + k
+        mut out = sb.to_owned()
+        sb.free()
+        return out
+
+    pub def is_valid_utf8(data: str) -> bool:
+        mut n = data.len()
+        mut i = 0
+        while i < n:
+            if _mb(data, i) < 128:
+                i = i + 1
+                continue
+            mut k = _utf8_seq_len(data, i)
+            if k <= 0: return false
+            i = i + k
+        return true
+
+    # ── sniffing ─────────────────────────────────────────────────────────────
+
+    # Identify content from its leading bytes (pass at least the first 512
+    # bytes; more lets the ZIP/WebM/tar checks see further). Returns
+    # "text/plain" for text without a better match and
+    # "application/octet-stream" for unrecognised binary data.
+    pub def sniff(data: str) -> str:
+        mut n = data.len()
+        if n == 0: return "text/plain"
+        # BOMs (WHATWG: text/plain)
+        if Mime._hasb(data, 0, 254, 255): return "text/plain"
+        if Mime._hasb(data, 0, 255, 254): return "text/plain"
+        if n >= 3 and _mb(data, 0) == 239 and _mb(data, 1) == 187 and _mb(data, 2) == 191: return "text/plain"
+        # Markup / documents (after leading whitespace)
+        mut ws = 0
+        while ws < n and _is_ws(_mb(data, ws)): ws = ws + 1
+        mut html = Mime._sniff_html(data, ws)
+        if html.len() > 0: return html
+        if Mime._has_ci(data, ws, "<?xml"): return "text/xml"
+        if Mime._has(data, 0, "%PDF-"): return "application/pdf"
+        if Mime._has(data, 0, "%!PS-Adobe-"): return "application/postscript"
+        if Mime._has(data, 0, "{\\rtf"): return "application/rtf"
+        # Images
+        if Mime._has(data, 0, "GIF87a") or Mime._has(data, 0, "GIF89a"): return "image/gif"
+        if n >= 8 and _mb(data, 0) == 137 and Mime._has(data, 1, "PNG") and _mb(data, 4) == 13 and _mb(data, 5) == 10 and _mb(data, 6) == 26 and _mb(data, 7) == 10: return "image/png"
+        if n >= 3 and _mb(data, 0) == 255 and _mb(data, 1) == 216 and _mb(data, 2) == 255: return "image/jpeg"
+        if Mime._has(data, 0, "RIFF") and Mime._has(data, 8, "WEBPVP"): return "image/webp"
+        if Mime._has(data, 0, "RIFF") and Mime._has(data, 8, "WAVE"): return "audio/wav"
+        if Mime._has(data, 0, "RIFF") and Mime._has(data, 8, "AVI "): return "video/x-msvideo"
+        if n >= 4 and _mb(data, 0) == 0 and _mb(data, 1) == 0 and _mb(data, 2) == 1 and _mb(data, 3) == 0: return "image/x-icon"
+        if n >= 4 and _mb(data, 0) == 0 and _mb(data, 1) == 0 and _mb(data, 2) == 2 and _mb(data, 3) == 0: return "image/x-icon"
+        if Mime._has(data, 0, "BM") and n >= 14: return "image/bmp"
+        if Mime._has(data, 0, "II*") and n >= 4 and _mb(data, 3) == 0: return "image/tiff"
+        if Mime._has(data, 0, "MM") and n >= 4 and _mb(data, 2) == 0 and _mb(data, 3) == 42: return "image/tiff"
+        if Mime._has(data, 0, "8BPS"): return "image/vnd.adobe.photoshop"
+        if Mime._has(data, 0, "qoif"): return "image/qoi"
+        if n >= 2 and _mb(data, 0) == 255 and _mb(data, 1) == 10: return "image/jxl"
+        if n >= 12 and _mb(data, 0) == 0 and _mb(data, 1) == 0 and _mb(data, 2) == 0 and _mb(data, 3) == 12 and Mime._has(data, 4, "JXL "): return "image/jxl"
+        # ISO base media (MP4 / QuickTime / HEIF / AVIF / 3GP)
+        if n >= 12 and Mime._has(data, 4, "ftyp"):
+            mut brand = data.slice(8, 12)
+            if brand == "avif" or brand == "avis": return "image/avif"
+            if brand == "heic" or brand == "heix" or brand == "heim" or brand == "heis" or brand == "hevc" or brand == "hevx": return "image/heic"
+            if brand == "mif1" or brand == "msf1": return "image/heif"
+            if brand == "M4A " or brand == "M4B ": return "audio/mp4"
+            if brand == "qt  ": return "video/quicktime"
+            if brand.starts_with("3g2"): return "video/3gpp2"
+            if brand.starts_with("3gp"): return "video/3gpp"
+            return "video/mp4"
+        # Audio / video
+        if n >= 4 and _mb(data, 0) == 26 and _mb(data, 1) == 69 and _mb(data, 2) == 223 and _mb(data, 3) == 163:
+            mut hl = n
+            if hl > 4096: hl = 4096
+            mut head = data.slice(0, hl)
+            if head.find("webm") >= 0: return "video/webm"
+            return "video/x-matroska"
+        if Mime._has(data, 0, "OggS") and n >= 5 and _mb(data, 4) == 0:
+            if Mime._has(data, 28, "OpusHead"): return "audio/opus"
+            if n > 35 and _mb(data, 28) == 1 and Mime._has(data, 29, "vorbis"): return "audio/ogg"
+            if n > 35 and _mb(data, 28) == 128 and Mime._has(data, 29, "theora"): return "video/ogg"
+            if Mime._has(data, 28, "Speex"): return "audio/ogg"
+            if n > 33 and _mb(data, 28) == 127 and Mime._has(data, 29, "FLAC"): return "audio/ogg"
+            return "application/ogg"
+        if Mime._has(data, 0, "fLaC"): return "audio/flac"
+        if Mime._has(data, 0, "ID3"): return "audio/mpeg"
+        if Mime._has(data, 0, "MThd") and n >= 8 and _mb(data, 4) == 0 and _mb(data, 7) == 6: return "audio/midi"
+        if Mime._has(data, 0, "FORM") and Mime._has(data, 8, "AIFF"): return "audio/aiff"
+        if Mime._has(data, 0, "FORM") and Mime._has(data, 8, "AIFC"): return "audio/aiff"
+        if Mime._has(data, 0, ".snd"): return "audio/basic"
+        if Mime._has(data, 0, "#!AMR"): return "audio/amr"
+        if n >= 4 and _mb(data, 0) == 255 and (_mb(data, 1) & 246) == 240: return "audio/aac"
+        if n >= 4 and _mb(data, 0) == 255 and (_mb(data, 1) & 224) == 224 and ((_mb(data, 1) >> 1) & 3) != 0 and (_mb(data, 2) >> 4) != 15 and ((_mb(data, 2) >> 2) & 3) != 3: return "audio/mpeg"
+        if n >= 4 and _mb(data, 0) == 0 and _mb(data, 1) == 0 and _mb(data, 2) == 1 and (_mb(data, 3) == 186 or _mb(data, 3) == 179): return "video/mpeg"
+        if Mime._has(data, 0, "FLV") and n >= 4 and _mb(data, 3) == 1: return "video/x-flv"
+        # Fonts
+        if Mime._has(data, 0, "wOFF"): return "font/woff"
+        if Mime._has(data, 0, "wOF2"): return "font/woff2"
+        if Mime._has(data, 0, "OTTO"): return "font/otf"
+        if Mime._has(data, 0, "ttcf"): return "font/collection"
+        if n >= 5 and _mb(data, 0) == 0 and _mb(data, 1) == 1 and _mb(data, 2) == 0 and _mb(data, 3) == 0 and _mb(data, 4) == 0: return "font/ttf"
+        if n >= 36 and _mb(data, 34) == 76 and _mb(data, 35) == 80: return "application/vnd.ms-fontobject"
+        # Archives / containers / executables
+        if n >= 3 and _mb(data, 0) == 31 and _mb(data, 1) == 139 and _mb(data, 2) == 8: return "application/gzip"
+        if Mime._has(data, 0, "PK") and n >= 4 and _mb(data, 2) == 3 and _mb(data, 3) == 4:
+            mut zt = Mime._zip_mimetype(data)
+            if zt.len() > 0: return zt
+            return "application/zip"
+        if Mime._has(data, 0, "Rar!") and n >= 7 and _mb(data, 4) == 26 and _mb(data, 5) == 7: return "application/vnd.rar"
+        if Mime._has(data, 0, "7z") and n >= 6 and _mb(data, 2) == 188 and _mb(data, 3) == 175 and _mb(data, 4) == 39 and _mb(data, 5) == 28: return "application/x-7z-compressed"
+        if n >= 6 and _mb(data, 0) == 253 and Mime._has(data, 1, "7zXZ") and _mb(data, 5) == 0: return "application/x-xz"
+        if Mime._has(data, 0, "BZh") and n >= 4 and _mb(data, 3) >= 49 and _mb(data, 3) <= 57: return "application/x-bzip2"
+        if n >= 4 and _mb(data, 0) == 40 and _mb(data, 1) == 181 and _mb(data, 2) == 47 and _mb(data, 3) == 253: return "application/zstd"
+        if n >= 4 and _mb(data, 0) == 4 and _mb(data, 1) == 34 and _mb(data, 2) == 77 and _mb(data, 3) == 24: return "application/x-lz4"
+        if Mime._has(data, 257, "ustar"): return "application/x-tar"
+        if n >= 8 and _mb(data, 0) == 0 and Mime._has(data, 1, "asm"): return "application/wasm"
+        if Mime._has(data, 0, "SQLite format 3"): return "application/vnd.sqlite3"
+        if n >= 4 and _mb(data, 0) == 127 and Mime._has(data, 1, "ELF"): return "application/x-executable"
+        if Mime._has(data, 0, "MZ") and n >= 64: return "application/vnd.microsoft.portable-executable"
+        if n >= 4 and _mb(data, 0) == 202 and _mb(data, 1) == 254 and _mb(data, 2) == 186 and _mb(data, 3) == 190: return "application/java-vm"
+        if Mime._has(data, 0, "!<arch>"): return "application/x-archive"
+        if n >= 4 and _mb(data, 0) == 237 and _mb(data, 1) == 171 and _mb(data, 2) == 238 and _mb(data, 3) == 219: return "application/x-rpm"
+        # Text heuristics
+        mut lim = n
+        if lim > 1445: lim = 1445
+        mut i = 0
+        while i < lim:
+            mut b = _mb(data, i)
+            if b <= 8 or b == 11 or (b >= 14 and b <= 26) or (b >= 28 and b <= 31): return "application/octet-stream"
+            i = i + 1
+        if ws < n:
+            mut c0 = _mb(data, ws)
+            if c0 == 123 or c0 == 91:
+                mut e = n - 1
+                while e > ws and _is_ws(_mb(data, e)): e = e - 1
+                mut ce = _mb(data, e)
+                mut k = ws + 1
+                while k < n and _is_ws(_mb(data, k)): k = k + 1
+                mut c1 = 0
+                if k < n: c1 = _mb(data, k)
+                if c0 == 123 and (c1 == 34 or c1 == 125) and (ce == 125 or n >= 512): return "application/json"
+                if c0 == 91 and (ce == 93 or n >= 512) and (c1 == 34 or c1 == 123 or c1 == 91 or c1 == 93 or c1 == 45 or (c1 >= 48 and c1 <= 57) or c1 == 116 or c1 == 102 or c1 == 110): return "application/json"
+        return "text/plain"
+
+    # Sniff, but keep `declared` unless it is missing/generic or the data
+    # clearly contradicts a textual declaration (binary signature found).
+    pub def sniff_with_hint(data: str, declared: str) -> str:
+        mut d = Mime.essence_of(declared)
+        mut s = Mime.sniff(data)
+        if d.len() == 0 or d == "application/octet-stream" or d == "application/unknown" or d == "unknown/unknown": return s
+        return d
+
+    def _has(data: str, off: int, sig: str) -> bool:
+        mut k = sig.len()
+        if off + k > data.len(): return false
+        mut i = 0
+        while i < k:
+            if _mb(data, off + i) != _mb(sig, i): return false
+            i = i + 1
+        return true
+
+    def _hasb(data: str, off: int, a: int, b: int) -> bool:
+        if off + 2 > data.len(): return false
+        return _mb(data, off) == a and _mb(data, off + 1) == b
+
+    # Case-insensitive ASCII prefix match at `off`.
+    def _has_ci(data: str, off: int, sig: str) -> bool:
+        mut k = sig.len()
+        if off + k > data.len(): return false
+        mut i = 0
+        while i < k:
+            mut a = _mb(data, off + i)
+            mut b = _mb(sig, i)
+            if a >= 65 and a <= 90: a = a + 32
+            if b >= 65 and b <= 90: b = b + 32
+            if a != b: return false
+            i = i + 1
+        return true
+
+    def _sniff_html(data: str, off: int) -> str:
+        mut tags = ["<!DOCTYPE HTML", "<HTML", "<HEAD", "<SCRIPT", "<IFRAME", "<H1", "<DIV", "<FONT", "<TABLE", "<A", "<STYLE", "<TITLE", "<B", "<BODY", "<BR", "<P", "<!--"]
+        mut i = 0
+        while i < len(tags):
+            mut tg = tags[i]
+            if Mime._has_ci(data, off, tg):
+                mut e = off + tg.len()
+                if e < data.len():
+                    mut c = _mb(data, e)
+                    if c == 32 or c == 62: return "text/html"
+            i = i + 1
+        return ""
+
+    # ZIP containers whose first entry is an uncompressed "mimetype" file
+    # (EPUB, OpenDocument) name their own type.
+    def _zip_mimetype(data: str) -> str:
+        if data.len() < 38: return ""
+        mut method = _mb(data, 8) | (_mb(data, 9) << 8)
+        mut csize = _mb(data, 18) | (_mb(data, 19) << 8) | (_mb(data, 20) << 16) | (_mb(data, 21) << 24)
+        mut nlen = _mb(data, 26) | (_mb(data, 27) << 8)
+        mut elen = _mb(data, 28) | (_mb(data, 29) << 8)
+        if method != 0 or nlen != 8 or not Mime._has(data, 30, "mimetype"): return ""
+        mut st = 30 + nlen + elen
+        if csize <= 0 or csize > 100 or st + csize > data.len(): return ""
+        mut t = data.slice(st, st + csize)
+        if Mime.essence_of(t) == t: return t
+        return ""
+
+# Length of the valid UTF-8 sequence starting at i (1..4), or 0 if invalid.
+def _utf8_seq_len(s: str, i: int) -> int:
+    mut n = s.len()
+    mut b = _mb(s, i)
+    if b < 128: return 1
+    mut k = 0
+    mut cp = 0
+    mut lo = 0
+    if b >= 194 and b <= 223:
+        k = 2
+        cp = b & 31
+        lo = 128
+    elif b >= 224 and b <= 239:
+        k = 3
+        cp = b & 15
+        lo = 2048
+    elif b >= 240 and b <= 244:
+        k = 4
+        cp = b & 7
+        lo = 65536
+    else:
+        return 0
+    if i + k > n: return 0
+    mut j = 1
+    while j < k:
+        mut c = _mb(s, i + j)
+        if (c & 192) != 128: return 0
+        cp = (cp << 6) | (c & 63)
+        j = j + 1
+    if cp < lo or cp > 1114111: return 0
+    if cp >= 55296 and cp <= 57343: return 0
+    return k
+
+def _utf16_to_utf8(data: str, cs: str) -> str:
+    mut n = data.len()
+    mut be = cs == "utf-16be"
+    mut i = 0
+    if cs == "utf-16" and n >= 2:
+        if _mb(data, 0) == 254 and _mb(data, 1) == 255:
+            be = true
+            i = 2
+        elif _mb(data, 0) == 255 and _mb(data, 1) == 254:
+            i = 2
+        else:
+            be = true    # RFC 2781: no BOM -> big-endian
+    mut sb = StringBuilder.init(n + 4)
+    while i + 1 < n:
+        mut u = 0
+        if be: u = (_mb(data, i) << 8) | _mb(data, i + 1)
+        else: u = _mb(data, i) | (_mb(data, i + 1) << 8)
+        i = i + 2
+        if u >= 55296 and u <= 56319 and i + 1 < n:
+            mut u2 = 0
+            if be: u2 = (_mb(data, i) << 8) | _mb(data, i + 1)
+            else: u2 = _mb(data, i) | (_mb(data, i + 1) << 8)
+            if u2 >= 56320 and u2 <= 57343:
+                i = i + 2
+                _put_utf8(sb, 65536 + ((u - 55296) << 10) + (u2 - 56320))
+                continue
+            _put_utf8(sb, 65533)
+            continue
+        if u >= 55296 and u <= 57343:
+            _put_utf8(sb, 65533)
+            continue
+        _put_utf8(sb, u)
+    mut out = sb.to_owned()
+    sb.free()
+    return out

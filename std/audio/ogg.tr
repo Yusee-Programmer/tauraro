@@ -1,0 +1,339 @@
+# std.audio.ogg -- Ogg container, Vorbis and Opus: metadata, seeking, streaming.
+#
+# One-shot decoding is `Ogg.decode` / `Vorbis.decode` / `Opus.decode` in
+# std.audio (and `Audio.decode` sniffs "OggS"). This module adds:
+#
+#   OggFile.info(data, n)       codec, channels, rate, exact length, tags
+#   OggFile.open(data, n)       OggReader: read(max) / seek(frame) / tell
+#   OggFile.pages / packets     raw container structure (RFC 3533), CRC checked
+#   OggDecoder                  streaming: feed(bytes) then pull(max) frames
+#
+# Vorbis (stb_vorbis) and Opus (libopus decoder; SILK, CELT and hybrid, mapping
+# families 0/1/2/255, pre-skip, output gain, end trimming) are decoded to
+# AudioBuffer. Opus is always 48 kHz. Multichannel is in WAV order.
+# Where a file multiplexes several logical streams the first Vorbis or Opus
+# stream is decoded; the others are listed in OggInfo.streams.
+#
+# Usage:
+#   from std.audio.ogg import OggFile
+#   mut info = OggFile.info(bytes, n)?
+#   print(info.tag("TITLE"), info.duration)
+#   mut r = OggFile.open(bytes, n)?
+#   r.seek(48000)?
+#   mut chunk = r.read(4096)
+
+from std.audio.mod import AudioBuffer, Audio
+from std.audio.ogg_native import trc_ogg_new, trc_ogg_free, trc_ogg_feed, trc_ogg_finish, trc_ogg_available, trc_ogg_pull
+from std.audio.ogg_native import trc_ogg_ready, trc_ogg_failed, trc_ogg_codec, trc_ogg_channels, trc_ogg_rate, trc_ogg_serial
+from std.audio.ogg_native import trc_ogg_pre_skip, trc_ogg_gain_q8, trc_ogg_family, trc_ogg_bitrate, trc_ogg_bad_pages, trc_ogg_gaps
+from std.audio.ogg_native import trc_ogg_bad_packets, trc_ogg_comment_count, trc_ogg_comment_len, trc_ogg_comment
+from std.audio.ogg_native import trc_ogg_stream_count, trc_ogg_stream_serial, trc_ogg_stream_codec, trc_ogg_error
+from std.audio.ogg_native import trc_oggr_open, trc_oggr_total, trc_oggr_tell, trc_oggr_read, trc_oggr_seek
+from std.audio.ogg_native import trc_ogg_raw, trc_ogg_raw_free, trc_ogg_raw_pages, trc_ogg_raw_page, trc_ogg_raw_packets, trc_ogg_raw_packet
+from std.audio.opus_native import opus_get_version_string
+from std.audio.native import _tr_c_malloc, _tr_str_wrap_len
+
+extern "C":
+    def pow(base: float, exp: float) -> float
+
+def _og_err(h: int) -> str:
+    mut out = _tr_c_malloc(161)
+    mut n = trc_ogg_error(h, out, 160)
+    unsafe: out.offset(n).write('\0')
+    return _tr_str_wrap_len(out, n)
+
+def _og_comment(h: int, i: int) -> str:
+    mut n = trc_ogg_comment_len(h, i)
+    mut out = _tr_c_malloc(n + 1)
+    mut got = trc_ogg_comment(h, i, out, n)
+    unsafe: out.offset(got).write('\0')
+    return _tr_str_wrap_len(out, got)
+
+def _og_codec_name(c: int) -> str:
+    if c == 1: return "vorbis"
+    if c == 2: return "opus"
+    return ""
+
+pub class OggStreamInfo:
+    pub serial: int
+    pub codec:  str      # "vorbis", "opus", "theora", "flac", "speex", "skeleton", ... or "unknown"
+
+pub class OggInfo:
+    pub codec:           str      # "vorbis" or "opus"
+    pub channels:        int
+    pub sample_rate:     int      # Opus: 48000 (decoder output rate)
+    pub frames:          int      # exact PCM frames after trimming; -1 when streaming and not yet known
+    pub duration:        float    # seconds, -1.0 when unknown
+    pub serial:          int      # logical stream decoded
+    pub pre_skip:        int      # Opus only (samples at 48 kHz)
+    pub output_gain_db:  float    # Opus only; already applied by the decoder
+    pub channel_family:  int      # Opus mapping family
+    pub nominal_bitrate: int      # Vorbis header value, 0 when unset
+    pub vendor:          str
+    pub comments:        List[str]   # "KEY=value" in file order
+    pub streams:         List[OggStreamInfo]
+    pub bad_pages:       int      # pages skipped for a bad CRC / framing
+    pub lost_pages:      int      # sequence-number gaps in the decoded stream
+    pub bad_packets:     int      # audio packets the codec rejected (concealed)
+
+extend OggInfo:
+    # First value of a tag, key compared case-insensitively ("" if absent).
+    pub def tag(self, key: str) -> str:
+        mut k = key.lower() + "="
+        mut i = 0
+        while i < len(self.comments):
+            mut c = self.comments[i]
+            if c.len() >= k.len() and c.slice(0, k.len()).lower() == k:
+                return c.slice(k.len(), c.len())
+            i = i + 1
+        return ""
+
+    # Every value of a tag (e.g. several ARTIST entries).
+    pub def tags(self, key: str) -> List[str]:
+        mut out: List[str] = []
+        mut k = key.lower() + "="
+        mut i = 0
+        while i < len(self.comments):
+            mut c = self.comments[i]
+            if c.len() >= k.len() and c.slice(0, k.len()).lower() == k:
+                out.append(c.slice(k.len(), c.len()))
+            i = i + 1
+        return out
+
+def _og_info(h: int, frames: int) -> OggInfo:
+    mut inf = OggInfo()
+    inf.codec = _og_codec_name(trc_ogg_codec(h))
+    inf.channels = trc_ogg_channels(h)
+    inf.sample_rate = trc_ogg_rate(h)
+    inf.frames = frames
+    inf.duration = -1.0
+    if frames >= 0 and inf.sample_rate > 0: inf.duration = (frames as float) / (inf.sample_rate as float)
+    inf.serial = trc_ogg_serial(h)
+    inf.pre_skip = trc_ogg_pre_skip(h)
+    inf.output_gain_db = (trc_ogg_gain_q8(h) as float) / 256.0
+    inf.channel_family = trc_ogg_family(h)
+    inf.nominal_bitrate = trc_ogg_bitrate(h)
+    inf.vendor = _og_comment(h, -1)
+    inf.comments = []
+    mut n = trc_ogg_comment_count(h)
+    mut i = 0
+    while i < n:
+        inf.comments.append(_og_comment(h, i))
+        i = i + 1
+    inf.streams = []
+    mut ns = trc_ogg_stream_count(h)
+    i = 0
+    while i < ns:
+        mut s = OggStreamInfo()
+        s.serial = trc_ogg_stream_serial(h, i)
+        mut buf = _tr_c_malloc(17)
+        mut cn = trc_ogg_stream_codec(h, i, buf, 16)
+        unsafe: buf.offset(cn).write('\0')
+        s.codec = _tr_str_wrap_len(buf, cn)
+        inf.streams.append(s)
+        i = i + 1
+    inf.bad_pages = trc_ogg_bad_pages(h)
+    inf.lost_pages = trc_ogg_gaps(h)
+    inf.bad_packets = trc_ogg_bad_packets(h)
+    return inf
+
+def _og_buffer(h: int, rate: int, ch: int, frames: int, seekable: bool) -> AudioBuffer:
+    mut b = AudioBuffer.init(rate, ch, frames)
+    mut sp = b.samples as Pointer[float]
+    mut got = 0
+    if seekable: got = trc_oggr_read(h, sp, frames)
+    else: got = trc_ogg_pull(h, sp, frames)
+    if got < frames:
+        mut t = AudioBuffer.init(rate, ch, got)
+        mut i = 0
+        while i < got * ch:
+            t.samples[i] = b.samples[i]
+            i = i + 1
+        return t
+    return b
+
+# Random-access reader over an in-memory file. Frame positions count output
+# frames (Opus: after pre-skip, at 48 kHz).
+pub class OggReader:
+    handle: int
+    pub total: int            # total output frames
+    pub channels: int
+    pub sample_rate: int
+
+extend OggReader:
+    pub def info(self) -> OggInfo: return _og_info(self.handle, self.total)
+
+    # Next frame to be returned.
+    pub def tell(self) -> int: return trc_oggr_tell(self.handle)
+
+    # Up to `max` frames (fewer at the end of the stream; 0 frames = end).
+    pub def read(self, max: int) -> AudioBuffer:
+        if max < 0: return AudioBuffer.init(self.sample_rate, self.channels, 0)
+        mut left = self.total - self.tell()
+        mut want = max
+        if left < want: want = left
+        if want < 0: want = 0
+        return _og_buffer(self.handle, self.sample_rate, self.channels, want, true)
+
+    pub def read_all(self) -> AudioBuffer:
+        mut r = self.seek(0)
+        return self.read(self.total)
+
+    # Position at frame `frame` (clamped to 0..total); the next read starts there.
+    pub def seek(self, frame: int) throws str -> int:
+        if trc_oggr_seek(self.handle, frame) != 0: raise(_og_err(self.handle))
+        return self.tell()
+
+    pub def seek_seconds(self, seconds: float) throws str -> int:
+        return self.seek((seconds * (self.sample_rate as float)) as int)?
+
+    pub def close(self):
+        if self.handle != 0:
+            trc_ogg_free(self.handle)
+            self.handle = 0
+
+pub class OggPage:
+    pub offset:   int
+    pub length:   int
+    pub flags:    int      # 1 continued packet, 2 first page of stream, 4 last page of stream
+    pub granule:  int      # -1 when no packet ends on the page
+    pub serial:   int
+    pub sequence: int
+    pub packets:  int      # packets that end on this page
+
+pub class OggPacket:
+    pub length:  int
+    pub granule: int       # page granule if the packet is the last on its page, else -1
+    pub serial:  int
+    pub first:   bool      # first packet of its logical stream
+    pub last:    bool      # last packet of an end-of-stream page
+
+pub class OggFile:
+    _dummy: int
+
+extend OggFile:
+    # Parse headers and the page index of the first Vorbis or Opus stream.
+    pub def open(data: str, len_: int) throws str -> OggReader:
+        mut dp = data as Pointer[char]
+        mut h = trc_oggr_open(dp, len_, 0)
+        if h == 0: raise("Ogg: out of memory")
+        if trc_ogg_failed(h) != 0:
+            mut e = _og_err(h)
+            trc_ogg_free(h)
+            raise(e)
+        mut r = OggReader()
+        r.handle = h
+        r.total = trc_oggr_total(h)
+        r.channels = trc_ogg_channels(h)
+        r.sample_rate = trc_ogg_rate(h)
+        return r
+
+    pub def info(data: str, len_: int) throws str -> OggInfo:
+        mut r = OggFile.open(data, len_)?
+        mut inf = r.info()
+        r.close()
+        return inf
+
+    # Version string of the vendored libopus.
+    pub def opus_version() -> str:
+        mut p = opus_get_version_string()
+        mut n = 0
+        unsafe:
+            while p.offset(n).read() != '\0': n = n + 1
+        mut out = _tr_c_malloc(n + 1)
+        mut i = 0
+        unsafe:
+            while i < n:
+                out.offset(i).write(p.offset(i).read())
+                i = i + 1
+            out.offset(n).write('\0')
+        return _tr_str_wrap_len(out, n)
+
+    # Every CRC-valid page (corrupt data between pages is skipped).
+    pub def pages(data: str, len_: int) -> List[OggPage]:
+        mut dp = data as Pointer[char]
+        mut h = trc_ogg_raw(dp, len_, -1)
+        mut out: List[OggPage] = []
+        if h == 0: return out
+        mut n = trc_ogg_raw_pages(h)
+        mut i = 0
+        while i < n:
+            mut p = OggPage()
+            p.offset = trc_ogg_raw_page(h, i, 0)
+            p.length = trc_ogg_raw_page(h, i, 1)
+            p.flags = trc_ogg_raw_page(h, i, 2)
+            p.granule = trc_ogg_raw_page(h, i, 3)
+            p.serial = trc_ogg_raw_page(h, i, 4)
+            p.sequence = trc_ogg_raw_page(h, i, 5)
+            p.packets = trc_ogg_raw_page(h, i, 6)
+            out.append(p)
+            i = i + 1
+        trc_ogg_raw_free(h)
+        return out
+
+    # Reassembled packets (lengths only) of one logical stream, or of all
+    # streams when serial < 0.
+    pub def packets(data: str, len_: int, serial: int) -> List[OggPacket]:
+        mut dp = data as Pointer[char]
+        mut h = trc_ogg_raw(dp, len_, serial)
+        mut out: List[OggPacket] = []
+        if h == 0: return out
+        mut n = trc_ogg_raw_packets(h)
+        mut i = 0
+        while i < n:
+            mut p = OggPacket()
+            p.length = trc_ogg_raw_packet(h, i, 0)
+            p.granule = trc_ogg_raw_packet(h, i, 1)
+            p.serial = trc_ogg_raw_packet(h, i, 2)
+            mut fl = trc_ogg_raw_packet(h, i, 3)
+            p.first = (fl & 2) != 0
+            p.last = (fl & 4) != 0
+            out.append(p)
+            i = i + 1
+        trc_ogg_raw_free(h)
+        return out
+
+# Streaming decoder: feed chunks of any size, pull decoded frames as they
+# become available. Call finish() at the end of the input: it applies the final
+# granule-position trim and reports truncated or non-audio input.
+pub class OggDecoder:
+    handle: int
+    pub finished: bool
+
+extend OggDecoder:
+    # codec: "" (first Vorbis or Opus stream), "vorbis" or "opus".
+    pub def init(codec: str) -> OggDecoder:
+        mut d = OggDecoder()
+        mut want = 0
+        if codec == "vorbis": want = 1
+        if codec == "opus": want = 2
+        d.handle = trc_ogg_new(want)
+        d.finished = false
+        return d
+
+    pub def feed(self, data: str, len_: int) throws str -> int:
+        mut dp = data as Pointer[char]
+        if trc_ogg_feed(self.handle, dp, len_) != 0: raise(_og_err(self.handle))
+        return self.available()
+
+    pub def finish(self) throws str:
+        if trc_ogg_finish(self.handle) != 0: raise(_og_err(self.handle))
+        self.finished = true
+
+    # Headers parsed; channels / sample_rate / info() are valid.
+    pub def ready(self) -> bool: return trc_ogg_ready(self.handle) != 0
+    pub def channels(self) -> int: return trc_ogg_channels(self.handle)
+    pub def sample_rate(self) -> int: return trc_ogg_rate(self.handle)
+    pub def available(self) -> int: return trc_ogg_available(self.handle)
+    pub def info(self) -> OggInfo: return _og_info(self.handle, -1)
+
+    # Up to `max` decoded frames (the whole backlog when max < 0).
+    pub def pull(self, max: int) -> AudioBuffer:
+        mut want = self.available()
+        if max >= 0 and max < want: want = max
+        return _og_buffer(self.handle, self.sample_rate(), self.channels(), want, false)
+
+    pub def close(self):
+        if self.handle != 0:
+            trc_ogg_free(self.handle)
+            self.handle = 0

@@ -1,5 +1,8 @@
 # std.cli — clap-style command-line argument parser.
 #
+# For typed values, env fallbacks, groups, nested commands, response files and
+# completion scripts see std.cli.argparse (ArgParser, Arg, Namespace).
+#
 # Usage:
 #   from std.cli import Cli
 #   from std.sys.env import Env
