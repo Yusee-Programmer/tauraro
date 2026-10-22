@@ -232,7 +232,7 @@ def main():
     # signed zero and subnormals survive a decode -> encode trip
     check(t, "f98000", "-0.0", true)
     check(t, "f90000", "0.0", true)
-    check(t, "f98001", "-5.96046e-08", true)
+    check(t, "f98001", "-5.960464477539063e-08", true)
     # wider-than-needed widths decode, and the encoder narrows them
     mut w1 = Cbor.loads(Hex.decode("fb3ff0000000000000"), 9)
     mut w1len = [0]

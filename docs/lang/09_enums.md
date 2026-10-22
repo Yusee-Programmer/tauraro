@@ -267,9 +267,9 @@ match shape:
     case Shape.Rect(w, h):     # OK
 ```
 
-**Forgetting `case _:` when not all variants are handled** — the compiler does not currently
-enforce exhaustive matching. A missing variant silently falls through without executing any arm.
-Always include a catch-all unless you are certain every variant is covered:
+**Forgetting `case _:` when not all variants are handled** — the compiler rejects a `match`
+that does not cover every variant (arms with a guard do not count as covering). Add the missing
+variant or a catch-all:
 
 ```python
 # RISKY — East and West silently unhandled
@@ -517,8 +517,8 @@ you have provably handled all variants.
 
 ### How it works
 
-The compiler does **not** currently enforce exhaustive matching. A `match` with missing arms
-silently falls through without executing any arm. There is no warning.
+The compiler enforces exhaustive matching: a `match` over an enum that misses a variant (and has
+no `case _:`) is a compile error. Guarded arms (`case X if cond:`) never count as covering.
 
 ```python
 # RISKY — if Direction gains a new variant (e.g. Up), it falls through silently

@@ -83,6 +83,7 @@ pub class Parser:
     pub cols: Vec[int]     # parallel 1-based columns (from lexer.token_cols); may be empty
     pub src_text: str      # full source text, for source-snippet diagnostics ("" if unknown)
     pub error_count: int   # number of parse errors emitted (0 = clean parse)
+    pub aug_ctr: int       # counter for compound-assignment temporaries
     pub current_file: str  # source path, for diagnostic messages ("" if unknown)
     # `from module import name as alias` — bug #10 (nebula bugs.txt): a plain
     # Tauraro free function's alias silently did nothing (item.alias was only
@@ -107,6 +108,7 @@ extend Parser:
         p.src_text = ""
         p.pos = 0
         p.error_count = 0
+        p.aug_ctr = 0
         p.current_file = ""
         p.import_aliases = Map[str, str].init(8)
         return p
@@ -1484,6 +1486,62 @@ extend Parser:
                 pass
         return Pattern.PWild
 
+    # An expression whose evaluation runs no code and has no side effects.
+    pub def _ast_simple(self, e: Pointer[Expr]) -> bool:
+        if e as usize == 0 as usize: return true
+        match e.read():
+            case Expr.EIdent(_): return true
+            case Expr.ELitInt(_): return true
+            case Expr.ELitStr(_, _): return true
+            case Expr.ELitBool(_): return true
+            case Expr.EPropAccess(o, _): return self._ast_simple(o)
+            case Expr.EIndex(o, i): return self._ast_simple(o) and self._ast_simple(i)
+            case Expr.EBinOp(_, a, b): return self._ast_simple(a) and self._ast_simple(b)
+            case Expr.EUnaryOp(_, a): return self._ast_simple(a)
+            case _: return false
+
+    # `target op= rhs`. Lowered as `target = target op rhs`, but the target's own
+    # sub-expressions must be evaluated ONCE (`xs[next()] += 1` must call next() once; Python:
+    # container and index first, then the load, then the right-hand side). When the target's
+    # object / index run code, bind them to temporaries inside a scoped block first.
+    pub def mk_aug(self, lhs: Pointer[Expr], op: str, rhs: Pointer[Expr]) -> Pointer[Stmt]:
+        mut plain = box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp(op, lhs, rhs))))
+        mut stmts = Vec[Pointer[Stmt]].init(4)
+        match lhs.read():
+            case Expr.EIndex(o, i):
+                if self._ast_simple(o) and self._ast_simple(i): return plain
+                mut o2 = o
+                mut i2 = i
+                if not self._ast_simple(o):
+                    self.aug_ctr = self.aug_ctr + 1
+                    mut on = "_aug" + str(self.aug_ctr)
+                    stmts.push(box_stmt(Stmt.SLet(on, Ownership.Own, True, false, false, Pointer[AstType](0), o)))
+                    o2 = box_expr(Expr.EIdent(on))
+                if not self._ast_simple(i):
+                    self.aug_ctr = self.aug_ctr + 1
+                    mut inm = "_aug" + str(self.aug_ctr)
+                    stmts.push(box_stmt(Stmt.SLet(inm, Ownership.Own, True, false, false, Pointer[AstType](0), i)))
+                    i2 = box_expr(Expr.EIdent(inm))
+                mut t_node = box_expr(Expr.EIndex(o2, i2))
+                mut r_node = box_expr(Expr.EIndex(o2, i2))
+                stmts.push(box_stmt(Stmt.SAssign(t_node, box_expr(Expr.EBinOp(op, r_node, rhs)))))
+            case Expr.EPropAccess(o, f):
+                if self._ast_simple(o): return plain
+                self.aug_ctr = self.aug_ctr + 1
+                mut pn = "_aug" + str(self.aug_ctr)
+                stmts.push(box_stmt(Stmt.SLet(pn, Ownership.Own, True, false, false, Pointer[AstType](0), o)))
+                mut o3 = box_expr(Expr.EIdent(pn))
+                mut t_node2 = box_expr(Expr.EPropAccess(o3, f))
+                mut r_node2 = box_expr(Expr.EPropAccess(o3, f))
+                stmts.push(box_stmt(Stmt.SAssign(t_node2, box_expr(Expr.EBinOp(op, r_node2, rhs)))))
+            case _: return plain
+        mut blk = Block.init()
+        mut si = 0
+        while si < stmts.len:
+            blk.stmts.push(stmts.get(si))
+            si = si + 1
+        return box_stmt(Stmt.SIf(box_expr(Expr.ELitBool(true)), blk, Vec[ElifClause].init(0), Block.init()))
+
     pub def parse_assign_or_expr_stmt(self) -> Pointer[Stmt]:
         lhs = self.parse_expr()
         match self.peek():
@@ -1509,62 +1567,62 @@ extend Parser:
                 self.pos = self.pos + 1
                 mut rhs = self.parse_expr()
                 self.expect_newline()
-                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("+", lhs, rhs))))
+                return self.mk_aug(lhs, "+", rhs)
             case Token.MinusEq:
                 self.pos = self.pos + 1
                 mut rhs = self.parse_expr()
                 self.expect_newline()
-                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("-", lhs, rhs))))
+                return self.mk_aug(lhs, "-", rhs)
             case Token.StarEq:
                 self.pos = self.pos + 1
                 mut rhs = self.parse_expr()
                 self.expect_newline()
-                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("*", lhs, rhs))))
+                return self.mk_aug(lhs, "*", rhs)
             case Token.SlashEq:
                 self.pos = self.pos + 1
                 mut rhs = self.parse_expr()
                 self.expect_newline()
-                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("/", lhs, rhs))))
+                return self.mk_aug(lhs, "/", rhs)
             case Token.PercentEq:
                 self.pos = self.pos + 1
                 mut rhs = self.parse_expr()
                 self.expect_newline()
-                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("%", lhs, rhs))))
+                return self.mk_aug(lhs, "%", rhs)
             case Token.FloorDivEq:
                 self.pos = self.pos + 1
                 mut rhs = self.parse_expr()
                 self.expect_newline()
-                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("//", lhs, rhs))))
+                return self.mk_aug(lhs, "//", rhs)
             case Token.StarStarEq:
                 self.pos = self.pos + 1
                 mut rhs = self.parse_expr()
                 self.expect_newline()
-                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("**", lhs, rhs))))
+                return self.mk_aug(lhs, "**", rhs)
             case Token.AmpEq:
                 self.pos = self.pos + 1
                 mut rhs = self.parse_expr()
                 self.expect_newline()
-                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("&", lhs, rhs))))
+                return self.mk_aug(lhs, "&", rhs)
             case Token.PipeEq:
                 self.pos = self.pos + 1
                 mut rhs = self.parse_expr()
                 self.expect_newline()
-                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("|", lhs, rhs))))
+                return self.mk_aug(lhs, "|", rhs)
             case Token.CaretEq:
                 self.pos = self.pos + 1
                 mut rhs = self.parse_expr()
                 self.expect_newline()
-                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("^", lhs, rhs))))
+                return self.mk_aug(lhs, "^", rhs)
             case Token.LtLtEq:
                 self.pos = self.pos + 1
                 mut rhs = self.parse_expr()
                 self.expect_newline()
-                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp("<<", lhs, rhs))))
+                return self.mk_aug(lhs, "<<", rhs)
             case Token.GtGtEq:
                 self.pos = self.pos + 1
                 mut rhs = self.parse_expr()
                 self.expect_newline()
-                return box_stmt(Stmt.SAssign(lhs, box_expr(Expr.EBinOp(">>", lhs, rhs))))
+                return self.mk_aug(lhs, ">>", rhs)
             case _:
                 pass
         self.expect_newline()
@@ -2937,6 +2995,15 @@ extend Parser:
             while self.peek() == Token.Comma:
                 self.pos = self.pos + 1
                 c.region_params.push(self.consume_ident())
+        # `class Dog(Animal):` is the documented spelling of `class Dog extends Animal:`
+        if self.peek() == Token.LParen:
+            self.pos = self.pos + 1
+            c.base_classes.push(self.consume_ident())
+            while self.peek() == Token.Comma:
+                self.pos = self.pos + 1
+                c.base_classes.push(self.consume_ident())
+            if self.peek() == Token.RParen:
+                self.pos = self.pos + 1
         if self.peek() == Token.KwExtends:
             self.pos = self.pos + 1
             c.base_classes.push(self.consume_ident())

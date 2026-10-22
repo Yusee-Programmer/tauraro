@@ -5545,6 +5545,7 @@ static char* _tr_str_replace(const char* s, const char* old, const char* nw) {
     *dst='\0'; return r;
 }
 _TR_XLINK char* _tr_int_to_str(long long n)   { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%lld",n); return b; }
+_TR_XLINK char* _tr_uint_to_str(unsigned long long n) { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%llu",n); return b; }
 /* Thousands grouping for f"{n:,d}": 1234567 -> "1,234,567" (fresh heap C string). */
 static char* _tr_i64_grouped(long long v) {
     char t[24]; int n=0, neg=v<0;
@@ -5555,7 +5556,109 @@ static char* _tr_i64_grouped(long long v) {
     for (int i=n-1,c=0;i>=0;i--,c++) { if (c&&c%3==0) b[w++]=','; b[w++]=t[i]; }
     b[w]=0; return b;
 }
-_TR_XLINK char* _tr_float_to_str(double n)    { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%g",n);   return b; }
+/* ── Float -> text: shortest representation that parses back to the same value ──────────────
+ * Python's repr rules: 0.1+0.2 -> "0.30000000000000004", 1/3 -> "0.3333333333333333", 100.0 -> "100.0",
+ * fixed notation for decimal exponents -4..15, otherwise "1e+16" / "1.5e-05".  The previous "%g"
+ * kept only 6 significant digits, so printing and re-reading a float silently lost precision.
+ * `f32` selects the float round-trip (0.1f -> "0.1").  Hosted builds only; freestanding keeps %g. */
+#ifndef TAURARO_BARE
+static int _tr_fmt_float(double x, int is_f32, char* out) {
+    if (x != x) { memcpy(out, "nan", 4); return 3; }
+    if (x > 1.7976931348623157e308) { memcpy(out, "inf", 4); return 3; }
+    if (x < -1.7976931348623157e308) { memcpy(out, "-inf", 5); return 4; }
+    if (x == 0.0) {
+        if (signbit(x)) { memcpy(out, "-0.0", 5); return 4; }
+        memcpy(out, "0.0", 4); return 3;
+    }
+    char e[48];
+    int lo = 0, hi = is_f32 ? 8 : 16;      /* precision after the point: 1 + p significant digits */
+    /* round-tripping is monotone in the digit count, so binary-search the smallest that works */
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        snprintf(e, sizeof e, "%.*e", mid, x);
+        int ok = is_f32 ? (strtof(e, NULL) == (float)x) : (strtod(e, NULL) == x);
+        if (ok) hi = mid; else lo = mid + 1;
+    }
+    snprintf(e, sizeof e, "%.*e", lo, x);
+    /* printf rounds to the NEAREST digit string, but a value's rounding interval is asymmetric at a power
+     * of two, so a one-digit-shorter string (the other neighbour) may still round-trip: 2^-24 prints as
+     * 5.960464477539063e-08, though nearest-rounding gives ...062. Try dropping the last digit with and
+     * without rounding up, as Python's repr (shortest string) does. */
+    if (lo > 0) {
+        char m[24]; int nm = 0; const char* q = e; int ng = 0;
+        if (*q == '-') { ng = 1; q++; }
+        while (*q && *q != 'e' && nm < 22) { if (*q != '.') m[nm++] = *q; q++; }
+        const char* exs = q;
+        for (int mode = 0; mode < 2 && nm > 1; mode++) {
+            char t[24]; int len = nm - 1; memcpy(t, m, (size_t)len);
+            if (mode == 1) {
+                int i = len - 1;
+                while (i >= 0) { if (t[i] == '9') { t[i] = '0'; i--; } else { t[i]++; break; } }
+                if (i < 0) continue;
+            }
+            char cand[56]; int w = 0;
+            if (ng) cand[w++] = '-';
+            cand[w++] = t[0];
+            if (len > 1) { cand[w++] = '.'; memcpy(cand + w, t + 1, (size_t)(len - 1)); w += len - 1; }
+            snprintf(cand + w, sizeof cand - (size_t)w, "%s", exs);
+            int ok2 = is_f32 ? (strtof(cand, NULL) == (float)x) : (strtod(cand, NULL) == x);
+            if (ok2) { snprintf(e, sizeof e, "%s", cand); break; }
+        }
+    }
+    char* sp = e; int neg = 0;
+    if (*sp == '-') { neg = 1; sp++; }
+    char digs[24]; int nd = 0;
+    while (*sp && *sp != 'e') { if (*sp != '.') digs[nd++] = *sp; sp++; }
+    int ex = (*sp == 'e') ? atoi(sp + 1) : 0;
+    while (nd > 1 && digs[nd - 1] == '0') nd--;
+    char* o = out;
+    if (neg) *o++ = '-';
+    int i;
+    if (ex >= -4 && ex < 16) {
+        if (ex >= 0) {
+            for (i = 0; i <= ex; i++) *o++ = (i < nd) ? digs[i] : '0';
+            *o++ = '.';
+            if (nd > ex + 1) { for (i = ex + 1; i < nd; i++) *o++ = digs[i]; }
+            else *o++ = '0';
+        } else {
+            *o++ = '0'; *o++ = '.';
+            for (i = 0; i < -ex - 1; i++) *o++ = '0';
+            for (i = 0; i < nd; i++) *o++ = digs[i];
+        }
+    } else {
+        *o++ = digs[0];
+        if (nd > 1) { *o++ = '.'; for (i = 1; i < nd; i++) *o++ = digs[i]; }
+        *o++ = 'e'; *o++ = (ex < 0) ? '-' : '+';
+        int ax = ex < 0 ? -ex : ex;
+        if (ax < 10) *o++ = '0';
+        o += snprintf(o, 8, "%d", ax);
+    }
+    *o = 0;
+    return (int)(o - out);
+}
+/* Non-owning variant for printf-style callers (print, f-strings): a small thread-local ring of
+ * buffers, so several floats can appear in one snprintf call (it is invoked twice per f-string). */
+static const char* _tr_f64_buf(double x) {
+    static _Thread_local char ring[64][40];
+    static _Thread_local unsigned idx;
+    char* b = ring[idx++ & 63u];
+    _tr_fmt_float(x, 0, b);
+    return b;
+}
+static const char* _tr_f32_buf(double x) {
+    static _Thread_local char ring[64][40];
+    static _Thread_local unsigned idx;
+    char* b = ring[idx++ & 63u];
+    _tr_fmt_float(x, 1, b);
+    return b;
+}
+#else
+static const char* _tr_f64_buf(double x) { static char b[40]; snprintf(b, sizeof b, "%g", x); return b; }
+static const char* _tr_f32_buf(double x) { return _tr_f64_buf(x); }
+#endif
+
+_TR_XLINK char* _tr_float_to_str(double n)    { char* b=(char*)TAURARO_ALLOC(40); snprintf(b,40,"%s",_tr_f64_buf(n)); return b; }
+_TR_XLINK char* _tr_f32_to_str(double n)      { char* b=(char*)TAURARO_ALLOC(40); snprintf(b,40,"%s",_tr_f32_buf(n)); return b; }
 _TR_XLINK char* _tr_float_to_c_lit(double n) {
     char* b=(char*)TAURARO_ALLOC(32);
     int len = snprintf(b,32,"%.17g",n);
@@ -5577,7 +5680,7 @@ static char* _tr_bool_to_str(bool b)       { return b ? "true" : "false"; }
  * Uses _Generic so __auto_type variables work without an explicit type annotation.
  * Each branch is a distinct typed helper to avoid cross-type implicit-cast errors. */
 static inline char* _tr__ll_s(long long x)          { return _tr_int_to_str(x); }
-static inline char* _tr__ull_s(unsigned long long x) { return _tr_int_to_str((long long)x); }
+static inline char* _tr__ull_s(unsigned long long x) { return _tr_uint_to_str(x); }
 static inline char* _tr__i32_s(int x)               { return _tr_int_to_str((long long)x); }
 static inline char* _tr__u32_s(unsigned int x)       { return _tr_int_to_str((long long)x); }
 static inline char* _tr__i16_s(short x)              { return _tr_int_to_str((long long)x); }
@@ -5585,7 +5688,7 @@ static inline char* _tr__u16_s(unsigned short x)     { return _tr_int_to_str((lo
 static inline char* _tr__i8_s(signed char x)         { return _tr_int_to_str((long long)x); }
 static inline char* _tr__u8_s(unsigned char x)       { return _tr_int_to_str((long long)x); }
 static inline char* _tr__dbl_s(double x)             { return _tr_float_to_str(x); }
-static inline char* _tr__flt_s(float x)              { return _tr_float_to_str((double)x); }
+static inline char* _tr__flt_s(float x)              { return _tr_f32_to_str((double)x); }
 static inline char* _tr__bool_s(bool x)              { return x ? "true" : "false"; }
 static inline char* _tr__ptr_s(void* x)              { return (char*)x; }
 static inline char* _tr__trstr_s(TrStr x)            { return x.data; }
@@ -6577,7 +6680,7 @@ static inline List_TrStr* _tr_dict_keys(TrMap* d) {
            freeing the list (List_TrStr_free -> _tr_str_release) doesn't free
            the dict's own key storage (which would dangle d's keys -> a later
            d.get() / d[key] would miss). */
-        while (n) { if (n->key && n->value) List_TrStr_append_owned(out, _tr_str_wrap(strdup(n->key))); n = n->next; }
+        while (n) { if (n->key) List_TrStr_append_owned(out, _tr_str_wrap(strdup(n->key))); n = n->next; }
     }
     return out;
 }
@@ -6586,7 +6689,7 @@ static inline List_ptr* _tr_dict_values(TrMap* d) {
     if (!d) return out;
     for (size_t i = 0; i < d->cap; i++) {
         _DictNode* n = d->buckets[i];
-        while (n) { if (n->key && n->value) List_ptr_append(out, n->value); n = n->next; }
+        while (n) { if (n->key) List_ptr_append(out, n->value); n = n->next; }
     }
     return out;
 }
@@ -6595,8 +6698,34 @@ static inline List_i64* _tr_idict_keys(TrIDict* d) {
     if (!d) return out;
     for (size_t i = 0; i < d->cap; i++) {
         _TrIDictNode* n = d->buckets[i];
-        while (n) { if (n->value) List_i64_append(out, n->key); n = n->next; }
+        while (n) { List_i64_append(out, n->key); n = n->next; }
     }
+    return out;
+}
+/* values() for Dict[K,int] / Dict[K,float]: scalar values live in the void* slot (floats as their
+ * bit pattern), so build a properly TYPED list instead of a List_ptr the caller cannot use. */
+static inline List_i64* _tr_dict_values_i64(TrMap* d) {
+    List_i64* out = List_i64_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) { _DictNode* n = d->buckets[i]; while (n) { if (n->key) List_i64_append(out, (long long)(uintptr_t)n->value); n = n->next; } }
+    return out;
+}
+static inline List_i64* _tr_idict_values_i64(TrIDict* d) {
+    List_i64* out = List_i64_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) { _TrIDictNode* n = d->buckets[i]; while (n) { List_i64_append(out, (long long)(uintptr_t)n->value); n = n->next; } }
+    return out;
+}
+static inline List_f64* _tr_dict_values_f64(TrMap* d) {
+    List_f64* out = List_f64_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) { _DictNode* n = d->buckets[i]; while (n) { if (n->key) List_f64_append(out, _tr_ptr_to_f64(n->value)); n = n->next; } }
+    return out;
+}
+static inline List_f64* _tr_idict_values_f64(TrIDict* d) {
+    List_f64* out = List_f64_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) { _TrIDictNode* n = d->buckets[i]; while (n) { List_f64_append(out, _tr_ptr_to_f64(n->value)); n = n->next; } }
     return out;
 }
 static inline List_ptr* _tr_idict_values(TrIDict* d) {
@@ -6604,7 +6733,7 @@ static inline List_ptr* _tr_idict_values(TrIDict* d) {
     if (!d) return out;
     for (size_t i = 0; i < d->cap; i++) {
         _TrIDictNode* n = d->buckets[i];
-        while (n) { if (n->value) List_ptr_append(out, n->value); n = n->next; }
+        while (n) { List_ptr_append(out, n->value); n = n->next; }
     }
     return out;
 }
@@ -6616,7 +6745,7 @@ static inline List_TrStr* _tr_dict_values_strval(TrMap* d) {
     if (!d) return out;
     for (size_t i = 0; i < d->cap; i++) {
         _DictNode* n = d->buckets[i];
-        while (n) { if (n->key && n->value) List_TrStr_append(out, _tr_str_unbox(n->value)); n = n->next; }
+        while (n) { if (n->key) List_TrStr_append(out, _tr_str_unbox(n->value)); n = n->next; }
     }
     return out;
 }
@@ -6625,7 +6754,7 @@ static inline List_TrStr* _tr_idict_values_strval(TrIDict* d) {
     if (!d) return out;
     for (size_t i = 0; i < d->cap; i++) {
         _TrIDictNode* n = d->buckets[i];
-        while (n) { if (n->value) List_TrStr_append(out, _tr_str_unbox(n->value)); n = n->next; }
+        while (n) { List_TrStr_append(out, _tr_str_unbox(n->value)); n = n->next; }
     }
     return out;
 }
@@ -6703,6 +6832,30 @@ _TR_LIST_RESERVE(List_u64)
 _TR_LIST_RESERVE(List_u16)
 _TR_LIST_RESERVE(List_i16)
 _TR_LIST_RESERVE(List_f32)
+/* list.insert(i, v): shift the tail up and place v at i (i is clamped to 0..len, like Python). The
+ * append step does the element-type-specific work (e.g. retaining a TrStr). */
+#define _TR_LIST_INSERT(LT) static inline void LT##_insert(LT* l, long long i, __typeof__(*((LT*)0)->data) v){ \
+    if(!l) return; if(i<0) i=0; if((size_t)i>l->len) i=(long long)l->len; \
+    LT##_append(l, v); \
+    for(size_t j=l->len-1;j>(size_t)i;j--) l->data[j]=l->data[j-1]; \
+    l->data[i]=v; }
+_TR_LIST_INSERT(List_bool)
+_TR_LIST_INSERT(List_char)
+_TR_LIST_INSERT(List_f64)
+_TR_LIST_INSERT(List_i32)
+_TR_LIST_INSERT(List_i64)
+_TR_LIST_INSERT(List_i8)
+_TR_LIST_INSERT(List_ptr)
+_TR_LIST_INSERT(List_str)
+_TR_LIST_INSERT(List_TrStr)
+_TR_LIST_INSERT(List_TrTuple)
+_TR_LIST_INSERT(List_TrFnVal)
+_TR_LIST_INSERT(List_u32)
+_TR_LIST_INSERT(List_u8)
+_TR_LIST_INSERT(List_u64)
+_TR_LIST_INSERT(List_u16)
+_TR_LIST_INSERT(List_i16)
+_TR_LIST_INSERT(List_f32)
 /* ── Extended Vec/List operations: remove, swap, clear, is_empty, extend ──── */
 static inline void List_i64_remove(List_i64* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
 static inline void List_i64_swap(List_i64* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; long long t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
@@ -7265,7 +7418,7 @@ static inline void StringBuilder_append_int(StringBuilder* sb, long long n) {
     StringBuilder_append(sb, _tr_str_lit_len(tmp, (size_t)tl));
 }
 static inline void StringBuilder_append_float(StringBuilder* sb, double f) {
-    char tmp[32]; int tl = snprintf(tmp, sizeof(tmp), "%g", f);
+    const char* tmp = _tr_f64_buf(f); int tl = (int)strlen(tmp);
     StringBuilder_append(sb, _tr_str_lit_len(tmp, (size_t)tl));
 }
 static inline long long StringBuilder_length(StringBuilder* sb) { return sb->buf->len; }

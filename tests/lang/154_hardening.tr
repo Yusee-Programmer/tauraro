@@ -1,0 +1,197 @@
+# tests/lang/154_hardening.tr
+# Regressions found by differential fuzzing against Python and by sanitizer sweeps:
+# float / u64 printing, str.find, list.insert, dict keys/values with zero values, Option / Result
+# defaults and None typing, enum `is`, closure calls, fresh-string + closure arguments,
+# name shadowing / reuse across scopes, loop variables that alias container elements, and defined
+# integer wrap-around.
+
+from std.test import TestRunner
+
+enum Color:
+    Red
+    Green
+    Blue
+
+enum Shape:
+    Circle(r: int)
+    Rect(w: int, h: int)
+
+class Box:
+    pub v: int
+    pub s: str
+
+class Holder:
+    pub o: Option[int]
+
+def mk(v: int) -> Box:
+    mut b = Box()
+    b.v = v
+    b.s = "b" + str(v)
+    return b
+
+def fresh() -> str:
+    return "ab" + "cd"
+
+def use(s: str, f: lambda) -> int:
+    return s.len() + f(1)
+
+def adder(k: int) -> lambda:
+    return lambda x: x + k
+
+def apply_twice(f: lambda, x: int) -> int:
+    return f(f(x))
+
+def find(xs: List[int], x: int) -> Option[int]:
+    mut i = 0
+    while i < len(xs):
+        if xs[i] == x: return Some(i)
+        i = i + 1
+    return None
+
+def parse(s: str) throws str -> int:
+    if s.len() == 0: raise("empty")
+    return s.len()
+
+def take(x: Option[int]) -> bool:
+    return x.is_some()
+
+class Animal:
+    pub name: str
+
+extend Animal:
+    pub def breathe(self) -> str:
+        return self.name + " breathes"
+
+class Dog(Animal):
+    pub breed: str
+
+def main():
+    mut t = TestRunner.init("154_hardening")
+
+    t.section("float printing is the shortest round-trip form")
+    t.assert_eq_str(str(0.1 + 0.2), "0.30000000000000004", "0.1 + 0.2")
+    t.assert_eq_str(str(1.0 / 3.0), "0.3333333333333333", "1/3")
+    t.assert_eq_str(str(100.0), "100.0", "whole number keeps .0")
+    t.assert_eq_str(str(1234567.0), "1234567.0", "seven digits")
+    t.assert_eq_str(str(123456789.123456789), "123456789.12345679", "nine digits")
+    t.assert_eq_str(str(1e22), "1e+22", "large exponent")
+    t.assert_eq_str(str(0.00001), "1e-05", "small exponent")
+    t.assert_eq_str(str(0.0001), "0.0001", "fixed below 1e-4")
+    t.assert_eq_str(str(2.5), "2.5", "plain fraction")
+    t.assert_eq_str(f"{0.1 + 0.2}", "0.30000000000000004", "f-string uses the same form")
+    t.assert_eq_str(f"{1.0 / 3.0:.3f}", "0.333", "format specs still apply")
+
+    t.section("unsigned 64-bit values print as unsigned")
+    mut m = 0 - 1
+    t.assert_eq_str(str(m as u64), "18446744073709551615", "u64 max")
+
+    t.section("integer arithmetic wraps")
+    mut big = 9223372036854775807
+    t.assert_eq_int(big + 1, 0 - 9223372036854775807 - 1, "max + 1 wraps to min")
+    t.assert_eq_int(big * 2, 0 - 2, "max * 2 wraps")
+
+    t.section("str.find is an int")
+    mut s = "hello"
+    t.assert_eq_str(str(s.find("l")), "2", "find in a str() call")
+    t.assert_eq_str(str(s.find("zz")), "-1", "find miss")
+    t.assert_eq_int(s.find("lo") + 1, 4, "find in arithmetic")
+
+    t.section("list.insert and dict zero values")
+    mut xs: List[int] = [1, 3]
+    xs.insert(1, 2)
+    t.assert_eq_int(xs[0] * 100 + xs[1] * 10 + xs[2], 123, "insert in the middle")
+    xs.insert(0, 9)
+    xs.insert(99, 7)
+    t.assert_eq_int(len(xs), 5, "insert at the ends")
+    t.assert_eq_int(xs[0] + xs[4], 16, "clamped positions")
+    mut d: Dict[str, int] = {}
+    d["zero"] = 0
+    d["one"] = 1
+    t.assert_eq_int(len(d.keys()), 2, "keys() keeps an entry whose value is 0")
+    mut vs = d.values()
+    t.assert_eq_int(len(vs), 2, "values() keeps a 0")
+    t.assert_eq_int(vs[0] + vs[1], 1, "values() is a usable List[int]")
+    mut e: Dict[int, int] = {}
+    e[5] = 0
+    t.assert_true(e.has(5), "has() sees a stored 0")
+    t.assert_eq_int(len(e.keys()), 1, "int-keyed keys() keeps a 0 value")
+
+    t.section("Option and Result defaults")
+    mut a: Option[int] = Some(3)
+    mut b: Option[int] = None
+    t.assert_eq_int(a.unwrap_or(-5), 3, "Some default unused")
+    t.assert_eq_int(b.unwrap_or(-5), -5, "None default used")
+    mut fo: Option[float] = None
+    t.assert_eq_str(str(fo.unwrap_or(9.5)), "9.5", "float default")
+    mut so: Option[str] = None
+    t.assert_eq_str(so.unwrap_or("dflt"), "dflt", "str default")
+    t.assert_eq_int(a.expect("present"), 3, "expect")
+    mut f1 = find([4, 8, 15], 8)
+    mut f2 = find([4, 8, 15], 9)
+    t.assert_true(f1.is_some() and f2.is_none(), "return None / Some")
+    t.assert_eq_int(f1.unwrap(), 1, "found index")
+    t.assert_true(not take(None) and take(Some(7)), "None as an argument")
+    mut h = Holder()
+    h.o = None
+    t.assert_true(h.o.is_none(), "None assigned to a field")
+    h.o = Some(4)
+    t.assert_eq_int(h.o.unwrap(), 4, "Some assigned to a field")
+    mut r1: Result[int, str] = parse("abc")
+    mut r2: Result[int, str] = parse("")
+    t.assert_eq_int(r1.unwrap_or(0), 3, "Result ok value")
+    t.assert_eq_int(r2.unwrap_or(-1), -1, "Result default")
+
+    t.section("enum is")
+    mut c = Color.Green
+    t.assert_true(c is Color.Green, "same variant")
+    t.assert_true(not (c is Color.Red), "different variant")
+    mut sh = Shape.Circle(3)
+    t.assert_true(sh is Shape.Circle, "payload variant")
+    t.assert_true(not (sh is Shape.Rect), "other payload variant")
+
+    t.section("closure values")
+    mut add5 = adder(5)
+    t.assert_eq_int(add5(10), 15, "call a closure variable")
+    t.assert_eq_int(apply_twice(add5, 1), 11, "f(f(x)) through a closure parameter")
+    t.assert_eq_int(adder(2)(3), 5, "call the result of a call")
+    mut k = 10
+    t.assert_eq_int(use(fresh(), lambda x: x + k), 15, "fresh-string argument before a lambda")
+    t.assert_eq_int(use(fresh(), lambda x: x * 2) + use("q", lambda y: y), 8, "two such calls in one expression")
+
+    t.section("shadowing and name reuse")
+    mut v = [1, 2, 3]
+    if len(v) > 0:
+        mut v = "inner"
+        t.assert_eq_int(v.len(), 5, "the inner variable is a str")
+    t.assert_eq_int(v[1], 2, "the outer List is intact after the block")
+    t.assert_eq_int(len(v), 3, "and still a List")
+    mut item = mk(1)
+    mut items: List[Box] = []
+    for i in range(3):
+        mut item = mk(i + 10)
+        items.append(item)
+    t.assert_eq_int(item.v, 1, "outer class local after a shadowing loop body")
+    mut total = 0
+    for item in items:
+        total = total + item.v
+    t.assert_eq_int(total, 33, "loop variable aliasing class elements")
+    t.assert_eq_int(items[2].v, 12, "the elements are still alive")
+    mut grid: List[List[int]] = []
+    for i in range(3):
+        mut row: List[int] = []
+        for j in range(4):
+            row.append(i * 10 + j)
+        grid.append(row)
+    mut sum = 0
+    for row in grid:
+        for x in row:
+            sum = sum + x
+    t.assert_eq_int(sum, 138, "sum over a grid")
+    grid[1][2] = 99
+    t.assert_eq_int(grid[1][2] + grid[2][3], 122, "the grid rows survive iteration")
+    t.section("class Dog(Animal) inherits the parent's fields and methods")
+    mut dg = Dog()
+    dg.name = "Rex"
+    dg.breed = "lab"
+    t.assert_eq_str(dg.breathe(), "Rex breathes", "parent method on a child")
+    t.summary()

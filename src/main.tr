@@ -1150,11 +1150,11 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
     mut native_flags = ""
     if target == "" and opt_level == "3":
         native_flags = " -march=native -funroll-loops"
-    # -ftrapv: make signed integer overflow a runtime trap (defined behavior) instead of UB.
-    # Disabled at O3/Os where the user explicitly prioritises speed over safety checks.
-    mut overflow_flag = ""
-    if opt_level != "3" and opt_level != "s":
-        overflow_flag = " -ftrapv"
+    # Signed integer overflow is DEFINED: two's-complement wrap-around at every optimization level
+    # (-fwrapv), never C undefined behaviour the optimizer may exploit, and never a silent abort that
+    # depends on -O. (Previously -O0..-O2 used -ftrapv and -O3/-Os had neither, so the same program
+    # aborted in one build and was undefined in another.)
+    mut overflow_flag = " -fwrapv"
     mut cmd = cc + " -O" + opt_level + overflow_flag + static_flag + native_flags + cross_flags + warn_flags + " \"-I" + inc_dir + "\" -o \"" + exe_path + "\""
     mut i = 0
     while i < c_files.len:
@@ -1304,11 +1304,12 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
     mut native_flags = ""
     if target == "" and opt_level == "3":
         native_flags = " -march=native -funroll-loops"
-    mut overflow_flag = ""
-    if opt_level != "3" and opt_level != "s":
-        overflow_flag = " -ftrapv"
+    # Defined wrap-around at every optimization level (see the note in the single-step build).
+    # --debug leaves overflow to UBSan, which reports it with a source location.
+    mut overflow_flag = " -fwrapv"
     mut dbg = ""
     if debug_mode:
+        overflow_flag = ""
         dbg = " -fsanitize=address,undefined -g"
     # Coverage: gcov counters; the #line markers map them to .tr lines.
     if coverage:

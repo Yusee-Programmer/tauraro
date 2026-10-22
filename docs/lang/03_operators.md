@@ -31,7 +31,7 @@ result is truncated toward zero, not rounded.
 7 / 2       # 3
 ```
 
-The `//` operator is an alias for integer division, mirroring Python semantics for readability:
+The `//` operator is an alias for `/` on integers (it truncates toward zero; it does **not** floor like Python's `//` for negative operands):
 
 ```python
 10 // 3     # 3  — explicit integer division

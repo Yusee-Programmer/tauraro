@@ -288,6 +288,13 @@ pub class Sema:
     pub block_depth_stack: Vec[int]  # auto-drop: saved block_depth per scope, restored on exit_scope
     pub next_block_id: int       # auto-drop: monotonic id, incremented each time an if/while/etc body block opens
     pub block_stack: Vec[int]    # auto-drop: ids of currently-open if/while bodies, innermost last
+    # A local declared in a nested block that REUSES the name of an outer local replaces the outer
+    # symbol in the (function-level) scope map. Each replaced symbol is recorded here and put back
+    # when the nested block closes, so the outer variable keeps its type and its drop bookkeeping.
+    pub shadow_names:  Vec[str]
+    pub shadow_prevs:  Vec[Symbol]
+    pub shadow_blocks: Vec[int]
+    pub shadow_scopes: Vec[int]
     pub block_stack_base: Vec[int] # auto-drop: block_stack.len at each enter_scope, restored on exit_scope
     pub do_temp_ctr: int           # `do:` block-expression: monotonic counter for synthetic result-capture temps
     pub pc_alias_consumes: bool    # apply_borrow_drops: while true, `x = y` / `mut x = y` (a bare-ident alias/move of the tracked local `y`) counts as CONSUMING y (set only for user-`free()` classes, whose owner must be unique)
@@ -404,6 +411,10 @@ extend Sema:
         s.block_depth_stack      = Vec[int].init(8)
         s.next_block_id          = 0
         s.block_stack            = Vec[int].init(8)
+        s.shadow_names           = Vec[str].init(4)
+        s.shadow_prevs           = Vec[Symbol].init(4)
+        s.shadow_blocks          = Vec[int].init(4)
+        s.shadow_scopes          = Vec[int].init(4)
         s.block_stack_base       = Vec[int].init(8)
         s.do_temp_ctr            = 0
         s.pc_alias_consumes      = false
@@ -1552,6 +1563,19 @@ extend Sema:
 
     # Close the innermost currently-open if/while/etc body block.
     pub def close_block(self):
+        mut closing = 0
+        if self.block_stack.len > 0: closing = self.block_stack.get(self.block_stack.len - 1)
+        # put back every outer local that a declaration inside this block shadowed
+        while self.shadow_blocks.len > 0 and self.shadow_blocks.get(self.shadow_blocks.len - 1) == closing:
+            mut li = self.shadow_blocks.len - 1
+            mut si = self.shadow_scopes.get(li)
+            if si >= 0 and si < self.scopes.len:
+                mut sc = self.scopes.get(si)
+                sc.variables.insert(self.shadow_names.get(li), self.shadow_prevs.get(li))
+            self.shadow_names.pop()
+            self.shadow_prevs.pop()
+            self.shadow_blocks.pop()
+            self.shadow_scopes.pop()
         self.block_stack.pop()
 
     # True if `id` is one of the currently-open if/while body blocks.
@@ -2561,6 +2585,14 @@ extend Sema:
                 if prev.kind == SymbolKind.SVariable and prev.decl_block_id == sym.decl_block_id and not prev.is_param:
                     self.error("[N-2] '" + name + "' is already declared in this block. Assign to it without `mut` (`" + name + " = ...`), or pick a different name.")
             if not decl_scope.variables.contains(name): decl_scope.decl_order.push(name)
+            elif kind == SymbolKind.SVariable and not name.starts_with("_") and sym.decl_block_id != 0:
+                # shadowing an outer-block local: remember it so close_block() can restore it
+                mut shadowed = decl_scope.variables.get(name)
+                if shadowed.kind == SymbolKind.SVariable and shadowed.decl_block_id != sym.decl_block_id:
+                    self.shadow_names.push(name)
+                    self.shadow_prevs.push(shadowed)
+                    self.shadow_blocks.push(sym.decl_block_id)
+                    self.shadow_scopes.push(self.scopes.len - 1)
             decl_scope.variables.insert(name, sym)
         else:
             self.globals.insert(name, sym)
@@ -4722,6 +4754,7 @@ extend Sema:
                             self.clo_let_ptrs.push(hval)
                             self.clo_let_scopes.push(self.scopes.len - 1)
                         case _: pass
+                hval = self.retype_none(hval, ty)
                 return box_hirstmt(HirStmt.SLet(name, ownership, is_mut, is_const, is_shared, ty, hval))
             case Stmt.SAssign(target, val):
                 # `name = <closure literal>` (first assignment, no `mut`) declares an immutable
@@ -4831,6 +4864,7 @@ extend Sema:
                     match target.read():
                         case Expr.EIdent(pc_tgt): self.clear_container_borrow(pc_tgt)
                         case _: pass
+                hv = self.retype_none(hv, hir_expr_type(htgt))
                 return box_hirstmt(HirStmt.SAssign(htgt, hv))
             case Stmt.SIf(cond, then_b, elifs, else_b):
                 # Rule T-5: numeric variable used directly as boolean condition
@@ -5031,6 +5065,14 @@ extend Sema:
                 elif iter_hn == "str":
                     var_ty_for = AstType.init("char")
                 self.declare(var, SymbolKind.SVariable, box_asttype(var_ty_for), false)
+                # The loop variable of `for row in grid` ALIASES the container's element: it must never be
+                # auto-dropped. Collections are not reference counted, so freeing `row` at the end of an
+                # iteration freed the element out of `grid` (a use-after-free on the next read). Mark it
+                # borrowed so the scope-exit drop skips it.
+                if iter_hn == "List" or iter_hn == "Vec" or iter_hn == "Set":
+                    mut lv_n = var_ty_for.name
+                    if lv_n == "List" or lv_n == "Vec" or lv_n == "Dict" or lv_n == "Map" or lv_n == "Set":
+                        self.set_borrows_region(var, "@borrowed")
                 # Gap 2: `for ref x in items` — x borrows each element, so the body borrows
                 # the collection. Record the edge so the borrow checker (B-2) rejects
                 # mutating `items` inside the loop (e.g. `items.push(..)` while iterating).
@@ -5131,25 +5173,33 @@ extend Sema:
                 mut k = 0
                 while k < arms.len:
                     mut arm = arms.get(k)
-                    # Collect exhaustiveness info from the pattern
+                    # Collect exhaustiveness info from the pattern. An arm with a GUARD does not cover
+                    # its variant: when the guard is false the match falls through to later arms.
+                    mut ex_guarded = arm.guard as usize != 0 as usize
                     match arm.pat:
-                        case Pattern.PWild: ex_has_wild = true
-                        case Pattern.PBind(_): ex_has_wild = true
-                        case Pattern.PVariant(_, ex_vn): ex_covered.push(ex_vn)
-                        case Pattern.PVariantBind(_, ex_vn2, _): ex_covered.push(ex_vn2)
-                        case Pattern.PVariantBindMany(_, ex_vn3, _): ex_covered.push(ex_vn3)
+                        case Pattern.PWild:
+                            if not ex_guarded: ex_has_wild = true
+                        case Pattern.PBind(_):
+                            if not ex_guarded: ex_has_wild = true
+                        case Pattern.PVariant(_, ex_vn):
+                            if not ex_guarded: ex_covered.push(ex_vn)
+                        case Pattern.PVariantBind(_, ex_vn2, _):
+                            if not ex_guarded: ex_covered.push(ex_vn2)
+                        case Pattern.PVariantBindMany(_, ex_vn3, _):
+                            if not ex_guarded: ex_covered.push(ex_vn3)
                         case Pattern.POr(ex_orpats):
                             # [E-3] A payload BIND inside an or-pattern is unsound: only one
                             # alternative matches, so the binder may be uninitialized.
                             mut ex_oi = 0
                             while ex_oi < ex_orpats.len:
                                 match ex_orpats.get(ex_oi):
-                                    case Pattern.PVariant(_, ex_ovn): ex_covered.push(ex_ovn)
+                                    case Pattern.PVariant(_, ex_ovn):
+                                        if not ex_guarded: ex_covered.push(ex_ovn)
                                     case Pattern.PVariantBind(_, ex_bvn, _):
-                                        ex_covered.push(ex_bvn)
+                                        if not ex_guarded: ex_covered.push(ex_bvn)
                                         self.error("[E-3] Payload binding '" + ex_ty_name + "." + ex_bvn + "(..)' is not allowed inside an or-pattern ('|').\n      FIX: Split the alternatives into separate 'case' arms, or match the variant without binding: 'case " + ex_ty_name + "." + ex_bvn + " | ...:'.")
                                     case Pattern.PVariantBindMany(_, ex_mvn, _):
-                                        ex_covered.push(ex_mvn)
+                                        if not ex_guarded: ex_covered.push(ex_mvn)
                                         self.error("[E-3] Payload binding '" + ex_ty_name + "." + ex_mvn + "(..)' is not allowed inside an or-pattern ('|').\n      FIX: Split the alternatives into separate 'case' arms, or match the variant without binding: 'case " + ex_ty_name + "." + ex_mvn + " | ...:'.")
                                     case _: pass
                                 ex_oi = ex_oi + 1
@@ -5432,6 +5482,60 @@ extend Sema:
                     i = i + 1
             case _: pass
 
+    # A match EXPRESSION must produce a value on every path, so a missing variant is always an error
+    # (the statement form reports the same condition). Guarded arms do not count as covering.
+    pub def check_match_expr_exhaustive(self, ty_name: str, arms: Vec[MatchArm]):
+        if not self.enums.contains(ty_name): return
+        mut covered = Vec[str].init(8)
+        mut has_wild = false
+        mut i = 0
+        while i < arms.len:
+            mut arm = arms.get(i)
+            mut guarded = arm.guard as usize != 0 as usize
+            if not guarded:
+                match arm.pat:
+                    case Pattern.PWild: has_wild = true
+                    case Pattern.PBind(_): has_wild = true
+                    case Pattern.PVariant(_, v1): covered.push(v1)
+                    case Pattern.PVariantBind(_, v2, _): covered.push(v2)
+                    case Pattern.PVariantBindMany(_, v3, _): covered.push(v3)
+                    case Pattern.POr(ors):
+                        mut oi = 0
+                        while oi < ors.len:
+                            match ors.get(oi):
+                                case Pattern.PVariant(_, ov1): covered.push(ov1)
+                                case Pattern.PVariantBind(_, ov2, _): covered.push(ov2)
+                                case Pattern.PVariantBindMany(_, ov3, _): covered.push(ov3)
+                                case _: pass
+                            oi = oi + 1
+                    case _: pass
+            i = i + 1
+        if has_wild: return
+        mut edef = self.enums.get(ty_name)
+        mut missing = ""
+        mut nmiss = 0
+        mut vi = 0
+        while vi < edef.variants.len:
+            mut vn = edef.variants.get(vi).name
+            if not covered.contains(vn):
+                if nmiss > 0: missing = missing + ", "
+                missing = missing + vn
+                nmiss = nmiss + 1
+            vi = vi + 1
+        if nmiss > 0:
+            mut plural = ""
+            if nmiss > 1: plural = "s"
+            self.error("[E-1] Non-exhaustive match expression on '" + ty_name + "': missing variant" + plural + ": " + missing + ".\n      FIX: Add a 'case " + ty_name + ".VariantName:' arm for each missing variant, or add 'case _:' to give the remaining cases a value.")
+
+    # A bare `None` takes its type from context. When the expected type is Option[T], retype the
+    # literal so codegen emits an empty Option value instead of a null pointer.
+    pub def retype_none(self, e: Pointer[HirExpr], expected: AstType) -> Pointer[HirExpr]:
+        if _is_invalid_ptr(e as usize): return e
+        if expected.name != "Option": return e
+        match e.read():
+            case HirExpr.ELitNone(_): return box_hirexpr(HirExpr.ELitNone(expected))
+            case _: return e
+
     pub def str_method_ret_ty(self, method: str) -> AstType:
         if method == "split" or method == "split_to_vec" or method == "split_once" or method == "split_exact":
             return AstType.init_generic("Vec", box_asttype(AstType.init("str")))
@@ -5463,7 +5567,8 @@ extend Sema:
         if method == "remove_char": return AstType.init("str")
         if method == "join": return AstType.init("str")
         if method == "len": return AstType.init("int")
-        if method == "index_of": return AstType.init("int")
+        if method == "index_of" or method == "find" or method == "length": return AstType.init("int")
+        if method == "to_string" or method == "md5" or method == "sha256": return AstType.init("str")
         if method == "last_index_of" or method == "rfind": return AstType.init("int")
         if method == "count": return AstType.init("int")
         if method == "char_at": return AstType.init("int")
@@ -5796,7 +5901,13 @@ extend Sema:
                             case Expr.EList(_lh_items):
                                 if _lh_items.len == 0: self.list_hint = self.list_hint_for_fn(_ch_fname, k)
                             case _: pass
-                    hl.push(self.lower_expr(args.get(k)))
+                    mut harg = self.lower_expr(args.get(k))
+                    # `f(None)` where the parameter is Option[T]: type the literal from the signature
+                    if _ch_fname != "" and self.fn_sigs.contains(_ch_fname):
+                        mut sig_n = self.fn_sigs.get(_ch_fname)
+                        if k < sig_n.args.len - 1 and sig_n.args.get(k) as usize != 0 as usize:
+                            harg = self.retype_none(harg, sig_n.args.get(k).read())
+                    hl.push(harg)
                     self.closure_hint = Pointer[AstType](0)
                     self.list_hint = Pointer[AstType](0)
                     k = k + 1
@@ -5872,6 +5983,14 @@ extend Sema:
                             # the call result is the signature's return type (last arg).
                             if ret_ty.name == "def" and ret_ty.args.len > 0:
                                 ret_ty = ret_ty.args.get(ret_ty.args.len - 1).read()
+                            # Calling a closure value (type `lambda`): the result is the closure's
+                            # recorded return type, or `int` for a bare `lambda` (documented default).
+                            # Leaving it `lambda` made `f(f(x))` pass the INNER RESULT as a closure.
+                            elif ret_ty.name == "lambda" and _fsym.kind == SymbolKind.SVariable:
+                                if ret_ty.args.len > 0:
+                                    ret_ty = ret_ty.args.get(ret_ty.args.len - 1).read()
+                                else:
+                                    ret_ty = AstType.init("int")
                             # A generic fn returning its type param (-> T) yields the
                             # CONCRETE type of the first argument declared as that T
                             # (otherwise `mut a = largest(1, 2)` emits a `T*` local).
@@ -7157,6 +7276,7 @@ extend Sema:
                     hm_arms.push(h_marm)
                     self.exit_scope()
                     hm_k = hm_k + 1
+                self.check_match_expr_exhaustive(hm_subj_ty.name, m_arms)
                 return box_hirexpr(HirExpr.EMatchExpr(hm_subj, hm_arms, hm_ty))
             case Expr.ELoop(loop_body):
                 # `loop:` expression — infinite loop; value comes from `break v`.

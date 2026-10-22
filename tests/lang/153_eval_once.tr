@@ -1,0 +1,108 @@
+# tests/lang/153_eval_once.tr
+# Single evaluation in statement forms: compound assignment (`xs[f()] += g()`), range bounds,
+# dict literals, assignment targets, and right-hand-side-first assignment order.
+
+from std.test import TestRunner
+
+class Cnt:
+    pub n: int
+    pub log: str
+
+extend Cnt:
+    pub def hit(self, tag: str, v: int) -> int:
+        self.n = self.n + 1
+        self.log = self.log + tag
+        return v
+    pub def shit(self, tag: str, v: str) -> str:
+        self.n = self.n + 1
+        self.log = self.log + tag
+        return v
+    pub def reset(self):
+        self.n = 0
+        self.log = ""
+
+class Box:
+    pub v: int
+    pub xs: List[int]
+
+def mkbox(c: Cnt, tag: str) -> Box:
+    c.log = c.log + tag
+    c.n = c.n + 1
+    mut b = Box()
+    b.v = 5
+    b.xs = [1, 2, 3]
+    return b
+
+def main():
+    mut t = TestRunner.init("153_eval_once")
+    mut c = Cnt()
+    c.reset()
+    mut xs: List[int] = [10, 20, 30]
+    mut d: Dict[str, int] = {}
+    d["k"] = 1
+
+    t.section("compound assignment evaluates its target once")
+    xs[c.hit("i", 1)] += c.hit("v", 5)
+    t.assert_eq_int(xs[1], 25, "list element updated")
+    t.assert_eq_str(c.log, "iv", "index runs once, before the value")
+    c.reset()
+    d[c.shit("k", "k")] += c.hit("v", 7)
+    t.assert_eq_int(d["k"], 8, "dict value updated")
+    t.assert_eq_str(c.log, "kv", "key runs once, before the value")
+    c.reset()
+    mkbox(c, "b").v += c.hit("v", 3)
+    t.assert_eq_str(c.log, "bv", "receiver call runs once")
+    t.assert_eq_int(c.n, 2, "exactly two calls")
+    c.reset()
+    xs[c.hit("a", 0)] -= 1
+    xs[c.hit("b", 2)] *= 2
+    t.assert_eq_int(xs[0], 9, "-= value")
+    t.assert_eq_int(xs[2], 60, "*= value")
+    t.assert_eq_str(c.log, "ab", "each target evaluated once")
+
+    t.section("range bounds are evaluated once")
+    c.reset()
+    mut total = 0
+    for i in range(c.hit("r", 4)):
+        total = total + i
+    t.assert_eq_int(total, 6, "range(4) sum")
+    t.assert_eq_str(c.log, "r", "bound ran once")
+    c.reset()
+    total = 0
+    for j in range(c.hit("s", 1), c.hit("e", 4), c.hit("t", 2)):
+        total = total + j
+    t.assert_eq_int(total, 4, "range(1, 4, 2) sum")
+    t.assert_eq_str(c.log, "set", "start, stop, step each once, in order")
+
+    t.section("dict literals evaluate key then value, entry by entry")
+    c.reset()
+    mut dd: Dict[str, int] = {c.shit("ka", "a"): c.hit("va", 1), c.shit("kb", "b"): c.hit("vb", 2)}
+    t.assert_eq_int(len(dd), 2, "two entries")
+    t.assert_eq_str(c.log, "kavakbvb", "key, value, key, value")
+
+    t.section("assignment evaluates the value before the target")
+    c.reset()
+    mut ys: List[int] = [0, 0, 0]
+    ys[c.hit("i", 2)] = c.hit("v", 9)
+    t.assert_eq_int(ys[2], 9, "list element assigned")
+    t.assert_eq_str(c.log, "vi", "right-hand side first, then the index")
+    c.reset()
+    mut e: Dict[str, int] = {}
+    e[c.shit("k", "key")] = c.hit("v", 4)
+    t.assert_eq_int(e["key"], 4, "dict entry assigned")
+    t.assert_eq_str(c.log, "vk", "right-hand side first, then the key")
+
+    t.section("other forms run code once")
+    c.reset()
+    mut r = c.hit("t", 1) if c.hit("c", 1) > 0 else c.hit("e", 2)
+    t.assert_eq_int(r, 1, "conditional expression value")
+    t.assert_eq_str(c.log, "ct", "condition, then only the taken branch")
+    c.reset()
+    mut s = "n=" + str(c.hit("p", 4)) + "," + str(c.hit("q", 5))
+    t.assert_eq_str(s, "n=4,5", "concat value")
+    t.assert_eq_str(c.log, "pq", "concat operands left to right")
+    c.reset()
+    mut zs: List[int] = [c.hit("a", 1), c.hit("b", 2), c.hit("c", 3)]
+    t.assert_eq_int(len(zs), 3, "list literal length")
+    t.assert_eq_str(c.log, "abc", "list literal elements left to right")
+    t.summary()

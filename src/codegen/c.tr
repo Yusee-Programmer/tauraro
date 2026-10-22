@@ -224,6 +224,37 @@ def _fstr_star_spec(spec: str) -> str:
             i = i + 1
     return out
 
+# Pending argument temporaries of the statement being generated (see flush_wraps). An expression
+# that GENERATES STATEMENTS (a closure body, `do:` / `match` / `loop` expression) must not touch the
+# enclosing statement's pending list -- its inner statements would flush (consume) those temporaries
+# and the outer statement then referenced undeclared names (`f(make_str(), lambda x: ...)`).
+# Per-function side tables are keyed by variable NAME (string locals, class locals, collection kinds,
+# shared handles, ...). A shadowing or re-used name (`mut v = "x"` inside a block, `for row in grid`
+# after an earlier `mut row`) used to leak its entries into the outer / later variable of the same
+# name, so e.g. the outer List `v` was compiled as a string after the block. A NameSnap records one
+# name's entries so a block can restore them on exit.
+pub class NameSnap:
+    pub name:     str
+    pub decl:     bool
+    pub str_l:    bool
+    pub cls:      bool
+    pub idict:    bool
+    pub strval:   bool
+    pub has_mono: bool
+    pub mono:     str
+    pub has_sfx:  bool
+    pub sfx:      str
+    pub has_vtc:  bool
+    pub vtc:      str
+    pub has_sh:   bool
+    pub sh:       str
+
+pub class WrapSave:
+    pub d: Vec[str]
+    pub n: Vec[str]
+    pub o: Vec[str]
+    pub r: Vec[str]
+
 pub class CGenerator:
     pub buf:            StringBuilder
     pub fwd_buf:        StringBuilder   # forward declarations
@@ -2931,7 +2962,10 @@ pub class CGenerator:
             case HirExpr.ELitBool(v, _):
                 if v: return "true"
                 else: return "false"
-            case HirExpr.ELitNone(_): return "NULL"
+            case HirExpr.ELitNone(none_ty):
+                # `None` typed (by context) as Option[T] is an empty Option value, not a null pointer.
+                if none_ty.name == "Option": return "((Option){.tag=Option_None})"
+                return "NULL"
             case HirExpr.EIdent(n, _ei_ty, _):
                 # Inside an outlined closure body, a captured variable is reached
                 # by-reference through the env pointer (preserves live read/write).
@@ -3135,8 +3169,9 @@ pub class CGenerator:
                 if start as usize != 0 as usize: return self.gen_expr(start)
                 return "0LL"
             case HirExpr.EIfElse(cond, then_e, else_e, ty):
-                mut ts = self.gen_expr(then_e)
-                mut es = self.gen_expr(else_e)
+                # Each arm is lazily evaluated: keep its fresh-arg temporaries inside the arm.
+                mut ts = self.gen_expr_scoped(then_e)
+                mut es = self.gen_expr_scoped(else_e)
                 if _is_int_type(ty.name):
                     if ts == "NULL": ts = "0LL"
                     if es == "NULL": es = "0LL"
@@ -3155,6 +3190,7 @@ pub class CGenerator:
                 # The trailing `_dores;` is what the statement-expression yields.
                 mut old_do_buf = self.buf
                 self.buf = StringBuilder.init(256)
+                mut do_ws = self.wrap_enter()
                 mut _dn = do_body.stmts.len
                 mut _val_e = Pointer[HirExpr](0)
                 if _dn > 0:
@@ -3192,6 +3228,7 @@ pub class CGenerator:
                         _dj2 = _dj2 + 1
                 mut do_inner = self.buf.to_string().as_str()
                 self.buf = old_do_buf
+                self.wrap_leave(do_ws)
                 return "({\n" + do_inner + "})"
             case HirExpr.EMatchExpr(m_subj, m_arms, m_ty):
                 return self.gen_match_expr(m_subj, m_arms, m_ty)
@@ -3200,6 +3237,7 @@ pub class CGenerator:
                 # is produced by `break <value>` inside (assigned to _lresN).
                 mut l_old = self.buf
                 self.buf = StringBuilder.init(256)
+                mut l_ws = self.wrap_enter()
                 mut l_ct = self.type_to_c(l_ty)
                 if l_ct == "void" or l_ct == "__auto_type": l_ct = "long long"
                 mut l_res = "_lres" + self.next_temp()
@@ -3214,6 +3252,7 @@ pub class CGenerator:
                 self.w(l_res + ";\n")
                 mut l_inner = self.buf.to_string().as_str()
                 self.buf = l_old
+                self.wrap_leave(l_ws)
                 return "({\n" + l_inner + "})"
             case HirExpr.EWhileExpr(w_cond, w_body, w_else, w_ty):
                 # `while c:` -> `({ T _lresN={0}; int _wdoneN=0; while(c){…}
@@ -3222,6 +3261,7 @@ pub class CGenerator:
                 # the else block's value (an EDo) becomes the result.
                 mut w_old = self.buf
                 self.buf = StringBuilder.init(256)
+                mut w_ws = self.wrap_enter()
                 mut w_ct = self.type_to_c(w_ty)
                 if w_ct == "void" or w_ct == "__auto_type": w_ct = "long long"
                 mut w_res = "_lres" + self.next_temp()
@@ -3247,6 +3287,7 @@ pub class CGenerator:
                 self.w(w_res + ";\n")
                 mut w_inner = self.buf.to_string().as_str()
                 self.buf = w_old
+                self.wrap_leave(w_ws)
                 return "({\n" + w_inner + "})"
             case _: return "0 /* unsupported expr */"
 
@@ -3276,6 +3317,7 @@ pub class CGenerator:
     pub def gen_match_expr(self, subj: Pointer[HirExpr], arms: Vec[HirMatchArm], ty: AstType) -> str:
         mut old_buf = self.buf
         self.buf = StringBuilder.init(256)
+        mut me_ws = self.wrap_enter()
         mut mty = self.type_to_c(ty)
         if mty == "void" or mty == "__auto_type": mty = "long long"
         mut subj_t = self.next_temp()
@@ -3376,6 +3418,7 @@ pub class CGenerator:
         self.w("_mres;\n")
         mut inner = self.buf.to_string().as_str()
         self.buf = old_buf
+        self.wrap_leave(me_ws)
         return "({\n" + inner + "})"
 
     pub def has_method(self, cls_name: str, method: str) -> bool:
@@ -4306,6 +4349,107 @@ pub class CGenerator:
             case HirExpr.ESet(_, _): return true
             case _: return false
 
+    # ---- left-to-right evaluation order -------------------------------------------------
+    # C leaves the evaluation order of call arguments and binary operands unspecified (gcc
+    # evaluates arguments right to left), so `f(a(), b())` ran b before a. Tauraro defines
+    # operands to evaluate left to right: operands that can run code, or read state such code
+    # might change, are bound to statement-level temporaries in operand order (hoist_operand).
+    #   0 = no side effects, reads no mutable state (literal, identifier)
+    #   1 = reads mutable state (field, index) but runs no code
+    #   2 = may run code (call, await, closure, block, comprehension, ...)
+    pub def _op_class(self, e: Pointer[HirExpr]) -> int:
+        if _is_invalid_ptr(e as usize): return 0
+        match e.read():
+            case HirExpr.ELitInt(_, _): return 0
+            case HirExpr.ELitFloat(_, _): return 0
+            case HirExpr.ELitStr(_, _, _): return 0
+            case HirExpr.ELitBytes(_, _, _): return 0
+            case HirExpr.ERawStr(_, _, _): return 0
+            case HirExpr.ELitChar(_, _): return 0
+            case HirExpr.ELitBool(_, _): return 0
+            case HirExpr.ELitNone(_): return 0
+            case HirExpr.EIdent(_, _, _): return 0
+            case HirExpr.ESizeOf(_, _): return 0
+            case HirExpr.EUnaryOp(_, x, _): return self._op_class(x)
+            case HirExpr.ECast(x, _): return self._op_class(x)
+            case HirExpr.EBinOp(_, a, b, _):
+                mut ca = self._op_class(a)
+                mut cb = self._op_class(b)
+                if cb > ca: return cb
+                return ca
+            # Building a closure value runs no user code (it only captures), and the closure-passing
+            # code needs to see the lambda itself -- never bind it to a temporary.
+            case HirExpr.EClosure(_, _, _, _, _): return 0
+            case HirExpr.ETuple(items, _): return self._items_class(items)
+            case HirExpr.EList(items, _): return self._items_class(items)
+            case HirExpr.ESet(items, _): return self._items_class(items)
+            case HirExpr.EPropAccess(o, _, _):
+                mut co = self._op_class(o)
+                if co > 1: return co
+                return 1
+            case HirExpr.EIndex(o, i, _):
+                mut c1 = self._op_class(o)
+                mut c2 = self._op_class(i)
+                mut cm = 1
+                if c1 > cm: cm = c1
+                if c2 > cm: cm = c2
+                return cm
+            case _: return 2
+
+    pub def _items_class(self, items: Vec[Pointer[HirExpr]]) -> int:
+        mut m = 0
+        mut i = 0
+        while i < items.len:
+            mut c = self._op_class(items.get(i))
+            if c > m: m = c
+            i = i + 1
+        return m
+
+    # Bind an operand's C value to a statement-level temporary so it is evaluated in operand
+    # order (the wrap temporaries run in the order they are pushed, before the statement).
+    pub def hoist_operand(self, s: str) -> str:
+        mut t = "_ord" + self.next_temp()
+        self.wrap_temp_decls.push("__auto_type " + t + " = (" + s + ")")
+        return t
+
+    # Like hoist_operand, but the temporary is declared at position `mark` of the pending list, i.e.
+    # BEFORE any temporaries created after `mark`. This keeps source order when a later sibling
+    # operand pushed hoisted temporaries (which run at the start of the statement) while this
+    # earlier operand was still inline (and would otherwise run after them).
+    pub def hoist_at(self, mark: int, s: str) -> str:
+        mut t = "_ord" + self.next_temp()
+        mut decl = "__auto_type " + t + " = (" + s + ")"
+        mut nv = Vec[str].init(self.wrap_temp_decls.len + 1)
+        mut i = 0
+        while i < self.wrap_temp_decls.len:
+            if i == mark: nv.push(decl)
+            nv.push(self.wrap_temp_decls.get(i))
+            i = i + 1
+        if mark >= self.wrap_temp_decls.len: nv.push(decl)
+        self.wrap_temp_decls = nv
+        return t
+
+    # True when evaluating `parts` in an unspecified order could be observable: at least one
+    # operand runs code and at least one other operand does anything but read a constant.
+    pub def _needs_order(self, parts: Vec[Pointer[HirExpr]]) -> bool:
+        mut n_run = 0
+        mut n_obs = 0
+        mut i = 0
+        while i < parts.len:
+            mut c = self._op_class(parts.get(i))
+            if c == 2: n_run = n_run + 1
+            if c >= 1: n_obs = n_obs + 1
+            i = i + 1
+        return n_run >= 1 and n_obs >= 2
+
+    # With a receiver that runs code, any observing argument needs ordering.
+    pub def _needs_order_with_recv(self, args: Vec[Pointer[HirExpr]]) -> bool:
+        mut i = 0
+        while i < args.len:
+            if self._op_class(args.get(i)) >= 1: return true
+            i = i + 1
+        return false
+
     pub def gen_cond_expr(self, cond: Pointer[HirExpr]) -> str:
         mut cond_s = self.gen_expr(cond)
         mut ty_n: str = hir_expr_type(cond).name
@@ -4313,9 +4457,114 @@ pub class CGenerator:
             cond_s = self.cls_method_c_call(ty_n, "__bool__", cond_s, "")
         return self.flush_wraps(cond_s, false)
 
+    pub def snap_name(self, n: str) -> NameSnap:
+        mut sn = NameSnap()
+        sn.name = n
+        sn.decl = self.decl_vars.contains(n)
+        sn.str_l = self.str_local_names.contains(n)
+        sn.cls = self.class_local_names.contains(n)
+        sn.idict = self.coll_local_idict.contains(n)
+        sn.strval = self.coll_local_strval.contains(n)
+        sn.has_mono = self.class_local_mono.contains(n)
+        sn.mono = ""
+        if sn.has_mono: sn.mono = self.class_local_mono.get(n)
+        sn.has_sfx = self.coll_local_sfx.contains(n)
+        sn.sfx = ""
+        if sn.has_sfx: sn.sfx = self.coll_local_sfx.get(n)
+        sn.has_vtc = self.coll_local_vtcoll.contains(n)
+        sn.vtc = ""
+        if sn.has_vtc: sn.vtc = self.coll_local_vtcoll.get(n)
+        sn.has_sh = self.shared_vars.contains(n)
+        sn.sh = ""
+        if sn.has_sh: sn.sh = self.shared_vars.get(n)
+        return sn
+
+    # Forget everything the per-name tables know about `n` (a fresh declaration starts clean).
+    pub def clear_name(self, n: str):
+        if self.decl_vars.contains(n): self.decl_vars.remove(n)
+        if self.str_local_names.contains(n): self.str_local_names.remove(n)
+        if self.class_local_names.contains(n): self.class_local_names.remove(n)
+        if self.coll_local_idict.contains(n): self.coll_local_idict.remove(n)
+        if self.coll_local_strval.contains(n): self.coll_local_strval.remove(n)
+        if self.class_local_mono.contains(n): self.class_local_mono.remove(n)
+        if self.coll_local_sfx.contains(n): self.coll_local_sfx.remove(n)
+        if self.coll_local_vtcoll.contains(n): self.coll_local_vtcoll.remove(n)
+        if self.shared_vars.contains(n): self.shared_vars.remove(n)
+
+    pub def restore_name(self, sn: NameSnap):
+        self.clear_name(sn.name)
+        if sn.decl: self.decl_vars.insert(sn.name, true)
+        if sn.str_l: self.str_local_names.insert(sn.name, true)
+        if sn.cls: self.class_local_names.insert(sn.name, true)
+        if sn.idict: self.coll_local_idict.insert(sn.name, true)
+        if sn.strval: self.coll_local_strval.insert(sn.name, true)
+        if sn.has_mono: self.class_local_mono.insert(sn.name, sn.mono)
+        if sn.has_sfx: self.coll_local_sfx.insert(sn.name, sn.sfx)
+        if sn.has_vtc: self.coll_local_vtcoll.insert(sn.name, sn.vtc)
+        if sn.has_sh: self.shared_vars.insert(sn.name, sn.sh)
+
+    pub def wrap_enter(self) -> WrapSave:
+        mut w = WrapSave()
+        w.d = self.wrap_temp_decls
+        w.n = self.wrap_temp_names
+        w.o = self.wrap_obj_names
+        w.r = self.wrap_obj_drops
+        self.wrap_temp_decls = Vec[str].init(0)
+        self.wrap_temp_names = Vec[str].init(0)
+        self.wrap_obj_names = Vec[str].init(0)
+        self.wrap_obj_drops = Vec[str].init(0)
+        return w
+
+    pub def wrap_leave(self, w: WrapSave):
+        self.wrap_temp_decls = w.d
+        self.wrap_temp_names = w.n
+        self.wrap_obj_names = w.o
+        self.wrap_obj_drops = w.r
+
+    # Generate `e` with its OWN wrap-temp scope. Fresh-argument temporaries (`g(sa())`'s `sa()`
+    # result) are normally hoisted to the start of the enclosing statement, which evaluates them
+    # even when `e` sits in a lazily-evaluated position (the right operand of `and`/`or`, an arm
+    # of a conditional expression) -- running side effects that must be skipped, or crashing on
+    # `p != none and g(p.name())`. Here they are declared/released INSIDE the returned
+    # expression, so they run only when `e` itself is evaluated.
+    pub def gen_expr_scoped(self, e: Pointer[HirExpr]) -> str:
+        mut sv_d = self.wrap_temp_decls
+        mut sv_n = self.wrap_temp_names
+        mut sv_o = self.wrap_obj_names
+        mut sv_r = self.wrap_obj_drops
+        self.wrap_temp_decls = Vec[str].init(0)
+        self.wrap_temp_names = Vec[str].init(0)
+        self.wrap_obj_names = Vec[str].init(0)
+        self.wrap_obj_drops = Vec[str].init(0)
+        mut es = self.gen_expr(e)
+        es = self.flush_wraps(es, false)
+        self.wrap_temp_decls = sv_d
+        self.wrap_temp_names = sv_n
+        self.wrap_obj_names = sv_o
+        self.wrap_obj_drops = sv_r
+        return es
+
     pub def gen_binop(self, op: str, l: Pointer[HirExpr], r: Pointer[HirExpr]) -> str:
-        mut ls = self.gen_expr(l)
-        mut rs = self.gen_expr(r)
+        mut ls = ""
+        mut rs = ""
+        mut ls_was_wrap = false
+        if op == "and" or op == "or":
+            # Short-circuit: each operand keeps its temporaries local (see gen_expr_scoped).
+            ls = self.gen_expr_scoped(l)
+            rs = self.gen_expr_scoped(r)
+        else:
+            ls = self.gen_expr(l)
+            # a() + b(): the left operand must run first. Anything the right operand hoists to the
+            # start of the statement would otherwise run BEFORE a still-inline left operand, so the
+            # left value is bound (at the right position) whenever the right operand runs code or
+            # hoisted temporaries of its own.
+            mut cl = self._op_class(l)
+            mut cr = self._op_class(r)
+            mut mark_r = self.wrap_temp_decls.len
+            rs = self.gen_expr(r)
+            if cl >= 1 and (self.wrap_temp_decls.len > mark_r or cr == 2 or (cl == 2 and cr >= 1)):
+                ls_was_wrap = ls.starts_with("_tr_str_wrap(") and ls.ends_with(")")
+                ls = self.hoist_at(mark_r, ls)
         # Inside a monomorphized generic body a `T`-typed operand must dispatch on its
         # CONCRETE type (T=str -> _tr_str_cmp/concat, not raw C `>`/`+` on TrStr).
         mut lt_n: str = self.resolve_generic_prim(hir_expr_type(l).name)
@@ -4329,7 +4578,7 @@ pub class CGenerator:
             # value with its own rc/data allocation. If an operand is one of
             # these, consume its `.data` and release it immediately after the
             # concat call so its (up to two) heap allocations don't leak.
-            mut l_owned = (ls.starts_with("_tr_str_wrap(") and ls.ends_with(")")) or self._is_fresh_str_expr(l)
+            mut l_owned = ls_was_wrap or (ls.starts_with("_tr_str_wrap(") and ls.ends_with(")")) or self._is_fresh_str_expr(l)
             mut r_owned = (rs.starts_with("_tr_str_wrap(") and rs.ends_with(")")) or self._is_fresh_str_expr(r)
             if l_owned and r_owned:
                 return "({ TrStr _tr_cl = (" + ls + "); TrStr _tr_cr = (" + rs + "); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })"
@@ -4355,7 +4604,16 @@ pub class CGenerator:
             if self.has_method(lt_n, "__bool__"): lso = self.cls_method_c_call(lt_n, "__bool__", ls, "")
             if self.has_method(rt_n, "__bool__"): rso = self.cls_method_c_call(rt_n, "__bool__", rs, "")
             return "(" + lso + " || " + rso + ")"
-        if op == "is": return "(" + ls + " == " + rs + ")"
+        if op == "is":
+            # `v is Enum.Variant`: compare the variant tag (an enum value is a tagged struct, which
+            # C cannot compare with `==`). Works for payload variants too (`s is Shape.Circle`).
+            if self.enums.contains(lt_n):
+                match r.read():
+                    case HirExpr.EPropAccess(_, vname, _):
+                        return "((" + ls + ").tag == " + lt_n + "_" + vname + ")"
+                    case _: pass
+                if self.enums.contains(rt_n): return "((" + ls + ").tag == (" + rs + ").tag)"
+            return "(" + ls + " == " + rs + ")"
         if op == "in":
             if rt_n == "List" or rt_n == "Vec":
                 mut in_sfx: str = self.list_elem_suffix(lt_n)
@@ -4509,19 +4767,32 @@ pub class CGenerator:
         return obj_s + "->" + p
 
     pub def gen_index(self, o: Pointer[HirExpr], idx: Pointer[HirExpr]) -> str:
+        mut ty_n: str = hir_expr_type(o).name
         mut os = self.gen_expr(o)
         mut is_idx = self.gen_expr(idx)
-        mut ty_n: str = hir_expr_type(o).name
+        # The generated access repeats both texts (`os->data[(check(i, os->len), i)]`), so an
+        # operand that runs code (`xs[next()]`, `get()[i]`) would run several times. Evaluate
+        # such operands once with a statement-expression IN PLACE (receiver first). The result
+        # stays an lvalue (`*({ ...; &os->data[i]; })`), so assignment targets work too -- hoisting
+        # to a statement-level temporary would not, as assignment targets are not flushed.
+        mut once = self._op_class(o) == 2 or self._op_class(idx) == 2
         if ty_n == "Pointer": return os + "[" + is_idx + "]"
         if ty_n == "Array":
             # Fixed-size array: bounds-checked `.data[i]` (lvalue + rvalue). N is the
             # compile-time size carried on the type.
             mut arr_o_ty = hir_expr_type(o)
+            if self._op_class(idx) == 2:
+                mut agi = "_gi" + self.next_temp()
+                return os + ".data[({ long long " + agi + " = (long long)(" + is_idx + "); _tr_bounds_check(" + agi + ", " + arr_o_ty.array_size.to_str() + "); " + agi + "; })]"
             return os + ".data[(_tr_bounds_check(" + is_idx + ", " + arr_o_ty.array_size.to_str() + "), " + is_idx + ")]"
         if ty_n == "List" or ty_n == "Vec":
             # Bounds-checked access - works as both lvalue and rvalue.
             # The comma operator in the subscript runs the check then uses the index.
             mut idx_r = os + "->data[(_tr_bounds_check(" + is_idx + ", " + os + "->len), " + is_idx + ")]"
+            if once:
+                mut go = "_go" + self.next_temp()
+                mut gi = "_gi" + self.next_temp()
+                idx_r = "(*({ __auto_type " + go + " = (" + os + "); long long " + gi + " = (long long)(" + is_idx + "); _tr_bounds_check(" + gi + ", " + go + "->len); &" + go + "->data[" + gi + "]; }))"
             mut o_full_ty = hir_expr_type(o)
             if o_full_ty.args.len > 0 and _is_str_type(self.resolve_generic_prim(o_full_ty.args.get(0).read().name)):
                 return "_tr_str_lit(" + idx_r + ")"
@@ -4862,8 +5133,11 @@ pub class CGenerator:
             if args.len > 0:
                 mut str_arg = args.get(0)
                 mut str_t_n: str = self.resolve_generic_prim(hir_expr_type(str_arg).name)
+                if str_t_n == "u64" or str_t_n == "usize": return "_tr_str_wrap(_tr_uint_to_str((unsigned long long)(" + self.gen_expr(str_arg) + ")))"
                 if _is_int_type(str_t_n): return "_tr_str_wrap(_tr_int_to_str((long long)(" + self.gen_expr(str_arg) + ")))"
-                if _is_float_type(str_t_n): return "_tr_str_wrap(_tr_float_to_str((double)(" + self.gen_expr(str_arg) + ")))"
+                if _is_float_type(str_t_n):
+                    if str_t_n == "f32": return "_tr_str_wrap(_tr_f32_to_str((double)(" + self.gen_expr(str_arg) + ")))"
+                    return "_tr_str_wrap(_tr_float_to_str((double)(" + self.gen_expr(str_arg) + ")))"
                 if str_t_n == "bool": return "((" + self.gen_expr(str_arg) + ") ? _tr_str_lit(\"true\") : _tr_str_lit(\"false\"))"
                 if self.has_method(str_t_n, "__str__"):
                     return self.cls_method_c_call(str_t_n, "__str__", self.gen_expr(str_arg), "")
@@ -5508,8 +5782,11 @@ pub class CGenerator:
     pub def gen_to_cstr(self, arg: Pointer[HirExpr]) -> str:
         mut tn: str = self.resolve_generic_prim(hir_expr_type(arg).name)
         mut s: str = self.gen_expr(arg)
+        if tn == "u64" or tn == "usize": return "_tr_uint_to_str((unsigned long long)(" + s + "))"
         if _is_int_type(tn): return "_tr_int_to_str((long long)(" + s + "))"
-        if _is_float_type(tn): return "_tr_float_to_str((double)(" + s + "))"
+        if _is_float_type(tn):
+            if tn == "f32": return "_tr_f32_to_str((double)(" + s + "))"
+            return "_tr_float_to_str((double)(" + s + "))"
         if tn == "bool": return "((" + s + ") ? \"true\" : \"false\")"
         if _is_str_type(tn): return self.strz(s)
         return "_tr_strz(_TR_AUTO_STR(" + s + "))"
@@ -5517,8 +5794,11 @@ pub class CGenerator:
     pub def gen_print_one(self, arg: Pointer[HirExpr]) -> str:
         mut ty_n: str = self.resolve_generic_prim(hir_expr_type(arg).name)
         mut s: str = self.gen_expr(arg)
+        if ty_n == "u64" or ty_n == "usize": return "printf(\"%llu\", (unsigned long long)(" + s + "))"
         if _is_int_type(ty_n): return "printf(\"%lld\", (long long)(" + s + "))"
-        if _is_float_type(ty_n): return "printf(\"%g\", (double)(" + s + "))"
+        if _is_float_type(ty_n):
+            if ty_n == "f32": return "printf(\"%s\", _tr_f32_buf((double)(" + s + ")))"
+            return "printf(\"%s\", _tr_f64_buf((double)(" + s + ")))"
         if ty_n == "bool": return "printf(\"%s\", (" + s + ") ? \"true\" : \"false\")"
         if ty_n == "char": return "printf(\"%c\", " + s + ")"
         if ty_n == "Pointer": return "printf(\"0x%llx\", (unsigned long long)(uintptr_t)(" + s + "))"
@@ -5778,26 +6058,49 @@ pub class CGenerator:
     # used to upcast a subclass instance passed where the callee declares the parent
     # (C requires the explicit (Parent*) cast; the struct-embedding layout makes it safe).
     pub def gen_args_casts(self, args: Vec[Pointer[HirExpr]], casts: Vec[str]) -> str:
-        mut s = ""
+        # Source-order evaluation (see hoist_operand): an argument that runs code, or reads state a
+        # later argument's code might change, is bound to a temporary. `pend` holds earlier inline
+        # arguments that must be bound before a later one that hoists temporaries or runs code.
+        mut texts = Vec[str].init(args.len)
+        mut pend = Vec[int].init(args.len)
         mut i = 0
         while i < args.len:
-            if i > 0: s = s + ", "
             mut a = args.get(i)
+            mut mark_i = self.wrap_temp_decls.len
             mut a_s = self.gen_expr(a)
+            mut a_cls = self._op_class(a)
+            mut did_hoist = false
             if _is_str_type(self.resolve_generic_prim(hir_expr_type(a).name)) and self._is_fresh_str_expr(a):
                 mut tmp = "_at" + self.next_temp()
                 self.wrap_temp_decls.push("TrStr " + tmp + " = (" + a_s + ")")
                 self.wrap_temp_names.push(tmp)
                 a_s = tmp
+                did_hoist = true
             elif self._is_fresh_obj_expr(a):
                 mut otmp = "_aot" + self.next_temp()
                 self.wrap_temp_decls.push(self.type_to_c(hir_expr_type(a)) + " " + otmp + " = (" + a_s + ")")
                 self.wrap_obj_names.push(otmp)
                 self.wrap_obj_drops.push(self.obj_drop_fn(hir_expr_type(a).name))
                 a_s = otmp
+                did_hoist = true
+            # earlier inline arguments must run before this one's hoisted temporaries / own code
+            if pend.len > 0 and (self.wrap_temp_decls.len > mark_i or a_cls == 2):
+                mut k = 0
+                while k < pend.len:
+                    mut j = pend.get(k)
+                    texts.set(j, self.hoist_at(mark_i + k, texts.get(j)))
+                    k = k + 1
+                pend = Vec[int].init(args.len)
             if i < casts.len and casts.get(i) != "":
                 a_s = casts.get(i) + "(" + a_s + ")"
-            s = s + a_s
+            texts.push(a_s)
+            if a_cls >= 1 and not did_hoist: pend.push(i)
+            i = i + 1
+        mut s = ""
+        i = 0
+        while i < texts.len:
+            if i > 0: s = s + ", "
+            s = s + texts.get(i)
             i = i + 1
         return s
 
@@ -5876,9 +6179,58 @@ pub class CGenerator:
             ai = ai + 1
         return wrapped_args
 
+    # Ordering wrapper: `recv().m(a(), b())` must evaluate the receiver, then a(), then b(). When
+    # that is observable, each operand that runs code or reads state is bound to a temporary (in
+    # order) and the real generator sees plain identifiers. Fresh strings / objects bound this way
+    # are released at the end of the statement, like the other argument temporaries.
+    pub def order_operand(self, a: Pointer[HirExpr], own_fresh: bool) -> Pointer[HirExpr]:
+        mut ty = hir_expr_type(a)
+        mut a_s = self.gen_expr(a)
+        mut t = "_ord" + self.next_temp()
+        if own_fresh and _is_str_type(self.resolve_generic_prim(ty.name)) and self._is_fresh_str_expr(a):
+            self.wrap_temp_decls.push("TrStr " + t + " = (" + a_s + ")")
+            self.wrap_temp_names.push(t)
+        elif own_fresh and self._is_fresh_obj_expr(a):
+            self.wrap_temp_decls.push(self.type_to_c(ty) + " " + t + " = (" + a_s + ")")
+            self.wrap_obj_names.push(t)
+            self.wrap_obj_drops.push(self.obj_drop_fn(ty.name))
+        else:
+            self.wrap_temp_decls.push("__auto_type " + t + " = (" + a_s + ")")
+        return box_hirexpr(HirExpr.EIdent(t, ty, false))
+
     pub def gen_method_call(self, obj: Pointer[HirExpr], method: str, args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
+        if args.len > 0:
+            mut parts = Vec[Pointer[HirExpr]].init(args.len + 1)
+            parts.push(obj)
+            mut pi = 0
+            while pi < args.len:
+                parts.push(args.get(pi))
+                pi = pi + 1
+            if self._needs_order(parts):
+                mut obj2 = obj
+                match obj.read():
+                    case HirExpr.ECall(_, _, _): obj2 = self.order_operand(obj, false)
+                    case HirExpr.EMethodCall(_, _, _, _): obj2 = self.order_operand(obj, false)
+                    case _: pass
+                mut args2 = Vec[Pointer[HirExpr]].init(args.len)
+                pi = 0
+                while pi < args.len:
+                    mut ai = args.get(pi)
+                    if self._op_class(ai) >= 1: args2.push(self.order_operand(ai, true))
+                    else: args2.push(ai)
+                    pi = pi + 1
+                return self.gen_method_call_impl(obj2, method, args2, call_ty)
+        return self.gen_method_call_impl(obj, method, args, call_ty)
+
+    pub def gen_method_call_impl(self, obj: Pointer[HirExpr], method: str, args: Vec[Pointer[HirExpr]], call_ty: AstType) -> str:
         mut obj_s = self.gen_expr(obj)
         mut t_n: str = hir_expr_type(obj).name
+        # A fresh string receiver (`_tr_str_wrap(...)`: `f().find(x)`, `str(n).len()`) is hoisted into a
+        # named temporary ONCE here. Several string-method dispatch blocks below each hoisted it on their
+        # own (strv), so a method handled by a later block evaluated the receiver -- and its side
+        # effects -- twice.
+        if obj_s.starts_with("_tr_str_wrap(") and obj_s.ends_with(")"):
+            obj_s = self.strv(obj_s)
 
         # Inside a monomorphized body, a receiver typed as a generic param (x: T) must
         # dispatch to the concrete type's method (x.show() -> Cat_show, not T_show).
@@ -6018,6 +6370,12 @@ pub class CGenerator:
                 if call_ty.name != "" and call_ty.name != "void":
                     return self.unwrap_voidp_as("Result_unwrap_err(" + obj_s + ")", call_ty)
                 return "Result_unwrap_err(" + obj_s + ")"
+            # Methods taking a default / message: box the argument like a payload and unbox the result.
+            mut res_full = hir_expr_type(obj)
+            if method == "unwrap_or" and args.len == 1 and res_full.args.len > 0:
+                return self.unwrap_voidp_as("Result_unwrap_or(" + obj_s + ", " + self.wrap_voidp_arg(args.get(0)) + ")", res_full.args.get(0).read())
+            if method == "expect" and args.len == 1 and res_full.args.len > 0:
+                return self.unwrap_voidp_as("Result_expect(" + obj_s + ", " + self.strz(self.gen_expr(args.get(0))) + ")", res_full.args.get(0).read())
             mut res_extra = ""
             if args.len > 0:
                 res_extra = ", " + self.gen_args(args)
@@ -6042,6 +6400,11 @@ pub class CGenerator:
                 if full_opt_ty2.args.len > 0:
                     return self.unwrap_voidp_as("Option_unwrap(" + obj_s + ")", full_opt_ty2.args.get(0).read())
                 return "Option_unwrap(" + obj_s + ")"
+            mut opt_full = hir_expr_type(obj)
+            if method == "unwrap_or" and args.len == 1 and opt_full.args.len > 0:
+                return self.unwrap_voidp_as("Option_unwrap_or(" + obj_s + ", " + self.wrap_voidp_arg(args.get(0)) + ")", opt_full.args.get(0).read())
+            if method == "expect" and args.len == 1 and opt_full.args.len > 0:
+                return self.unwrap_voidp_as("Option_expect(" + obj_s + ", " + self.strz(self.gen_expr(args.get(0))) + ")", opt_full.args.get(0).read())
             mut opt_extra = ""
             if args.len > 0:
                 opt_extra = ", " + self.gen_args(args)
@@ -6468,8 +6831,11 @@ pub class CGenerator:
 
         # Primitive conversion methods
         if method == "to_str" or method == "to_string":
+            if t_n == "u64" or t_n == "usize": return self.wrapstr("_tr_uint_to_str((unsigned long long)(" + obj_s + "))")
             if _is_int_type(t_n): return self.wrapstr("_tr_int_to_str((long long)(" + obj_s + "))")
-            if _is_float_type(t_n): return self.wrapstr("_tr_float_to_str((double)(" + obj_s + "))")
+            if _is_float_type(t_n):
+                if t_n == "f32": return self.wrapstr("_tr_f32_to_str((double)(" + obj_s + "))")
+                return self.wrapstr("_tr_float_to_str((double)(" + obj_s + "))")
             if t_n == "bool": return "((" + obj_s + ") ? _tr_str_lit(\"true\") : _tr_str_lit(\"false\"))"
             if t_n == "char": return self.wrapstr("_tr_char_to_str_alloc(" + obj_s + ")")
             # Fall through for class types (StringBuilder, user classes) so they hit their own branch
@@ -7109,6 +7475,21 @@ pub class CGenerator:
                 return "List_" + lsfx + "_is_empty(" + obj_s + ")"
             if method == "extend":
                 return "List_" + lsfx + "_extend(" + obj_s + ", " + self.gen_args(args) + ")"
+            if method == "insert" and args.len == 2:
+                # list.insert(i, v): v is stored like an append (retain an alias; a fresh value moves in)
+                mut _ins_i = self.gen_expr(args.get(0))
+                if self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(args.get(1)).name)):
+                    mut _ins_e = self.obj_retain_wrap(args.get(1), self.gen_expr(args.get(1)), false)
+                    if self._obj_store_needs_retain(args.get(1)): _ins_e = "_tr_obj_retain(" + _ins_e + ")"
+                    return "List_" + lsfx + "_insert(" + obj_s + ", (long long)(" + _ins_i + "), " + _ins_e + ")"
+                mut _ins_v = ""
+                if lsfx == "TrStr":
+                    _ins_v = self.gen_expr(args.get(1))
+                else:
+                    mut _ins_one = Vec[Pointer[HirExpr]].init(1)
+                    _ins_one.push(args.get(1))
+                    _ins_v = self.gen_args_strify(_ins_one, elem_sfx)
+                return "List_" + lsfx + "_insert(" + obj_s + ", (long long)(" + _ins_i + "), " + _ins_v + ")"
             if method == "slice" and args.len == 2:
                 # list.slice(a, b): a new list with copies of elements [a, b), clamped.
                 mut _sl = self.next_temp()
@@ -7384,10 +7765,17 @@ pub class CGenerator:
                 return "_tr_dict_keys(" + obj_s + ")"
             if method == "values":
                 mut _vals_strval = call_ty.name == "List" and call_ty.args.len > 0 and _is_str_type(call_ty.args.get(0).read().name)
+                mut _vals_en = ""
+                if call_ty.name == "List" and call_ty.args.len > 0:
+                    mut _vn = self.resolve_generic_prim(call_ty.args.get(0).read().name)
+                    if _is_float_type(_vn): _vals_en = "f64"
+                    elif _is_int_type(_vn) or _vn == "bool" or _vn == "char": _vals_en = "i64"
                 if is_idict:
                     if _vals_strval: return "_tr_idict_values_strval(" + obj_s + ")"
+                    if _vals_en != "": return "_tr_idict_values_" + _vals_en + "(" + obj_s + ")"
                     return "_tr_idict_values(" + obj_s + ")"
                 if _vals_strval: return "_tr_dict_values_strval(" + obj_s + ")"
+                if _vals_en != "": return "_tr_dict_values_" + _vals_en + "(" + obj_s + ")"
                 return "_tr_dict_values(" + obj_s + ")"
             if method == "items":
                 if is_idict: return "_tr_idict_items(" + obj_s + ")"
@@ -7459,12 +7847,36 @@ pub class CGenerator:
         mut fmt = ""
         mut fargs = ""
         mut i = 0
+        mut fs_exprs = Vec[Pointer[HirExpr]].init(parts.len)
+        while i < parts.len:
+            if parts.get(i).is_expr: fs_exprs.push(parts.get(i).expr)
+            i = i + 1
+        mut fs_ordered = self._needs_order(fs_exprs)
+        i = 0
         while i < parts.len:
             mut part = parts.get(i)
             if not part.is_expr:
                 fmt = fmt + _escape_fmt_for_c(part.text, part.text_len)
             else:
                 mut s = self.gen_expr(part.expr)
+                # The formatted text is built by TWO snprintf calls (measure, then fill) that both
+                # receive these arguments, so a placeholder that runs code (`{next_id()}`) would run
+                # twice. Bind it to a temporary once, in placeholder order; a fresh string is
+                # released at the end of the statement.
+                mut fs_cls = self._op_class(part.expr)
+                if fs_cls == 2 or (fs_ordered and fs_cls >= 1):
+                    mut fs_ty = hir_expr_type(part.expr)
+                    mut fs_t = "_ord" + self.next_temp()
+                    if _is_str_type(self.resolve_generic_prim(fs_ty.name)) and self._is_fresh_str_expr(part.expr):
+                        self.wrap_temp_decls.push("TrStr " + fs_t + " = (" + s + ")")
+                        self.wrap_temp_names.push(fs_t)
+                    elif self._is_fresh_obj_expr(part.expr):
+                        self.wrap_temp_decls.push(self.type_to_c(fs_ty) + " " + fs_t + " = (" + s + ")")
+                        self.wrap_obj_names.push(fs_t)
+                        self.wrap_obj_drops.push(self.obj_drop_fn(fs_ty.name))
+                    else:
+                        self.wrap_temp_decls.push("__auto_type " + fs_t + " = (" + s + ")")
+                    s = fs_t
                 mut ty_n: str = hir_expr_type(part.expr).name
                 mut spec = part.fmt_spec  # e.g. ".2f", ">10", "05d"
                 if part.spec_args.len > 0:
@@ -7558,11 +7970,16 @@ pub class CGenerator:
                             else:
                                 fargs = fargs + ", (char*)(" + s + ")"
                 elif _is_int_type(ty_n):
-                    fmt = fmt + "%lld"
-                    fargs = fargs + ", (long long)(" + s + ")"
+                    if ty_n == "u64" or ty_n == "usize":
+                        fmt = fmt + "%llu"
+                        fargs = fargs + ", (unsigned long long)(" + s + ")"
+                    else:
+                        fmt = fmt + "%lld"
+                        fargs = fargs + ", (long long)(" + s + ")"
                 elif _is_float_type(ty_n):
-                    fmt = fmt + "%g"
-                    fargs = fargs + ", (double)(" + s + ")"
+                    fmt = fmt + "%s"
+                    if ty_n == "f32": fargs = fargs + ", _tr_f32_buf((double)(" + s + "))"
+                    else: fargs = fargs + ", _tr_f64_buf((double)(" + s + "))"
                 elif ty_n == "bool":
                     fmt = fmt + "%s"
                     fargs = fargs + ", ((" + s + ") ? \"true\" : \"false\")"
@@ -7969,17 +8386,48 @@ pub class CGenerator:
             mut s = "({ TrIDict* " + tmp + " = _tr_idict_new(" + str(keys.len) + "LL); "
             mut i = 0
             while i < keys.len:
-                s = s + "_tr_idict_set(" + tmp + ", " + self.gen_expr(keys.get(i)) + ", " + self.dict_val_arg(vals.get(i)) + "); "
+                s = s + self.gen_dict_entry(tmp, keys.get(i), vals.get(i), true) + "; "
                 i = i + 1
             s = s + tmp + "; })"
             return s
         mut s = "({ TrMap* " + tmp + " = _tr_dict_new(" + str(keys.len) + "LL); "
         mut i = 0
         while i < keys.len:
-            s = s + "_tr_dict_set(" + tmp + ", " + self.dict_key_arg(keys.get(i)) + ", " + self.dict_val_arg(vals.get(i)) + "); "
+            s = s + self.gen_dict_entry(tmp, keys.get(i), vals.get(i), false) + "; "
             i = i + 1
         s = s + tmp + "; })"
         return s
+
+    # One `key: value` entry of a dict literal, evaluated key first, then value (Python order).
+    # Each entry keeps its own temporaries local (see gen_expr_scoped): they are declared and
+    # released inside the entry's statement-expression, in entry order, instead of all being
+    # hoisted ahead of the whole literal.
+    pub def gen_dict_entry(self, tmp: str, key: Pointer[HirExpr], val: Pointer[HirExpr], int_key: bool) -> str:
+        mut sv_d = self.wrap_temp_decls
+        mut sv_n = self.wrap_temp_names
+        mut sv_o = self.wrap_obj_names
+        mut sv_r = self.wrap_obj_drops
+        self.wrap_temp_decls = Vec[str].init(0)
+        self.wrap_temp_names = Vec[str].init(0)
+        self.wrap_obj_names = Vec[str].init(0)
+        self.wrap_obj_drops = Vec[str].init(0)
+        mut ks = ""
+        if int_key: ks = self.gen_expr(key)
+        else: ks = self.dict_key_arg(key)
+        mut mark = self.wrap_temp_decls.len
+        mut vs = self.dict_val_arg(val)
+        mut kc = self._op_class(key)
+        if kc >= 1 and (self.wrap_temp_decls.len > mark or self._op_class(val) == 2):
+            ks = self.hoist_at(mark, ks)
+        mut call = ""
+        if int_key: call = "_tr_idict_set(" + tmp + ", " + ks + ", " + vs + ")"
+        else: call = "_tr_dict_set(" + tmp + ", " + ks + ", " + vs + ")"
+        mut out = self.flush_wraps(call, true)
+        self.wrap_temp_decls = sv_d
+        self.wrap_temp_names = sv_n
+        self.wrap_obj_names = sv_o
+        self.wrap_obj_drops = sv_r
+        return out
 
     pub def gen_list_comp(self, element: Pointer[HirExpr], generators: Vec[Pointer[HirComprehension]]) -> str:
         mut tmp = self.next_temp()
@@ -8183,6 +8631,7 @@ pub class CGenerator:
             self.cur_throws_ty = ret_ty.args.get(1).read().name
             if self.cur_throws_ty == "": self.cur_throws_ty = "str"
         self.buf = StringBuilder.init(512)
+        mut clo_ws = self.wrap_enter()
         self.closure_cap_set = Map[str, bool].init(8)
         mut cj = 0
         while cj < captures.len:
@@ -8206,6 +8655,7 @@ pub class CGenerator:
         self.w("}\n")
         mut thisdef = self.buf.to_string().as_str()
         self.buf = saved_buf
+        self.wrap_leave(clo_ws)
         self.closure_cap_set = saved_cap
         self.closure_env_var = saved_env
         self.cur_throws_ty = saved_throws
@@ -8810,7 +9260,15 @@ pub class CGenerator:
                         else:
                             self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=(void*)(" + ret_s + ")});\n")
                     else:
-                        mut ret_s2 = self.gen_expr(e)
+                        mut ret_s2 = ""
+                        mut ret_is_none = false
+                        match e.read():
+                            case HirExpr.ELitNone(_): ret_is_none = true
+                            case _: pass
+                        if ret_is_none and self.cur_ret_ty.name == "Option":
+                            ret_s2 = "((Option){.tag=Option_None})"
+                        else:
+                            ret_s2 = self.gen_expr(e)
                         ret_s2 = self.flush_wraps(ret_s2, false)
                         if self.cur_ret_is_borrow:
                             # `-> ref` function: hand back the borrow as-is. No retain — the
@@ -8832,6 +9290,9 @@ pub class CGenerator:
                             # a returned local transfers (no retain — excluded from drops).
                             self.w(pad + "return " + self.iface_wrap_return(e, self.obj_retain_wrap(e, self.str_retain_wrap(e, ret_s2, true), true)) + ";\n")
             case HirStmt.SLet(n, _, sl_is_mut, is_const, is_shared, ty, v):
+                # A (re)declaration starts with a clean slate in the per-name tables: stale entries of an
+                # earlier or enclosing variable with the same name must not describe THIS one.
+                self.clear_name(n)
                 # Record a generic-class local's mono C prefix up front (before any
                 # branch), so an SAutoDrop free/drop names the concrete instance. The
                 # helper self-guards (only records when it finds concrete class args).
@@ -9194,6 +9655,30 @@ pub class CGenerator:
                         self.w(" = 0;\n")
                 self.decl_vars.insert(n, true)
             case HirStmt.SAssign(t, v):
+                # `d[key()] = value()` / `xs[i()] = v()` / `make().f = v()`: Python evaluates the
+                # right-hand side FIRST, then the target's subscript / receiver. C leaves the order
+                # of `lhs = rhs` unspecified, so when the target runs code and the value is
+                # observable, evaluate the value into a temporary in its own statement, then run
+                # the ordinary assignment with the temporary as the value.
+                mut ao_is_try = false
+                match v.read():
+                    case HirExpr.ETryExpr(_, _): ao_is_try = true
+                    case _: pass
+                mut ao_is_tuple = false
+                match t.read():
+                    case HirExpr.ETuple(_, _): ao_is_tuple = true
+                    case _: pass
+                if (not ao_is_try) and (not ao_is_tuple) and self._op_class(t) == 2 and self._op_class(v) >= 1:
+                    mut ao_ty = hir_expr_type(v)
+                    mut ao_rhs = self.flush_wraps(self.gen_expr(v), false)
+                    mut ao_tmp = "_asg" + self.next_temp()
+                    self.w(pad + "__auto_type " + ao_tmp + " = " + ao_rhs + ";\n")
+                    self.gen_stmt(box_hirstmt(HirStmt.SAssign(t, box_hirexpr(HirExpr.EIdent(ao_tmp, ao_ty, false)))), indent)
+                    if _is_str_type(self.resolve_generic_prim(ao_ty.name)) and self._is_fresh_str_expr(v):
+                        self.w(pad + "_tr_str_release(" + ao_tmp + ");\n")
+                    elif self._is_fresh_obj_expr(v):
+                        self.w(pad + "_tr_obj_release(" + ao_tmp + ", " + self.obj_drop_fn(ao_ty.name) + ");\n")
+                    return
                 # `obj.field = f()?` / `coll[i] = f()?`: the `?` was only propagated for a
                 # bare-identifier target (see the `x = f()?` case below); for a field /
                 # index target it fell through to gen_expr's ETryExpr fallback, which
@@ -9325,7 +9810,7 @@ pub class CGenerator:
                                     if self._is_fresh_str_expr(v):
                                         # set() retains; drop the fresh value's own reference.
                                         mut _lt_fresh = "{ TrStr _lt_v = " + self.gen_expr(v) + "; List_TrStr_set(" + _lt_obj + ", " + _lt_key + ", _lt_v); _tr_str_release(_lt_v); }"
-                                        self.w(pad + self.flush_wraps(_lt_fresh, true) + "\n")
+                                        self.w(pad + self.flush_wraps(_lt_fresh, true) + ";\n")
                                         return
                                     mut _lt_stmt = "List_TrStr_set(" + _lt_obj + ", " + _lt_key + ", " + self.gen_expr(v) + ")"
                                     self.w(pad + self.flush_wraps(_lt_stmt, true) + ";\n")
@@ -10043,9 +10528,17 @@ pub class CGenerator:
                             self.w(pad + "_tr_obj_release(" + _adn_safe + ", NULL);\n")
             case _: pass
 
+    # The loop variable is a NEW variable that merely shares a name with any earlier local: give it a clean
+    # slate in the per-name tables for the loop, then put the earlier variable's entries back.
     pub def gen_for_loop(self, var: str, iter: Pointer[HirExpr], body: HirBlock, indent: int):
+        mut fl_snap = self.snap_name(var)
+        self.clear_name(var)
+        self.gen_for_loop_impl(var, iter, body, indent)
+        self.restore_name(fl_snap)
+
+    pub def gen_for_loop_impl(self, var: str, iter: Pointer[HirExpr], body: HirBlock, indent: int):
         pad = _indent_str(indent)
-        mut iter_s = self.gen_expr(iter)
+        mut iter_s = ""
 
         # Check if it's a range call
         match iter.read():
@@ -10068,8 +10561,17 @@ pub class CGenerator:
                             # Loop direction depends on the step's SIGN, which isn't known
                             # from the rendered expression text (e.g. "-1" may render as
                             # "(-1LL)"), so pick the comparison at runtime: step>0 ? i<end : i>end.
-                            self.w(pad + "for (long long " + var + " = " + start_s + "; (" + step_s + ") > 0 ? " + var + " < " + end_s + " : " + var + " > " + end_s + "; " + var + " += " + step_s + ") {\n")
+                            # start / stop / step are evaluated ONCE, in order (Python semantics); the
+                            # loop header re-reads the bound every iteration, so a call there
+                            # (`range(len(f()))`) would otherwise run on every pass.
+                            mut rb = self.next_temp()
+                            mut start_f = self.flush_wraps(start_s, false)
+                            mut end_f = self.flush_wraps(end_s, false)
+                            mut step_f = self.flush_wraps(step_s, false)
+                            self.w(pad + "{ long long _rs" + rb + " = (long long)(" + start_f + "); long long _re" + rb + " = (long long)(" + end_f + "); long long _rt" + rb + " = (long long)(" + step_f + ");\n")
+                            self.w(pad + "for (long long " + var + " = _rs" + rb + "; _rt" + rb + " > 0 ? " + var + " < _re" + rb + " : " + var + " > _re" + rb + "; " + var + " += _rt" + rb + ") {\n")
                             self.gen_block(body, indent + 1)
+                            self.w(pad + "}\n")
                             self.w(pad + "}\n")
                             return
                     case _: pass
@@ -10102,6 +10604,7 @@ pub class CGenerator:
             case _: pass
 
         # Generic iteration over a collection
+        iter_s = self.gen_expr(iter)
         mut tmp = self.next_temp()
         mut iter_ty = hir_expr_type(iter)
         mut iter_ty_n: str = iter_ty.name
@@ -10492,10 +10995,24 @@ pub class CGenerator:
     pub def gen_block(self, b: HirBlock, indent: int):
         if _is_invalid_ptr(b as usize): return
         if _is_invalid_ptr(b.stmts as usize): return
+        # Names declared directly in this block: remember what the per-name tables held for them
+        # before the block, and put it back afterwards, so a shadowing / re-used name cannot change
+        # how the OUTER variable of that name is compiled once the block ends.
+        mut snaps = Vec[NameSnap].init(2)
+        mut si = 0
+        while si < b.stmts.len:
+            match b.stmts.get(si).read():
+                case HirStmt.SLet(sn_name, _, _, _, _, _, _): snaps.push(self.snap_name(sn_name))
+                case _: pass
+            si = si + 1
         mut i = 0
         while i < b.stmts.len:
             self.gen_stmt(b.stmts.get(i), indent)
             i = i + 1
+        mut ri = snaps.len - 1
+        while ri >= 0:
+            self.restore_name(snaps.get(ri))
+            ri = ri - 1
 
     pub def gen_match(self, expr: Pointer[HirExpr], arms: Vec[HirMatchArm], indent: int):
         pad = _indent_str(indent)

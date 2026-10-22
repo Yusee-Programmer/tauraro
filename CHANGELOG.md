@@ -16,6 +16,20 @@ spec, automated regression suite + CI, incremental compilation, and a batch of
 codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
+### Fixed (hardening round)
+- Evaluation order is now left-to-right for operands, call arguments, dict/list literals, index
+  expressions and compound assignments; each operand and each f-string placeholder is evaluated
+  exactly once (`a[f()] += 1` calls `f` once).
+- Float printing uses the shortest round-trip form (Python `repr` rules); `u64` values print as
+  unsigned; `str.find` is typed `int`; `list.insert`, `dict.keys()/values()` with zero values,
+  `Option/Result.unwrap_or/expect`, `None` typing at call arguments / returns / fields, enum `is`,
+  closure-valued variables and parameters, and shadowed names across scopes were corrected.
+- Loop variables over collections of classes borrow the element (no use-after-free).
+- Integer overflow wraps (`-fwrapv`) instead of trapping; `--debug` builds use sanitizers.
+- `match` over an enum must be exhaustive; `?` outside a `throws`/`Result` function and keyword
+  names used as identifiers get specific diagnostics.
+- `class Dog(Animal):` (as documented) now declares inheritance, like `class Dog extends Animal:`.
+
 ### Changed
 - `std.io.archive` (and so `std.compress.zip`) compresses and inflates entries with the built-in
   DEFLATE codec (`std.compress.flate`), so deflated ZIP entries written by other tools read

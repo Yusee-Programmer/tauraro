@@ -140,6 +140,21 @@ case "$dout" in *"No method 'nope' found on type 'str'"*) ;; *) diagfail="$diagf
 printf 'def main():\n    mut a = 1\n    if a > 0:\n        mut a = 2\n        print(a)\n    print(a)\n' > "$diagdir/shadow.tr"
 dout=$("$TAURAROC" "$diagdir/shadow.tr" -o "$diagdir/shadow" 2>&1)
 case "$dout" in *"[N-2]"*) diagfail="$diagfail [inner-block shadowing rejected]";; esac
+printf 'def f() throws str -> int:\n    return 1\ndef main():\n    mut x = f()?\n    print(x)\n' > "$diagdir/qmain.tr"
+dout=$("$TAURAROC" "$diagdir/qmain.tr" -o "$diagdir/qmain" 2>&1)
+case "$dout" in *"[F-4] '?' used in 'main'"*) ;; *) diagfail="$diagfail [? in non-throwing fn]";; esac
+printf 'enum C:\n    R\n    G\n    B\ndef main():\n    mut x = match C.R:\n        case C.R: 1\n        case C.G: 2\n    print(x)\n' > "$diagdir/mexpr.tr"
+dout=$("$TAURAROC" "$diagdir/mexpr.tr" -o "$diagdir/mexpr" 2>&1)
+case "$dout" in *"Non-exhaustive match expression on 'C': missing variant: B"*) ;; *) diagfail="$diagfail [non-exhaustive match expression]";; esac
+printf 'enum C:\n    R\n    G\ndef f(c: C) -> int:\n    match c:\n        case C.R if false: return 1\n        case C.G: return 2\n    return 0\ndef main():\n    print(f(C.R))\n' > "$diagdir/mguard.tr"
+dout=$("$TAURAROC" "$diagdir/mguard.tr" -o "$diagdir/mguard" 2>&1)
+case "$dout" in *"Non-exhaustive match on 'C': missing variant: R"*) ;; *) diagfail="$diagfail [guarded arm counted as covering]";; esac
+printf 'class _Complex:\n    pub v: int\ndef main():\n    mut c = _Complex()\n    print(c.v)\n' > "$diagdir/ckw.tr"
+dout=$("$TAURAROC" "$diagdir/ckw.tr" -o "$diagdir/ckw" 2>&1)
+case "$dout" in *"C99/C11 keyword"*) ;; *) diagfail="$diagfail [C keyword class name]";; esac
+printf 'def main():\n    mut pass = 1\n    print(pass)\n' > "$diagdir/kwname.tr"
+dout=$("$TAURAROC" "$diagdir/kwname.tr" -o "$diagdir/kwname" 2>&1)
+case "$dout" in *"unexpected keyword 'pass'"*) ;; *) diagfail="$diagfail [keyword used as a name]";; esac
 if [ -n "$diagfail" ]; then
     echo "  FAILED:$diagfail"
     failed=$((failed + 1))

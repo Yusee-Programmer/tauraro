@@ -1,0 +1,149 @@
+# tests/lang/152_eval_order.tr
+# Evaluation order and single evaluation. Operands evaluate left to right, `and` / `or` skip
+# their right operand, and an expression that runs code (a call) runs exactly once -- in
+# arguments, method receivers, binary operators, f-string placeholders and index expressions.
+
+from std.test import TestRunner
+
+class Tr:
+    pub log: str
+    pub n: int
+
+extend Tr:
+    pub def a(self) -> int:
+        self.log = self.log + "a"
+        return 1
+    pub def b(self) -> int:
+        self.log = self.log + "b"
+        return 2
+    pub def c(self) -> int:
+        self.log = self.log + "c"
+        return 3
+    pub def sa(self) -> str:
+        self.log = self.log + "A"
+        return "x" + "1"
+    pub def sb(self) -> str:
+        self.log = self.log + "B"
+        return "y" + "2"
+    pub def sc(self) -> str:
+        self.log = self.log + "C"
+        return "z" + "3"
+    pub def next(self) -> int:
+        self.n = self.n + 1
+        self.log = self.log + "n"
+        return self.n
+    pub def reset(self):
+        self.log = ""
+        self.n = 0
+
+class K:
+    pub v: int
+
+extend K:
+    pub def add(self, x: int, y: int) -> int:
+        return self.v + x + y
+    pub def cat(self, x: str, y: str) -> str:
+        return x + y
+
+def mk(t: Tr, n: int) -> K:
+    t.log = t.log + "k"
+    mut k = K()
+    k.v = n
+    return k
+
+def f3(x: int, y: int, z: int) -> int:
+    return x + y + z
+
+def g2(x: str, y: str) -> str:
+    return x + y
+
+def h3(x: int, y: str, z: int) -> int:
+    return x + y.len() + z
+
+def len_of(s: str) -> int:
+    return s.len()
+
+def main():
+    mut t = TestRunner.init("152_eval_order")
+    mut tr = Tr()
+    tr.log = ""
+    tr.n = 0
+
+    t.section("call arguments")
+    tr.reset()
+    t.assert_eq_int(f3(tr.a(), tr.b(), tr.c()), 6, "int args value")
+    t.assert_eq_str(tr.log, "abc", "int args run left to right")
+    tr.reset()
+    t.assert_eq_str(g2(tr.sa(), tr.sb()), "x1y2", "str args value")
+    t.assert_eq_str(tr.log, "AB", "str args run left to right")
+    tr.reset()
+    t.assert_eq_int(h3(tr.a(), tr.sa(), tr.b()), 5, "mixed args value")
+    t.assert_eq_str(tr.log, "aAb", "mixed int/str args run left to right")
+    tr.reset()
+    t.assert_eq_int(f3(tr.a(), f3(tr.b(), tr.c(), tr.a()), tr.b()), 9, "nested call value")
+    t.assert_eq_str(tr.log, "abcab", "nested calls run left to right")
+
+    t.section("binary operators")
+    tr.reset()
+    t.assert_eq_int(tr.a() + tr.b() * tr.c(), 7, "arithmetic value")
+    t.assert_eq_str(tr.log, "abc", "arithmetic operands run left to right")
+    tr.reset()
+    t.assert_true(tr.a() < tr.b(), "comparison value")
+    t.assert_eq_str(tr.log, "ab", "comparison operands run left to right")
+    tr.reset()
+    t.assert_eq_str(tr.sa() + tr.sb() + tr.sc(), "x1y2z3", "concat value")
+    t.assert_eq_str(tr.log, "ABC", "concat operands run left to right")
+
+    t.section("method receivers and arguments")
+    tr.reset()
+    mut k = K()
+    k.v = 10
+    t.assert_eq_int(k.add(tr.a(), tr.b()), 13, "method int args")
+    t.assert_eq_str(tr.log, "ab", "method args run left to right")
+    tr.reset()
+    t.assert_eq_str(k.cat(tr.sa(), tr.sb()), "x1y2", "method str args")
+    t.assert_eq_str(tr.log, "AB", "method str args run left to right")
+    tr.reset()
+    t.assert_eq_int(mk(tr, 7).add(tr.a(), tr.b()), 10, "receiver call then args value")
+    t.assert_eq_str(tr.log, "kab", "receiver runs before its arguments")
+    tr.reset()
+    t.assert_eq_str(tr.sa().replace(tr.sb(), tr.sc()), "x1", "string method value")
+    t.assert_eq_str(tr.log, "ABC", "string method receiver and args run left to right")
+
+    t.section("f-strings run each placeholder once, in order")
+    tr.reset()
+    t.assert_eq_str(f"{tr.a()}-{tr.sa()}-{tr.b()}", "1-x1-2", "f-string value")
+    t.assert_eq_str(tr.log, "aAb", "f-string placeholders: once each, left to right")
+    tr.reset()
+    t.assert_eq_str(f"{tr.next()}{tr.next()}{tr.next()}", "123", "counter placeholders")
+    t.assert_eq_int(tr.n, 3, "counter advanced exactly three times")
+
+    t.section("index expressions run once")
+    tr.reset()
+    mut xs: List[int] = [10, 20, 30, 40]
+    t.assert_eq_int(xs[tr.next() - 1], 10, "index value")
+    t.assert_eq_int(tr.n, 1, "index expression ran exactly once")
+    tr.reset()
+    t.assert_eq_int(xs[tr.a()] + xs[tr.b()], 50, "two index expressions")
+    t.assert_eq_str(tr.log, "ab", "indices run once each, left to right")
+
+    t.section("and / or short-circuit")
+    tr.reset()
+    if tr.a() > 5 and len_of(tr.sa()) > 0:
+        t.assert_true(false, "unreachable")
+    t.assert_eq_str(tr.log, "a", "right side of a false `and` is skipped (fresh-string argument)")
+    tr.reset()
+    if tr.a() > 0 or len_of(tr.sa()) > 0:
+        t.assert_eq_str(tr.log, "a", "right side of a true `or` is skipped")
+    tr.reset()
+    mut i = 0
+    while i < 2 and len_of(tr.sa()) > 0:
+        i = i + 1
+    t.assert_eq_str(tr.log, "AA", "loop condition evaluates its right side only while the left holds")
+    tr.reset()
+    mut r = 0
+    if i > 100:
+        r = len_of(tr.sa())
+    t.assert_eq_int(r, 0, "untaken branch skipped")
+    t.assert_eq_str(tr.log, "", "untaken branch did not run")
+    t.summary()
