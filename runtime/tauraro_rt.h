@@ -6253,8 +6253,30 @@ static inline void _tr_panic(const char* msg) {
         _tr_thread_panic_message = (char*)msg;
         longjmp(_tr_thread_panic_jmpbuf, 1);
     }
+    fflush(stdout);   /* output printed before the panic must not be lost with the buffer */
     _TR_DIAG("panic: %s\n", msg ? msg : "(null)");
     _TR_TRAP();
+}
+
+/* Integer division: a zero divisor panics; INT_MIN / -1 wraps (the quotient is -INT_MIN == INT_MIN)
+ * and INT_MIN % -1 is 0, instead of the hardware trap C gives for both. */
+static inline long long _tr_idiv(long long a, long long b) {
+    if (__builtin_expect(b == 0, 0)) _tr_panic("integer division by zero");
+    if (__builtin_expect(b == -1, 0)) return (long long)(0ULL - (unsigned long long)a);
+    return a / b;
+}
+static inline long long _tr_imod(long long a, long long b) {
+    if (__builtin_expect(b == 0, 0)) _tr_panic("integer modulo by zero");
+    if (__builtin_expect(b == -1, 0)) return 0;
+    return a % b;
+}
+static inline unsigned long long _tr_udiv(unsigned long long a, unsigned long long b) {
+    if (__builtin_expect(b == 0, 0)) _tr_panic("integer division by zero");
+    return a / b;
+}
+static inline unsigned long long _tr_umod(unsigned long long a, unsigned long long b) {
+    if (__builtin_expect(b == 0, 0)) _tr_panic("integer modulo by zero");
+    return a % b;
 }
 
 /* ── Generic contains (for `in` operator on strings) ────────────────── */
@@ -8437,7 +8459,7 @@ static const _tr_gf _tr_gf0={0}, _tr_gf1={1},
   _tr_edY={0x6658,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666},
   _tr_edI={0xa0b0,0x4a0e,0x1b27,0xc4ee,0xe478,0xad2f,0x1806,0x2f43,0xd7a7,0x3dfb,0x0099,0x2b4d,0xdf0b,0x4fc1,0x2480,0x2b83};
 static void _tr_edset(_tr_gf r,const _tr_gf a){ int i; for(i=0;i<16;i++) r[i]=a[i]; }
-static void _tr_edcar(_tr_gf o){ int i; int64_t c; for(i=0;i<16;i++){ o[i]+=(1LL<<16); c=o[i]>>16; o[(i+1)*(i<15)]+=c-1+37*(c-1)*(i==15); o[i]-=c<<16; } }
+static void _tr_edcar(_tr_gf o){ int i; int64_t c; for(i=0;i<16;i++){ o[i]+=(1LL<<16); c=o[i]>>16; o[(i+1)*(i<15)]+=c-1+37*(c-1)*(i==15); o[i]-=(int64_t)((uint64_t)c<<16); } }
 static void _tr_edsel(_tr_gf p,_tr_gf q,int b){ int64_t t,i,c=~(b-1); for(i=0;i<16;i++){ t=c&(p[i]^q[i]); p[i]^=t; q[i]^=t; } }
 static void _tr_edpack25519(uint8_t*o,const _tr_gf n){
   int i,j,b; _tr_gf m,t;

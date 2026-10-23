@@ -1,0 +1,31 @@
+# Concurrency corpus — multi-producer / single-consumer Chan pipeline. Three producers send 500
+# values each; the consumer must see exactly 1500 values with the right sum (no lost / duplicated
+# message, no race on the ring buffer, no UAF when the channel is closed and drained).
+def producer(ch: Chan[int], base: int) -> void:
+    mut i = 0
+    while i < 500:
+        ch.send(base + i)
+        i = i + 1
+
+def drain(ch: Chan[int], count: Atomic[int], total: Atomic[int], n: int) -> void:
+    mut seen = 0
+    while seen < n:
+        mut v = ch.recv()
+        count.add(1)
+        total.add(v)
+        seen = seen + 1
+
+async def main():
+    mut ch: Chan[int] = Chan.init(16)
+    mut count: Atomic[int] = Atomic.new(0)
+    mut total: Atomic[int] = Atomic.new(0)
+    task_group:
+        spawn producer(ch, 0)
+        spawn producer(ch, 1000)
+        spawn producer(ch, 2000)
+        spawn drain(ch, count, total, 1500)
+    # sum over bases of (500*base + 0+...+499) = 500*3000 + 3*124750
+    mut want = 500 * 3000 + 3 * 124750
+    mut msg = "chan_pipeline " + count.load().to_str() + " " + total.load().to_str()
+    if count.load() == 1500 and total.load() == want: print("OK " + msg)
+    else: print("FAIL " + msg)

@@ -10,7 +10,7 @@ mkdir -p "$WORK"
 mapfile -t FILES < <(cd "$ROOT" && find tests/lang tests/regression -name '*.tr' 2>/dev/null | sort)
 for ((j = 0; j < JOBS; j++)); do
     mkdir -p "$WORK/w$j"
-    rsync -a --exclude .git --exclude .claude --exclude build "$ROOT/" "$WORK/w$j/" 2>/dev/null || cp -r "$ROOT/." "$WORK/w$j/"
+    rsync -a --exclude .git --exclude .claude --exclude build --exclude scratch --exclude benchmarks "$ROOT/" "$WORK/w$j/" 2>/dev/null || cp -r "$ROOT/." "$WORK/w$j/"
 done
 run_one() {
     local w="$1" f="$2"

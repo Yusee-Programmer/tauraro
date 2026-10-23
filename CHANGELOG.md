@@ -28,6 +28,8 @@ added here as each phase lands.
 - Integer overflow wraps (`-fwrapv`) instead of trapping; `--debug` builds use sanitizers.
 - `match` over an enum must be exhaustive; `?` outside a `throws`/`Result` function and keyword
   names used as identifiers get specific diagnostics.
+- Integer `/`, `//` and `%` panic with "integer division by zero" instead of crashing on a hardware trap; `INT_MIN / -1` wraps. `panic` flushes buffered stdout first. `--debug` builds wrap on overflow too (UBSan no longer flags defined behaviour).
+- Native / LLVM backends print floats with the same shortest round-trip formatter as the C backend.
 - `class Dog(Animal):` (as documented) now declares inheritance, like `class Dog extends Animal:`.
 
 ### Changed

@@ -1305,11 +1305,10 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
     if target == "" and opt_level == "3":
         native_flags = " -march=native -funroll-loops"
     # Defined wrap-around at every optimization level (see the note in the single-step build).
-    # --debug leaves overflow to UBSan, which reports it with a source location.
+    # --debug keeps it too: wrap-around is the language semantics, so UBSan must not flag it.
     mut overflow_flag = " -fwrapv"
     mut dbg = ""
     if debug_mode:
-        overflow_flag = ""
         dbg = " -fsanitize=address,undefined -g"
     # Coverage: gcov counters; the #line markers map them to .tr lines.
     if coverage:

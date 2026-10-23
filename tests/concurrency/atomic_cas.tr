@@ -1,0 +1,31 @@
+# Concurrency corpus — Atomic add / cas under contention. 4 threads x 2000 adds, plus a cas-based
+# increment loop; both counters must be exact.
+def adder(a: Atomic[int]) -> void:
+    mut i = 0
+    while i < 2000:
+        a.add(1)
+        i = i + 1
+
+def cas_inc(a: Atomic[int]) -> void:
+    mut i = 0
+    while i < 1000:
+        mut done = false
+        while not done:
+            mut cur = a.load()
+            done = a.cas(cur, cur + 1)
+        i = i + 1
+
+async def main():
+    mut a: Atomic[int] = Atomic.new(0)
+    mut b: Atomic[int] = Atomic.new(0)
+    task_group:
+        spawn adder(a)
+        spawn adder(a)
+        spawn adder(a)
+        spawn adder(a)
+        spawn cas_inc(b)
+        spawn cas_inc(b)
+        spawn cas_inc(b)
+    mut msg = "atomic_cas " + a.load().to_str() + " " + b.load().to_str()
+    if a.load() == 8000 and b.load() == 3000: print("OK " + msg)
+    else: print("FAIL " + msg)

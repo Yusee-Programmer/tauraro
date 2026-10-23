@@ -4660,7 +4660,19 @@ pub class CGenerator:
             if self.has_method(mono_l, dunder):
                 return self.cls_method_c_call(mono_l, dunder, ls, rs)
         if op == "**": return "((long long)pow((double)(" + ls + "), (double)(" + rs + ")))"
-        if op == "//": return "((long long)(" + ls + ") / (long long)(" + rs + "))"
+        if op == "//" or op == "/" or op == "%":
+            # Integer division / remainder: a zero divisor panics with a message and
+            # INT_MIN / -1 wraps, instead of the hardware trap (SIGFPE / SIGILL) C gives.
+            if _is_int_type(lt_n) and _is_int_type(rt_n):
+                mut _dv_u = lt_n == "u64" or lt_n == "usize" or rt_n == "u64" or rt_n == "usize"
+                mut _dv_fn = "_tr_idiv"
+                if op == "%": _dv_fn = "_tr_imod"
+                if _dv_u:
+                    _dv_fn = "_tr_udiv"
+                    if op == "%": _dv_fn = "_tr_umod"
+                    return "" + _dv_fn + "((unsigned long long)(" + ls + "), (unsigned long long)(" + rs + "))"
+                return "" + _dv_fn + "((long long)(" + ls + "), (long long)(" + rs + "))"
+            if op == "//": return "((long long)(" + ls + ") / (long long)(" + rs + "))"
         if (_is_str_type(lt_n) and _is_str_type(rt_n)) and (op == "==" or op == "!=") and (self._is_fresh_str_expr(l) or self._is_fresh_str_expr(r)):
             # A fresh operand (call result, slice, concat, f-string) is owned by the
             # comparison: bind it in a statement-expression and release it after

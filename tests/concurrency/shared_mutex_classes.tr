@@ -1,0 +1,37 @@
+# Concurrency corpus — a Shared[T] class whose mutable state is a Mutex and an Atomic, mutated by
+# several threads that also build and drop strings (exercises refcount + allocator under threads).
+class Stats implements Sendable:
+    pub hits: Atomic[int]
+    pub log_len: Mutex[int]
+extend Stats:
+    pub def init() -> Stats:
+        mut s = Stats()
+        s.hits = Atomic.new(0)
+        s.log_len = Mutex.init(0)
+        return s
+    pub def record(self, n: int) -> void:
+        self.hits.add(1)
+        mut cur = self.log_len.get()
+        self.log_len.set(cur + n)
+
+def worker(st: Shared[Stats], id: int) -> void:
+    mut i = 0
+    while i < 300:
+        mut line = "worker-" + id.to_str() + "-item-" + i.to_str()
+        st.record(line.len())
+        i = i + 1
+
+async def main():
+    shared st = Stats.init()
+    task_group:
+        spawn worker(st, 1)
+        spawn worker(st, 2)
+        spawn worker(st, 3)
+        spawn worker(st, 4)
+    mut hits = st.hits.load()
+    mut total = st.log_len.get()
+    st.log_len.unlock()
+    mut msg = "shared_mutex_classes " + hits.to_str() + " " + total.to_str()
+    # "worker-W-item-" is 14 chars; item index digits: 10*1 + 90*2 + 200*3 = 790 per worker
+    if hits == 1200 and total == 4 * (300 * 14 + 790): print("OK " + msg)
+    else: print("FAIL " + msg)
