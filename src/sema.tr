@@ -5092,6 +5092,18 @@ extend Sema:
                 mut hv = self.lower_expr(val)
                 hv = self._patch_empty_dict_hint(hv, hir_expr_type(htgt))
                 if target as usize != 0 as usize and not self.in_unsafe:
+                    match htgt.read():
+                        case HirExpr.EPropAccess(_fo, _fname, _):
+                            mut _fo_ty = hir_expr_type(_fo)
+                            if self.classes.contains(_fo_ty.name) and not self.ambiguous_classes.contains(_fo_ty.name) and not self.is_builtin_dispatch_class(_fo_ty.name):
+                                mut _fo_cd = self.classes.get(_fo_ty.name)
+                                if _fo_cd.generics.len == 0:
+                                    mut _fo_i = 0
+                                    while _fo_i < _fo_cd.fields.len:
+                                        if _fo_cd.fields.get(_fo_i).name == _fname and _fo_cd.fields.get(_fo_i).ty as usize != 0 as usize:
+                                            self.check_expr_assignable(_fo_cd.fields.get(_fo_i).ty.read(), hv, "the field '" + _fname + "' of '" + _fo_ty.name + "'")
+                                        _fo_i = _fo_i + 1
+                        case _: pass
                     match target.read():
                         case Expr.EIdent(_as_n):
                             mut _as_sym = self.resolve(_as_n)
@@ -6097,6 +6109,10 @@ extend Sema:
                 if not self.in_unsafe:
                     mut _bo_lf = self.firm_family(hleft)
                     mut _bo_rf = self.firm_family(hright)
+                    if op == "is" and _bo_rf != "":
+                        self.error("[E-5] Type mismatch: the right-hand side of 'is' must be an enum variant or a type, not " + self.family_word(_bo_rf) + ".\n      FIX: compare values with '==' (e.g. `x == 3`); use `is` only as `shape is Shape.Circle`.")
+                    if (op == "in" or op == "not in") and (_bo_rf == "int" or _bo_rf == "float" or _bo_rf == "bool") and not (_bo_lf == "int" or _bo_lf == "float" or _bo_lf == "bool" or _bo_lf == "str"):
+                        self.error("[E-5] Type mismatch: the right-hand side of '" + op + "' must be a list, dict, set or string, but it is " + self.family_word(_bo_rf) + ".\n      FIX: put the collection (or the string to search in) on the right: `item in collection`.")
                     mut _bo_ls = _bo_lf == "int" or _bo_lf == "float" or _bo_lf == "bool" or _bo_lf == "str"
                     mut _bo_rs = _bo_rf == "int" or _bo_rf == "float" or _bo_rf == "bool" or _bo_rf == "str"
                     if _bo_ls and _bo_rs:
@@ -6508,7 +6524,7 @@ extend Sema:
                     case Expr.EPropAccess(obj, variant):
                         match obj.read():
                             case Expr.EIdent(type_name):
-                                if self.resolve(type_name).kind == SymbolKind.SClass: self.check_static_call(type_name, variant, hl)
+                                if self.resolve(type_name).kind != SymbolKind.SVariable: self.check_static_call(type_name, variant, hl)
                                 if self.enums.contains(type_name):
                                     ret_ty = AstType.init(type_name)
                                 # Built-in concurrency statics: Thread.spawn -> Thread, ThreadPool.new -> ThreadPool
@@ -6765,6 +6781,10 @@ extend Sema:
                             if _af_m.ret_ty.read().name != hobj_ty.name: _auto_is_self_factory = false
                         _af_i = _af_i + 1
                 if method == "init" or method == "new" or (method == "auto" and _auto_is_self_factory):
+                    match obj.read():
+                        case Expr.EIdent(_ic_n):
+                            if self.classes.contains(_ic_n) and self.resolve(_ic_n).kind != SymbolKind.SVariable: self.check_static_call(_ic_n, method, hl)
+                        case _: pass
                     # Preserve generic args so Vec[T].init(n) keeps the T info.
                     if hobj_ty.name == "void" or hobj_ty.name == "":
                         # Built-in types used as static receivers (e.g. Atomic.new, Thread.new)

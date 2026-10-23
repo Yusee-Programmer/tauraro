@@ -155,6 +155,38 @@ case "$dout" in *"C99/C11 keyword"*) ;; *) diagfail="$diagfail [C keyword class 
 printf 'def main():\n    mut pass = 1\n    print(pass)\n' > "$diagdir/kwname.tr"
 dout=$("$TAURAROC" "$diagdir/kwname.tr" -o "$diagdir/kwname" 2>&1)
 case "$dout" in *"unexpected keyword 'pass'"*) ;; *) diagfail="$diagfail [keyword used as a name]";; esac
+# expect_diag <label> <program text> <substring of the compiler output>
+expect_diag() {
+    printf '%b' "$2" > "$diagdir/ed.tr"
+    dout=$("$TAURAROC" "$diagdir/ed.tr" -o "$diagdir/ed" 2>&1)
+    case "$dout" in
+        *"[ICE]"*) diagfail="$diagfail [$1: reached the C compiler]";;
+        *"$3"*) ;;
+        *) diagfail="$diagfail [$1: expected '$3']";;
+    esac
+}
+CLS='class Th:\n    pub v: int\nextend Th:\n    pub def mk(a: int) -> Th:\n        mut t = Th()\n        t.v = a\n        return t\n    pub def val(self) -> int:\n        return self.v\n'
+expect_diag "fn arity" 'def f(x: int, y: str) -> int:\n    return x\ndef main():\n    f(1)\n' "[E-4] 'f()' takes 2 arguments but 1 was given"
+expect_diag "fn arg type" 'def f(x: int) -> int:\n    return x\ndef main():\n    f("a")\n' "[E-5] Type mismatch: argument 1 of 'f()'"
+expect_diag "method arity" "${CLS}"'def main():\n    mut t = Th()\n    t.val(5)\n' "[E-4] 'Th.val()' takes 0 arguments"
+expect_diag "static arity" "${CLS}"'def main():\n    mut t = Th.mk(1, 2)\n' "[E-4] 'Th.mk()' takes 1 argument"
+expect_diag "static arg type" "${CLS}"'def main():\n    mut t = Th.mk("s")\n' "[E-5] Type mismatch: argument 1 of 'Th.mk()'"
+expect_diag "return type" 'def f() -> int:\n    return "s"\ndef main():\n    f()\n' "[E-5] Type mismatch: 'f' is declared to return a int"
+expect_diag "let annotation" 'def main():\n    mut x: int = "s"\n' "[E-5] Type mismatch: the initializer of 'x'"
+expect_diag "assign" 'def main():\n    mut x = 1\n    x = "s"\n' "[E-5] Type mismatch: 'x' holds a int"
+expect_diag "str + int" 'def main():\n    mut x = "a" + 1\n' "[E-5] Type mismatch: cannot apply '+'"
+expect_diag "unary minus str" 'def main():\n    mut x = -"a"\n' "[E-5] Type mismatch: unary '-'"
+expect_diag "field of int" 'def main():\n    mut x = 5\n    print(x.foo)\n' "[E-6] Cannot read '.foo'"
+expect_diag "unknown field" "${CLS}"'def main():\n    mut t = Th()\n    print(t.nope)\n' "[E-7] Type 'Th' has no field 'nope'"
+expect_diag "field type" "${CLS}"'def main():\n    mut t = Th()\n    t.v = "s"\n' "[E-5] Type mismatch: the field 'v' of 'Th'"
+expect_diag "unknown type" 'def f(x: Nope) -> int:\n    return 1\ndef main():\n    f(1)\n' "[N-4] Unknown type 'Nope'"
+expect_diag "undefined var" 'def main():\n    print(zz + 1)\n' "[N-3] name 'zz' is not defined"
+expect_diag "undefined receiver" 'def main():\n    zz.go()\n' "[N-3] name 'zz' is not defined"
+expect_diag "undefined subscript" 'def main():\n    mut xs = [1, 2]\n    xs[kk] = 3\n' "[N-3] name 'kk' is not defined"
+expect_diag "str method arity" 'def main():\n    mut s = "abc"\n    print(s.find("a", "b", "c"))\n' "[E-4] 'str.find()' takes 1 argument"
+expect_diag "trailing tokens" 'def main():\n    mut b = 5 7\n' "unexpected token after the end of the statement"
+expect_diag "in non-collection" 'def main():\n    mut b = 1 in 5\n' "[E-5] Type mismatch: the right-hand side of 'in'"
+expect_diag "generic cannot infer" 'def conv[T](x: int) -> T:\n    return x as T\ndef main():\n    mut a = conv(3)\n' "[G-2] Cannot infer type parameter 'T'"
 if [ -n "$diagfail" ]; then
     echo "  FAILED:$diagfail"
     failed=$((failed + 1))

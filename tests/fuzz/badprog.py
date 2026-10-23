@@ -140,8 +140,56 @@ def m_type_confuse(ls, r):
     return "initialiser replaced"
 
 
+
+def m_del_punct(ls, r):
+    cands = [(i, m.start()) for i, l in enumerate(ls) for m in re.finditer(r"[():,\"\[\]{}]", l) if not l.lstrip().startswith("#")]
+    if not cands: return None
+    i, c = r.choice(cands)
+    ls[i] = ls[i][:c] + ls[i][c + 1:]
+    return "deleted a punctuation character"
+
+
+def m_dup_line(ls, r):
+    cands = [i for i, l in enumerate(ls) if l.strip() and not l.strip().startswith("#")]
+    if not cands: return None
+    i = r.choice(cands)
+    ls.insert(i, ls[i])
+    return "duplicated a line"
+
+
+def m_truncate(ls, r):
+    if len(ls) < 6: return None
+    del ls[r.randrange(len(ls) // 2, len(ls)):]
+    return "truncated the file"
+
+
+def m_swap_lines(ls, r):
+    if len(ls) < 4: return None
+    i = r.randrange(len(ls) - 1)
+    ls[i], ls[i + 1] = ls[i + 1], ls[i]
+    return "swapped two adjacent lines"
+
+
+def m_indent(ls, r):
+    cands = [i for i, l in enumerate(ls) if l.strip() and not l.strip().startswith("#")]
+    if not cands: return None
+    i = r.choice(cands)
+    ls[i] = (" " * r.choice([1, 2, 3, 5])) + ls[i] if r.random() < 0.5 else ls[i].lstrip()
+    return "changed indentation"
+
+
+def m_insert_token(ls, r):
+    cands = [i for i, l in enumerate(ls) if l.strip() and not l.strip().startswith("#")]
+    if not cands: return None
+    i = r.choice(cands)
+    tok = r.choice(["mut", "def", "class", "return", "(", ")", ":", "=", "->", "match", "case", "if", "else", "fn", "@", "$", "`", "\\", "?", "::"])
+    pos = r.randrange(len(ls[i]) + 1)
+    ls[i] = ls[i][:pos] + " " + tok + " " + ls[i][pos:]
+    return "inserted token " + tok
+
 MUTS = [m_undef_name, m_wrong_literal, m_str_to_int, m_drop_arg, m_extra_arg, m_ret_type, m_param_type,
-        m_method, m_field, m_delete_line, m_swap_op, m_generic_arg, m_type_confuse]
+        m_method, m_field, m_delete_line, m_swap_op, m_generic_arg, m_type_confuse,
+        m_del_punct, m_dup_line, m_truncate, m_swap_lines, m_indent, m_insert_token]
 
 
 def classify(rc, text):
