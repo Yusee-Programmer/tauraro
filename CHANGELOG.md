@@ -32,6 +32,7 @@ added here as each phase lands.
 - Native / LLVM backends print floats with the same shortest round-trip formatter as the C backend.
 - Generic functions infer their type parameter from `List[T]`-style parameters (`largest([3, 9, 4])`); a parameter that no argument can pin down is a `[G-2]` error instead of a C compile failure.
 - `min(xs)` / `max(xs)` / `sum(xs)` over a list (`sum` of floats no longer truncates), three-or-more-argument `min` / `max`, `sep.join(list)`, and `range()` outside a `for` loop (comprehension sources, assigned to a variable) now work; they used to return 0 or fail in the C compiler. Hosted runtime diagnostics flush buffered stdout first.
+- `s = s + x` / `s += x` on a string local appends in place when the variable owns its buffer, so building a string in a loop is linear instead of quadratic (200,000 appends: 52 s -> 0.03 s).
 - `class Dog(Animal):` (as documented) now declares inheritance, like `class Dog extends Animal:`.
 
 ### Changed

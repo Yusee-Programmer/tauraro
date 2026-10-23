@@ -738,6 +738,32 @@ static inline void _tr_str_release(TrStr s) {
     }
 }
 
+/* `dst = dst + p` for a string variable that owns its buffer: when `dst` is the sole owner
+ * (rc == 1) the buffer is grown in place (realloc), so building a string piece by piece in a loop
+ * is amortised linear instead of copying the whole string every time. A shared or literal `dst`
+ * falls back to a fresh buffer. `p` may alias `dst` (`s = s + s`). */
+static inline void _tr_str_append(TrStr* dst, TrStr p) {
+    size_t n = p.len;
+    if (n == 0) return;
+    size_t old = dst->len;
+    if (dst->rc && *dst->rc == 1) {
+        size_t off = 0; int alias = 0;
+        if (p.data >= dst->data && p.data <= dst->data + old) { alias = 1; off = (size_t)(p.data - dst->data); }
+        char* nd = (char*)_tr_c_realloc(dst->data, old + n + 1);
+        if (!nd) { _TR_OOM_ABORT(); }
+        memcpy(nd + old, alias ? nd + off : p.data, n);
+        nd[old + n] = '\0';
+        dst->data = nd;
+        dst->len = old + n;
+        return;
+    }
+    TrStr t = _tr_str_new(old + n);
+    memcpy(t.data, dst->data, old);
+    memcpy(t.data + old, p.data, n);
+    _tr_str_release(*dst);
+    *dst = t;
+}
+
 /* Wraps an EXISTING heap `char*` (e.g. the result of any legacy
  * _tr_str_* function, malloc'd separately from its refcount) into a
  * TrStr with refcount 1. Two allocations, but lets every existing

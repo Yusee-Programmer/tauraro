@@ -8451,6 +8451,26 @@ pub class CGenerator:
         return out
 
     # min / max with one List argument (`max(xs)`) or three or more scalar arguments.
+    # `s = s + a + b`: the pieces `a`, `b` (left to right) when the expression is a `+` chain over
+    # str operands whose leftmost operand is the variable `name`; false otherwise.
+    pub def collect_append_pieces(self, e: Pointer[HirExpr], name: str, out: Vec[Pointer[HirExpr]]) -> bool:
+        match e.read():
+            case HirExpr.EBinOp(op, l, r, ty):
+                if op != "+" or ty.name != "str": return false
+                if hir_expr_type(r).name != "str": return false
+                match l.read():
+                    case HirExpr.EIdent(ln, _, _):
+                        if ln != name: return false
+                        out.push(r)
+                        return true
+                    case HirExpr.EBinOp(_, _, _, _):
+                        if not self.collect_append_pieces(l, name, out): return false
+                        out.push(r)
+                        return true
+                    case _: return false
+            case _: return false
+        return false
+
     pub def gen_minmax_many(self, which: str, args: Vec[Pointer[HirExpr]]) -> str:
         if args.len == 1:
             mut lt = hir_expr_type(args.get(0))
@@ -10002,6 +10022,38 @@ pub class CGenerator:
                                 self.w(pad + self.lv_name(_trn) + " = " + ok_val4 + ";\n")
                                 return
                             case _: pass
+                    case _: pass
+                # `s = s + a + b` / `s += a` on a string local that owns its buffer: append in place
+                # (amortised linear) instead of copying the whole string on every iteration.
+                match t.read():
+                    case HirExpr.EIdent(_ap_n, _, _):
+                        if hir_expr_type(t).name == "str" and self.str_local_names.contains(_ap_n) and not self.cur_proven_borrows.contains(_ap_n):
+                            mut _ap_pieces = Vec[Pointer[HirExpr]].init(4)
+                            if self.collect_append_pieces(v, _ap_n, _ap_pieces) and _ap_pieces.len > 0:
+                                mut _ap_lv = self.lv_name(_ap_n)
+                                mut _ap_decl = ""
+                                mut _ap_do = ""
+                                mut _ap_rel = ""
+                                mut _ap_ok = true
+                                mut _ap_i = 0
+                                while _ap_i < _ap_pieces.len:
+                                    mut _ap_p = _ap_pieces.get(_ap_i)
+                                    mut _ap_tmp = "_ap" + self.next_temp()
+                                    mut _ap_c = self.gen_expr(_ap_p)
+                                    if _ap_c.contains(_safe_c_varname(_ap_n)): _ap_ok = false
+                                    _ap_decl = _ap_decl + "TrStr " + _ap_tmp + " = (" + _ap_c + "); "
+                                    _ap_do = _ap_do + "_tr_str_append(&" + _ap_lv + ", " + _ap_tmp + "); "
+                                    if self._is_fresh_str_expr(_ap_p): _ap_rel = _ap_rel + "_tr_str_release(" + _ap_tmp + "); "
+                                    _ap_i = _ap_i + 1
+                                if _ap_ok:
+                                    self.w(pad + self.flush_wraps("({ " + _ap_decl + _ap_do + _ap_rel + "})", true) + ";\n")
+                                    return
+                                # a piece mentions the variable: discard the wrap temps this probe created
+                                # and fall through to the ordinary copy-and-replace path.
+                                self.wrap_temp_decls = Vec[str].init(0)
+                                self.wrap_temp_names = Vec[str].init(0)
+                                self.wrap_obj_names = Vec[str].init(0)
+                                self.wrap_obj_drops = Vec[str].init(0)
                     case _: pass
                 mut _assign_rhs = ""
                 match v.read():

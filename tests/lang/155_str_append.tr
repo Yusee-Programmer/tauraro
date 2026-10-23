@@ -1,0 +1,45 @@
+# tests/lang/155_str_append.tr
+# `s = s + x` / `s += x` on a string local appends in place; building a long string piece by
+# piece is linear (this test would take minutes if every append copied the whole string), and a
+# string that is shared, aliased or appended to itself still behaves like a value.
+
+from std.test import TestRunner
+
+def build(n: int) -> str:
+    mut out = "["
+    for i in range(n):
+        out = out + str(i) + ","
+    out += "]"
+    return out
+
+def main():
+    mut t = TestRunner.init("155_str_append")
+
+    t.section("value semantics survive in-place appends")
+    mut s = ""
+    s = s + "a"
+    s += "bc"
+    mut copy = s
+    s = s + "!"
+    t.assert_eq_str(s, "abc!", "append after a copy was taken")
+    t.assert_eq_str(copy, "abc", "the copy is unchanged")
+    s = s + s
+    t.assert_eq_str(s, "abc!abc!", "appending a string to itself")
+    mut u = "x"
+    u = u + u + u
+    t.assert_eq_str(u, "xxx", "the variable on both sides")
+    mut parts = "p"
+    for k in range(3):
+        parts = parts + f"-{k}"
+    t.assert_eq_str(parts, "p-0-1-2", "f-string pieces")
+    mut lst: List[str] = []
+    mut acc = ""
+    for w in ["a", "b", "c"]:
+        acc = acc + w
+        lst.append(acc)
+    t.assert_eq_str(lst[0] + "|" + lst[1] + "|" + lst[2], "a|ab|abc", "snapshots stored in a list stay intact")
+
+    t.section("long strings build quickly")
+    mut big = build(200000)
+    t.assert_eq_int(big.len(), 1288892, "200000 appends")
+    t.summary()
