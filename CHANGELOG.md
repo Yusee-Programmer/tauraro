@@ -30,6 +30,7 @@ added here as each phase lands.
   names used as identifiers get specific diagnostics.
 - Integer `/`, `//` and `%` panic with "integer division by zero" instead of crashing on a hardware trap; `INT_MIN / -1` wraps. `panic` flushes buffered stdout first. `--debug` builds wrap on overflow too (UBSan no longer flags defined behaviour).
 - Native / LLVM backends print floats with the same shortest round-trip formatter as the C backend.
+- Generic functions infer their type parameter from `List[T]`-style parameters (`largest([3, 9, 4])`); a parameter that no argument can pin down is a `[G-2]` error instead of a C compile failure.
 - `class Dog(Animal):` (as documented) now declares inheritance, like `class Dog extends Animal:`.
 
 ### Changed

@@ -547,6 +547,31 @@ extend Program:
         return self.decls.get(i)
 
 
+# Structural match of a generic parameter type against an actual argument type: finds what the
+# type parameter `gp` stands for. `T` against `int` gives "int"; `List[T]` against `List[str]` gives
+# "str"; nested forms (`Option[List[T]]`) recurse. Returns "" when `gp` does not occur or the shapes
+# differ, so callers keep their existing "cannot infer" handling.
+pub def unify_generic(pty: AstType, aty: AstType, gp: str) -> str:
+    if pty.name == gp:
+        if aty.name == "" or aty.name == "void" or aty.name == gp: return ""
+        return aty.name
+    if pty.args.len == 0 or pty.name != aty.name: return ""
+    mut i = 0
+    while i < pty.args.len and i < aty.args.len:
+        mut r = unify_generic(pty.args.get(i).read(), aty.args.get(i).read(), gp)
+        if r != "": return r
+        i = i + 1
+    return ""
+
+# True when the type name `gp` occurs anywhere inside `ty` (its own name or any nested type argument).
+pub def type_mentions(ty: AstType, gp: str) -> bool:
+    if ty.name == gp: return true
+    mut i = 0
+    while i < ty.args.len:
+        if type_mentions(ty.args.get(i).read(), gp): return true
+        i = i + 1
+    return false
+
 pub def _dummy_instantiations():
     mut v1 = Vec[Pointer[Comprehension]].init(0)
     mut v2 = Vec[Pointer[CatchClause]].init(0)

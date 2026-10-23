@@ -8,7 +8,7 @@ from core.string import StringBuilder
 from core.alloc import alloc
 from core.io import write_file
 from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, HirChanSelectArm, _tr_str_len, hir_expr_type
-from ast import AstType, Decorator, Pattern, Ownership, Decl
+from ast import AstType, Decorator, Pattern, Ownership, Decl, unify_generic
 from codegen.libc_names import libc_fn_names
 
 extern "C":
@@ -1618,6 +1618,12 @@ pub class CGenerator:
                 mut aidx = pi - sk
                 if aidx >= 0 and aidx < args.len:
                     targ = self.resolve_generic_tyname(hir_expr_type(args.get(aidx)).name)
+            elif pp.name != "self" and targ == "" and pp.ty.args.len > 0:
+                # `xs: List[T]` and the like: take T from the argument's own type arguments
+                mut aidx2 = pi - sk
+                if aidx2 >= 0 and aidx2 < args.len:
+                    mut _ut = unify_generic(pp.ty, hir_expr_type(args.get(aidx2)), gp)
+                    if _ut != "": targ = self.resolve_generic_tyname(_ut)
             pi = pi + 1
         if targ == "void" or targ == gp or targ == "": return ""
         return targ
@@ -4663,7 +4669,7 @@ pub class CGenerator:
         if op == "//" or op == "/" or op == "%":
             # Integer division / remainder: a zero divisor panics with a message and
             # INT_MIN / -1 wraps, instead of the hardware trap (SIGFPE / SIGILL) C gives.
-            if _is_int_type(lt_n) and _is_int_type(rt_n):
+            if self.tier_define == "" and _is_int_type(lt_n) and _is_int_type(rt_n):
                 mut _dv_u = lt_n == "u64" or lt_n == "usize" or rt_n == "u64" or rt_n == "usize"
                 mut _dv_fn = "_tr_idiv"
                 if op == "%": _dv_fn = "_tr_imod"

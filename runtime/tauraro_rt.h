@@ -6253,7 +6253,9 @@ static inline void _tr_panic(const char* msg) {
         _tr_thread_panic_message = (char*)msg;
         longjmp(_tr_thread_panic_jmpbuf, 1);
     }
+#if !defined(TAURARO_KERNEL) && !defined(TAURARO_NO_OS)
     fflush(stdout);   /* output printed before the panic must not be lost with the buffer */
+#endif
     _TR_DIAG("panic: %s\n", msg ? msg : "(null)");
     _TR_TRAP();
 }

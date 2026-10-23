@@ -5,7 +5,7 @@ from core.vec import Vec
 from core.map import Map
 from core.alloc import alloc, dealloc
 from std.core.io import _tr_exit, write_file, append_file
-from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension, ChanSelectArm, GenericConstraint
+from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension, ChanSelectArm, GenericConstraint, unify_generic, type_mentions
 from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type, HirChanSelectArm
 from mir import mir_if_drop_plan, DropSite, mir_proven_borrows, mir_borrow_conflicts, mir_shared_ref_param_violations
 
@@ -5996,6 +5996,23 @@ extend Sema:
                             # (otherwise `mut a = largest(1, 2)` emits a `T*` local).
                             if self.fn_defs.contains(n):
                                 mut _gfd = self.fn_defs.get(n)
+                                # A generic parameter no argument pins down can't be inferred; say so
+                                # here rather than failing later in the C compiler.
+                                if _gfd.generics.len > 0 and _gfd.constraints.len == 0 and self.current_func_generics.len == 0:
+                                    mut _ngi = 0
+                                    while _ngi < _gfd.generics.len:
+                                        mut _ngp = _gfd.generics.get(_ngi)
+                                        mut _nfound = false
+                                        mut _nsk = 0
+                                        if _gfd.params.len > 0 and _gfd.params.get(0).name == "self": _nsk = 1
+                                        mut _npi = _nsk
+                                        while _npi < _gfd.params.len:
+                                            mut _npty = _gfd.params.get(_npi).ty
+                                            if _npty as usize != 0 as usize and type_mentions(_npty.read(), _ngp): _nfound = true
+                                            _npi = _npi + 1
+                                        if not _nfound and _gfd.generics.len == 1:
+                                            self.error("[G-2] Cannot infer type parameter '" + _ngp + "' of generic function '" + n + "' from its arguments.\n      FIX: give it explicitly: " + n + "[Type](...)")
+                                        _ngi = _ngi + 1
                                 if _gfd.generics.len > 0 and _gfd.generics.contains(ret_ty.name):
                                     mut _gsk = 0
                                     if _gfd.params.len > 0 and _gfd.params.get(0).name == "self": _gsk = 1
@@ -6007,6 +6024,13 @@ extend Sema:
                                             if _gaidx >= 0 and _gaidx < hl.len:
                                                 ret_ty = hir_expr_type(hl.get(_gaidx))
                                                 break
+                                        elif _gpty as usize != 0 as usize and _gpty.read().args.len > 0:
+                                            mut _gaidx2 = _gpi - _gsk
+                                            if _gaidx2 >= 0 and _gaidx2 < hl.len:
+                                                mut _gut = unify_generic(_gpty.read(), hir_expr_type(hl.get(_gaidx2)), ret_ty.name)
+                                                if _gut != "":
+                                                    ret_ty = AstType.init(_gut)
+                                                    break
                                         _gpi = _gpi + 1
                     case Expr.EIndex(base, idx):
                         match base.read():

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run every test under tests/lang + tests/regression with --debug (AddressSanitizer + UBSan) and report
 # the ones that hit a memory error / UB.  Leak detection is OFF here (see leak_sweep.sh).
+# LEAKS=1 turns leak detection ON and reports only LeakSanitizer findings (leak sweep).
 # Usage: tests/fuzz/asan_sweep.sh [jobs]      # run from the repo root; uses N private copies of the tree
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -17,9 +18,11 @@ run_one() {
     local out
     # one job at a time per private copy (they share the copy's build/ directory)
     exec 9>"$w/.lock"; flock 9
-    out=$(cd "$w" && ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=0 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 timeout 600 ./tauraroc --debug --run "$f" 2>&1)
+    out=$(cd "$w" && ASAN_OPTIONS=detect_leaks=${LEAKS:-0}:halt_on_error=1:abort_on_error=0 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 timeout 600 ./tauraroc --debug --run "$f" 2>&1)
     local rc=$?
-    if echo "$out" | grep -qE "ERROR: AddressSanitizer|runtime error:|SUMMARY: (Address|Undefined)"; then
+    if [ "${LEAKS:-0}" = 1 ]; then
+        if echo "$out" | grep -q "LeakSanitizer"; then echo "LEAK $f"; echo "$out" | grep -E -m1 "SUMMARY: AddressSanitizer"; fi
+    elif echo "$out" | grep -qE "ERROR: AddressSanitizer|runtime error:|SUMMARY: (Address|Undefined)"; then
         echo "SANITIZER $f"; echo "$out" | grep -E -m6 "ERROR: AddressSanitizer|runtime error:|SUMMARY:|#[0-4] " | sed 's/^/    /'
     elif [ $rc -ne 0 ] || echo "$out" | grep -q "FAILED"; then
         echo "FAIL(rc=$rc) $f"; echo "$out" | grep -E -m4 "FAIL|error" | sed 's/^/    /'

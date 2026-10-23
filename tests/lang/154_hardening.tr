@@ -65,6 +65,12 @@ extend Animal:
 class Dog(Animal):
     pub breed: str
 
+def largest[T](xs: List[T]) -> T:
+    mut best = xs[0]
+    for x in xs:
+        if x > best: best = x
+    return best
+
 def main():
     mut t = TestRunner.init("154_hardening")
 
@@ -200,4 +206,8 @@ def main():
     dg.name = "Rex"
     dg.breed = "lab"
     t.assert_eq_str(dg.breathe(), "Rex breathes", "parent method on a child")
+    t.section("generic parameter inferred from List[T]")
+    t.assert_eq_int(largest([3, 9, 4]), 9, "List[int]")
+    t.assert_eq_str(largest(["b", "zz", "a"]), "zz", "List[str]")
+    t.assert_eq_str(str(largest([1.5, 0.5])), "1.5", "List[float]")
     t.summary()
