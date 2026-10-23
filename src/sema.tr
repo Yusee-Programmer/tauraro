@@ -17,6 +17,13 @@ pub enum SymbolKind:
     SVariable
     SInterface
 
+pub def _is_builtin_type_word(n: str) -> bool:
+    if n.len() > 2 and n.slice(0, 2) == "c_": return true   # C scalar types (c_int, c_char, ...) in FFI signatures
+    if n == "int" or n == "float" or n == "bool" or n == "char" or n == "str" or n == "i8" or n == "i16" or n == "i32" or n == "i64" or n == "u8" or n == "u16" or n == "u32" or n == "u64" or n == "usize" or n == "isize" or n == "f32" or n == "f64": return true
+    if n == "List" or n == "Vec" or n == "Dict" or n == "Map" or n == "Set" or n == "Option" or n == "Result" or n == "Tuple" or n == "tuple" or n == "Array" or n == "Pointer" or n == "ref" or n == "mut_ref" or n == "def" or n == "lambda": return true
+    if n == "Shared" or n == "Weak" or n == "Chan" or n == "Channel" or n == "Atomic" or n == "Mutex" or n == "RwLock" or n == "Thread" or n == "ThreadPool" or n == "ThreadLocal" or n == "StringBuilder" or n == "StringObj" or n == "Bytes" or n == "String" or n == "Any" or n == "any" or n == "object" or n == "Future" or n == "Task" or n == "AsyncTask" or n == "AsyncPool": return true
+    return false
+
 pub class Symbol:
     pub name: str
     pub kind: SymbolKind
@@ -38,6 +45,7 @@ pub class Symbol:
     pub decl_block_id: int    # auto-drop: id of the innermost if/while C block open at declaration within the current scope; 0 = scope top-level
     pub str_escaped: bool     # auto-drop: a `str` local passed as a call/method-call ARGUMENT - may be aliased into a legacy List_str/Dict/Set (#52 not yet migrated); excluded from auto-drop to avoid UAF
     pub coll_escaped: bool    # auto-drop: a List/Vec/Dict/Map/Set local that is ever read in a non-receiver position (call/method arg, assigned to another var, returned, stored in a literal) - raw unrefcounted pointer, so any alias must disable auto-free to avoid UAF
+    pub firm: str             # type family this variable is CERTAIN to have ("int"/"float"/"bool"/"str"/"List"/"Dict"/"class"), "" when unsure; drives the E-5 mismatch checks
     pub borrows_region: str   # [L-3/L-4] region derivation of this str local's CURRENT value: "" = unknown (never flagged), "@owned" = freshly built (concat — owned, not a borrow), "<name>" = shares parameter/local <name>'s region (transitive). Tracks the LAST assignment.
 
 extend Symbol:
@@ -64,6 +72,7 @@ extend Symbol:
         s.str_escaped = false
         s.coll_escaped = false
         s.borrows_region = ""
+        s.firm = ""
         return s
 
 pub class Scope:
@@ -226,6 +235,7 @@ pub class Sema:
     pub current_file:        str             # path of source file currently being analysed
     pub current_func_name:  str
     pub current_class_name: str
+    pub ambiguous_classes: Map[str, bool]   # class names declared more than once (different modules); member checks skip them
     pub current_scope_depth: int
     pub in_async_fn:        bool
     pub fn_try_ok:          bool   # `?` allowed: the enclosing fn throws / returns Result|Option (or we are in a closure)
@@ -258,6 +268,7 @@ pub class Sema:
     pub in_unsafe: bool                 # Gap 6: inside an unsafe: block
     pub cur_fn_is_lib: bool             # currently lowering a trusted std/core function (audited unsafe core) — exempt from [P-2]
     pub current_func_ret_from: str      # Gap 1: 'from' lifetime param of current function return
+    pub current_func_ret_family: str        # type family of the current fn's declared return type (see decl_family); "" = unchecked
     pub current_func_ret_borrow_str: bool   # current fn returns `ref str from ...` (a str borrow)
     pub current_func_ret_regions: Vec[str]  # explicit `from a, b` region list (empty if none/auto-inferred)
     pub current_func_outlives_a: Vec[str]   # `where a outlives b` bounds (parallel): a[i] outlives b[i]
@@ -383,6 +394,8 @@ extend Sema:
         s.cur_fn_is_lib          = false
         s.current_func_ret_from  = ""
         s.current_func_ret_borrow_str = false
+        s.current_func_ret_family = ""
+        s.ambiguous_classes = Map[str, bool].init(8)
         s.current_func_ret_regions = Vec[str].init(0)
         s.current_func_outlives_a = Vec[str].init(0)
         s.current_func_outlives_b = Vec[str].init(0)
@@ -725,6 +738,191 @@ extend Sema:
                 return self.is_sendable_ty(ty.args.get(0).read())
             return true
         return self.is_sendable_type(n)
+
+    # ---- Type-family checks (E-4 arity, E-5 mismatch) -----------------------------------------
+    # Deliberately conservative: a "family" is only reported when sema is CERTAIN of it (a literal, an
+    # annotated name, a call to a function with a declared scalar return type ...).  Anything else is "",
+    # and "" never produces a diagnostic, so these checks cannot reject a valid program.
+    pub def decl_family(self, ty: AstType) -> str:
+        mut n = ty.name
+        if n == "int" or n == "i8" or n == "i16" or n == "i32" or n == "i64" or n == "u8" or n == "u16" or n == "u32" or n == "u64" or n == "usize" or n == "isize": return "int"
+        if n == "float" or n == "f32" or n == "f64": return "float"
+        if n == "bool": return "bool"
+        if n == "str": return "str"
+        if n == "List" or n == "Vec": return "List"
+        if n == "Dict" or n == "Map": return "Dict"
+        mut gi = 0
+        while gi < self.current_func_generics.len:
+            if self.current_func_generics.get(gi) == n: return ""
+            gi = gi + 1
+        if self.classes.contains(n):
+            mut cd = self.classes.get(n)
+            if cd.generics.len == 0 and cd.iface_names.len == 0 and cd.base_classes.len == 0: return "class"
+            return ""
+        if self.enums.contains(n) and n != "Option" and n != "Result": return "class"
+        if n == "Thread" or n == "Atomic" or n == "Mutex" or n == "RwLock" or n == "Chan" or n == "Channel" or n == "Shared" or n == "Weak" or n == "StringBuilder" or n == "ThreadPool" or n == "ThreadLocal": return "class"
+        return ""
+
+    pub def firm_family(self, e: Pointer[HirExpr]) -> str:
+        if _is_invalid_ptr(e as usize): return ""
+        match e.read():
+            case HirExpr.ELitInt(_, _): return "int"
+            case HirExpr.ELitFloat(_, _): return "float"
+            case HirExpr.ELitStr(_, _, _): return "str"
+            case HirExpr.ELitBool(_, _): return "bool"
+            case HirExpr.EFString(_, _): return "str"
+            case HirExpr.EList(_, _): return "List"
+            case HirExpr.EDict(_, _, _): return "Dict"
+            case HirExpr.EIdent(nm, _, _):
+                mut sy = self.resolve(nm)
+                if sy.name != "" and sy.kind == SymbolKind.SVariable: return sy.firm
+                return ""
+            case HirExpr.EUnaryOp(op, x, _):
+                if op == "not" or op == "!": return "bool"
+                if op == "-" or op == "+":
+                    mut xf = self.firm_family(x)
+                    if xf == "int" or xf == "float": return xf
+                return ""
+            case HirExpr.EBinOp(op, l, r, _):
+                if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or": return "bool"
+                mut lf = self.firm_family(l)
+                mut rf = self.firm_family(r)
+                if op == "+" and lf == "str" and rf == "str": return "str"
+                if op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%":
+                    if (lf == "int" or lf == "float") and (rf == "int" or rf == "float"):
+                        if lf == "float" or rf == "float": return "float"
+                        return "int"
+                return ""
+            case HirExpr.ECall(callee, _, _):
+                match callee.read():
+                    case HirExpr.EIdent(fn, _, _):
+                        if self.fn_defs.contains(fn):
+                            mut fd = self.fn_defs.get(fn)
+                            if fd.generics.len > 0 or fd.is_extern or fd.ret_ty as usize == 0 as usize: return ""
+                            if fd.throws_ty as usize != 0 as usize and fd.throws_ty.read().name != "": return ""
+                            mut fam = self.decl_family(fd.ret_ty.read())
+                            if fam == "class": return ""
+                            return fam
+                        if self.resolve(fn).name == "":
+                            if fn == "str": return "str"
+                            if fn == "int" or fn == "len": return "int"
+                            if fn == "float": return "float"
+                        return ""
+                    case _: return ""
+            case _: return ""
+        return ""
+
+    pub def family_mismatch(self, exp: str, act: str) -> bool:
+        if exp == "" or act == "": return false
+        mut exp_scalar = exp == "int" or exp == "float" or exp == "bool" or exp == "str"
+        mut act_scalar = act == "int" or act == "float" or act == "bool" or act == "str"
+        if exp_scalar and act_scalar: return (exp == "str") != (act == "str")
+        if exp_scalar and (act == "List" or act == "Dict"): return true
+        if act_scalar and (exp == "List" or exp == "Dict" or exp == "class"): return true
+        if (exp == "List" and act == "Dict") or (exp == "Dict" and act == "List"): return true
+        if exp == "class" and (act == "List" or act == "Dict"): return true
+        return false
+
+    pub def family_word(self, fam: str) -> str:
+        if fam == "class": return "a class/enum value"
+        return "a " + fam
+    # Report an E-5 mismatch when `e` is certainly a different kind of value than `exp_ty` declares.
+    pub def check_expr_assignable(self, exp_ty: AstType, e: Pointer[HirExpr], what: str):
+        if self.in_unsafe: return
+        mut ef = self.decl_family(exp_ty)
+        mut af = self.firm_family(e)
+        if self.family_mismatch(ef, af):
+            self.error("[E-5] Type mismatch: " + what + " expects '" + exp_ty.name + "' but is given " + self.family_word(af) + ".\n      FIX: pass a value of type '" + exp_ty.name + "' (convert it explicitly, e.g. str(x) / int(x) / float(x), if that is what you mean).")
+
+    # Arity + argument-family check of a call to `fd` (free function or method). `sk` is the number
+    # of leading `self` parameters to skip.
+    pub def check_call_args(self, fd: FunctionDef, args: Vec[Pointer[HirExpr]], sk: int, what: str):
+        if self.in_unsafe: return
+        mut pi = sk
+        while pi < fd.params.len:
+            if fd.params.get(pi).is_variadic: return
+            pi = pi + 1
+        mut want = fd.params.len - sk
+        if want != args.len:
+            mut plural = "s"
+            if want == 1: plural = ""
+            mut verb = "were"
+            if args.len == 1: verb = "was"
+            self.error("[E-4] " + what + " takes " + want.to_str() + " argument" + plural + " but " + args.len.to_str() + " " + verb + " given.\n      FIX: call it with exactly " + want.to_str() + " argument" + plural + " (see its definition).")
+            return
+        if fd.generics.len > 0: return
+        mut ai = 0
+        while ai < args.len:
+            mut pty = fd.params.get(sk + ai).ty
+            if pty as usize != 0 as usize:
+                self.check_expr_assignable(pty.read(), args.get(ai), "argument " + (ai + 1).to_str() + " of " + what)
+            ai = ai + 1
+
+    # Argument-count range of the built-in methods of str / List / Dict, keyed "family.method".
+    # Only methods listed here are checked; anything else is left to the normal lookup.
+    pub def builtin_method_range(self, fam: str, method: str) -> int:
+        if fam == "str":
+            if method == "len" or method == "upper" or method == "lower" or method == "to_upper" or method == "to_lower" or method == "strip" or method == "trim" or method == "trim_left" or method == "trim_right" or method == "capitalize" or method == "title" or method == "reverse": return 0
+            if method == "find" or method == "index_of" or method == "contains" or method == "starts_with" or method == "ends_with" or method == "split" or method == "split_exact" or method == "repeat" or method == "strip_prefix" or method == "strip_suffix": return 101
+            if method == "replace": return 202
+        elif fam == "List":
+            if method == "append" or method == "push" or method == "contains" or method == "index_of" or method == "extend" or method == "get": return 101
+            if method == "len" or method == "reverse" or method == "clear" or method == "copy": return 0
+            if method == "insert": return 202
+        elif fam == "Dict":
+            if method == "has" or method == "contains" or method == "remove": return 101
+            if method == "keys" or method == "values" or method == "len" or method == "clear": return 0
+        return 0 - 1
+
+    pub def check_builtin_method_arity(self, fam: str, method: str, nargs: int):
+        if fam != "str" and fam != "List" and fam != "Dict": return
+        mut r = self.builtin_method_range(fam, method)
+        if r < 0: return
+        mut lo = r / 100
+        mut hi = r % 100
+        if nargs >= lo and nargs <= hi: return
+        mut pl = "s"
+        if lo == 1 and hi == 1: pl = ""
+        mut vb = "were"
+        if nargs == 1: vb = "was"
+        self.error("[E-4] '" + fam + "." + method + "()' takes " + lo.to_str() + " argument" + pl + " but " + nargs.to_str() + " " + vb + " given.\n      FIX: see the built-in method list in the language docs.")
+
+    # True when class `cls_name` (or a base class) declares a field named `name`.
+    pub def class_has_field(self, cls_name: str, name: str) -> bool:
+        if not self.classes.contains(cls_name): return false
+        mut cls = self.classes.get(cls_name)
+        mut fi = 0
+        while fi < cls.fields.len:
+            if cls.fields.get(fi).name == name: return true
+            fi = fi + 1
+        mut bi = 0
+        while bi < cls.base_classes.len:
+            if self.class_has_field(cls.base_classes.get(bi), name): return true
+            bi = bi + 1
+        return false
+
+    pub def is_builtin_dispatch_class(self, n: str) -> bool:
+        return n == "Thread" or n == "Atomic" or n == "ThreadLocal" or n == "ThreadPool" or n == "Mutex" or n == "RwLock" or n == "Chan" or n == "Channel" or n == "Shared" or n == "Weak" or n == "StringBuilder" or n == "OS" or n == "Process" or n == "Env" or n == "Hash" or n == "File" or n == "AsyncPool" or n == "AsyncTask"
+
+    # [N-4] A type annotation must name a type that exists.
+    pub def type_name_known(self, n: str) -> bool:
+        if n == "" or n == "void" or n == "None" or n == "Self": return true
+        if _is_builtin_type_word(n): return true
+        if self.is_known_name(n): return true
+        if self.resolve(n).name != "": return true
+        return false
+
+    pub def check_type_known(self, tp: Pointer[AstType], where_: str):
+        if _is_invalid_ptr(tp as usize) or self.in_unsafe: return
+        mut t = tp.read()
+        if not self.type_name_known(t.name):
+            self.error("[N-4] Unknown type '" + t.name + "' (in " + where_ + ").\n      FIX: check the spelling, or import it (e.g. `from std.x import " + t.name + "`).")
+            return
+        if _is_invalid_ptr(t.args as usize): return
+        mut ai = 0
+        while ai < t.args.len:
+            self.check_type_known(t.args.get(ai), where_)
+            ai = ai + 1
 
     # Recursively checks cls_name and its base classes for a method named `method`.
     pub def class_method_exists(self, cls_name: str, method: str) -> bool:
@@ -2690,9 +2888,11 @@ extend Sema:
         while ppi < prog.decls.len:
             match prog.decls.get(ppi).read():
                 case Decl.DClass(c):
-                    if not self.classes.contains(c.name): self.classes.insert(c.name, c)
+                    if self.classes.contains(c.name): self.ambiguous_classes.insert(c.name, true)
+                    else: self.classes.insert(c.name, c)
                 case Decl.DActor(c):
-                    if not self.classes.contains(c.name): self.classes.insert(c.name, c)
+                    if self.classes.contains(c.name): self.ambiguous_classes.insert(c.name, true)
+                    else: self.classes.insert(c.name, c)
                 case _: pass
             ppi = ppi + 1
 
@@ -3880,6 +4080,7 @@ extend Sema:
                         self.variadic_elem_ty.insert(f.name, box_asttype(_velem_ty))
             case Decl.DClass(c):
                 self.declare(c.name, SymbolKind.SClass, box_asttype(AstType.init(c.name)), false)
+                if self.classes.contains(c.name) and (self.classes.get(c.name) as usize) != (c as usize): self.ambiguous_classes.insert(c.name, true)
                 self.classes.insert(c.name, c)
                 # @copy opt-in: treat as a freely-shareable value (exempt from move tracking)
                 if self.has_copy_decorator(c.decorators): self.copy_classes.insert(c.name, true)
@@ -3980,6 +4181,11 @@ extend Sema:
         # Gap 1: capture 'from' lifetime param for escape-analysis check in SReturn
         mut saved_ret_from = self.current_func_ret_from
         mut saved_ret_borrow_str = self.current_func_ret_borrow_str
+        mut saved_ret_family = self.current_func_ret_family
+        self.current_func_ret_family = ""
+        if f.ret_ty as usize != 0 as usize and not f.is_extern: self.check_type_known(f.ret_ty, "the return type of '" + f.name + "'")
+        if f.ret_ty as usize != 0 as usize and f.generics.len == 0:
+            self.current_func_ret_family = self.decl_family(f.ret_ty.read())
         mut saved_ret_regions = self.current_func_ret_regions
         mut saved_outlives_a = self.current_func_outlives_a
         mut saved_outlives_b = self.current_func_outlives_b
@@ -4063,6 +4269,7 @@ extend Sema:
             mut p_ty = AstType.init("int")
             if p.ty as usize != 0 as usize:
                 p_ty = p.ty.read()
+                if not f.is_extern: self.check_type_known(p.ty, "parameter '" + p.name + "' of '" + f.name + "'")
             elif p.name == "self" and self.current_class_name != "":
                 p_ty = AstType.init(self.current_class_name)
             if p.is_variadic:
@@ -4080,6 +4287,8 @@ extend Sema:
                     mut pb_sym = pb_scope.variables.get(p.name)
                     pb_sym.is_param = true
                     pb_sym.ptr_region = 2  # PARAM region
+                    if p.ty as usize != 0 as usize and not p.is_variadic and f.generics.len == 0:
+                        pb_sym.firm = self.decl_family(p_ty)
                     pb_scope.variables.insert(p.name, pb_sym)
 
             mut hp = HirParam()
@@ -4167,6 +4376,7 @@ extend Sema:
         self.current_func_constraints = saved_func_constraints
         self.current_func_ret_from = saved_ret_from
         self.current_func_ret_borrow_str = saved_ret_borrow_str
+        self.current_func_ret_family = saved_ret_family
         self.current_func_ret_regions = saved_ret_regions
         self.current_func_outlives_a = saved_outlives_a
         self.current_func_outlives_b = saved_outlives_b
@@ -4582,7 +4792,12 @@ extend Sema:
                                     if ret_sym.ty.read().name == "Pointer":
                                         self.error("[L-1] '" + ret_name + "' is a local Pointer that may not outlive this function call. Returning it is unsafe.\n      FIX: Annotate the return type with 'from <param>' if the pointer borrows from a parameter, or wrap the allocation in 'unsafe:' if it is heap-allocated.")
                         case _: pass
-                return box_hirstmt(HirStmt.SReturn(self.lower_expr(e)))
+                mut _ret_h = self.lower_expr(e)
+                if e as usize != 0 as usize and self.closure_depth == 0 and self.current_func_ret_family != "":
+                    mut _rf = self.firm_family(_ret_h)
+                    if self.family_mismatch(self.current_func_ret_family, _rf) and not self.in_unsafe:
+                        self.error("[E-5] Type mismatch: '" + self.current_func_name + "' is declared to return " + self.family_word(self.current_func_ret_family) + " but this returns " + self.family_word(_rf) + ".\n      FIX: return a value of the declared type, or change the function's return type.")
+                return box_hirstmt(HirStmt.SReturn(_ret_h))
             case Stmt.SLet(name, ownership, is_mut, is_const, is_shared, ty_ptr, val_ptr):
                 # Rule M-7: none must not be assigned to a non-Optional type
                 if ty_ptr as usize != 0 as usize and val_ptr as usize != 0 as usize:
@@ -4596,6 +4811,7 @@ extend Sema:
                 if ty_ptr as usize != 0 as usize:
                     ty = ty_ptr.read()
                     self._check_ty_arity(ty_ptr, "'" + name + "' declaration", 0)
+                    self.check_type_known(ty_ptr, "the declaration of '" + name + "'")
                 mut hval = self.lower_expr(val_ptr)
                 if ty.name != "void" and ty.name != "None": hval = self._patch_empty_dict_hint(hval, ty)
                 if ty_ptr as usize != 0 as usize and val_ptr as usize != 0 as usize:
@@ -4626,7 +4842,21 @@ extend Sema:
                 # `shared x = f()` where f returns Shared[T]: x is the shared handle of T
                 # (typed as its inner T, like every other shared local).
                 if is_shared and ty.name == "Shared" and ty.args.len > 0: ty = ty.args.get(0).read()
+                if ty_ptr as usize != 0 as usize and val_ptr as usize != 0 as usize and not is_shared:
+                    self.check_expr_assignable(ty_ptr.read(), hval, "the initializer of '" + name + "'")
+                mut _let_firm = ""
+                if not is_shared:
+                    if ty_ptr as usize != 0 as usize:
+                        _let_firm = self.decl_family(ty_ptr.read())
+                    elif val_ptr as usize != 0 as usize:
+                        _let_firm = self.firm_family(hval)
                 self.declare(name, SymbolKind.SVariable, box_asttype(ty), is_mut)
+                if _let_firm != "" and self.scopes.len > 0:
+                    mut _fm_scope = self.scopes.get(self.scopes.len - 1)
+                    if _fm_scope.variables.contains(name):
+                        mut _fm_sym = _fm_scope.variables.get(name)
+                        _fm_sym.firm = _let_firm
+                        _fm_scope.variables.insert(name, _fm_sym)
                 # A `shared` local: record is_shared on the symbol so the Shared[T]
                 # control methods (clone/downgrade/drop) resolve on it and its drop is
                 # routed to _tr_shared_drop.
@@ -4782,6 +5012,15 @@ extend Sema:
                 self.in_assign_target_plain = false
                 mut hv = self.lower_expr(val)
                 hv = self._patch_empty_dict_hint(hv, hir_expr_type(htgt))
+                if target as usize != 0 as usize and not self.in_unsafe:
+                    match target.read():
+                        case Expr.EIdent(_as_n):
+                            mut _as_sym = self.resolve(_as_n)
+                            if _as_sym.name != "" and _as_sym.kind == SymbolKind.SVariable and _as_sym.firm != "":
+                                mut _as_af = self.firm_family(hv)
+                                if self.family_mismatch(_as_sym.firm, _as_af):
+                                    self.error("[E-5] Type mismatch: '" + _as_n + "' holds " + self.family_word(_as_sym.firm) + " but is assigned " + self.family_word(_as_af) + ".\n      FIX: assign a value of the same type, or declare a new variable.")
+                        case _: pass
                 # [L-5] (--strict): storing freshly-built (owned) data into a `ref`
                 # (borrow) field — the field is meant to hold a borrow, not own.
                 if self.strict_mode and target as usize != 0 as usize:
@@ -5740,7 +5979,13 @@ extend Sema:
                 # class/enum/interface/type, and not an assignment target or a
                 # method/property receiver (module receivers like OS/File resolve to
                 # no symbol). Catch it here so it never reaches the C backend.
-                if sym.name == "" and name != "" and not self.in_assign_target and not self.in_recv_pos and not self.is_known_name(name):
+                mut _n3_recv_ok = self.in_recv_pos
+                if _n3_recv_ok:
+                    # A receiver may be a module / type name (`OS`, `Env`, `math`): only a lowercase
+                    # bare name that nothing declares is certainly a typo'd variable.
+                    mut _n3_c = name.slice(0, 1)
+                    if _n3_c >= "a" and _n3_c <= "z": _n3_recv_ok = false
+                if sym.name == "" and name != "" and not self.in_assign_target and not _n3_recv_ok and not self.is_known_name(name):
                     self.error("[N-3] name '" + name + "' is not defined.\n      FIX: check the spelling, declare it with 'mut " + name + " = ...', or import it before use.")
                 # First-class function reference: a top-level function used as a
                 # value carries its def(...)->R signature (not its return type).
@@ -5767,6 +6012,22 @@ extend Sema:
             case Expr.EBinOp(op, left, right):
                 mut hleft = self.lower_expr(left)
                 mut hright = self.lower_expr(right)
+                if not self.in_unsafe:
+                    mut _bo_lf = self.firm_family(hleft)
+                    mut _bo_rf = self.firm_family(hright)
+                    mut _bo_ls = _bo_lf == "int" or _bo_lf == "float" or _bo_lf == "bool" or _bo_lf == "str"
+                    mut _bo_rs = _bo_rf == "int" or _bo_rf == "float" or _bo_rf == "bool" or _bo_rf == "str"
+                    if _bo_ls and _bo_rs:
+                        mut _bo_mixed = (_bo_lf == "str") != (_bo_rf == "str")
+                        mut _bo_cmp = op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">="
+                        mut _bo_arith = op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**"
+                        if _bo_mixed and (_bo_cmp or _bo_arith):
+                            if not (op == "*" and (_bo_lf == "int" or _bo_rf == "int")):
+                                self.error("[E-5] Type mismatch: cannot apply '" + op + "' to " + self.family_word(_bo_lf) + " and " + self.family_word(_bo_rf) + ".\n      FIX: convert one side first, e.g. str(x) or int(s), so both operands have the same type.")
+                        elif (op == "in" or op == "not in") and (_bo_rf == "int" or _bo_rf == "float" or _bo_rf == "bool" or (_bo_rf == "str" and _bo_lf != "str")):
+                            self.error("[E-5] Type mismatch: the right-hand side of '" + op + "' must be a list, dict, set or string, but it is " + self.family_word(_bo_rf) + ".\n      FIX: put the collection (or the string to search in) on the right: `item in collection`.")
+                        elif _bo_lf == "str" and _bo_rf == "str" and (op == "-" or op == "/" or op == "//" or op == "%" or op == "**" or op == "*"):
+                            self.error("[E-5] Type mismatch: '" + op + "' is not defined for two strings.\n      FIX: only '+' (concatenate), comparisons, and 'str * int' (repeat) work on strings.")
                 # [H-1] str `+` (concat) and str `*` (repeat) build a NEW heap string.
                 if self.no_heap and (op == "+" or op == "*"):
                     mut _nh_l = hir_expr_type(hleft).name
@@ -5801,6 +6062,8 @@ extend Sema:
                 return box_hirexpr(HirExpr.EBinOp(op, hleft, hright, bin_ty))
             case Expr.EUnaryOp(op, expr):
                 mut hexpr_inner = self.lower_expr(expr)
+                if (op == "-" or op == "+") and not self.in_unsafe and self.firm_family(hexpr_inner) == "str":
+                    self.error("[E-5] Type mismatch: unary '" + op + "' cannot be applied to a str.\n      FIX: convert it first, e.g. -int(s).")
                 mut inner_ty = hir_expr_type(hexpr_inner)
                 mut un_ty = inner_ty
                 if op == "&":
@@ -6017,6 +6280,8 @@ extend Sema:
                                         if not _nfound and _gfd.generics.len == 1:
                                             self.error("[G-2] Cannot infer type parameter '" + _ngp + "' of generic function '" + n + "' from its arguments.\n      FIX: give it explicitly: " + n + "[Type](...)")
                                         _ngi = _ngi + 1
+                                if not _gfd.is_extern and self.resolve(n).kind == SymbolKind.SFunction:
+                                    self.check_call_args(_gfd, hl, 0, "'" + n + "()'")
                                 if _gfd.generics.len > 0 and _gfd.generics.contains(ret_ty.name):
                                     mut _gsk = 0
                                     if _gfd.params.len > 0 and _gfd.params.get(0).name == "self": _gsk = 1
@@ -6287,6 +6552,8 @@ extend Sema:
                             if free_sym.name != "": self.mark_freed(free_nm)
                         case _: pass
                 mut hobj_ty = hir_expr_type(hobj)
+                if not self.in_unsafe:
+                    self.check_builtin_method_arity(self.firm_family(hobj), method, hl.len)
                 # Resolve type aliases: `type IntList = List[int]` -> hobj_ty becomes List[int].
                 if self.type_aliases.contains(hobj_ty.name):
                     mut _alias_base = self.type_aliases.get(hobj_ty.name)
@@ -6793,9 +7060,30 @@ extend Sema:
                         self.error("[E-1] No method '" + method + "' found on type '" + hobj_ty.name + "'.\n      FIX: Define 'pub def " + method + "(self, ...)' in '" + hobj_ty.name + "' or its base class via 'extend " + hobj_ty.name + ":'.")
                     mut _mi = 0
                     mut _mdef_throws_ty: Pointer[AstType] = 0 as Pointer[AstType]
+                    mut _m_named = 0
+                    mut _m_recv_is_type = false
+                    match obj.read():
+                        case Expr.EIdent(_m_rn):
+                            _m_recv_is_type = self.resolve(_m_rn).kind == SymbolKind.SClass or self.classes.contains(_m_rn)
+                        case _: pass
+                    mut _m_arity_ok = false
+                    mut _m_one: FunctionDef = FunctionDef.init("")
+                    mut _m_first_want = 0
+                    mut _m_variadic = false
                     while _mi < _cls.methods.len:
                         mut _mdef = _cls.methods.get(_mi)
                         if _mdef.name == method:
+                            mut _m_cnt = 0
+                            mut _m_ci = 0
+                            while _m_ci < _mdef.params.len:
+                                if _mdef.params.get(_m_ci).name != "self": _m_cnt = _m_cnt + 1
+                                if _mdef.params.get(_m_ci).is_variadic: _m_variadic = true
+                                _m_ci = _m_ci + 1
+                            if _m_named == 0: _m_first_want = _m_cnt
+                            _m_named = _m_named + 1
+                            if _m_cnt == hl.len: _m_arity_ok = true
+                            _m_one = _mdef
+                            if _m_cnt + 1 == hl.len and _mdef.params.len > 0 and _mdef.params.get(0).name == "self" and _m_recv_is_type: _m_arity_ok = true   # Type.method(instance, ...) form
                             if _mdef.ret_ty as usize != 0 as usize:
                                 # For overloaded methods, prefer the overload whose param
                                 # count (excluding self) matches the call's arg count.
@@ -6819,6 +7107,22 @@ extend Sema:
                                     ret_ty = _mdef.ret_ty.read()  # fallback: first match
                                     _mdef_throws_ty = _mdef.throws_ty
                         _mi = _mi + 1
+                    if _m_named == 1 and _m_arity_ok and not _m_variadic and not _is_builtin_dispatch and not self.in_unsafe and _cls.generics.len == 0 and _m_one.generics.len == 0:
+                        mut _m1_sk = 0
+                        if _m_one.params.len > 0 and _m_one.params.get(0).name == "self": _m1_sk = 1
+                        if _m_one.params.len - _m1_sk == hl.len:
+                            mut _m1_i = 0
+                            while _m1_i < hl.len:
+                                mut _m1_pt = _m_one.params.get(_m1_sk + _m1_i).ty
+                                if _m1_pt as usize != 0 as usize:
+                                    self.check_expr_assignable(_m1_pt.read(), hl.get(_m1_i), "argument " + (_m1_i + 1).to_str() + " of '" + hobj_ty.name + "." + method + "()'")
+                                _m1_i = _m1_i + 1
+                    if _m_named > 0 and not _m_arity_ok and not _m_variadic and not _is_builtin_dispatch and not self.in_unsafe:
+                        mut _m_pl = "s"
+                        if _m_first_want == 1: _m_pl = ""
+                        mut _m_vb = "were"
+                        if hl.len == 1: _m_vb = "was"
+                        self.error("[E-4] '" + hobj_ty.name + "." + method + "()' takes " + _m_first_want.to_str() + " argument" + _m_pl + " but " + hl.len.to_str() + " " + _m_vb + " given.\n      FIX: call it with exactly " + _m_first_want.to_str() + " argument" + _m_pl + " (see its definition).")
                     # A `throws E` method's ACTUAL return type is `Result[T, E]`, not the
                     # bare success type `T` — mirrors register_decl's identical wrapping
                     # for free functions (~line 3221) and the explicit-generic call path
@@ -6904,6 +7208,13 @@ extend Sema:
                 mut hobj_ty_n: str = hir_expr_type(hobj).name
                 mut hobj_ty_full = hir_expr_type(hobj)
                 mut ret_ty = AstType.init("void")
+                if not self.in_unsafe:
+                    mut _pa_ff = self.firm_family(hobj)
+                    if _pa_ff == "int" or _pa_ff == "float" or _pa_ff == "bool":
+                        self.error("[E-6] Cannot read '." + prop + "' of " + self.family_word(_pa_ff) + ": a " + _pa_ff + " has no fields.\n      FIX: check that the receiver is the object you meant; numbers and booleans only have methods such as abs() or to_str().")
+                if not self.in_unsafe and self.classes.contains(hobj_ty_n) and not self.ambiguous_classes.contains(hobj_ty_n) and hobj_ty_n != "Result" and hobj_ty_n != "Option" and not self.is_builtin_dispatch_class(hobj_ty_n):
+                    if not self.class_has_field(hobj_ty_n, prop) and not self.class_method_exists(hobj_ty_n, prop) and not self.is_universal_method(prop):
+                        self.error("[E-7] Type '" + hobj_ty_n + "' has no field '" + prop + "'.\n      FIX: check the spelling, or declare 'pub " + prop + ": <type>' in the class.")
                 if hobj_ty_n == "Result":
                     if prop == "is_err" or prop == "is_ok": ret_ty = AstType.init("bool")
                     elif prop == "ok" and hobj_ty_full.args.len > 0: ret_ty = hobj_ty_full.args.get(0).read()

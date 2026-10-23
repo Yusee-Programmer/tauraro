@@ -1270,6 +1270,64 @@ pub def prepare_pch(cc: str, common: str, inc_dir: str, ncompile: int, target: s
     if verbose: print("  [PCH] built " + gch)
     return true
 
+# The C compiler rejected the C we generated. Report it as a Tauraro internal error, quoting only the
+# first C diagnostic, instead of dumping raw C compiler output on the user.
+def print_ice(cpath: str, log: str):
+    mut first = ""
+    mut lines = log.split("\n")
+    mut li = 0
+    while li < lines.len:
+        mut ln = lines.get(li)
+        if _tr_str_contains(ln, "error:") and first == "":
+            first = ln.trim()
+        li = li + 1
+    # `file.tr:LINE:COL: error: message` (the #line directives map C errors back to the source)
+    mut src_file = ""
+    mut src_line = 0
+    mut msg = first
+    mut epos = first.find(": error: ")
+    if epos > 0:
+        msg = first.slice(epos + 9, first.len())
+        mut loc = first.slice(0, epos)
+        mut parts = loc.split(":")
+        if parts.len >= 2 and parts.get(0).ends_with(".tr"):
+            src_file = parts.get(0)
+            src_line = int(parts.get(1))
+    print(c_red("error") + ": [ICE] internal compiler error: " + c_msg_to_tauraro(msg))
+    if src_file != "":
+        print("  --> " + src_file + ":" + str(src_line))
+        if file_exists(src_file):
+            mut src_text = read_file(src_file)
+            mut want = src_line - 1
+            mut cur = 0
+            mut start = 0
+            mut ci = 0
+            while ci < src_text.len() and cur < want:
+                if src_text.slice(ci, ci + 1) == "\n":
+                    cur = cur + 1
+                    start = ci + 1
+                ci = ci + 1
+            if cur == want:
+                mut stop = start
+                while stop < src_text.len() and src_text.slice(stop, stop + 1) != "\n": stop = stop + 1
+                print("   " + str(src_line) + " | " + src_text.slice(start, stop))
+    elif first != "":
+        print("  (in the C generated for '" + cpath + "')")
+    print("      This is a Tauraro bug: the program should have been rejected with a normal diagnostic, or compiled.")
+    print("      Please report it with this program. Set TAURARO_SHOW_C_ERRORS=1 to see the raw C compiler output.")
+
+# Plain-words version of the most common C compiler complaints about generated code.
+def c_msg_to_tauraro(msg: str) -> str:
+    if msg == "": return "the generated C was rejected by the C compiler."
+    if _tr_str_contains(msg, "undeclared"): return "a name used here is not defined (or its type is unknown)."
+    if _tr_str_contains(msg, "implicit declaration of function"): return "a call to a function that does not exist."
+    if _tr_str_contains(msg, "has no member named"): return "access to a field or property that does not exist."
+    if _tr_str_contains(msg, "too many arguments") or _tr_str_contains(msg, "too few arguments"): return "a call with the wrong number of arguments."
+    if _tr_str_contains(msg, "incompatible type") or _tr_str_contains(msg, "incompatible pointer") or _tr_str_contains(msg, "makes pointer from integer") or _tr_str_contains(msg, "makes integer from pointer"): return "a value of the wrong type is used here."
+    if _tr_str_contains(msg, "invalid operands") or _tr_str_contains(msg, "wrong type argument") or _tr_str_contains(msg, "invalid type argument"): return "an operator or member access is applied to a value of the wrong type."
+    if _tr_str_contains(msg, "unknown type name"): return "a type is used here that is not defined."
+    return "the generated C was rejected (" + msg + ")."
+
 pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: str, inc_dir: str,
                       link_paths: Vec[str], lib_flags: Vec[str],
                       opt_level: str, verbose: bool, static_link: bool,
@@ -1385,11 +1443,16 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
             mut tpath = c_files.get(todo.get(ti))
             mut topath = obj_path_for(tpath)
             mut tlog = topath + ".log"
+            mut trc = rcs.get(nshim + ti)
             if file_exists(tlog):
                 mut ttxt = read_file(tlog)
-                if ttxt.len() > 0: print(ttxt)
+                if trc != 0 and _tr_getenv("TAURARO_SHOW_C_ERRORS") != "1" and not verbose:
+                    # The generated C was rejected: that is a compiler bug (or a construct sema
+                    # should have diagnosed), so don't hand the user raw C-compiler output.
+                    print_ice(tpath, ttxt)
+                elif ttxt.len() > 0:
+                    print(ttxt)
                 delete_file(tlog)
-            mut trc = rcs.get(nshim + ti)
             if trc == 0 and not file_exists(topath):
                 # Lost-rename race (see above): the compiler exited 0 but the object never
                 # landed. Retry once, serially, before treating it as a hard failure.
@@ -2307,7 +2370,8 @@ pub def main(args: Vec[str]):
     mut c_gen  = CGenerator.init()
     # --debug: emit `#line N "src.tr"` directives so GCC/GDB diagnostics and
     # backtraces map generated C back to the original Tauraro source.
-    c_gen.emit_line_info = debug_mode or cov_mode
+    # Always emit #line directives: a C error then points at the .tr line it came from instead of build/main.c.
+    c_gen.emit_line_info = true
     # --prof: auto-wrap the compiled program's main() with CPU sampling
     # start/stop and a flat profile dump to stderr on exit -- lets `tauraroc
     # --run --prof foo.tr` or a `tauraroc foo.tr -o foo --prof` build profile
