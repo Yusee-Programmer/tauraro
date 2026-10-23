@@ -459,7 +459,7 @@ static int printf(const char* fmt,...){ char b[1024]; va_list ap; va_start(ap,fm
 #  endif
 #else
 #  ifndef _TR_DIAG
-#    define _TR_DIAG(...)   fprintf(stderr, __VA_ARGS__)
+#    define _TR_DIAG(...)   (fflush(stdout), fprintf(stderr, __VA_ARGS__))   /* keep earlier output ordered before the diagnostic */
 #  endif
 #  ifndef _TR_TRAP
 #    define _TR_TRAP()      abort()
@@ -6288,11 +6288,8 @@ static inline bool _tr_contains(const char* haystack, const char* needle) {
 
 /* ── Range iteration helper ──────────────────────────────────────────── */
 /* Note: range() on for-loops is compiled to C for() loops directly.     */
-/* This stub satisfies any residual reference in generic code paths.     */
-static inline long long _tr_range(long long start, long long end, long long step) {
-    (void)start; (void)end; (void)step;
-    return 0LL;
-}
+/* Anywhere else (comprehension source, assigned to a variable) range()  */
+/* is a fresh List[int]; defined after List_i64 below.                   */
 
 /* ── Dict (hash map: str → void*) ───────────────────────────────────── */
 
@@ -6985,6 +6982,12 @@ static inline _Bool Set_str_is_empty(Set_str* l) { return !l || l->len==0; }
 static inline void Set_str_remove(Set_str* l, const char* v) { if(!l||!v) return; for(size_t i=0;i<l->len;i++) if(l->data[i]&&strcmp(l->data[i],v)==0){ for(size_t j=i;j+1<l->len;j++) l->data[j]=l->data[j+1]; l->len--; return; } }
 
 /* ── Bounds-checked list access ─────────────────────────────────────────── */
+static inline List_i64* _tr_range(long long start, long long end, long long step) {
+    List_i64* l = List_i64_new();
+    if (step > 0) { for (long long i = start; i < end; i += step) List_i64_append(l, i); }
+    else if (step < 0) { for (long long i = start; i > end; i += step) List_i64_append(l, i); }
+    return l;
+}
 static inline List_i64* _tr_range_new(long long start, long long stop, bool inclusive) {
     List_i64* l = List_i64_new();
     long long end = inclusive ? stop : stop - 1;

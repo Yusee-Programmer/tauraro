@@ -210,4 +210,23 @@ def main():
     t.assert_eq_int(largest([3, 9, 4]), 9, "List[int]")
     t.assert_eq_str(largest(["b", "zz", "a"]), "zz", "List[str]")
     t.assert_eq_str(str(largest([1.5, 0.5])), "1.5", "List[float]")
+    t.section("sep.join(list)")
+    t.assert_eq_str(",".join(["x", "y", "z"]), "x,y,z", "join with a literal separator")
+    mut parts = "a-b-c".split("-")
+    t.assert_eq_str(" ".join(parts), "a b c", "join a split result")
+    t.section("min / max / sum over lists, n-ary min / max, range() as a list")
+    mut mmx: List[int] = [8, 5, 3]
+    t.assert_eq_int(min(mmx), 3, "min(list)")
+    t.assert_eq_int(max(mmx), 8, "max(list)")
+    t.assert_eq_int(sum(mmx), 16, "sum(list)")
+    mut mmf: List[float] = [1.5, 2.5, -0.5]
+    t.assert_eq_str(str(sum(mmf)), "3.5", "sum of floats keeps the fraction")
+    t.assert_eq_str(str(max(mmf)), "2.5", "max of floats")
+    t.assert_eq_int(max(3, 9, 4), 9, "three-argument max")
+    t.assert_eq_int(min(3, 9, 4, 1), 1, "four-argument min")
+    mut sqs = [i * i for i in range(5)]
+    t.assert_eq_int(sum(sqs), 30, "comprehension over range()")
+    mut rng = range(3, 10, 3)
+    t.assert_eq_int(len(rng), 3, "range() assigned to a variable")
+    t.assert_eq_int(rng[2], 9, "range() with a step")
     t.summary()

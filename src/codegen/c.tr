@@ -5093,13 +5093,13 @@ pub class CGenerator:
                 mut ma = self.next_temp()
                 mut mb = self.next_temp()
                 return "({ __auto_type " + ma + " = " + self.gen_expr(args.get(0)) + "; __auto_type " + mb + " = " + self.gen_expr(args.get(1)) + "; " + ma + " > " + mb + " ? " + ma + " : " + mb + "; })"
-            return "0LL"
+            return self.gen_minmax_many("max", args)
         if base_callee == "min":
             if args.len == 2:
                 mut mna = self.next_temp()
                 mut mnb = self.next_temp()
                 return "({ __auto_type " + mna + " = " + self.gen_expr(args.get(0)) + "; __auto_type " + mnb + " = " + self.gen_expr(args.get(1)) + "; " + mna + " < " + mnb + " ? " + mna + " : " + mnb + "; })"
-            return "0LL"
+            return self.gen_minmax_many("min", args)
 
         # assert_eq / assert_ne / assert_lt / assert_le / assert_gt / assert_ge
         # Prints both values on failure so the user sees what was expected vs got.
@@ -5258,6 +5258,9 @@ pub class CGenerator:
             if args.len > 0:
                 mut sum_tmp = self.next_temp()
                 mut sum_l = self.next_temp()
+                mut _sum_ety = hir_expr_type(args.get(0))
+                if _sum_ety.args.len > 0 and _is_float_type(_sum_ety.args.get(0).read().name):
+                    return "({ double " + sum_tmp + " = 0; __auto_type " + sum_l + " = " + self.gen_expr(args.get(0)) + "; for (long long _si = 0; _si < " + sum_l + "->len; _si++) " + sum_tmp + " += (double)" + sum_l + "->data[_si]; " + sum_tmp + "; })"
                 return "({ long long " + sum_tmp + " = 0; __auto_type " + sum_l + " = " + self.gen_expr(args.get(0)) + "; for (long long _si = 0; _si < " + sum_l + "->len; _si++) " + sum_tmp + " += (long long)" + sum_l + "->data[_si]; " + sum_tmp + "; })"
             return "0LL"
 
@@ -6470,7 +6473,7 @@ pub class CGenerator:
             if method == "strip_prefix":  return "_tr_str_strip_prefixv(" + ov + ", " + arg0v + ")"
             if method == "strip_suffix":  return "_tr_str_strip_suffixv(" + ov + ", " + arg0v + ")"
             if method == "remove_char":   return "_tr_str_remove_charv(" + ov + ", " + arg0v + ")"
-            if method == "join":          return "_tr_trstr_join((List_TrStr*)(void*)" + obj_s + ", " + sa0 + ")"
+            if method == "join" and args.len == 1: return "_tr_trstr_join((List_TrStr*)(void*)(" + str_arg0 + "), " + os + ")"
             if method == "len":           return "_tr_str_lenv(" + ov + ")"
             if method == "index_of":      return "_tr_str_index_ofv(" + ov + ", " + arg0v + ")"
             if method == "last_index_of" or method == "rfind": return "_tr_str_last_index_ofv(" + ov + ", " + arg0v + ")"
@@ -8447,6 +8450,27 @@ pub class CGenerator:
         self.wrap_obj_drops = sv_r
         return out
 
+    # min / max with one List argument (`max(xs)`) or three or more scalar arguments.
+    pub def gen_minmax_many(self, which: str, args: Vec[Pointer[HirExpr]]) -> str:
+        if args.len == 1:
+            mut lt = hir_expr_type(args.get(0))
+            mut en = "int"
+            if lt.args.len > 0: en = lt.args.get(0).read().name
+            mut lsfx = self.list_sfx(self.list_elem_suffix(en))
+            return "_tr_list_" + which + "_" + lsfx + "(" + self.gen_expr(args.get(0)) + ")"
+        if args.len >= 3:
+            mut cmp = ">"
+            if which == "min": cmp = "<"
+            mut acc = self.next_temp()
+            mut out = "({ __auto_type " + acc + " = " + self.gen_expr(args.get(0)) + "; "
+            mut ai = 1
+            while ai < args.len:
+                mut nx = self.next_temp()
+                out = out + "{ __auto_type " + nx + " = " + self.gen_expr(args.get(ai)) + "; if (" + nx + " " + cmp + " " + acc + ") " + acc + " = " + nx + "; } "
+                ai = ai + 1
+            return out + acc + "; })"
+        return "0LL"
+
     pub def gen_list_comp(self, element: Pointer[HirExpr], generators: Vec[Pointer[HirComprehension]]) -> str:
         mut tmp = self.next_temp()
         mut elem_ty_n: str = hir_expr_type(element).name
@@ -8505,6 +8529,10 @@ pub class CGenerator:
         match iter_e.read():
             case HirExpr.EList(_, _): is_fresh = true
             case HirExpr.ERange(_, _, _, _): is_fresh = true
+            case HirExpr.ECall(rc, _, _):
+                match rc.read():
+                    case HirExpr.EIdent(rn, _, _): is_fresh = rn == "range"
+                    case _: is_fresh = false
             case _: is_fresh = false
         if not is_fresh: return ""
         mut src_ty = hir_expr_type(iter_e)

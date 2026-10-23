@@ -423,7 +423,9 @@ extend Sema:
         s.globals.insert("print",    Symbol.init("print",    SymbolKind.SFunction, box_asttype(AstType.init("void"))))
         s.globals.insert("input",    Symbol.init("input",    SymbolKind.SFunction, box_asttype(AstType.init("str"))))
         s.globals.insert("len",      Symbol.init("len",      SymbolKind.SFunction, box_asttype(AstType.init("int"))))
-        s.globals.insert("range",    Symbol.init("range",    SymbolKind.SFunction, box_asttype(AstType.init("List"))))
+        mut _range_ty = AstType.init("List")
+        _range_ty.args.push(box_asttype(AstType.init("int")))
+        s.globals.insert("range",    Symbol.init("range",    SymbolKind.SFunction, box_asttype(_range_ty)))
         s.globals.insert("type",     Symbol.init("type",     SymbolKind.SFunction, box_asttype(AstType.init("str"))))
         s.globals.insert("str",      Symbol.init("str",      SymbolKind.SFunction, box_asttype(AstType.init("str"))))
         s.globals.insert("hex",      Symbol.init("hex",      SymbolKind.SFunction, box_asttype(AstType.init("str"))))
@@ -5966,6 +5968,8 @@ extend Sema:
                         # is known, the same mechanism already used for `T.static_method()`.
                         elif self.resolve(n).name == "" and self._is_type_param_in_scope(n):
                             ret_ty = AstType.init(n)
+                        elif (n == "min" or n == "max" or n == "sum") and hl.len == 1 and hir_expr_type(hl.get(0)).args.len > 0 and (hir_expr_type(hl.get(0)).name == "List" or hir_expr_type(hl.get(0)).name == "Vec"):
+                            ret_ty = hir_expr_type(hl.get(0)).args.get(0).read()   # max(xs) / sum(xs): the element type
                         elif (n == "abs" or n == "min" or n == "max") and _hl_has_float(hl):
                             ret_ty = AstType.init("float")   # abs/min/max are float-in -> float-out
                         elif n == "c_callback":
