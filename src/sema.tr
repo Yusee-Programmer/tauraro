@@ -929,11 +929,79 @@ extend Sema:
             ai = ai + 1
 
     # A bool or a tuple has (almost) no methods; calling an unknown one is a typo or the wrong variable.
-    pub def check_scalar_method(self, fam: str, method: str):
+    pub def check_scalar_method(self, fam: str, method: str, ty_name: str):
+        if self.class_method_exists(ty_name, method): return   # std's real Map / Vec classes declare extra methods
+        if fam == "List" or fam == "Dict":
+            if self.is_universal_method(method): return
+            if self.known_collection_method(fam, method): return
+            self.error("[E-6] " + self.family_word(fam) + " has no method '" + method + "()'.\n      FIX: check the spelling, or that the receiver is the collection you meant.")
+            return
         if fam != "bool" and fam != "Tuple": return
         if self.is_universal_method(method): return
         if fam == "Tuple" and (method == "get" or method == "first" or method == "last" or method == "count"): return
         self.error("[E-6] " + self.family_word(fam) + " has no method '" + method + "()'.\n      FIX: check that the receiver is the object you meant (this one is " + self.family_word(fam) + ").")
+
+    # `Type.method(args)` on a user class: argument count and (for a single overload) argument types.
+    pub def check_static_call(self, type_name: str, variant: str, hl: Vec[Pointer[HirExpr]]):
+        if self.in_unsafe or self.ambiguous_classes.contains(type_name) or self.is_builtin_dispatch_class(type_name): return
+        if not self.classes.contains(type_name): return
+        mut cdef = self.classes.get(type_name)
+        mut named = 0
+        mut ok = false
+        mut want = 0
+        mut variadic = false
+        mut one = FunctionDef.init("")
+        mut i = 0
+        while i < cdef.methods.len:
+            mut m = cdef.methods.get(i)
+            if m.name == variant:
+                mut has_self = m.params.len > 0 and m.params.get(0).name == "self"
+                mut cnt = m.params.len
+                if has_self: cnt = cnt - 1
+                mut pj = 0
+                while pj < m.params.len:
+                    if m.params.get(pj).is_variadic: variadic = true
+                    pj = pj + 1
+                if named == 0: want = cnt
+                named = named + 1
+                if cnt == hl.len or (has_self and cnt + 1 == hl.len): ok = true
+                one = m
+            i = i + 1
+        if named == 0 or variadic: return
+        if not ok:
+            mut pl = "s"
+            if want == 1: pl = ""
+            mut vb = "were"
+            if hl.len == 1: vb = "was"
+            self.error("[E-4] '" + type_name + "." + variant + "()' takes " + want.to_str() + " argument" + pl + " but " + hl.len.to_str() + " " + vb + " given.\n      FIX: call it with exactly " + want.to_str() + " argument" + pl + " (see its definition).")
+        elif named == 1 and cdef.generics.len == 0 and one.generics.len == 0 and one.params.len == hl.len:
+            mut ti = 0
+            while ti < hl.len:
+                if one.params.get(ti).ty as usize != 0 as usize:
+                    self.check_expr_assignable(one.params.get(ti).ty.read(), hl.get(ti), "argument " + (ti + 1).to_str() + " of '" + type_name + "." + variant + "()'")
+                ti = ti + 1
+
+    # The subscript of `xs[k] = v` is read, not assigned: an undefined `k` there must still be reported.
+    pub def lower_index_operand(self, idx: Pointer[Expr]) -> Pointer[HirExpr]:
+        mut sv_a = self.in_assign_target
+        mut sv_p = self.in_assign_target_plain
+        self.in_assign_target = false
+        self.in_assign_target_plain = false
+        mut r = self.lower_expr(idx)
+        self.in_assign_target = sv_a
+        self.in_assign_target_plain = sv_p
+        return r
+
+    # Method names the code generator implements for List / Set / Dict receivers (kept in step with
+    # the dispatch in codegen/c.tr; closure-taking helpers included).
+    pub def known_collection_method(self, fam: str, m: str) -> bool:
+        if m == "add" or m == "all" or m == "any" or m == "append" or m == "clear" or m == "clone" or m == "contains" or m == "copy" or m == "count" or m == "difference" or m == "extend" or m == "first" or m == "free": return true
+        if m == "get" or m == "has" or m == "index_of" or m == "init" or m == "insert" or m == "intersection" or m == "is_empty" or m == "is_subset" or m == "join" or m == "last" or m == "len" or m == "length": return true
+        if m == "max" or m == "max_val" or m == "min" or m == "min_val" or m == "new" or m == "pop" or m == "push" or m == "remove" or m == "reserve" or m == "reverse" or m == "reversed" or m == "reversed_copy": return true
+        if m == "set" or m == "slice" or m == "sort" or m == "sort_asc" or m == "sort_by" or m == "sort_desc" or m == "sum" or m == "swap" or m == "to_list" or m == "union": return true
+        if m == "get_index" or m == "get_or" or m == "items" or m == "keys" or m == "values" or m == "update": return true
+        if m == "map" or m == "filter" or m == "each" or m == "for_each" or m == "fold" or m == "reduce" or m == "find" or m == "sorted" or m == "enumerate" or m == "zip" or m == "take" or m == "skip" or m == "flat_map" or m == "find_index" or m == "position" or m == "partition" or m == "group_by": return true
+        return false
 
     # Recursively checks cls_name and its base classes for a method named `method`.
     pub def class_method_exists(self, cls_name: str, method: str) -> bool:
@@ -6440,6 +6508,7 @@ extend Sema:
                     case Expr.EPropAccess(obj, variant):
                         match obj.read():
                             case Expr.EIdent(type_name):
+                                if self.resolve(type_name).kind == SymbolKind.SClass: self.check_static_call(type_name, variant, hl)
                                 if self.enums.contains(type_name):
                                     ret_ty = AstType.init(type_name)
                                 # Built-in concurrency statics: Thread.spawn -> Thread, ThreadPool.new -> ThreadPool
@@ -6468,40 +6537,6 @@ extend Sema:
                                                     ret_ty = _smdef.ret_ty.read()
                                                 _sfound = true
                                         _smi = _smi + 1
-                                    if not self.in_unsafe and not self.ambiguous_classes.contains(type_name) and not self.is_builtin_dispatch_class(type_name):
-                                        mut _sc_named = 0
-                                        mut _sc_ok = false
-                                        mut _sc_want = 0
-                                        mut _sc_var = false
-                                        mut _sc_one = FunctionDef.init("")
-                                        mut _sc_i = 0
-                                        while _sc_i < _scdef.methods.len:
-                                            mut _sc_m = _scdef.methods.get(_sc_i)
-                                            if _sc_m.name == variant:
-                                                mut _sc_has_self = _sc_m.params.len > 0 and _sc_m.params.get(0).name == "self"
-                                                mut _sc_cnt = _sc_m.params.len
-                                                if _sc_has_self: _sc_cnt = _sc_cnt - 1
-                                                mut _sc_pj = 0
-                                                while _sc_pj < _sc_m.params.len:
-                                                    if _sc_m.params.get(_sc_pj).is_variadic: _sc_var = true
-                                                    _sc_pj = _sc_pj + 1
-                                                if _sc_named == 0: _sc_want = _sc_cnt
-                                                _sc_named = _sc_named + 1
-                                                if _sc_cnt == hl.len or (_sc_has_self and _sc_cnt + 1 == hl.len): _sc_ok = true
-                                                _sc_one = _sc_m
-                                            _sc_i = _sc_i + 1
-                                        if _sc_named > 0 and not _sc_ok and not _sc_var:
-                                            mut _sc_pl = "s"
-                                            if _sc_want == 1: _sc_pl = ""
-                                            mut _sc_vb = "were"
-                                            if hl.len == 1: _sc_vb = "was"
-                                            self.error("[E-4] '" + type_name + "." + variant + "()' takes " + _sc_want.to_str() + " argument" + _sc_pl + " but " + hl.len.to_str() + " " + _sc_vb + " given.\n      FIX: call it with exactly " + _sc_want.to_str() + " argument" + _sc_pl + " (see its definition).")
-                                        elif _sc_named == 1 and _sc_ok and not _sc_var and _scdef.generics.len == 0 and _sc_one.generics.len == 0 and (_sc_one.params.len == hl.len):
-                                            mut _sc_ti = 0
-                                            while _sc_ti < hl.len:
-                                                if _sc_one.params.get(_sc_ti).ty as usize != 0 as usize:
-                                                    self.check_expr_assignable(_sc_one.params.get(_sc_ti).ty.read(), hl.get(_sc_ti), "argument " + (_sc_ti + 1).to_str() + " of '" + type_name + "." + variant + "()'")
-                                                _sc_ti = _sc_ti + 1
                                     if not _sfound:
                                         _smi = 0
                                         while _smi < _scdef.methods.len and not _sfound:
@@ -6602,7 +6637,7 @@ extend Sema:
                 mut hobj_ty = hir_expr_type(hobj)
                 if not self.in_unsafe:
                     self.check_builtin_method_arity(self.firm_family(hobj), method, hl.len)
-                    self.check_scalar_method(self.firm_family(hobj), method)
+                    self.check_scalar_method(self.firm_family(hobj), method, hir_expr_type(hobj).name)
                 # Resolve type aliases: `type IntList = List[int]` -> hobj_ty becomes List[int].
                 if self.type_aliases.contains(hobj_ty.name):
                     mut _alias_base = self.type_aliases.get(hobj_ty.name)
@@ -7264,6 +7299,9 @@ extend Sema:
                 if not self.in_unsafe and self.classes.contains(hobj_ty_n) and not self.ambiguous_classes.contains(hobj_ty_n) and hobj_ty_n != "Result" and hobj_ty_n != "Option" and not self.is_builtin_dispatch_class(hobj_ty_n):
                     if not self.class_has_field(hobj_ty_n, prop) and not self.class_method_exists(hobj_ty_n, prop) and not self.is_universal_method(prop):
                         self.error("[E-7] Type '" + hobj_ty_n + "' has no field '" + prop + "'.\n      FIX: check the spelling, or declare 'pub " + prop + ": <type>' in the class.")
+                if (hobj_ty_n == "Result" or hobj_ty_n == "Option") and not self.in_unsafe:
+                    if not (prop == "err" or prop == "ok" or prop == "is_err" or prop == "is_ok" or prop == "is_some" or prop == "is_none" or prop == "val" or prop == "value" or prop == "some" or prop == "none" or prop == "tag" or prop == "data" or (prop.len() > 0 and prop.slice(0, 1) >= "A" and prop.slice(0, 1) <= "Z")):
+                        self.error("[E-7] '" + hobj_ty_n + "' has no field '" + prop + "'.\n      FIX: use .is_ok / .is_err / .ok / .err (Result) or .is_some / .is_none / .value (Option), or the unwrap() family of methods.")
                 if hobj_ty_n == "Result":
                     if prop == "is_err" or prop == "is_ok": ret_ty = AstType.init("bool")
                     elif prop == "ok" and hobj_ty_full.args.len > 0: ret_ty = hobj_ty_full.args.get(0).read()
@@ -7408,7 +7446,7 @@ extend Sema:
                         else:
                             container_ty.args.push(box_asttype(AstType.init(generic_arg_n)))
                         if obj_name == "alloc" or obj_name == "dealloc" or obj_name == "resize" or obj_name == "copy":
-                             return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_expr(idx_inner), container_ty))
+                             return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_index_operand(idx_inner), container_ty))
                         return box_hirexpr(HirExpr.EIdent(eff_ty_n, container_ty, false))
                     # User-defined generic class or enum: preserve the concrete type args
                     if (self.classes.contains(obj_name) or self.enums.contains(obj_name)) and generic_arg_n != "":
@@ -7437,7 +7475,7 @@ extend Sema:
                     mut dobj_full = hir_expr_type(hexpr_obj)
                     if dobj_full.args.len > 1: dval_ty = dobj_full.args.get(1).read()
                     mut didx_args = Vec[Pointer[HirExpr]].init(1)
-                    didx_args.push(self.lower_expr(idx_inner))
+                    didx_args.push(self.lower_index_operand(idx_inner))
                     return box_hirexpr(HirExpr.EMethodCall(hexpr_obj, "get_index", didx_args, dval_ty))
                 # Tuple index t[i]: a CONSTANT index types the read as element #i's type
                 # (tuples are heterogeneous, so only literal indices are well-typed).
@@ -7450,11 +7488,11 @@ extend Sema:
                                 telem_ty = tup_full.args.get(tup_ci).read()
                         case _: pass
                     mut tup_args = Vec[Pointer[HirExpr]].init(1)
-                    tup_args.push(self.lower_expr(idx_inner))
+                    tup_args.push(self.lower_index_operand(idx_inner))
                     return box_hirexpr(HirExpr.EMethodCall(hexpr_obj, "get_index", tup_args, telem_ty))
                 if not self.is_primitive_name(obj_ty_n) and obj_ty_n != "str" and obj_ty_n != "Pointer" and obj_ty_n != "List" and obj_ty_n != "Vec":
                     mut call_args = Vec[Pointer[HirExpr]].init(1)
-                    call_args.push(self.lower_expr(idx_inner))
+                    call_args.push(self.lower_index_operand(idx_inner))
                     return box_hirexpr(HirExpr.EMethodCall(hexpr_obj, "get_index", call_args, AstType.init("void")))
                 # EIndex type is the element type, not the container type
                 mut elem_ty = AstType.init("void")
@@ -7465,7 +7503,7 @@ extend Sema:
                     if hir_expr_type(hexpr_obj).args.len > 0:
                         elem_ty = hir_expr_type(hexpr_obj).args.get(0).read()
                 elif obj_ty_n == "str": elem_ty = AstType.init("char")
-                return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_expr(idx_inner), elem_ty))
+                return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_index_operand(idx_inner), elem_ty))
             case Expr.ESizeOf(ty):
                 if ty as usize == 0 as usize: return box_hirexpr(HirExpr.ESizeOf(AstType.init("void"), AstType.init("int")))
                 return box_hirexpr(HirExpr.ESizeOf(ty.read(), AstType.init("int")))
