@@ -134,9 +134,9 @@ static void _tr_gnorm(char* b) {
         e[2] = e[3]; e[3] = e[4]; e[4] = 0;
     }
 }
-static void _tr_gfmt(double v, char* b, size_t n) { snprintf(b, n, "%g", v); _tr_gnorm(b); }
-void _tr_rt_print_f64(double v) { char b[32]; _tr_gfmt(v, b, sizeof b); printf("%s\n", b); }   /* matches C backend's "%g" */
-void _tr_rt_write_f64(double v) { char b[32]; _tr_gfmt(v, b, sizeof b); printf("%s", b); }
+static void _tr_gfmt(double v, char* b, size_t n) { snprintf(b, n, "%s", _tr_f64_buf(v)); }
+void _tr_rt_print_f64(double v) { char b[48]; _tr_gfmt(v, b, sizeof b); printf("%s\n", b); }   /* matches C backend's "%g" */
+void _tr_rt_write_f64(double v) { char b[48]; _tr_gfmt(v, b, sizeof b); printf("%s", b); }
 char* _tr_rt_char_to_str(long long c) { char b[2]; b[0]=(char)c; b[1]=0; return _tr_rt_str_new(b); }
 void _tr_rt_write_char(long long c) { putchar((int)c); }
 void _tr_rt_print_char(long long c) { putchar((int)c); putchar('\n'); }
@@ -241,7 +241,7 @@ char* _tr_rt_fmt_spec_str(const char* s, const char* spec) {
     snprintf(buf, sizeof buf, fmt, s);
     return _tr_rt_str_new(buf);
 }
-char* _tr_rt_f64_to_str(double v) { char b[32]; _tr_gfmt(v, b, sizeof(b)); return _tr_rt_str_new(b); }
+char* _tr_rt_f64_to_str(double v) { char b[48]; _tr_gfmt(v, b, sizeof(b)); return _tr_rt_str_new(b); }
 char* _tr_rt_hex_str(long long n) {
     char b[32]; unsigned long long u = n < 0 ? (unsigned long long)(-n) : (unsigned long long)n;
     if (n < 0) snprintf(b, sizeof(b), "-0x%llx", u); else snprintf(b, sizeof(b), "0x%llx", u);
@@ -681,7 +681,7 @@ void _tr_rt_write_list_f64(void* h) {
     if (l) for (long long i = 0; i < l->len; i++) {
         if (i) fputs(", ", stdout);
         double v; memcpy(&v, &l->data[i], 8);
-        char gb[32]; _tr_gfmt(v, gb, sizeof gb);
+        char gb[48]; _tr_gfmt(v, gb, sizeof gb);
         printf("%s", gb);
     }
     fputc(']', stdout);
