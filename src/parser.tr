@@ -150,8 +150,28 @@ extend Parser:
         match self.peek():
             case Token.Newline | Token.Semicolon:
                 self.pos = self.pos + 1
-            case _:
+            case Token.Eof | Token.Dedent | Token.Indent | Token.RBrace | Token.RParen | Token.RBracket | Token.Comma:
+                pass   # block / argument list closed right after an inline body
+            case Token.KwElse | Token.KwElif | Token.KwExcept | Token.KwFinally | Token.KwCase:
+                pass   # an inline body followed by its clause on the same line: `if c: a else: b`
+            case Token.Error(_):
                 pass
+            case _:
+                # A nested block expression (`mut x = if c: a else: b`) already consumed this
+                # statement's newline: the next token starts the following statement.
+                if self.pos > 0 and self.pos <= self.tokens.len:
+                    match self.tokens.get(self.pos - 1):
+                        case Token.Newline | Token.Dedent | Token.Semicolon: return
+                        case _: pass
+                # Something follows a complete statement on the same line (`mut b = 5 7`,
+                # `print(1) 2`): that is never valid, and silently starting a new statement
+                # here would hide typos.
+                self.emit_diag("unexpected token after the end of the statement", "each statement goes on its own line (or separate them with ';') - check for a missing operator, comma or ')' before this token.")
+                while True:
+                    match self.peek():
+                        case Token.Newline | Token.Eof | Token.Dedent | Token.Semicolon:
+                            break
+                        case _: self.pos = self.pos + 1
 
     pub def at_end(self) -> bool:
         match self.peek():

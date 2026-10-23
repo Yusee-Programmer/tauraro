@@ -751,6 +751,7 @@ extend Sema:
         if n == "str": return "str"
         if n == "List" or n == "Vec": return "List"
         if n == "Dict" or n == "Map": return "Dict"
+        if n == "Tuple" or n == "tuple": return "Tuple"
         mut gi = 0
         while gi < self.current_func_generics.len:
             if self.current_func_generics.get(gi) == n: return ""
@@ -773,6 +774,7 @@ extend Sema:
             case HirExpr.EFString(_, _): return "str"
             case HirExpr.EList(_, _): return "List"
             case HirExpr.EDict(_, _, _): return "Dict"
+            case HirExpr.ETuple(_, _): return "Tuple"
             case HirExpr.EIdent(nm, _, _):
                 mut sy = self.resolve(nm)
                 if sy.name != "" and sy.kind == SymbolKind.SVariable: return sy.firm
@@ -821,6 +823,8 @@ extend Sema:
         if act_scalar and (exp == "List" or exp == "Dict" or exp == "class"): return true
         if (exp == "List" and act == "Dict") or (exp == "Dict" and act == "List"): return true
         if exp == "class" and (act == "List" or act == "Dict"): return true
+        if exp == "Tuple" and act != "Tuple": return act_scalar or act == "List" or act == "Dict"
+        if act == "Tuple" and exp != "Tuple": return exp_scalar or exp == "List" or exp == "Dict" or exp == "class"
         return false
 
     pub def family_word(self, fam: str) -> str:
@@ -923,6 +927,13 @@ extend Sema:
         while ai < t.args.len:
             self.check_type_known(t.args.get(ai), where_)
             ai = ai + 1
+
+    # A bool or a tuple has (almost) no methods; calling an unknown one is a typo or the wrong variable.
+    pub def check_scalar_method(self, fam: str, method: str):
+        if fam != "bool" and fam != "Tuple": return
+        if self.is_universal_method(method): return
+        if fam == "Tuple" and (method == "get" or method == "first" or method == "last" or method == "count"): return
+        self.error("[E-6] " + self.family_word(fam) + " has no method '" + method + "()'.\n      FIX: check that the receiver is the object you meant (this one is " + self.family_word(fam) + ").")
 
     # Recursively checks cls_name and its base classes for a method named `method`.
     pub def class_method_exists(self, cls_name: str, method: str) -> bool:
@@ -5985,7 +5996,10 @@ extend Sema:
                     # bare name that nothing declares is certainly a typo'd variable.
                     mut _n3_c = name.slice(0, 1)
                     if _n3_c >= "a" and _n3_c <= "z": _n3_recv_ok = false
-                if sym.name == "" and name != "" and not self.in_assign_target and not _n3_recv_ok and not self.is_known_name(name):
+                mut _n3_known = self.is_known_name(name)
+                if _n3_known and name.len() == 1 and name >= "a" and name <= "z" and not self.fn_sigs.contains(name) and not self.extern_names.contains(name) and not self.classes.contains(name):
+                    _n3_known = false   # a lone lowercase letter is a variable, not a type parameter (those are `T`, `K`, ...)
+                if sym.name == "" and name != "" and not self.in_assign_target and not _n3_recv_ok and not _n3_known:
                     self.error("[N-3] name '" + name + "' is not defined.\n      FIX: check the spelling, declare it with 'mut " + name + " = ...', or import it before use.")
                 # First-class function reference: a top-level function used as a
                 # value carries its def(...)->R signature (not its return type).
@@ -6454,6 +6468,40 @@ extend Sema:
                                                     ret_ty = _smdef.ret_ty.read()
                                                 _sfound = true
                                         _smi = _smi + 1
+                                    if not self.in_unsafe and not self.ambiguous_classes.contains(type_name) and not self.is_builtin_dispatch_class(type_name):
+                                        mut _sc_named = 0
+                                        mut _sc_ok = false
+                                        mut _sc_want = 0
+                                        mut _sc_var = false
+                                        mut _sc_one = FunctionDef.init("")
+                                        mut _sc_i = 0
+                                        while _sc_i < _scdef.methods.len:
+                                            mut _sc_m = _scdef.methods.get(_sc_i)
+                                            if _sc_m.name == variant:
+                                                mut _sc_has_self = _sc_m.params.len > 0 and _sc_m.params.get(0).name == "self"
+                                                mut _sc_cnt = _sc_m.params.len
+                                                if _sc_has_self: _sc_cnt = _sc_cnt - 1
+                                                mut _sc_pj = 0
+                                                while _sc_pj < _sc_m.params.len:
+                                                    if _sc_m.params.get(_sc_pj).is_variadic: _sc_var = true
+                                                    _sc_pj = _sc_pj + 1
+                                                if _sc_named == 0: _sc_want = _sc_cnt
+                                                _sc_named = _sc_named + 1
+                                                if _sc_cnt == hl.len or (_sc_has_self and _sc_cnt + 1 == hl.len): _sc_ok = true
+                                                _sc_one = _sc_m
+                                            _sc_i = _sc_i + 1
+                                        if _sc_named > 0 and not _sc_ok and not _sc_var:
+                                            mut _sc_pl = "s"
+                                            if _sc_want == 1: _sc_pl = ""
+                                            mut _sc_vb = "were"
+                                            if hl.len == 1: _sc_vb = "was"
+                                            self.error("[E-4] '" + type_name + "." + variant + "()' takes " + _sc_want.to_str() + " argument" + _sc_pl + " but " + hl.len.to_str() + " " + _sc_vb + " given.\n      FIX: call it with exactly " + _sc_want.to_str() + " argument" + _sc_pl + " (see its definition).")
+                                        elif _sc_named == 1 and _sc_ok and not _sc_var and _scdef.generics.len == 0 and _sc_one.generics.len == 0 and (_sc_one.params.len == hl.len):
+                                            mut _sc_ti = 0
+                                            while _sc_ti < hl.len:
+                                                if _sc_one.params.get(_sc_ti).ty as usize != 0 as usize:
+                                                    self.check_expr_assignable(_sc_one.params.get(_sc_ti).ty.read(), hl.get(_sc_ti), "argument " + (_sc_ti + 1).to_str() + " of '" + type_name + "." + variant + "()'")
+                                                _sc_ti = _sc_ti + 1
                                     if not _sfound:
                                         _smi = 0
                                         while _smi < _scdef.methods.len and not _sfound:
@@ -6554,6 +6602,7 @@ extend Sema:
                 mut hobj_ty = hir_expr_type(hobj)
                 if not self.in_unsafe:
                     self.check_builtin_method_arity(self.firm_family(hobj), method, hl.len)
+                    self.check_scalar_method(self.firm_family(hobj), method)
                 # Resolve type aliases: `type IntList = List[int]` -> hobj_ty becomes List[int].
                 if self.type_aliases.contains(hobj_ty.name):
                     mut _alias_base = self.type_aliases.get(hobj_ty.name)
