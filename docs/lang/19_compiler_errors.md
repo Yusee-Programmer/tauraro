@@ -35,6 +35,13 @@ category, with its cause, a triggering example, and the fix.
 | [F-5] | Function | A closure/function that returns a non-`int` value was passed to a bare `lambda`-typed slot (which is called as returning `int`) |
 | [E-1] | Existence | (1) Non-exhaustive `match`; (2) explicit `main()` call; (3) no such method on type |
 | [E-2] | Existence | Nested declaration used outside `main()` |
+| [E-4] | Existence | Wrong number of arguments in a call |
+| [E-5] | Type | A value of the wrong type is passed, returned, stored or used with an operator |
+| [E-6] | Existence | A method that the receiver type does not have |
+| [E-7] | Existence | A field that the type does not have |
+| [N-3] | Name | Name is not defined |
+| [N-4] | Name | Unknown type in an annotation |
+| [G-2] | Generics | A type parameter cannot be inferred from the arguments |
 | [S-1] | Shared | `Shared[Self]` field creates a reference cycle |
 | [S-2] | Shared | A strong-ownership **cycle** among reference-counted classes (would leak). Break it with `Pointer[T]` or `Weak[T]` (non-owning edges). `--strict` only |
 | [I-1] | Interface / Init | (1) `implements` an undefined interface; (2) variable used before assignment |
@@ -586,6 +593,121 @@ def main():
 
 **FIX:** Move the declaration to module (top-level) scope, or move the
 surrounding logic into `main()`.
+
+---
+
+## Type and Call Checks (E-4 .. E-7, N-3, N-4, G-2)
+
+### [E-4] Wrong Number of Arguments
+
+**Message:** `'f()' takes 2 arguments but 1 was given.`
+
+**Cause:** A call to a function, method, static method or built-in method passes
+more or fewer arguments than the definition declares (variadic parameters excepted).
+
+```python
+def area(w: int, h: int) -> int:
+    return w * h
+
+area(3)        # E-4: takes 2 arguments but 1 was given
+```
+
+**FIX:** Pass exactly the declared number of arguments.
+
+---
+
+### [E-5] Type Mismatch
+
+**Message:** `Type mismatch: argument 1 of 'f()' expects 'int' but is given a str.`
+
+**Cause:** The compiler is *certain* the value has a different kind than the
+declaration requires. It checks function / method / static-method arguments,
+`return` values, annotated `mut x: T = value` initialisers, reassignment of a
+variable whose type is known, field assignment, and operators (`"a" + 1`,
+`-"a"`, `x in 5`, `x is 3`). "Kind" means: int / float / bool (interchangeable),
+str, List, Dict, tuple, class or enum value.
+
+```python
+def f(x: int) -> int:
+    return x
+
+f("a")                 # E-5: argument 1 of 'f()' expects 'int' but is given a str
+mut n: int = "3"       # E-5: the initializer of 'n'
+mut s = "a" + 1        # E-5: cannot apply '+' to a str and a int
+```
+
+**FIX:** Convert explicitly (`str(x)`, `int(s)`, `float(x)`) or pass the right value.
+The check is deliberately conservative: it stays silent whenever the type of an
+expression is not known for certain, so it never rejects a valid program.
+
+---
+
+### [E-6] No Such Method
+
+**Message:** `a List has no method 'push_back()'.` / `[E-1] No method 'x' found on type 'T'.`
+
+**Cause:** A method name that the receiver's type does not provide. Covered for
+`str`, `List`, `Dict`, `bool`, tuples, user classes and the `Chan` / `Mutex` /
+`RwLock` / `Atomic` / `ThreadLocal` / `Weak` built-ins.
+
+**FIX:** Check the spelling and that the variable holds the object you meant.
+
+---
+
+### [E-7] No Such Field
+
+**Message:** `Type 'Point' has no field 'z'.`
+
+**Cause:** A field read or written on a user class (or on `Result` / `Option`)
+that the type does not declare.
+
+**FIX:** Check the spelling, or declare `pub z: int` in the class.
+
+---
+
+### [N-3] Name Not Defined
+
+**Message:** `name 'zz' is not defined.`
+
+**Cause:** A variable or function name that is not declared. Also reported for an
+undefined name used as a method receiver (`zz.go()`) or as a subscript (`xs[k]`).
+
+---
+
+### [N-4] Unknown Type
+
+**Message:** `Unknown type 'Foo' (in the declaration of 'x').`
+
+**Cause:** A type annotation (variable, parameter, return type) names a type that
+does not exist and was not imported.
+
+**FIX:** Check the spelling or `from std.x import Foo`.
+
+---
+
+### [G-2] Cannot Infer Type Parameter
+
+**Message:** `Cannot infer type parameter 'T' of generic function 'conv' from its arguments.`
+
+**Cause:** No parameter mentions `T`, so the call gives the compiler nothing to
+infer it from.
+
+**FIX:** Give it explicitly: `conv[int](3)`.
+
+---
+
+### Statement syntax: unexpected token after the end of a statement
+
+`mut b = 5 7` and `print(1) 2` are rejected; each statement belongs on its own
+line (or separated by `;`).
+
+### Internal compiler errors (`[ICE]`)
+
+If the generated C is rejected by the C compiler, `tauraroc` prints
+`error: [ICE] internal compiler error: ...` with the Tauraro source line it came
+from. That always indicates a compiler bug (the program should have been rejected
+with a normal diagnostic, or compiled) - please report it. Set
+`TAURARO_SHOW_C_ERRORS=1` to see the raw C compiler output.
 
 ---
 

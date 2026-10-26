@@ -17,6 +17,14 @@ codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
 ### Fixed (hardening round)
+- New compile-time checks, so these mistakes no longer reach the C compiler: wrong argument counts
+  `[E-4]`, wrong-typed arguments / returns / initialisers / assignments / operands `[E-5]`, unknown
+  methods `[E-6]` and fields `[E-7]` (user classes, `str`, `List`, `Dict`, `Option`, `Result`, `Chan`,
+  `Mutex`, `RwLock`, `Atomic`, ...), unknown types `[N-4]`, undefined names as receivers and
+  subscripts `[N-3]`, and uninferable generic parameters `[G-2]`. See docs/lang/19_compiler_errors.md.
+- Extra tokens after a complete statement (`mut b = 5 7`) are a syntax error instead of being ignored.
+- If the C compiler still rejects generated C, `tauraroc` reports an `[ICE]` with the Tauraro source
+  line instead of raw C diagnostics (`TAURARO_SHOW_C_ERRORS=1` restores the raw output).
 - Evaluation order is now left-to-right for operands, call arguments, dict/list literals, index
   expressions and compound assignments; each operand and each f-string placeholder is evaluated
   exactly once (`a[f()] += 1` calls `f` once).
