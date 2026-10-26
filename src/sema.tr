@@ -45,6 +45,7 @@ pub class Symbol:
     pub decl_block_id: int    # auto-drop: id of the innermost if/while C block open at declaration within the current scope; 0 = scope top-level
     pub str_escaped: bool     # auto-drop: a `str` local passed as a call/method-call ARGUMENT - may be aliased into a legacy List_str/Dict/Set (#52 not yet migrated); excluded from auto-drop to avoid UAF
     pub coll_escaped: bool    # auto-drop: a List/Vec/Dict/Map/Set local that is ever read in a non-receiver position (call/method arg, assigned to another var, returned, stored in a literal) - raw unrefcounted pointer, so any alias must disable auto-free to avoid UAF
+    pub firm_cls: str         # class name this variable is CERTAIN to hold ("" when unsure); lets field / method result kinds be known
     pub firm: str             # type family this variable is CERTAIN to have ("int"/"float"/"bool"/"str"/"List"/"Dict"/"class"), "" when unsure; drives the E-5 mismatch checks
     pub borrows_region: str   # [L-3/L-4] region derivation of this str local's CURRENT value: "" = unknown (never flagged), "@owned" = freshly built (concat — owned, not a borrow), "<name>" = shares parameter/local <name>'s region (transitive). Tracks the LAST assignment.
 
@@ -73,6 +74,7 @@ extend Symbol:
         s.coll_escaped = false
         s.borrows_region = ""
         s.firm = ""
+        s.firm_cls = ""
         return s
 
 pub class Scope:
@@ -765,6 +767,91 @@ extend Sema:
         if n == "Thread" or n == "Atomic" or n == "Mutex" or n == "RwLock" or n == "Chan" or n == "Channel" or n == "Shared" or n == "Weak" or n == "StringBuilder" or n == "ThreadPool" or n == "ThreadLocal": return "class"
         return ""
 
+    # The single (non-overloaded) method `m` of user class `cls` (searching base classes), or an
+    # empty FunctionDef (name == "") when absent / overloaded / the class is generic or ambiguous.
+    pub def find_unique_method(self, cls: str, m: str) -> FunctionDef:
+        mut nothing = FunctionDef.init("")
+        if not self.classes.contains(cls) or self.ambiguous_classes.contains(cls) or self.is_rt_builtin_class(cls): return nothing
+        mut cd = self.classes.get(cls)
+        if cd.generics.len > 0: return nothing
+        mut found = nothing
+        mut cnt = 0
+        mut i = 0
+        while i < cd.methods.len:
+            if cd.methods.get(i).name == m:
+                found = cd.methods.get(i)
+                cnt = cnt + 1
+            i = i + 1
+        if cnt == 1 and found.generics.len == 0: return found
+        if cnt > 1: return nothing
+        mut bi = 0
+        while bi < cd.base_classes.len:
+            mut r = self.find_unique_method(cd.base_classes.get(bi), m)
+            if r.name != "": return r
+            bi = bi + 1
+        return nothing
+
+    # The declared type of field `f` of user class `cls` (searching bases); name == "" when unknown.
+    pub def find_field_type(self, cls: str, f: str) -> AstType:
+        mut nothing = AstType.init("")
+        if not self.classes.contains(cls) or self.ambiguous_classes.contains(cls) or self.is_rt_builtin_class(cls): return nothing
+        mut cd = self.classes.get(cls)
+        if cd.generics.len > 0: return nothing
+        mut i = 0
+        while i < cd.fields.len:
+            if cd.fields.get(i).name == f and cd.fields.get(i).ty as usize != 0 as usize: return cd.fields.get(i).ty.read()
+            i = i + 1
+        mut bi = 0
+        while bi < cd.base_classes.len:
+            mut r = self.find_field_type(cd.base_classes.get(bi), f)
+            if r.name != "": return r
+            bi = bi + 1
+        return nothing
+
+    # The user class `e` is CERTAIN to be an instance of ("" when unsure).
+    pub def firm_class(self, e: Pointer[HirExpr]) -> str:
+        if _is_invalid_ptr(e as usize): return ""
+        match e.read():
+            case HirExpr.EIdent(nm, _, _):
+                mut sy = self.resolve(nm)
+                if sy.name != "" and sy.kind == SymbolKind.SVariable: return sy.firm_cls
+                return ""
+            case HirExpr.ECall(callee, _, _):
+                match callee.read():
+                    case HirExpr.EIdent(cn, _, _):
+                        if self.classes.contains(cn) and self.resolve(cn).kind != SymbolKind.SVariable and self.decl_family(AstType.init(cn)) == "class": return cn
+                        return ""
+                    case _: return ""
+            case HirExpr.EPropAccess(po, pf, _):
+                mut pc = self.firm_class(po)
+                if pc == "": return ""
+                mut ft = self.find_field_type(pc, pf)
+                if ft.name != "" and self.decl_family(ft) == "class" and self.classes.contains(ft.name): return ft.name
+                return ""
+            case HirExpr.EMethodCall(mo, mm, margs, _):
+                mut rc = self.method_receiver_class(mo)
+                if rc == "": return ""
+                mut md = self.find_unique_method(rc, mm)
+                if md.name == "" or md.ret_ty as usize == 0 as usize: return ""
+                if md.throws_ty as usize != 0 as usize and md.throws_ty.read().name != "": return ""
+                mut rt = md.ret_ty.read()
+                if self.decl_family(rt) == "class" and self.classes.contains(rt.name): return rt.name
+                return ""
+            case _: return ""
+        return ""
+
+    # The class a method-call receiver denotes: an instance of a known class, or the class name itself
+    # (static call `Type.make(...)`).
+    pub def method_receiver_class(self, mo: Pointer[HirExpr]) -> str:
+        match mo.read():
+            case HirExpr.EIdent(rn, _, _):
+                mut sy = self.resolve(rn)
+                if sy.name != "" and sy.kind == SymbolKind.SVariable: return sy.firm_cls
+                if self.classes.contains(rn) and self.decl_family(AstType.init(rn)) == "class": return rn
+                return ""
+            case _: return self.firm_class(mo)
+        return ""
+
     pub def firm_family(self, e: Pointer[HirExpr]) -> str:
         if _is_invalid_ptr(e as usize): return ""
         match e.read():
@@ -798,20 +885,30 @@ extend Sema:
                         return "int"
                 return ""
             case HirExpr.EMethodCall(mo, mm, margs, _):
+                mut mrc = self.method_receiver_class(mo)
+                if mrc != "":
+                    mut mmd = self.find_unique_method(mrc, mm)
+                    if mmd.name != "" and mmd.ret_ty as usize != 0 as usize and not (mmd.throws_ty as usize != 0 as usize and mmd.throws_ty.read().name != ""):
+                        return self.decl_family(mmd.ret_ty.read())
                 if (mm == "to_str" or mm == "to_string") and margs.len == 0:
                     mut mty = hir_expr_type(mo).name
                     if not (self.classes.contains(mty) and self.class_method_exists(mty, mm)): return "str"
                 return ""
+            case HirExpr.EPropAccess(po, pf, _):
+                mut pc = self.firm_class(po)
+                if pc != "":
+                    mut ft = self.find_field_type(pc, pf)
+                    if ft.name != "": return self.decl_family(ft)
+                return ""
             case HirExpr.ECall(callee, _, _):
                 match callee.read():
                     case HirExpr.EIdent(fn, _, _):
+                        if self.classes.contains(fn) and self.resolve(fn).kind != SymbolKind.SVariable and self.decl_family(AstType.init(fn)) == "class": return "class"
                         if self.fn_defs.contains(fn):
                             mut fd = self.fn_defs.get(fn)
                             if fd.generics.len > 0 or fd.is_extern or fd.ret_ty as usize == 0 as usize: return ""
                             if fd.throws_ty as usize != 0 as usize and fd.throws_ty.read().name != "": return ""
-                            mut fam = self.decl_family(fd.ret_ty.read())
-                            if fam == "class": return ""
-                            return fam
+                            return self.decl_family(fd.ret_ty.read())
                         if self.resolve(fn).name == "":
                             if fn == "str": return "str"
                             if fn == "int" or fn == "len": return "int"
@@ -830,6 +927,7 @@ extend Sema:
         if act_scalar and (exp == "List" or exp == "Dict" or exp == "class"): return true
         if (exp == "List" and act == "Dict") or (exp == "Dict" and act == "List"): return true
         if exp == "class" and (act == "List" or act == "Dict"): return true
+        if act == "class" and (exp_scalar or exp == "List" or exp == "Dict" or exp == "Tuple"): return true
         if act == "Option" and (exp_scalar or exp == "List" or exp == "Dict" or exp == "class"): return true
         if exp == "Tuple" and act != "Tuple": return act_scalar or act == "List" or act == "Dict"
         if act == "Tuple" and exp != "Tuple": return exp_scalar or exp == "List" or exp == "Dict" or exp == "class"
@@ -4552,6 +4650,7 @@ extend Sema:
                     pb_sym.ptr_region = 2  # PARAM region
                     if p.ty as usize != 0 as usize and not p.is_variadic and f.generics.len == 0:
                         pb_sym.firm = self.decl_family(p_ty)
+                        if pb_sym.firm == "class" and self.classes.contains(p_ty.name): pb_sym.firm_cls = p_ty.name
                     pb_scope.variables.insert(p.name, pb_sym)
 
             mut hp = HirParam()
@@ -5108,17 +5207,21 @@ extend Sema:
                 if ty_ptr as usize != 0 as usize and val_ptr as usize != 0 as usize and not is_shared:
                     self.check_expr_assignable(ty_ptr.read(), hval, "the initializer of '" + name + "'")
                 mut _let_firm = ""
+                mut _let_cls = ""
                 if not is_shared:
                     if ty_ptr as usize != 0 as usize:
                         _let_firm = self.decl_family(ty_ptr.read())
+                        if _let_firm == "class" and self.classes.contains(ty_ptr.read().name): _let_cls = ty_ptr.read().name
                     elif val_ptr as usize != 0 as usize:
                         _let_firm = self.firm_family(hval)
+                        if _let_firm == "class": _let_cls = self.firm_class(hval)
                 self.declare(name, SymbolKind.SVariable, box_asttype(ty), is_mut)
                 if _let_firm != "" and self.scopes.len > 0:
                     mut _fm_scope = self.scopes.get(self.scopes.len - 1)
                     if _fm_scope.variables.contains(name):
                         mut _fm_sym = _fm_scope.variables.get(name)
                         _fm_sym.firm = _let_firm
+                        _fm_sym.firm_cls = _let_cls
                         _fm_scope.variables.insert(name, _fm_sym)
                 # A `shared` local: record is_shared on the symbol so the Shared[T]
                 # control methods (clone/downgrade/drop) resolve on it and its drop is
