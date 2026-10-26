@@ -466,6 +466,40 @@ static int printf(const char* fmt,...){ char b[1024]; va_list ap; va_start(ap,fm
 #  endif
 #endif
 
+/* Internal-compiler-error context.  The compiler driver (src/main.tr) records what it is doing
+ * (parsing / type-checking / generating C for FILE) and installs crash handlers, so a bug in the
+ * compiler itself (index out of range, null dereference, ...) is reported as a Tauraro [ICE] that
+ * names the file being compiled instead of a bare "Aborted" / "Segmentation fault".  User programs
+ * never set a context, so they keep the plain runtime behaviour. */
+#if !defined(TAURARO_KERNEL) && !defined(TAURARO_NO_OS)
+static char _tr_ice_ctx[512];
+static inline void _tr_set_ice_ctx(const char* s) { snprintf(_tr_ice_ctx, sizeof _tr_ice_ctx, "%s", s ? s : ""); }
+static inline void _tr_ice_report(const char* what) {
+    if (!_tr_ice_ctx[0]) return;
+    fflush(stdout);
+    fprintf(stderr, "error: [ICE] internal compiler error: %s\n  while %s\n  This is a Tauraro bug - please report it with the program that triggered it.\n", what, _tr_ice_ctx);
+}
+#else
+static inline void _tr_set_ice_ctx(const char* s) { (void)s; }
+static inline void _tr_ice_report(const char* what) { (void)what; }
+#endif
+#if !defined(TAURARO_KERNEL) && !defined(TAURARO_NO_OS) && !defined(_WIN32)
+#include <signal.h>
+static void _tr_ice_signal(int sig) {
+    _tr_ice_report(sig == SIGSEGV ? "the compiler crashed (invalid memory access)" : sig == SIGFPE ? "the compiler crashed (arithmetic fault)" : sig == SIGILL ? "the compiler crashed (illegal instruction)" : "the compiler aborted");
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+static inline void _tr_install_ice_handlers(void) {
+    signal(SIGSEGV, _tr_ice_signal); signal(SIGFPE, _tr_ice_signal); signal(SIGILL, _tr_ice_signal);
+#ifdef SIGBUS
+    signal(SIGBUS, _tr_ice_signal);
+#endif
+}
+#else
+static inline void _tr_install_ice_handlers(void) {}
+#endif
+
 /* Opt-in live-allocation counter for leak bisection. Compile with
  * -DTAURARO_MEMCOUNT to enable; _tr_report_mem() then also prints the net
  * number of outstanding (alloc'd minus freed) heap blocks, so a steady
@@ -5195,6 +5229,7 @@ static inline long long _tr_file_size(const char* path)                  { (void
 
 static inline void _tr_bounds_check(long long i, size_t len) {
     if (__builtin_expect(i < 0 || (size_t)i >= len, 0)) {
+        _tr_ice_report("an index was out of range");
         _TR_DIAG("Index %lld out of bounds (length %zu)\n", i, len);
         _TR_TRAP();
     }
@@ -6281,6 +6316,7 @@ static inline void _tr_panic(const char* msg) {
     }
 #if !defined(TAURARO_KERNEL) && !defined(TAURARO_NO_OS)
     fflush(stdout);   /* output printed before the panic must not be lost with the buffer */
+    _tr_ice_report(msg ? msg : "a runtime panic");
 #endif
     _TR_DIAG("panic: %s\n", msg ? msg : "(null)");
     _TR_TRAP();

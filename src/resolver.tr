@@ -23,6 +23,7 @@ from token import Token
 from ast import Program, Decl, FunctionDef, ClassDef, EnumDef, InterfaceDef, ImportItem
 
 extern "C":
+    def _tr_set_ice_ctx(s: str)
     def _tr_dir_exists(path: str) -> bool
     def _tr_opendir(path: str) -> Pointer[void]
     def _tr_readdir(handle: Pointer[void]) -> str
@@ -232,6 +233,7 @@ extend ModuleResolver:
         # derefs need `unsafe:`.
         mut file_trusted = self._path_is_lib(path) or self._source_is_trusted(source)
 
+        _tr_set_ice_ctx("parsing " + path)
         mut lexer   = Lexer.init(source)
         mut tokens  = lexer.tokenize()
         self._dedupe_private_fns(tokens, path, is_root, self._source_is_trusted(source))

@@ -870,12 +870,15 @@ extend Sema:
             if method == "find" or method == "index_of" or method == "contains" or method == "starts_with" or method == "ends_with" or method == "split" or method == "split_exact" or method == "repeat" or method == "strip_prefix" or method == "strip_suffix": return 101
             if method == "replace": return 202
         elif fam == "List":
-            if method == "append" or method == "push" or method == "contains" or method == "index_of" or method == "extend" or method == "get": return 101
-            if method == "len" or method == "reverse" or method == "clear" or method == "copy": return 0
-            if method == "insert": return 202
+            if method == "len" or method == "length" or method == "reverse" or method == "clear" or method == "copy" or method == "clone" or method == "first" or method == "last" or method == "free" or method == "is_empty" or method == "max" or method == "min" or method == "max_val" or method == "min_val" or method == "sum" or method == "reversed" or method == "reversed_copy" or method == "sort_asc" or method == "sort_desc" or method == "to_list": return 0
+            if method == "append" or method == "push" or method == "contains" or method == "has" or method == "add" or method == "index_of" or method == "extend" or method == "get" or method == "remove" or method == "reserve" or method == "sort_by" or method == "union" or method == "intersection" or method == "difference" or method == "is_subset" or method == "all" or method == "any": return 101
+            if method == "insert" or method == "set" or method == "swap" or method == "slice": return 202
+            if method == "pop" or method == "sort" or method == "join" or method == "count": return 1
         elif fam == "Dict":
-            if method == "has" or method == "contains" or method == "remove": return 101
-            if method == "keys" or method == "values" or method == "len" or method == "clear": return 0
+            if method == "keys" or method == "values" or method == "items" or method == "len" or method == "length" or method == "clear" or method == "free" or method == "is_empty": return 0
+            if method == "has" or method == "contains" or method == "remove" or method == "get_index" or method == "update": return 101
+            if method == "set" or method == "insert" or method == "get_or": return 202
+            if method == "get": return 102
         return 0 - 1
 
     pub def check_builtin_method_arity(self, fam: str, method: str, nargs: int):
@@ -886,10 +889,12 @@ extend Sema:
         mut hi = r % 100
         if nargs >= lo and nargs <= hi: return
         mut pl = "s"
+        mut want_s = lo.to_str()
+        if lo != hi: want_s = lo.to_str() + " to " + hi.to_str()
         if lo == 1 and hi == 1: pl = ""
         mut vb = "were"
         if nargs == 1: vb = "was"
-        self.error("[E-4] '" + fam + "." + method + "()' takes " + lo.to_str() + " argument" + pl + " but " + nargs.to_str() + " " + vb + " given.\n      FIX: see the built-in method list in the language docs.")
+        self.error("[E-4] '" + fam + "." + method + "()' takes " + want_s + " argument" + pl + " but " + nargs.to_str() + " " + vb + " given.\n      FIX: see the built-in method list in the language docs.")
 
     # True when class `cls_name` (or a base class) declares a field named `name`.
     pub def class_has_field(self, cls_name: str, name: str) -> bool:

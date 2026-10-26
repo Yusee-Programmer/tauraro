@@ -32,6 +32,8 @@ extern "C":
     def _tr_file_delete(path: str) -> int
     def _tr_getenv(name: str) -> str
     def _tr_setenv(name: str, value: str) -> int   # set an env var for THIS process + its children (used to put bundled zig on PATH)
+    def _tr_set_ice_ctx(s: str)          # what the compiler is doing, for crash reports ([ICE])
+    def _tr_install_ice_handlers()       # turn compiler crashes (SIGSEGV, ...) into [ICE] reports
     def _tr_exe_dir() -> str   # absolute dir of the running compiler exe (OS-level; reliable even when invoked by bare name via PATH)
     def _tr_print_raw(s: str)  # print without trailing newline (for `tauraroc fmt` stdout output)
     # Stage 2: in-process LLVM `.ll` -> `.o` via libLLVM (runtime/tauraro_llvm.c). Returns 0 on
@@ -1767,6 +1769,8 @@ pub def run_fmt(path0: str, write_in_place: bool):
 # --- Main entry point ---------------------------------------------------------
 
 pub def main(args: Vec[str]):
+    _tr_install_ice_handlers()
+    _tr_set_ice_ctx("starting up")
     # If a zig is bundled beside the compiler, put it on PATH first so every
     # `zig`/`zig cc` toolchain lookup (host fallback + all cross targets) finds it —
     # making tauraro a self-contained toolchain with no external downloads.
@@ -2093,7 +2097,9 @@ pub def main(args: Vec[str]):
     # zero-heap guarantee honest (see [H-1] in sema.check_no_heap / the ETuple case).
     sema.heap_boxes_tuples = (backend != "c")
     sema.current_file = input_path   # track source file for error messages
+    _tr_set_ice_ctx("type-checking " + input_path)
     mut hir = sema.analyze(prog)
+    _tr_set_ice_ctx("generating C for " + input_path)
 
     if sema.warnings.len > 0:
         mut wk = 0
