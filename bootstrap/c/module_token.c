@@ -2,43 +2,43 @@
 
 
 __attribute__((hot)) bool Token_is_eof(Token self) {
-    /* pass */
+#line 199 "src/token.tr"
     __auto_type _t2 = self;
     if (_t2.tag == Token_Eof) {
-        /* pass */
+#line 201 "src/token.tr"
         return true;
     } else if (1) {
         __auto_type _ = _t2;
-        /* pass */
+#line 203 "src/token.tr"
         /* pass */
     }
-    /* pass */
+#line 204 "src/token.tr"
     return false;
 }
 
 __attribute__((hot)) bool Token_is_newline(Token self) {
-    /* pass */
+#line 207 "src/token.tr"
     __auto_type _t3 = self;
     if (_t3.tag == Token_Newline) {
-        /* pass */
+#line 209 "src/token.tr"
         return true;
     } else if (_t3.tag == Token_Indent) {
-        /* pass */
+#line 211 "src/token.tr"
         return true;
     } else if (_t3.tag == Token_Dedent) {
-        /* pass */
+#line 213 "src/token.tr"
         return true;
     } else if (1) {
         __auto_type _ = _t3;
-        /* pass */
+#line 215 "src/token.tr"
         /* pass */
     }
-    /* pass */
+#line 216 "src/token.tr"
     return false;
 }
 
 __attribute__((hot)) bool Token_is_keyword(Token self) {
-    /* pass */
+#line 219 "src/token.tr"
     __auto_type _t4 = self;
     if (_t4.tag == Token_KwDef) {
         return true;
@@ -150,43 +150,49 @@ __attribute__((hot)) bool Token_is_keyword(Token self) {
         return true;
     } else if (1) {
         __auto_type _ = _t4;
-        /* pass */
+#line 275 "src/token.tr"
         /* pass */
     }
-    /* pass */
+#line 276 "src/token.tr"
     return false;
 }
 
 __attribute__((hot)) TrStr Token_debug(Token self) {
-    /* pass */
+#line 279 "src/token.tr"
     __auto_type _t5 = self;
     if (_t5.tag == Token_Ident) {
         __auto_type name = _t5.data.Ident.name;
-        return _tr_str_retain(name);
+        TrStr _trret1 = _tr_str_retain(name);
+        return _trret1;
     } else if (_t5.tag == Token_IntLit) {
         __auto_type val = _t5.data.IntLit.val;
         return ({ int _fz = snprintf(NULL,0,"IntLit(%lld)", (long long)(val)); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,"IntLit(%lld)", (long long)(val)); _tr_str_wrap_len(_fr, (size_t)_fz); });
     } else if (_t5.tag == Token_FloatLit) {
         __auto_type val = _t5.data.FloatLit.val;
-        return ({ int _fz = snprintf(NULL,0,"FloatLit(%g)", (double)(val)); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,"FloatLit(%g)", (double)(val)); _tr_str_wrap_len(_fr, (size_t)_fz); });
+        return ({ int _fz = snprintf(NULL,0,"FloatLit(%s)", _tr_f64_buf((double)(val))); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,"FloatLit(%s)", _tr_f64_buf((double)(val))); _tr_str_wrap_len(_fr, (size_t)_fz); });
     } else if (_t5.tag == Token_StrLit) {
         __auto_type val = _t5.data.StrLit.val;
-        return ({ int _fz = snprintf(NULL,0,"StrLit(%s)", _tr_strz(val)); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,"StrLit(%s)", _tr_strz(val)); _tr_str_wrap_len(_fr, (size_t)_fz); });
+        TrStr _trret2 = ({ int _fz = snprintf(NULL,0,"StrLit(%s)", _tr_strz(val)); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,"StrLit(%s)", _tr_strz(val)); _tr_str_wrap_len(_fr, (size_t)_fz); });
+        return _trret2;
     } else if (_t5.tag == Token_TripleStrLit) {
         __auto_type val = _t5.data.TripleStrLit.val;
-        return ({ int _fz = snprintf(NULL,0,"TripleStrLit(%s)", _tr_strz(val)); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,"TripleStrLit(%s)", _tr_strz(val)); _tr_str_wrap_len(_fr, (size_t)_fz); });
+        TrStr _trret3 = ({ int _fz = snprintf(NULL,0,"TripleStrLit(%s)", _tr_strz(val)); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,"TripleStrLit(%s)", _tr_strz(val)); _tr_str_wrap_len(_fr, (size_t)_fz); });
+        return _trret3;
     } else if (_t5.tag == Token_ByteStrLit) {
         __auto_type val = _t5.data.ByteStrLit.val;
-        return ({ int _fz = snprintf(NULL,0,"ByteStrLit(%s)", _tr_strz(val)); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,"ByteStrLit(%s)", _tr_strz(val)); _tr_str_wrap_len(_fr, (size_t)_fz); });
+        TrStr _trret4 = ({ int _fz = snprintf(NULL,0,"ByteStrLit(%s)", _tr_strz(val)); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,"ByteStrLit(%s)", _tr_strz(val)); _tr_str_wrap_len(_fr, (size_t)_fz); });
+        return _trret4;
     } else if (_t5.tag == Token_RawStrLit) {
         __auto_type val = _t5.data.RawStrLit.val;
-        return ({ int _fz = snprintf(NULL,0,"RawStrLit(%s)", _tr_strz(val)); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,"RawStrLit(%s)", _tr_strz(val)); _tr_str_wrap_len(_fr, (size_t)_fz); });
+        TrStr _trret5 = ({ int _fz = snprintf(NULL,0,"RawStrLit(%s)", _tr_strz(val)); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,"RawStrLit(%s)", _tr_strz(val)); _tr_str_wrap_len(_fr, (size_t)_fz); });
+        return _trret5;
     } else if (_t5.tag == Token_CharLit) {
         __auto_type val = _t5.data.CharLit.val;
         return ({ int _fz = snprintf(NULL,0,"CharLit(%lld)", (long long)(val)); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,"CharLit(%lld)", (long long)(val)); _tr_str_wrap_len(_fr, (size_t)_fz); });
     } else if (_t5.tag == Token_FStrLit) {
         __auto_type val = _t5.data.FStrLit.val;
-        return ({ int _fz = snprintf(NULL,0,"FStrLit(%s)", _tr_strz(val)); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,"FStrLit(%s)", _tr_strz(val)); _tr_str_wrap_len(_fr, (size_t)_fz); });
+        TrStr _trret6 = ({ int _fz = snprintf(NULL,0,"FStrLit(%s)", _tr_strz(val)); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,"FStrLit(%s)", _tr_strz(val)); _tr_str_wrap_len(_fr, (size_t)_fz); });
+        return _trret6;
     } else if (_t5.tag == Token_BoolLit) {
         __auto_type val = _t5.data.BoolLit.val;
         return ({ int _fz = snprintf(NULL,0,"BoolLit(%s)", ((val) ? "true" : "false")); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,"BoolLit(%s)", ((val) ? "true" : "false")); _tr_str_wrap_len(_fr, (size_t)_fz); });
@@ -356,13 +362,14 @@ __attribute__((hot)) TrStr Token_debug(Token self) {
         return _tr_str_lit_len("EOF", 3LL);
     } else if (_t5.tag == Token_Error) {
         __auto_type msg = _t5.data.Error.msg;
-        return _tr_str_retain(msg);
+        TrStr _trret7 = _tr_str_retain(msg);
+        return _trret7;
     } else if (1) {
         __auto_type _ = _t5;
-        /* pass */
+#line 374 "src/token.tr"
         /* pass */
     }
-    /* pass */
+#line 375 "src/token.tr"
     return _tr_str_lit_len("?", 1LL);
 }
 

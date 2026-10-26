@@ -5,393 +5,394 @@ void _shdr(ByteBuf* out, long long name, long long ty, long long flags, long lon
 long long _align8(long long n);
 
 __attribute__((hot)) long long _index_of(List_TrStr* names, TrStr s) {
-    /* pass */
+#line 23 "src/codegen/native/elf.tr"
     long long i = 0LL;
-    /* pass */
+#line 24 "src/codegen/native/elf.tr"
     while ((i < names->len)) {
-        /* pass */
-        if (_tr_str_eqv((List_TrStr_get(names, i)), (s))) {
-            /* pass */
+#line 25 "src/codegen/native/elf.tr"
+        if (({ TrStr _cmpa_t6528 = (List_TrStr_get(names, i)); TrStr _cmpb_t6529 = (s); _Bool _cmpr_t6530 = _tr_str_eqv(_cmpa_t6528, _cmpb_t6529); _tr_str_release(_cmpa_t6528); _cmpr_t6530; })) {
+#line 25 "src/codegen/native/elf.tr"
             return i;
         }
-        /* pass */
+#line 26 "src/codegen/native/elf.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 27 "src/codegen/native/elf.tr"
     return (-1LL);
 }
 
 __attribute__((hot)) void _shdr(ByteBuf* out, long long name, long long ty, long long flags, long long addr, long long offset, long long size, long long link, long long info, long long align, long long entsize) {
-    /* pass */
+#line 30 "src/codegen/native/elf.tr"
     ByteBuf_u32(out, name);
-    /* pass */
+#line 31 "src/codegen/native/elf.tr"
     ByteBuf_u32(out, ty);
-    /* pass */
+#line 32 "src/codegen/native/elf.tr"
     ByteBuf_u64(out, flags);
-    /* pass */
+#line 33 "src/codegen/native/elf.tr"
     ByteBuf_u64(out, addr);
-    /* pass */
+#line 34 "src/codegen/native/elf.tr"
     ByteBuf_u64(out, offset);
-    /* pass */
+#line 35 "src/codegen/native/elf.tr"
     ByteBuf_u64(out, size);
-    /* pass */
+#line 36 "src/codegen/native/elf.tr"
     ByteBuf_u32(out, link);
-    /* pass */
+#line 37 "src/codegen/native/elf.tr"
     ByteBuf_u32(out, info);
-    /* pass */
+#line 38 "src/codegen/native/elf.tr"
     ByteBuf_u64(out, align);
-    /* pass */
+#line 39 "src/codegen/native/elf.tr"
     ByteBuf_u64(out, entsize);
 }
 
 __attribute__((hot)) long long _align8(long long n) {
-    /* pass */
+#line 42 "src/codegen/native/elf.tr"
     long long r = n;
-    /* pass */
-    while (((r % 8LL) != 0LL)) {
-        /* pass */
+#line 43 "src/codegen/native/elf.tr"
+    while ((_tr_imod((long long)(r), (long long)(8LL)) != 0LL)) {
+#line 43 "src/codegen/native/elf.tr"
         r = (r + 1LL);
     }
-    /* pass */
+#line 44 "src/codegen/native/elf.tr"
     return r;
 }
 
 __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List_TrStr* externs, List_TrStr* strings, List_i64* string_lens, long long n_globals) {
-    /* pass */
+#line 48 "src/codegen/native/elf.tr"
     ByteBuf* text = ByteBuf_init();
-    /* pass */
+#line 49 "src/codegen/native/elf.tr"
     List_ptr* trelocs = (void*)List_ptr_new();
-    /* pass */
+#line 50 "src/codegen/native/elf.tr"
     List_i64* func_base = (void*)List_i64_new();
-    /* pass */
+#line 51 "src/codegen/native/elf.tr"
     long long fi = 0LL;
-    /* pass */
+#line 52 "src/codegen/native/elf.tr"
     while ((fi < funcs->len)) {
-        /* pass */
+#line 53 "src/codegen/native/elf.tr"
         EncodedFunc* f = ((EncodedFunc*)List_ptr_get(funcs, fi));
-        /* pass */
+#line 54 "src/codegen/native/elf.tr"
         long long base = text->len;
-        /* pass */
+#line 55 "src/codegen/native/elf.tr"
         List_i64_append(func_base, base);
-        /* pass */
+#line 56 "src/codegen/native/elf.tr"
         ByteBuf_append_buf(text, f->code);
-        /* pass */
+#line 57 "src/codegen/native/elf.tr"
         long long ri = 0LL;
-        /* pass */
+#line 58 "src/codegen/native/elf.tr"
         while ((ri < f->relocs->len)) {
-            /* pass */
+#line 59 "src/codegen/native/elf.tr"
             Reloc* r = ((Reloc*)List_ptr_get(f->relocs, ri));
-            /* pass */
+#line 60 "src/codegen/native/elf.tr"
             TextReloc* tr = ((TextReloc*)_tr_obj_alloc(sizeof(TextReloc)));
-            /* pass */
+#line 61 "src/codegen/native/elf.tr"
             tr->roff = (base + r->offset);
-            /* pass */
+#line 62 "src/codegen/native/elf.tr"
             tr->sym = _tr_str_retain(r->symbol);
-            /* pass */
+#line 63 "src/codegen/native/elf.tr"
             tr->kind = r->kind;
-            /* pass */
+#line 64 "src/codegen/native/elf.tr"
             tr->str_idx = r->str_idx;
-            /* pass */
+#line 65 "src/codegen/native/elf.tr"
             List_ptr_append(trelocs, _tr_obj_retain(tr));
-            /* pass */
+#line 66 "src/codegen/native/elf.tr"
             ri = (ri + 1LL);
             _tr_obj_release(tr, _trdrop_TextReloc);
         }
-        /* pass */
+#line 67 "src/codegen/native/elf.tr"
         fi = (fi + 1LL);
     }
-    /* pass */
+#line 70 "src/codegen/native/elf.tr"
     ByteBuf* rodata = ByteBuf_init();
-    /* pass */
+#line 71 "src/codegen/native/elf.tr"
     List_i64* str_off = (void*)List_i64_new();
-    /* pass */
+#line 72 "src/codegen/native/elf.tr"
     long long sxi = 0LL;
-    /* pass */
+#line 73 "src/codegen/native/elf.tr"
     while ((sxi < strings->len)) {
-        /* pass */
+#line 74 "src/codegen/native/elf.tr"
         List_i64_append(str_off, rodata->len);
-        /* pass */
-        ({ TrStr _at_t3452 = (List_TrStr_get(strings, sxi)); ByteBuf_cstr_len(rodata, _at_t3452, List_i64_get(string_lens, sxi)); _tr_str_release(_at_t3452); });
-        /* pass */
+#line 75 "src/codegen/native/elf.tr"
+        ({ TrStr _ord_t6531 = (List_TrStr_get(strings, sxi)); __auto_type _ord_t6532 = (List_i64_get(string_lens, sxi)); ByteBuf_cstr_len(rodata, _ord_t6531, _ord_t6532); _tr_str_release(_ord_t6531); });
+#line 76 "src/codegen/native/elf.tr"
         sxi = (sxi + 1LL);
     }
-    /* pass */
+#line 81 "src/codegen/native/elf.tr"
     ByteBuf* symtab = ByteBuf_init();
-    /* pass */
+#line 82 "src/codegen/native/elf.tr"
     ByteBuf* strtab = ByteBuf_init();
-    /* pass */
+#line 83 "src/codegen/native/elf.tr"
     List_TrStr* sym_names = (void*)List_TrStr_new();
-    /* pass */
+#line 84 "src/codegen/native/elf.tr"
     ByteBuf_zeros(symtab, 24LL);
-    /* pass */
+#line 85 "src/codegen/native/elf.tr"
     ByteBuf_u8(strtab, 0LL);
-    /* pass */
+#line 87 "src/codegen/native/elf.tr"
     ByteBuf_u32(symtab, 0LL);
-    /* pass */
+#line 88 "src/codegen/native/elf.tr"
     ByteBuf_u8(symtab, 3LL);
-    /* pass */
+#line 89 "src/codegen/native/elf.tr"
     ByteBuf_u8(symtab, 0LL);
-    /* pass */
+#line 90 "src/codegen/native/elf.tr"
     ByteBuf_u16(symtab, 2LL);
-    /* pass */
+#line 91 "src/codegen/native/elf.tr"
     ByteBuf_u64(symtab, 0LL);
-    /* pass */
+#line 92 "src/codegen/native/elf.tr"
     ByteBuf_u64(symtab, 0LL);
-    /* pass */
+#line 94 "src/codegen/native/elf.tr"
     ByteBuf_u32(symtab, 0LL);
-    /* pass */
+#line 95 "src/codegen/native/elf.tr"
     ByteBuf_u8(symtab, 3LL);
-    /* pass */
+#line 96 "src/codegen/native/elf.tr"
     ByteBuf_u8(symtab, 0LL);
-    /* pass */
+#line 97 "src/codegen/native/elf.tr"
     ByteBuf_u16(symtab, 3LL);
-    /* pass */
+#line 98 "src/codegen/native/elf.tr"
     ByteBuf_u64(symtab, 0LL);
-    /* pass */
+#line 99 "src/codegen/native/elf.tr"
     ByteBuf_u64(symtab, 0LL);
-    /* pass */
+#line 101 "src/codegen/native/elf.tr"
     fi = 0LL;
-    /* pass */
+#line 102 "src/codegen/native/elf.tr"
     while ((fi < funcs->len)) {
-        /* pass */
+#line 103 "src/codegen/native/elf.tr"
         EncodedFunc* f2 = ((EncodedFunc*)List_ptr_get(funcs, fi));
-        /* pass */
+#line 104 "src/codegen/native/elf.tr"
         long long noff = strtab->len;
-        /* pass */
+#line 105 "src/codegen/native/elf.tr"
         ByteBuf_cstr(strtab, f2->name);
-        /* pass */
+#line 106 "src/codegen/native/elf.tr"
         ByteBuf_u32(symtab, noff);
-        /* pass */
+#line 107 "src/codegen/native/elf.tr"
         ByteBuf_u8(symtab, 18LL);
-        /* pass */
+#line 108 "src/codegen/native/elf.tr"
         ByteBuf_u8(symtab, 0LL);
-        /* pass */
+#line 109 "src/codegen/native/elf.tr"
         ByteBuf_u16(symtab, 1LL);
-        /* pass */
+#line 110 "src/codegen/native/elf.tr"
         ByteBuf_u64(symtab, List_i64_get(func_base, fi));
-        /* pass */
+#line 111 "src/codegen/native/elf.tr"
         ByteBuf_u64(symtab, f2->code->len);
-        /* pass */
+#line 112 "src/codegen/native/elf.tr"
         List_TrStr_append(sym_names, f2->name);
-        /* pass */
+#line 113 "src/codegen/native/elf.tr"
         fi = (fi + 1LL);
     }
-    /* pass */
+#line 115 "src/codegen/native/elf.tr"
     long long ei = 0LL;
-    /* pass */
+#line 116 "src/codegen/native/elf.tr"
     while ((ei < externs->len)) {
-        /* pass */
+#line 117 "src/codegen/native/elf.tr"
         TrStr ex = List_TrStr_get(externs, ei);
-        /* pass */
+#line 118 "src/codegen/native/elf.tr"
         long long noff2 = strtab->len;
-        /* pass */
+#line 119 "src/codegen/native/elf.tr"
         ByteBuf_cstr(strtab, ex);
-        /* pass */
+#line 120 "src/codegen/native/elf.tr"
         ByteBuf_u32(symtab, noff2);
-        /* pass */
+#line 121 "src/codegen/native/elf.tr"
         ByteBuf_u8(symtab, 16LL);
-        /* pass */
+#line 122 "src/codegen/native/elf.tr"
         ByteBuf_u8(symtab, 0LL);
-        /* pass */
+#line 123 "src/codegen/native/elf.tr"
         ByteBuf_u16(symtab, 0LL);
-        /* pass */
+#line 124 "src/codegen/native/elf.tr"
         ByteBuf_u64(symtab, 0LL);
-        /* pass */
+#line 125 "src/codegen/native/elf.tr"
         ByteBuf_u64(symtab, 0LL);
-        /* pass */
+#line 126 "src/codegen/native/elf.tr"
         List_TrStr_append(sym_names, ex);
-        /* pass */
+#line 127 "src/codegen/native/elf.tr"
         ei = (ei + 1LL);
         _tr_str_release(ex);
     }
-    /* pass */
+#line 130 "src/codegen/native/elf.tr"
     ByteBuf* rela = ByteBuf_init();
-    /* pass */
+#line 131 "src/codegen/native/elf.tr"
     long long tri = 0LL;
-    /* pass */
+#line 132 "src/codegen/native/elf.tr"
     while ((tri < trelocs->len)) {
-        /* pass */
+#line 133 "src/codegen/native/elf.tr"
         TextReloc* trr = ((TextReloc*)List_ptr_get(trelocs, tri));
-        /* pass */
+#line 134 "src/codegen/native/elf.tr"
         if ((trr->kind == 1LL)) {
-            /* pass */
+#line 136 "src/codegen/native/elf.tr"
             ByteBuf_u64(rela, trr->roff);
-            /* pass */
+#line 137 "src/codegen/native/elf.tr"
             ByteBuf_u64(rela, ((1LL * 4294967296LL) + 2LL));
-            /* pass */
+#line 138 "src/codegen/native/elf.tr"
             ByteBuf_u64(rela, (List_i64_get(str_off, trr->str_idx) - 4LL));
         } else if ((trr->kind == 3LL)) {
-            /* pass */
+#line 141 "src/codegen/native/elf.tr"
             ByteBuf_u64(rela, trr->roff);
-            /* pass */
+#line 142 "src/codegen/native/elf.tr"
             ByteBuf_u64(rela, ((2LL * 4294967296LL) + 2LL));
-            /* pass */
+#line 143 "src/codegen/native/elf.tr"
             ByteBuf_u64(rela, ((trr->str_idx * 8LL) - 4LL));
         } else if ((trr->kind == 4LL)) {
-            /* pass */
+#line 146 "src/codegen/native/elf.tr"
             long long fsidx = (_index_of(sym_names, trr->sym) + 3LL);
-            /* pass */
+#line 147 "src/codegen/native/elf.tr"
             ByteBuf_u64(rela, trr->roff);
-            /* pass */
+#line 148 "src/codegen/native/elf.tr"
             ByteBuf_u64(rela, ((fsidx * 4294967296LL) + 2LL));
-            /* pass */
+#line 149 "src/codegen/native/elf.tr"
             ByteBuf_u64(rela, (0LL - 4LL));
         } else {
-            /* pass */
+#line 152 "src/codegen/native/elf.tr"
             long long sidx = (_index_of(sym_names, trr->sym) + 3LL);
-            /* pass */
+#line 153 "src/codegen/native/elf.tr"
             ByteBuf_u64(rela, trr->roff);
-            /* pass */
+#line 154 "src/codegen/native/elf.tr"
             ByteBuf_u64(rela, ((sidx * 4294967296LL) + 4LL));
-            /* pass */
+#line 155 "src/codegen/native/elf.tr"
             ByteBuf_u64(rela, (0LL - 4LL));
         }
-        /* pass */
+#line 156 "src/codegen/native/elf.tr"
         tri = (tri + 1LL);
     }
-    /* pass */
+#line 159 "src/codegen/native/elf.tr"
     ByteBuf* shstr = ByteBuf_init();
-    /* pass */
+#line 160 "src/codegen/native/elf.tr"
     ByteBuf_u8(shstr, 0LL);
-    /* pass */
+#line 161 "src/codegen/native/elf.tr"
     long long n_text = shstr->len;
-    /* pass */
+#line 162 "src/codegen/native/elf.tr"
     ByteBuf_cstr(shstr, _tr_str_lit_len(".text", 5LL));
-    /* pass */
+#line 163 "src/codegen/native/elf.tr"
     long long n_rodata = shstr->len;
-    /* pass */
+#line 164 "src/codegen/native/elf.tr"
     ByteBuf_cstr(shstr, _tr_str_lit_len(".rodata", 7LL));
-    /* pass */
+#line 165 "src/codegen/native/elf.tr"
     long long n_bss = shstr->len;
-    /* pass */
+#line 166 "src/codegen/native/elf.tr"
     ByteBuf_cstr(shstr, _tr_str_lit_len(".bss", 4LL));
-    /* pass */
+#line 167 "src/codegen/native/elf.tr"
     long long n_rela = shstr->len;
-    /* pass */
+#line 168 "src/codegen/native/elf.tr"
     ByteBuf_cstr(shstr, _tr_str_lit_len(".rela.text", 10LL));
-    /* pass */
+#line 169 "src/codegen/native/elf.tr"
     long long n_symtab = shstr->len;
-    /* pass */
+#line 170 "src/codegen/native/elf.tr"
     ByteBuf_cstr(shstr, _tr_str_lit_len(".symtab", 7LL));
-    /* pass */
+#line 171 "src/codegen/native/elf.tr"
     long long n_strtab = shstr->len;
-    /* pass */
+#line 172 "src/codegen/native/elf.tr"
     ByteBuf_cstr(shstr, _tr_str_lit_len(".strtab", 7LL));
-    /* pass */
+#line 173 "src/codegen/native/elf.tr"
     long long n_shstr = shstr->len;
-    /* pass */
+#line 174 "src/codegen/native/elf.tr"
     ByteBuf_cstr(shstr, _tr_str_lit_len(".shstrtab", 9LL));
-    /* pass */
+#line 177 "src/codegen/native/elf.tr"
     long long text_off = 64LL;
-    /* pass */
+#line 178 "src/codegen/native/elf.tr"
     long long off = _align8((text_off + text->len));
-    /* pass */
+#line 179 "src/codegen/native/elf.tr"
     long long rodata_off = off;
-    /* pass */
+#line 180 "src/codegen/native/elf.tr"
     off = _align8((off + rodata->len));
-    /* pass */
+#line 181 "src/codegen/native/elf.tr"
     long long bss_off = off;
-    /* pass */
+#line 182 "src/codegen/native/elf.tr"
     long long rela_off = off;
-    /* pass */
+#line 183 "src/codegen/native/elf.tr"
     off = (off + rela->len);
-    /* pass */
+#line 184 "src/codegen/native/elf.tr"
     long long symtab_off = off;
-    /* pass */
+#line 185 "src/codegen/native/elf.tr"
     off = (off + symtab->len);
-    /* pass */
+#line 186 "src/codegen/native/elf.tr"
     long long strtab_off = off;
-    /* pass */
+#line 187 "src/codegen/native/elf.tr"
     off = (off + strtab->len);
-    /* pass */
+#line 188 "src/codegen/native/elf.tr"
     long long shstr_off = off;
-    /* pass */
+#line 189 "src/codegen/native/elf.tr"
     off = _align8((off + shstr->len));
-    /* pass */
+#line 190 "src/codegen/native/elf.tr"
     long long shoff = off;
-    /* pass */
+#line 193 "src/codegen/native/elf.tr"
     ByteBuf* out = ByteBuf_init();
-    /* pass */
+#line 194 "src/codegen/native/elf.tr"
     ByteBuf_u8(out, 127LL);
-    /* pass */
+#line 195 "src/codegen/native/elf.tr"
     ByteBuf_u8(out, 69LL);
-    /* pass */
+#line 196 "src/codegen/native/elf.tr"
     ByteBuf_u8(out, 76LL);
-    /* pass */
+#line 197 "src/codegen/native/elf.tr"
     ByteBuf_u8(out, 70LL);
-    /* pass */
+#line 198 "src/codegen/native/elf.tr"
     ByteBuf_u8(out, 2LL);
-    /* pass */
+#line 199 "src/codegen/native/elf.tr"
     ByteBuf_u8(out, 1LL);
-    /* pass */
+#line 200 "src/codegen/native/elf.tr"
     ByteBuf_u8(out, 1LL);
-    /* pass */
+#line 201 "src/codegen/native/elf.tr"
     ByteBuf_u8(out, 0LL);
-    /* pass */
+#line 202 "src/codegen/native/elf.tr"
     ByteBuf_zeros(out, 8LL);
-    /* pass */
+#line 203 "src/codegen/native/elf.tr"
     ByteBuf_u16(out, 1LL);
-    /* pass */
+#line 204 "src/codegen/native/elf.tr"
     ByteBuf_u16(out, 62LL);
-    /* pass */
+#line 205 "src/codegen/native/elf.tr"
     ByteBuf_u32(out, 1LL);
-    /* pass */
+#line 206 "src/codegen/native/elf.tr"
     ByteBuf_u64(out, 0LL);
-    /* pass */
+#line 207 "src/codegen/native/elf.tr"
     ByteBuf_u64(out, 0LL);
-    /* pass */
+#line 208 "src/codegen/native/elf.tr"
     ByteBuf_u64(out, shoff);
-    /* pass */
+#line 209 "src/codegen/native/elf.tr"
     ByteBuf_u32(out, 0LL);
-    /* pass */
+#line 210 "src/codegen/native/elf.tr"
     ByteBuf_u16(out, 64LL);
-    /* pass */
+#line 211 "src/codegen/native/elf.tr"
     ByteBuf_u16(out, 0LL);
-    /* pass */
+#line 212 "src/codegen/native/elf.tr"
     ByteBuf_u16(out, 0LL);
-    /* pass */
+#line 213 "src/codegen/native/elf.tr"
     ByteBuf_u16(out, 64LL);
-    /* pass */
+#line 214 "src/codegen/native/elf.tr"
     ByteBuf_u16(out, 8LL);
-    /* pass */
+#line 215 "src/codegen/native/elf.tr"
     ByteBuf_u16(out, 7LL);
-    /* pass */
+#line 217 "src/codegen/native/elf.tr"
     ByteBuf_append_buf(out, text);
-    /* pass */
+#line 218 "src/codegen/native/elf.tr"
     ByteBuf_align_to(out, 8LL);
-    /* pass */
+#line 219 "src/codegen/native/elf.tr"
     ByteBuf_append_buf(out, rodata);
-    /* pass */
+#line 220 "src/codegen/native/elf.tr"
     ByteBuf_align_to(out, 8LL);
-    /* pass */
+#line 221 "src/codegen/native/elf.tr"
     ByteBuf_append_buf(out, rela);
-    /* pass */
+#line 222 "src/codegen/native/elf.tr"
     ByteBuf_append_buf(out, symtab);
-    /* pass */
+#line 223 "src/codegen/native/elf.tr"
     ByteBuf_append_buf(out, strtab);
-    /* pass */
+#line 224 "src/codegen/native/elf.tr"
     ByteBuf_append_buf(out, shstr);
-    /* pass */
+#line 225 "src/codegen/native/elf.tr"
     ByteBuf_align_to(out, 8LL);
-    /* pass */
+#line 228 "src/codegen/native/elf.tr"
     long long bss_size = (n_globals * 8LL);
-    /* pass */
+#line 231 "src/codegen/native/elf.tr"
     _shdr(out, 0LL, 0LL, 0LL, 0LL, 0LL, 0LL, 0LL, 0LL, 0LL, 0LL);
-    /* pass */
+#line 232 "src/codegen/native/elf.tr"
     _shdr(out, n_text, 1LL, 6LL, 0LL, text_off, text->len, 0LL, 0LL, 16LL, 0LL);
-    /* pass */
+#line 233 "src/codegen/native/elf.tr"
     _shdr(out, n_rodata, 1LL, 2LL, 0LL, rodata_off, rodata->len, 0LL, 0LL, 1LL, 0LL);
-    /* pass */
+#line 234 "src/codegen/native/elf.tr"
     _shdr(out, n_bss, 8LL, 3LL, 0LL, bss_off, bss_size, 0LL, 0LL, 8LL, 0LL);
-    /* pass */
+#line 235 "src/codegen/native/elf.tr"
     _shdr(out, n_rela, 4LL, 64LL, 0LL, rela_off, rela->len, 5LL, 1LL, 8LL, 24LL);
-    /* pass */
+#line 236 "src/codegen/native/elf.tr"
     _shdr(out, n_symtab, 2LL, 0LL, 0LL, symtab_off, symtab->len, 6LL, 3LL, 8LL, 24LL);
-    /* pass */
+#line 237 "src/codegen/native/elf.tr"
     _shdr(out, n_strtab, 3LL, 0LL, 0LL, strtab_off, strtab->len, 0LL, 0LL, 1LL, 0LL);
-    /* pass */
+#line 238 "src/codegen/native/elf.tr"
     _shdr(out, n_shstr, 3LL, 0LL, 0LL, shstr_off, shstr->len, 0LL, 0LL, 1LL, 0LL);
-    /* pass */
+#line 240 "src/codegen/native/elf.tr"
+    bool _trret1803 = ByteBuf_write_file(out, out_path);
     _tr_obj_release(text, _trdrop_ByteBuf);
     List_ptr_free_obj(trelocs, _trdrop_TextReloc);
     List_i64_free(func_base);
@@ -401,6 +402,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     _tr_obj_release(strtab, _trdrop_ByteBuf);
     _tr_obj_release(rela, _trdrop_ByteBuf);
     _tr_obj_release(shstr, _trdrop_ByteBuf);
-    return ByteBuf_write_file(out, out_path);
+    _tr_obj_release(out, _trdrop_ByteBuf);
+    return _trret1803;
 }
 

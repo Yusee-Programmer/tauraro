@@ -186,1515 +186,1538 @@ long long _list_get_elem(LModule* m, LFunc* lf, long long ltag, long long handle
 long long _lower_expr_impl(LModule* m, LFunc* lf, HirExpr* e);
 
 __attribute__((hot)) AstType** box_asttype_lir(AstType* t) {
-    /* pass */
+#line 22 "src/taumir/lower.tr"
     /* unsafe block */
-    /* pass */
+#line 23 "src/taumir/lower.tr"
     AstType** p = ((AstType**)_tr_c_calloc((size_t)(1LL), sizeof(AstType*)));
-    /* pass */
+#line 24 "src/taumir/lower.tr"
     (*p = t);
-    /* pass */
+#line 25 "src/taumir/lower.tr"
     return p;
 }
 
 __attribute__((hot)) long long _f64_bits(double v) {
-    /* pass */
+#line 31 "src/taumir/lower.tr"
     /* unsafe block */
-    /* pass */
+#line 32 "src/taumir/lower.tr"
     double* p = ((double*)_tr_c_calloc((size_t)(1LL), sizeof(double)));
-    /* pass */
+#line 33 "src/taumir/lower.tr"
     (*p = v);
-    /* pass */
+#line 34 "src/taumir/lower.tr"
     long long* ip = ((long long*)(p));
-    /* pass */
+#line 35 "src/taumir/lower.tr"
     return (*ip);
 }
 
 __attribute__((hot)) long long _promote_f(LFunc* lf, long long v) {
-    /* pass */
+#line 39 "src/taumir/lower.tr"
     long long d = LFunc_new_vreg(lf);
-    /* pass */
+#line 40 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IIToF(d, v));
-    /* pass */
+#line 41 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, d, 5LL);
-    /* pass */
+#line 42 "src/taumir/lower.tr"
     return d;
 }
 
 __attribute__((hot)) long long _int_cast_width(TrStr tn) {
-    /* pass */
+#line 48 "src/taumir/lower.tr"
     if ((_tr_str_eqv((tn), (_tr_str_lit_len("i8", 2LL))) || _tr_str_eqv((tn), (_tr_str_lit_len("u8", 2LL))))) {
-        /* pass */
+#line 48 "src/taumir/lower.tr"
         return 8LL;
     }
-    /* pass */
+#line 49 "src/taumir/lower.tr"
     if ((_tr_str_eqv((tn), (_tr_str_lit_len("i16", 3LL))) || _tr_str_eqv((tn), (_tr_str_lit_len("u16", 3LL))))) {
-        /* pass */
+#line 49 "src/taumir/lower.tr"
         return 16LL;
     }
-    /* pass */
+#line 50 "src/taumir/lower.tr"
     if ((_tr_str_eqv((tn), (_tr_str_lit_len("i32", 3LL))) || _tr_str_eqv((tn), (_tr_str_lit_len("u32", 3LL))))) {
-        /* pass */
+#line 50 "src/taumir/lower.tr"
         return 32LL;
     }
-    /* pass */
+#line 51 "src/taumir/lower.tr"
     return 0LL;
 }
 
 __attribute__((hot)) bool _int_cast_signed(TrStr tn) {
-    /* pass */
+#line 54 "src/taumir/lower.tr"
     return ((_tr_str_eqv((tn), (_tr_str_lit_len("i8", 2LL))) || _tr_str_eqv((tn), (_tr_str_lit_len("i16", 3LL)))) || _tr_str_eqv((tn), (_tr_str_lit_len("i32", 3LL))));
 }
 
 __attribute__((hot)) long long _narrow_int(LFunc* lf, long long v, TrStr tn) {
-    /* pass */
+#line 57 "src/taumir/lower.tr"
     long long bits = _int_cast_width(tn);
-    /* pass */
+#line 58 "src/taumir/lower.tr"
     if ((bits == 0LL)) {
-        /* pass */
+#line 58 "src/taumir/lower.tr"
         return v;
     }
-    /* pass */
+#line 60 "src/taumir/lower.tr"
     long long maskc = LFunc_new_vreg(lf);
-    /* pass */
-    LFunc_emit(lf, LInst_ctor_IConst(maskc, ((1LL << bits) - 1LL)));
-    /* pass */
+#line 61 "src/taumir/lower.tr"
+    LFunc_emit(lf, LInst_ctor_IConst(maskc, (((long long)((unsigned long long)(1LL) << (bits))) - 1LL)));
+#line 62 "src/taumir/lower.tr"
     long long masked = LFunc_new_vreg(lf);
-    /* pass */
+#line 63 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(masked, _tr_str_lit_len("&", 1LL), v, maskc));
-    /* pass */
+#line 64 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, masked, 0LL);
-    /* pass */
+#line 65 "src/taumir/lower.tr"
     if ((!_int_cast_signed(tn))) {
-        /* pass */
+#line 65 "src/taumir/lower.tr"
         return masked;
     }
-    /* pass */
+#line 67 "src/taumir/lower.tr"
     long long sbc = LFunc_new_vreg(lf);
-    /* pass */
-    LFunc_emit(lf, LInst_ctor_IConst(sbc, (1LL << (bits - 1LL))));
-    /* pass */
+#line 68 "src/taumir/lower.tr"
+    LFunc_emit(lf, LInst_ctor_IConst(sbc, ((long long)((unsigned long long)(1LL) << ((bits - 1LL))))));
+#line 69 "src/taumir/lower.tr"
     long long xored = LFunc_new_vreg(lf);
-    /* pass */
+#line 70 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(xored, _tr_str_lit_len("^", 1LL), masked, sbc));
-    /* pass */
+#line 71 "src/taumir/lower.tr"
     long long res = LFunc_new_vreg(lf);
-    /* pass */
+#line 72 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(res, _tr_str_lit_len("-", 1LL), xored, sbc));
-    /* pass */
+#line 73 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, res, 0LL);
-    /* pass */
+#line 74 "src/taumir/lower.tr"
     return res;
 }
 
 __attribute__((hot)) bool _is_int_cast_target(TrStr tn) {
-    /* pass */
+#line 78 "src/taumir/lower.tr"
     if (((((_tr_str_eqv((tn), (_tr_str_lit_len("int", 3LL))) || _tr_str_eqv((tn), (_tr_str_lit_len("i64", 3LL)))) || _tr_str_eqv((tn), (_tr_str_lit_len("u64", 3LL)))) || _tr_str_eqv((tn), (_tr_str_lit_len("usize", 5LL)))) || _tr_str_eqv((tn), (_tr_str_lit_len("isize", 5LL))))) {
-        /* pass */
+#line 78 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 79 "src/taumir/lower.tr"
     if ((((((_tr_str_eqv((tn), (_tr_str_lit_len("i8", 2LL))) || _tr_str_eqv((tn), (_tr_str_lit_len("u8", 2LL)))) || _tr_str_eqv((tn), (_tr_str_lit_len("i16", 3LL)))) || _tr_str_eqv((tn), (_tr_str_lit_len("u16", 3LL)))) || _tr_str_eqv((tn), (_tr_str_lit_len("i32", 3LL)))) || _tr_str_eqv((tn), (_tr_str_lit_len("u32", 3LL))))) {
-        /* pass */
+#line 79 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 80 "src/taumir/lower.tr"
     if (_tr_str_eqv((tn), (_tr_str_lit_len("bool", 4LL)))) {
-        /* pass */
+#line 80 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 81 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) TrStr _print_i64_sym() {
-    /* pass */
+#line 84 "src/taumir/lower.tr"
     return _tr_str_lit_len("_tr_rt_print_i64", 16LL);
 }
 
 __attribute__((hot)) bool _is_list_tag(long long t) {
-    /* pass */
+#line 89 "src/taumir/lower.tr"
     return ((((((t == 2LL) || (t == 3LL)) || (t == 14LL)) || (t == 19LL)) || (t == 21LL)) || (t == 22LL));
 }
 
 __attribute__((hot)) long long _list_stride(long long ltag) {
-    /* pass */
+#line 94 "src/taumir/lower.tr"
     if ((ltag == 22LL)) {
-        /* pass */
+#line 94 "src/taumir/lower.tr"
         return 1LL;
     }
-    /* pass */
+#line 95 "src/taumir/lower.tr"
     return 8LL;
 }
 
 __attribute__((hot)) bool _is_set_tag(long long t) {
-    /* pass */
+#line 98 "src/taumir/lower.tr"
     return ((t == 13LL) || (t == 16LL));
 }
 
 __attribute__((hot)) TrStr _set_sym(long long t, TrStr op) {
-    /* pass */
+#line 102 "src/taumir/lower.tr"
     if ((t == 16LL)) {
-        /* pass */
+#line 102 "src/taumir/lower.tr"
         return _tr_strx_concatv((_tr_str_lit_len("_tr_rt_sdict_", 13LL)), (op));
     }
-    /* pass */
+#line 103 "src/taumir/lower.tr"
     return _tr_strx_concatv((_tr_str_lit_len("_tr_rt_idict_", 13LL)), (op));
 }
 
 __attribute__((hot)) bool _is_dict_tag(long long t) {
-    /* pass */
+#line 106 "src/taumir/lower.tr"
     return ((((((((((t == 6LL) || (t == 7LL)) || (t == 8LL)) || (t == 9LL)) || (t == 17LL)) || (t == 18LL)) || (t == 24LL)) || (t == 25LL)) || (t == 26LL)) || (t == 27LL));
 }
 
 __attribute__((hot)) bool _dict_key_is_str(long long t) {
-    /* pass */
+#line 109 "src/taumir/lower.tr"
     return (((((t == 6LL) || (t == 8LL)) || (t == 17LL)) || (t == 24LL)) || (t == 26LL));
 }
 
 __attribute__((hot)) long long _dict_val_tag(long long t) {
-    /* pass */
+#line 112 "src/taumir/lower.tr"
     if (((t == 8LL) || (t == 9LL))) {
-        /* pass */
+#line 112 "src/taumir/lower.tr"
         return 1LL;
     }
-    /* pass */
+#line 113 "src/taumir/lower.tr"
     if (((t == 17LL) || (t == 18LL))) {
-        /* pass */
+#line 113 "src/taumir/lower.tr"
         return 5LL;
     }
-    /* pass */
+#line 114 "src/taumir/lower.tr"
     if (((t == 24LL) || (t == 25LL))) {
-        /* pass */
+#line 114 "src/taumir/lower.tr"
         return 10LL;
     }
-    /* pass */
+#line 115 "src/taumir/lower.tr"
     if (((t == 26LL) || (t == 27LL))) {
-        /* pass */
+#line 115 "src/taumir/lower.tr"
         return 4LL;
     }
-    /* pass */
+#line 116 "src/taumir/lower.tr"
     return 0LL;
 }
 
 __attribute__((hot)) TrStr _dict_new_sym(long long t) {
-    /* pass */
+#line 119 "src/taumir/lower.tr"
     if (_dict_key_is_str(t)) {
-        /* pass */
+#line 119 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_sdict_new", 16LL);
     }
-    /* pass */
+#line 120 "src/taumir/lower.tr"
     return _tr_str_lit_len("_tr_rt_idict_new", 16LL);
 }
 
 __attribute__((hot)) TrStr _dict_sym(long long t, TrStr op) {
-    /* pass */
+#line 124 "src/taumir/lower.tr"
     TrStr pfx = _tr_str_lit_len("_tr_rt_idict_", 13LL);
-    /* pass */
+#line 125 "src/taumir/lower.tr"
     if (_dict_key_is_str(t)) {
-        /* pass */
-        TrStr _strtmp_t3108 = _tr_str_lit_len("_tr_rt_sdict_", 13LL);
+#line 125 "src/taumir/lower.tr"
+        TrStr _strtmp_t6036 = _tr_str_lit_len("_tr_rt_sdict_", 13LL);
         _tr_str_release(pfx);
-        pfx = _strtmp_t3108;
+        pfx = _strtmp_t6036;
     }
-    /* pass */
-    return _tr_strx_concatv((pfx), (op));
+#line 126 "src/taumir/lower.tr"
+    TrStr _trret1471 = _tr_strx_concatv((pfx), (op));
+    _tr_str_release(pfx);
+    return _trret1471;
 }
 
 __attribute__((hot)) long long _list_elem_tag(long long t) {
-    /* pass */
+#line 129 "src/taumir/lower.tr"
     if ((t == 3LL)) {
-        /* pass */
+#line 129 "src/taumir/lower.tr"
         return 1LL;
     }
-    /* pass */
+#line 130 "src/taumir/lower.tr"
     if ((t == 14LL)) {
-        /* pass */
+#line 130 "src/taumir/lower.tr"
         return 5LL;
     }
-    /* pass */
+#line 131 "src/taumir/lower.tr"
     if ((t == 19LL)) {
-        /* pass */
+#line 131 "src/taumir/lower.tr"
         return 10LL;
     }
-    /* pass */
+#line 132 "src/taumir/lower.tr"
     if ((t == 21LL)) {
-        /* pass */
+#line 132 "src/taumir/lower.tr"
         return 15LL;
     }
-    /* pass */
+#line 133 "src/taumir/lower.tr"
     if ((t == 22LL)) {
-        /* pass */
+#line 133 "src/taumir/lower.tr"
         return 4LL;
     }
-    /* pass */
+#line 134 "src/taumir/lower.tr"
     return 0LL;
 }
 
 __attribute__((hot)) long long _list_tag_for_elem(long long et) {
-    /* pass */
+#line 137 "src/taumir/lower.tr"
     if ((et == 1LL)) {
-        /* pass */
+#line 137 "src/taumir/lower.tr"
         return 3LL;
     }
-    /* pass */
+#line 138 "src/taumir/lower.tr"
     if ((et == 5LL)) {
-        /* pass */
+#line 138 "src/taumir/lower.tr"
         return 14LL;
     }
-    /* pass */
+#line 139 "src/taumir/lower.tr"
     if ((et == 10LL)) {
-        /* pass */
+#line 139 "src/taumir/lower.tr"
         return 19LL;
     }
-    /* pass */
+#line 140 "src/taumir/lower.tr"
     if ((et == 15LL)) {
-        /* pass */
+#line 140 "src/taumir/lower.tr"
         return 21LL;
     }
-    /* pass */
+#line 141 "src/taumir/lower.tr"
     if ((et == 4LL)) {
-        /* pass */
+#line 141 "src/taumir/lower.tr"
         return 22LL;
     }
-    /* pass */
+#line 142 "src/taumir/lower.tr"
     return 2LL;
 }
 
 __attribute__((hot)) long long _list_tag_from_ann(LModule* m, AstType* ty) {
-    /* pass */
+#line 146 "src/taumir/lower.tr"
     if (((!_tr_str_eqv((ty->name), (_tr_str_lit_len("List", 4LL)))) && (!_tr_str_eqv((ty->name), (_tr_str_lit_len("Vec", 3LL)))))) {
-        /* pass */
+#line 146 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 147 "src/taumir/lower.tr"
     long long t = _tag_of(m, ty);
-    /* pass */
+#line 148 "src/taumir/lower.tr"
     if ((((((t == 2LL) || (t == 3LL)) || (t == 14LL)) || (t == 19LL)) || (t == 21LL))) {
-        /* pass */
+#line 148 "src/taumir/lower.tr"
         return t;
     }
-    /* pass */
+#line 149 "src/taumir/lower.tr"
     if ((ty->args->len > 0LL)) {
-        /* pass */
+#line 150 "src/taumir/lower.tr"
         TrStr en = _tr_str_retain((*((AstType**)List_ptr_get(ty->args, 0LL)))->name);
-        /* pass */
+#line 151 "src/taumir/lower.tr"
         if (_tr_str_eqv((en), (_tr_str_lit_len("bool", 4LL)))) {
-            /* pass */
+#line 151 "src/taumir/lower.tr"
             _tr_str_release(en);
             return 2LL;
         }
-        /* pass */
+#line 152 "src/taumir/lower.tr"
         if ((_tr_str_eqv((en), (_tr_str_lit_len("Tuple", 5LL))) || _tr_str_eqv((en), (_tr_str_lit_len("tuple", 5LL))))) {
-            /* pass */
+#line 152 "src/taumir/lower.tr"
             _tr_str_release(en);
             return 21LL;
         }
     }
-    /* pass */
+#line 153 "src/taumir/lower.tr"
     return (-1LL);
 }
 
 __attribute__((hot)) long long _dict_tag_from_ann(LModule* m, AstType* ty) {
-    /* pass */
+#line 157 "src/taumir/lower.tr"
     if (((!_tr_str_eqv((ty->name), (_tr_str_lit_len("Dict", 4LL)))) && (!_tr_str_eqv((ty->name), (_tr_str_lit_len("Map", 3LL)))))) {
-        /* pass */
+#line 157 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 158 "src/taumir/lower.tr"
     if ((ty->args->len != 2LL)) {
-        /* pass */
+#line 158 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 159 "src/taumir/lower.tr"
     AstType* kt = (*((AstType**)List_ptr_get(ty->args, 0LL)));
-    /* pass */
+#line 160 "src/taumir/lower.tr"
     AstType* vt = (*((AstType**)List_ptr_get(ty->args, 1LL)));
-    /* pass */
+#line 161 "src/taumir/lower.tr"
     bool kstr = (_tr_str_eqv((kt->name), (_tr_str_lit_len("str", 3LL))) || _tr_str_eqv((kt->name), (_tr_str_lit_len("String", 6LL))));
-    /* pass */
+#line 162 "src/taumir/lower.tr"
     bool kint = _is_int_typename(kt->name);
-    /* pass */
+#line 163 "src/taumir/lower.tr"
     bool vstr = (_tr_str_eqv((vt->name), (_tr_str_lit_len("str", 3LL))) || _tr_str_eqv((vt->name), (_tr_str_lit_len("String", 6LL))));
-    /* pass */
+#line 164 "src/taumir/lower.tr"
     bool vint = _is_int_typename(vt->name);
-    /* pass */
+#line 165 "src/taumir/lower.tr"
     bool vflt = (_tr_str_eqv((vt->name), (_tr_str_lit_len("float", 5LL))) || _tr_str_eqv((vt->name), (_tr_str_lit_len("f64", 3LL))));
-    /* pass */
+#line 166 "src/taumir/lower.tr"
     if ((kstr && vint)) {
-        /* pass */
+#line 166 "src/taumir/lower.tr"
         return 6LL;
     }
-    /* pass */
+#line 167 "src/taumir/lower.tr"
     if ((kint && vint)) {
-        /* pass */
+#line 167 "src/taumir/lower.tr"
         return 7LL;
     }
-    /* pass */
+#line 168 "src/taumir/lower.tr"
     if ((kstr && vstr)) {
-        /* pass */
+#line 168 "src/taumir/lower.tr"
         return 8LL;
     }
-    /* pass */
+#line 169 "src/taumir/lower.tr"
     if ((kint && vstr)) {
-        /* pass */
+#line 169 "src/taumir/lower.tr"
         return 9LL;
     }
-    /* pass */
+#line 170 "src/taumir/lower.tr"
     if ((kstr && vflt)) {
-        /* pass */
+#line 170 "src/taumir/lower.tr"
         return 17LL;
     }
-    /* pass */
+#line 171 "src/taumir/lower.tr"
     if ((kint && vflt)) {
-        /* pass */
+#line 171 "src/taumir/lower.tr"
         return 18LL;
     }
-    /* pass */
+#line 172 "src/taumir/lower.tr"
     return (-1LL);
 }
 
 __attribute__((hot)) bool _is_cmp_op(TrStr op) {
-    /* pass */
+#line 175 "src/taumir/lower.tr"
     return (((((_tr_str_eqv((op), (_tr_str_lit_len("<", 1LL))) || _tr_str_eqv((op), (_tr_str_lit_len(">", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("==", 2LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("!=", 2LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("<=", 2LL)))) || _tr_str_eqv((op), (_tr_str_lit_len(">=", 2LL))));
 }
 
 __attribute__((hot)) bool _is_int_typename(TrStr n) {
-    /* pass */
+#line 178 "src/taumir/lower.tr"
     if (((((_tr_str_eqv((n), (_tr_str_lit_len("int", 3LL))) || _tr_str_eqv((n), (_tr_str_lit_len("i64", 3LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("i32", 3LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("i16", 3LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("i8", 2LL))))) {
-        /* pass */
+#line 178 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 179 "src/taumir/lower.tr"
     if ((((((_tr_str_eqv((n), (_tr_str_lit_len("usize", 5LL))) || _tr_str_eqv((n), (_tr_str_lit_len("isize", 5LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("u64", 3LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("u32", 3LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("u16", 3LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("u8", 2LL))))) {
-        /* pass */
+#line 179 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 180 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) long long _ast_type_tag(AstType* ty) {
-    /* pass */
+#line 185 "src/taumir/lower.tr"
     TrStr n = _tr_str_retain(ty->name);
-    /* pass */
+#line 186 "src/taumir/lower.tr"
     if ((_tr_str_eqv((n), (_tr_str_lit_len("str", 3LL))) || _tr_str_eqv((n), (_tr_str_lit_len("String", 6LL))))) {
-        /* pass */
+#line 186 "src/taumir/lower.tr"
         _tr_str_release(n);
         return 1LL;
     }
-    /* pass */
+#line 187 "src/taumir/lower.tr"
     if (_tr_str_eqv((n), (_tr_str_lit_len("bool", 4LL)))) {
-        /* pass */
+#line 187 "src/taumir/lower.tr"
         _tr_str_release(n);
         return 4LL;
     }
-    /* pass */
+#line 188 "src/taumir/lower.tr"
     if ((_tr_str_eqv((n), (_tr_str_lit_len("List", 4LL))) || _tr_str_eqv((n), (_tr_str_lit_len("Vec", 3LL))))) {
-        /* pass */
+#line 189 "src/taumir/lower.tr"
         if ((ty->args->len > 0LL)) {
-            /* pass */
+#line 190 "src/taumir/lower.tr"
             AstType* et = (*((AstType**)List_ptr_get(ty->args, 0LL)));
-            /* pass */
+#line 191 "src/taumir/lower.tr"
             if ((_tr_str_eqv((et->name), (_tr_str_lit_len("str", 3LL))) || _tr_str_eqv((et->name), (_tr_str_lit_len("String", 6LL))))) {
-                /* pass */
+#line 191 "src/taumir/lower.tr"
                 _tr_str_release(n);
                 return 3LL;
             }
-            /* pass */
+#line 192 "src/taumir/lower.tr"
             if (_is_int_typename(et->name)) {
-                /* pass */
+#line 192 "src/taumir/lower.tr"
                 _tr_str_release(n);
                 return 2LL;
             }
-            /* pass */
+#line 193 "src/taumir/lower.tr"
             if (_tr_str_eqv((et->name), (_tr_str_lit_len("bool", 4LL)))) {
-                /* pass */
+#line 193 "src/taumir/lower.tr"
                 _tr_str_release(n);
                 return 22LL;
             }
-            /* pass */
+#line 194 "src/taumir/lower.tr"
             if ((_tr_str_eqv((et->name), (_tr_str_lit_len("float", 5LL))) || _tr_str_eqv((et->name), (_tr_str_lit_len("f64", 3LL))))) {
-                /* pass */
+#line 194 "src/taumir/lower.tr"
                 _tr_str_release(n);
                 return 14LL;
             }
-            /* pass */
+#line 195 "src/taumir/lower.tr"
             _tr_str_release(n);
             return (-1LL);
         }
-        /* pass */
+#line 196 "src/taumir/lower.tr"
         _tr_str_release(n);
         return 2LL;
     }
-    /* pass */
+#line 197 "src/taumir/lower.tr"
     if (_tr_str_eqv((n), (_tr_str_lit_len("Set", 3LL)))) {
-        /* pass */
+#line 198 "src/taumir/lower.tr"
         if ((ty->args->len > 0LL)) {
-            /* pass */
+#line 199 "src/taumir/lower.tr"
             AstType* se = (*((AstType**)List_ptr_get(ty->args, 0LL)));
-            /* pass */
+#line 200 "src/taumir/lower.tr"
             if ((_tr_str_eqv((se->name), (_tr_str_lit_len("str", 3LL))) || _tr_str_eqv((se->name), (_tr_str_lit_len("String", 6LL))))) {
-                /* pass */
+#line 200 "src/taumir/lower.tr"
                 _tr_str_release(n);
                 return 16LL;
             }
-            /* pass */
+#line 201 "src/taumir/lower.tr"
             if (_is_int_typename(se->name)) {
-                /* pass */
+#line 201 "src/taumir/lower.tr"
                 _tr_str_release(n);
                 return 13LL;
             }
         }
-        /* pass */
+#line 202 "src/taumir/lower.tr"
         _tr_str_release(n);
         return (-1LL);
     }
-    /* pass */
+#line 203 "src/taumir/lower.tr"
     if (_tr_str_eqv((n), (_tr_str_lit_len("Tuple", 5LL)))) {
-        /* pass */
+#line 203 "src/taumir/lower.tr"
         _tr_str_release(n);
         return 15LL;
     }
-    /* pass */
+#line 204 "src/taumir/lower.tr"
     if (_tr_str_eqv((n), (_tr_str_lit_len("def", 3LL)))) {
-        /* pass */
+#line 204 "src/taumir/lower.tr"
         _tr_str_release(n);
         return 0LL;
     }
-    /* pass */
+#line 205 "src/taumir/lower.tr"
     if ((_tr_str_eqv((n), (_tr_str_lit_len("Dict", 4LL))) || _tr_str_eqv((n), (_tr_str_lit_len("Map", 3LL))))) {
-        /* pass */
+#line 206 "src/taumir/lower.tr"
         if ((ty->args->len >= 2LL)) {
-            /* pass */
+#line 207 "src/taumir/lower.tr"
             AstType* kt = (*((AstType**)List_ptr_get(ty->args, 0LL)));
-            /* pass */
+#line 208 "src/taumir/lower.tr"
             AstType* vt = (*((AstType**)List_ptr_get(ty->args, 1LL)));
-            /* pass */
+#line 209 "src/taumir/lower.tr"
             bool kstr = (_tr_str_eqv((kt->name), (_tr_str_lit_len("str", 3LL))) || _tr_str_eqv((kt->name), (_tr_str_lit_len("String", 6LL))));
-            /* pass */
+#line 210 "src/taumir/lower.tr"
             bool kint = _is_int_typename(kt->name);
-            /* pass */
+#line 211 "src/taumir/lower.tr"
             bool vstr = (_tr_str_eqv((vt->name), (_tr_str_lit_len("str", 3LL))) || _tr_str_eqv((vt->name), (_tr_str_lit_len("String", 6LL))));
-            /* pass */
+#line 212 "src/taumir/lower.tr"
             bool vint = _is_int_typename(vt->name);
-            /* pass */
+#line 213 "src/taumir/lower.tr"
             bool vflt = (_tr_str_eqv((vt->name), (_tr_str_lit_len("float", 5LL))) || _tr_str_eqv((vt->name), (_tr_str_lit_len("f64", 3LL))));
-            /* pass */
+#line 214 "src/taumir/lower.tr"
             bool vbool = _tr_str_eqv((vt->name), (_tr_str_lit_len("bool", 4LL)));
-            /* pass */
+#line 215 "src/taumir/lower.tr"
             if (_tr_str_eqv((vt->name), (_tr_str_lit_len("Pointer", 7LL)))) {
-                /* pass */
+#line 215 "src/taumir/lower.tr"
                 vint = true;
             }
-            /* pass */
+#line 216 "src/taumir/lower.tr"
             if ((kstr && vint)) {
-                /* pass */
+#line 216 "src/taumir/lower.tr"
                 _tr_str_release(n);
                 return 6LL;
             }
-            /* pass */
+#line 217 "src/taumir/lower.tr"
             if ((kint && vint)) {
-                /* pass */
+#line 217 "src/taumir/lower.tr"
                 _tr_str_release(n);
                 return 7LL;
             }
-            /* pass */
+#line 218 "src/taumir/lower.tr"
             if ((kstr && vstr)) {
-                /* pass */
+#line 218 "src/taumir/lower.tr"
                 _tr_str_release(n);
                 return 8LL;
             }
-            /* pass */
+#line 219 "src/taumir/lower.tr"
             if ((kint && vstr)) {
-                /* pass */
+#line 219 "src/taumir/lower.tr"
                 _tr_str_release(n);
                 return 9LL;
             }
-            /* pass */
+#line 220 "src/taumir/lower.tr"
             if ((kstr && vflt)) {
-                /* pass */
+#line 220 "src/taumir/lower.tr"
                 _tr_str_release(n);
                 return 17LL;
             }
-            /* pass */
+#line 221 "src/taumir/lower.tr"
             if ((kint && vflt)) {
-                /* pass */
+#line 221 "src/taumir/lower.tr"
                 _tr_str_release(n);
                 return 18LL;
             }
-            /* pass */
+#line 222 "src/taumir/lower.tr"
             if ((kstr && vbool)) {
-                /* pass */
+#line 222 "src/taumir/lower.tr"
                 _tr_str_release(n);
                 return 26LL;
             }
-            /* pass */
+#line 223 "src/taumir/lower.tr"
             if ((kint && vbool)) {
-                /* pass */
+#line 223 "src/taumir/lower.tr"
                 _tr_str_release(n);
                 return 27LL;
             }
         }
-        /* pass */
+#line 224 "src/taumir/lower.tr"
         _tr_str_release(n);
         return (-1LL);
     }
-    /* pass */
+#line 225 "src/taumir/lower.tr"
     if (_is_int_typename(n)) {
-        /* pass */
+#line 225 "src/taumir/lower.tr"
         _tr_str_release(n);
         return 0LL;
     }
-    /* pass */
+#line 226 "src/taumir/lower.tr"
     if (_tr_str_eqv((n), (_tr_str_lit_len("char", 4LL)))) {
-        /* pass */
+#line 226 "src/taumir/lower.tr"
         _tr_str_release(n);
         return 0LL;
     }
-    /* pass */
+#line 232 "src/taumir/lower.tr"
     if ((_tr_str_eqv((n), (_tr_str_lit_len("float", 5LL))) || _tr_str_eqv((n), (_tr_str_lit_len("f64", 3LL))))) {
-        /* pass */
+#line 232 "src/taumir/lower.tr"
         _tr_str_release(n);
         return 5LL;
     }
-    /* pass */
+#line 233 "src/taumir/lower.tr"
     if (((_tr_str_eqv((n), (_tr_str_lit_len("void", 4LL))) || _tr_str_eqv((n), (_tr_str_lit_len("", 0LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("None", 4LL))))) {
-        /* pass */
+#line 233 "src/taumir/lower.tr"
         _tr_str_release(n);
         return 0LL;
     }
-    /* pass */
+#line 234 "src/taumir/lower.tr"
     _tr_str_release(n);
     return (-1LL);
 }
 
 __attribute__((hot)) bool _is_null_str(TrStr s) {
-    /* pass */
+#line 239 "src/taumir/lower.tr"
     return (((unsigned long long)(((char*)(_tr_strz(s))))) == ((unsigned long long)(0LL)));
 }
 
 __attribute__((hot)) TrStr _own(TrStr s) {
-    /* pass */
+#line 245 "src/taumir/lower.tr"
     if (_is_null_str(s)) {
-        /* pass */
+#line 245 "src/taumir/lower.tr"
         return _tr_str_lit_len("", 0LL);
     }
-    /* pass */
+#line 246 "src/taumir/lower.tr"
     return _tr_strx_concatv((s), (_tr_str_lit_len("", 0LL)));
 }
 
 __attribute__((hot)) long long _tag_of(LModule* m, AstType* ty) {
-    /* pass */
+#line 253 "src/taumir/lower.tr"
     if (_is_null_str(ty->name)) {
-        /* pass */
+#line 253 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 254 "src/taumir/lower.tr"
     if (_tr_str_eqv((ty->name), (_tr_str_lit_len("Pointer", 7LL)))) {
-        /* pass */
+#line 254 "src/taumir/lower.tr"
         return 0LL;
     }
-    /* pass */
+#line 257 "src/taumir/lower.tr"
     if (((((((_tr_str_eqv((ty->name), (_tr_str_lit_len("Chan", 4LL))) || _tr_str_eqv((ty->name), (_tr_str_lit_len("Mutex", 5LL)))) || _tr_str_eqv((ty->name), (_tr_str_lit_len("RwLock", 6LL)))) || _tr_str_eqv((ty->name), (_tr_str_lit_len("Atomic", 6LL)))) || _tr_str_eqv((ty->name), (_tr_str_lit_len("ThreadPool", 10LL)))) || _tr_str_eqv((ty->name), (_tr_str_lit_len("Thread", 6LL)))) || _tr_str_eqv((ty->name), (_tr_str_lit_len("ThreadLocal", 11LL))))) {
-        /* pass */
+#line 257 "src/taumir/lower.tr"
         return 0LL;
     }
-    /* pass */
+#line 259 "src/taumir/lower.tr"
     long long sbi = 0LL;
-    /* pass */
+#line 260 "src/taumir/lower.tr"
     while ((sbi < m->subst_names->len)) {
-        /* pass */
-        if (_tr_str_eqv((List_TrStr_get(m->subst_names, sbi)), (ty->name))) {
-            /* pass */
+#line 261 "src/taumir/lower.tr"
+        if (({ __auto_type _ord_t6037 = (List_TrStr_get(m->subst_names, sbi)); __auto_type _wr = (({ TrStr _cmpa_t6038 = (_ord_t6037); TrStr _cmpb_t6039 = (ty->name); _Bool _cmpr_t6040 = _tr_str_eqv(_cmpa_t6038, _cmpb_t6039); _tr_str_release(_cmpa_t6038); _cmpr_t6040; })); _wr; })) {
+#line 262 "src/taumir/lower.tr"
             return _tag_of(m, (*((AstType**)List_ptr_get(m->subst_tys, sbi))));
         }
-        /* pass */
+#line 263 "src/taumir/lower.tr"
         sbi = (sbi + 1LL);
     }
-    /* pass */
+#line 264 "src/taumir/lower.tr"
     if (LModule_is_class(m, ty->name)) {
-        /* pass */
+#line 264 "src/taumir/lower.tr"
         return 10LL;
     }
-    /* pass */
+#line 265 "src/taumir/lower.tr"
     if (LModule_is_enum(m, ty->name)) {
-        /* pass */
+#line 265 "src/taumir/lower.tr"
         return 11LL;
     }
-    /* pass */
+#line 287 "src/taumir/lower.tr"
     if (((_tr_str_eqv((ty->name), (_tr_str_lit_len("Dict", 4LL))) || _tr_str_eqv((ty->name), (_tr_str_lit_len("Map", 3LL)))) && (ty->args->len >= 2LL))) {
-        /* pass */
+#line 288 "src/taumir/lower.tr"
         AstType* dkk = _subst_ty(m, (*((AstType**)List_ptr_get(ty->args, 0LL))));
-        /* pass */
+#line 289 "src/taumir/lower.tr"
         AstType* dvv = _subst_ty(m, (*((AstType**)List_ptr_get(ty->args, 1LL))));
-        /* pass */
+#line 290 "src/taumir/lower.tr"
         if (((!_is_null_str(dvv->name)) && (LModule_is_class(m, dvv->name) || LModule_is_enum(m, dvv->name)))) {
-            /* pass */
+#line 291 "src/taumir/lower.tr"
             if ((_tr_str_eqv((dkk->name), (_tr_str_lit_len("str", 3LL))) || _tr_str_eqv((dkk->name), (_tr_str_lit_len("String", 6LL))))) {
-                /* pass */
+#line 291 "src/taumir/lower.tr"
                 return 24LL;
             }
-            /* pass */
+#line 292 "src/taumir/lower.tr"
             if (_is_int_typename(dkk->name)) {
-                /* pass */
+#line 292 "src/taumir/lower.tr"
                 return 25LL;
             }
         }
-        /* pass */
+#line 293 "src/taumir/lower.tr"
         long long _dtg = _ast_type_tag(_subst_args(m, ty));
-        /* pass */
+#line 294 "src/taumir/lower.tr"
         if (_is_dict_tag(_dtg)) {
-            /* pass */
-            return _dtg;
+#line 294 "src/taumir/lower.tr"
+            long long _trret1472 = _dtg;
+            return _trret1472;
         }
-        /* pass */
+#line 295 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 297 "src/taumir/lower.tr"
     if (((ty->args->len > 0LL) && (_prog_generic_class_index(m, ty->name) >= 0LL))) {
-        /* pass */
-        if ((!_tr_str_eqv((_ensure_generic_class(m, ty)), (_tr_str_lit_len("", 0LL))))) {
-            /* pass */
+#line 298 "src/taumir/lower.tr"
+        if (({ TrStr _cmpa_t6041 = (_ensure_generic_class(m, ty)); TrStr _cmpb_t6042 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t6043 = !_tr_str_eqv(_cmpa_t6041, _cmpb_t6042); _tr_str_release(_cmpa_t6041); _cmpr_t6043; })) {
+#line 298 "src/taumir/lower.tr"
             return 10LL;
         }
-        /* pass */
+#line 299 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 300 "src/taumir/lower.tr"
     if (((_tr_str_eqv((ty->name), (_tr_str_lit_len("List", 4LL))) || _tr_str_eqv((ty->name), (_tr_str_lit_len("Vec", 3LL)))) && (ty->args->len > 0LL))) {
-        /* pass */
+#line 301 "src/taumir/lower.tr"
         AstType* lelem = _subst_ty(m, (*((AstType**)List_ptr_get(ty->args, 0LL))));
-        /* pass */
+#line 302 "src/taumir/lower.tr"
         if (((!_is_null_str(lelem->name)) && LModule_is_class(m, lelem->name))) {
-            /* pass */
+#line 302 "src/taumir/lower.tr"
             return 19LL;
         }
     }
-    /* pass */
+#line 305 "src/taumir/lower.tr"
     if (((ty->args->len > 0LL) && (m->subst_names->len > 0LL))) {
-        /* pass */
+#line 306 "src/taumir/lower.tr"
         return _ast_type_tag(_subst_args(m, ty));
     }
-    /* pass */
+#line 307 "src/taumir/lower.tr"
     return _ast_type_tag(ty);
 }
 
 __attribute__((hot)) AstType* _subst_args(LModule* m, AstType* ty) {
-    /* pass */
+#line 312 "src/taumir/lower.tr"
     if ((ty->args->len == 0LL)) {
-        /* pass */
+#line 312 "src/taumir/lower.tr"
         return ty;
     }
-    /* pass */
-    AstType* r = ({ TrStr _at_t3109 = (_own(ty->name)); __auto_type _wr = (AstType_init(_at_t3109)); _tr_str_release(_at_t3109); _wr; });
-    /* pass */
+#line 313 "src/taumir/lower.tr"
+    AstType* r = ({ TrStr _at_t6044 = (_own(ty->name)); __auto_type _wr = (AstType_init(_at_t6044)); _tr_str_release(_at_t6044); _wr; });
+#line 314 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 315 "src/taumir/lower.tr"
     while ((i < ty->args->len)) {
-        /* pass */
-        List_ptr_append(r->args, box_asttype_lir(_subst_ty(m, (*((AstType**)List_ptr_get(ty->args, i))))));
-        /* pass */
+#line 316 "src/taumir/lower.tr"
+        ({ __auto_type _ord_t6045 = (box_asttype_lir(_subst_ty(m, (*((AstType**)List_ptr_get(ty->args, i)))))); List_ptr_append(r->args, _ord_t6045); });
+#line 317 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 318 "src/taumir/lower.tr"
     return r;
 }
 
 __attribute__((hot)) AstType* _subst_ty(LModule* m, AstType* ty) {
-    /* pass */
+#line 322 "src/taumir/lower.tr"
     if (_is_null_str(ty->name)) {
-        /* pass */
+#line 322 "src/taumir/lower.tr"
         return ty;
     }
-    /* pass */
+#line 323 "src/taumir/lower.tr"
     long long sbi = 0LL;
-    /* pass */
+#line 324 "src/taumir/lower.tr"
     while ((sbi < m->subst_names->len)) {
-        /* pass */
-        if (_tr_str_eqv((List_TrStr_get(m->subst_names, sbi)), (ty->name))) {
-            /* pass */
+#line 325 "src/taumir/lower.tr"
+        if (({ __auto_type _ord_t6046 = (List_TrStr_get(m->subst_names, sbi)); __auto_type _wr = (({ TrStr _cmpa_t6047 = (_ord_t6046); TrStr _cmpb_t6048 = (ty->name); _Bool _cmpr_t6049 = _tr_str_eqv(_cmpa_t6047, _cmpb_t6048); _tr_str_release(_cmpa_t6047); _cmpr_t6049; })); _wr; })) {
+#line 325 "src/taumir/lower.tr"
             return (*((AstType**)List_ptr_get(m->subst_tys, sbi)));
         }
-        /* pass */
+#line 326 "src/taumir/lower.tr"
         sbi = (sbi + 1LL);
     }
-    /* pass */
+#line 327 "src/taumir/lower.tr"
     return ty;
 }
 
 __attribute__((hot)) long long _prog_generic_class_index(LModule* m, TrStr name) {
-    /* pass */
+#line 331 "src/taumir/lower.tr"
     if (_is_null_str(name)) {
-        /* pass */
+#line 331 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 332 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 333 "src/taumir/lower.tr"
     while ((i < m->hir_prog->classes->len)) {
-        /* pass */
+#line 334 "src/taumir/lower.tr"
         HirClass* c = ((HirClass*)List_ptr_get(m->hir_prog->classes, i));
-        /* pass */
+#line 335 "src/taumir/lower.tr"
         if ((_tr_str_eqv((c->name), (name)) && (c->generics->len > 0LL))) {
-            /* pass */
-            return i;
+#line 335 "src/taumir/lower.tr"
+            long long _trret1473 = i;
+            return _trret1473;
         }
-        /* pass */
+#line 336 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 337 "src/taumir/lower.tr"
     return (-1LL);
 }
 
 __attribute__((hot)) bool _is_real_generic_class_arity_match(LModule* m, TrStr name, long long arg_count) {
-    /* pass */
+#line 359 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) TrStr _mangle_generic(LModule* m, AstType* ty) {
-    /* pass */
+#line 363 "src/taumir/lower.tr"
     TrStr n = _own(ty->name);
-    /* pass */
+#line 364 "src/taumir/lower.tr"
     long long ai = 0LL;
-    /* pass */
+#line 365 "src/taumir/lower.tr"
     while ((ai < ty->args->len)) {
-        /* pass */
+#line 366 "src/taumir/lower.tr"
         AstType* at = _subst_ty(m, (*((AstType**)List_ptr_get(ty->args, ai))));
-        /* pass */
-        TrStr _strtmp_t3110 = ({ TrStr _cl = (_tr_strx_concatv((n), (_tr_str_lit_len("__g", 3LL)))); TrStr _cr = (_own(at->name)); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
+#line 367 "src/taumir/lower.tr"
+        TrStr _strtmp_t6052 = ({ TrStr _tr_cl = (_tr_strx_concatv((n), (_tr_str_lit_len("__g", 3LL)))); TrStr _tr_cr = (_own(at->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; });
         _tr_str_release(n);
-        n = _strtmp_t3110;
-        /* pass */
+        n = _strtmp_t6052;
+#line 368 "src/taumir/lower.tr"
         ai = (ai + 1LL);
     }
-    /* pass */
-    return n;
+#line 369 "src/taumir/lower.tr"
+    TrStr _trret1474 = _tr_str_retain(n);
+    _tr_str_release(n);
+    return _trret1474;
 }
 
 __attribute__((hot)) TrStr _ensure_generic_class(LModule* m, AstType* ty) {
-    /* pass */
+#line 375 "src/taumir/lower.tr"
     long long gci = _prog_generic_class_index(m, ty->name);
-    /* pass */
+#line 376 "src/taumir/lower.tr"
     if ((gci < 0LL)) {
-        /* pass */
+#line 376 "src/taumir/lower.tr"
         return _tr_str_lit_len("", 0LL);
     }
-    /* pass */
+#line 377 "src/taumir/lower.tr"
     HirClass* c = ((HirClass*)List_ptr_get(m->hir_prog->classes, gci));
-    /* pass */
+#line 378 "src/taumir/lower.tr"
     if ((c->generics->len != ty->args->len)) {
-        /* pass */
+#line 378 "src/taumir/lower.tr"
         return _tr_str_lit_len("", 0LL);
     }
-    /* pass */
+#line 379 "src/taumir/lower.tr"
     if ((c->base_classes->len > 0LL)) {
-        /* pass */
+#line 379 "src/taumir/lower.tr"
         return _tr_str_lit_len("", 0LL);
     }
-    /* pass */
+#line 380 "src/taumir/lower.tr"
     TrStr mangled = _mangle_generic(m, ty);
-    /* pass */
+#line 381 "src/taumir/lower.tr"
     if (LModule_is_class(m, mangled)) {
-        /* pass */
-        return mangled;
+#line 381 "src/taumir/lower.tr"
+        TrStr _trret1475 = _tr_str_retain(mangled);
+        _tr_str_release(mangled);
+        return _trret1475;
     }
-    /* pass */
+#line 383 "src/taumir/lower.tr"
     long long sb = 0LL;
-    /* pass */
+#line 384 "src/taumir/lower.tr"
     while ((sb < c->generics->len)) {
-        /* pass */
-        ({ TrStr _at_t3111 = (List_TrStr_get(c->generics, sb)); TrStr _at_t3112 = (_own(_at_t3111)); List_TrStr_append(m->subst_names, _at_t3112); _tr_str_release(_at_t3111); _tr_str_release(_at_t3112); });
-        /* pass */
-        List_ptr_append(m->subst_tys, box_asttype_lir(_subst_ty(m, (*((AstType**)List_ptr_get(ty->args, sb))))));
-        /* pass */
+#line 385 "src/taumir/lower.tr"
+        ({ TrStr _at_t6053 = (List_TrStr_get(c->generics, sb)); TrStr _ord_t6054 = (_own(_at_t6053)); List_TrStr_append(m->subst_names, _ord_t6054); _tr_str_release(_at_t6053); _tr_str_release(_ord_t6054); });
+#line 386 "src/taumir/lower.tr"
+        ({ __auto_type _ord_t6055 = (box_asttype_lir(_subst_ty(m, (*((AstType**)List_ptr_get(ty->args, sb)))))); List_ptr_append(m->subst_tys, _ord_t6055); });
+#line 387 "src/taumir/lower.tr"
         sb = (sb + 1LL);
     }
-    /* pass */
-    ClassLayout* lay = ({ TrStr _at_t3113 = (_own(mangled)); __auto_type _wr = (ClassLayout_init(_at_t3113)); _tr_str_release(_at_t3113); _wr; });
-    /* pass */
+#line 389 "src/taumir/lower.tr"
+    ClassLayout* lay = ({ TrStr _at_t6056 = (_own(mangled)); __auto_type _wr = (ClassLayout_init(_at_t6056)); _tr_str_release(_at_t6056); _wr; });
+#line 390 "src/taumir/lower.tr"
     lay->is_value = (!c->is_class);
-    /* pass */
+#line 391 "src/taumir/lower.tr"
     bool ok = true;
-    /* pass */
+#line 392 "src/taumir/lower.tr"
     long long fi = 0LL;
-    /* pass */
+#line 393 "src/taumir/lower.tr"
     while ((fi < c->fields->len)) {
-        /* pass */
+#line 394 "src/taumir/lower.tr"
         long long ftg = _tag_of(m, ((HirField*)List_ptr_get(c->fields, fi))->ty);
-        /* pass */
+#line 395 "src/taumir/lower.tr"
         if ((ftg < 0LL)) {
-            /* pass */
+#line 396 "src/taumir/lower.tr"
             ok = false;
         }
-        /* pass */
-        ({ TrStr _at_t3114 = (_own(((HirField*)List_ptr_get(c->fields, fi))->name)); List_TrStr_append(lay->fields, _at_t3114); _tr_str_release(_at_t3114); });
-        /* pass */
+#line 397 "src/taumir/lower.tr"
+        ({ TrStr _ord_t6057 = (_own(((HirField*)List_ptr_get(c->fields, fi))->name)); List_TrStr_append(lay->fields, _ord_t6057); _tr_str_release(_ord_t6057); });
+#line 398 "src/taumir/lower.tr"
         List_i64_append(lay->ftags, ftg);
-        /* pass */
-        ({ TrStr _at_t3115 = (_cls_of_ty(m, _subst_ty(m, ((HirField*)List_ptr_get(c->fields, fi))->ty))); List_TrStr_append(lay->fcls, _at_t3115); _tr_str_release(_at_t3115); });
-        /* pass */
+#line 399 "src/taumir/lower.tr"
+        ({ TrStr _ord_t6058 = (_cls_of_ty(m, _subst_ty(m, ((HirField*)List_ptr_get(c->fields, fi))->ty))); List_TrStr_append(lay->fcls, _ord_t6058); _tr_str_release(_ord_t6058); });
+#line 400 "src/taumir/lower.tr"
         fi = (fi + 1LL);
     }
-    /* pass */
+#line 401 "src/taumir/lower.tr"
     if (ok) {
-        /* pass */
+#line 402 "src/taumir/lower.tr"
         LModule_add_class(m, lay);
-        /* pass */
+#line 405 "src/taumir/lower.tr"
         long long prereg = 0LL;
-        /* pass */
+#line 406 "src/taumir/lower.tr"
         while ((prereg < m->hir_prog->functions->len)) {
-            /* pass */
+#line 407 "src/taumir/lower.tr"
             HirFunction* pf = ((HirFunction*)List_ptr_get(m->hir_prog->functions, prereg));
-            /* pass */
+#line 408 "src/taumir/lower.tr"
             if (((_tr_str_eqv((pf->class_name), (ty->name)) && (!pf->is_extern)) && (pf->generics->len == 0LL))) {
-                /* pass */
-                TrStr pfmang = ({ TrStr _cl = (({ TrStr _cl = (_own(mangled)); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_own(pf->name)); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
-                /* pass */
+#line 409 "src/taumir/lower.tr"
+                TrStr pfmang = ({ __auto_type _ord_t6059 = (({ TrStr _tr_cl = (_own(mangled)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (_ord_t6059); TrStr _tr_cr = (_own(pf->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); _wr; });
+#line 410 "src/taumir/lower.tr"
                 long long pfrt = _tag_of(m, pf->ret_ty);
-                /* pass */
+#line 411 "src/taumir/lower.tr"
                 List_TrStr_append(m->fn_names, pfmang);
-                /* pass */
+#line 412 "src/taumir/lower.tr"
                 List_i64_append(m->fn_ret, pfrt);
-                /* pass */
+#line 413 "src/taumir/lower.tr"
                 if ((pf->returns_owned && ((pfrt == 10LL) || (pfrt == 11LL)))) {
-                    /* pass */
+#line 413 "src/taumir/lower.tr"
                     LModule_mark_fn_owned(m, pfmang);
                 }
             }
-            /* pass */
+#line 414 "src/taumir/lower.tr"
             prereg = (prereg + 1LL);
         }
-        /* pass */
+#line 415 "src/taumir/lower.tr"
         long long prereg2 = 0LL;
-        /* pass */
+#line 416 "src/taumir/lower.tr"
         while ((prereg2 < c->methods->len)) {
-            /* pass */
+#line 417 "src/taumir/lower.tr"
             HirFunction* pfm = ((HirFunction*)List_ptr_get(c->methods, prereg2));
-            /* pass */
+#line 418 "src/taumir/lower.tr"
             if ((((!pfm->is_extern) && (pfm->generics->len == 0LL)) && (!_method_in_prog_functions(m->hir_prog, ty->name, pfm->name)))) {
-                /* pass */
-                TrStr pfmang2 = ({ TrStr _cl = (({ TrStr _cl = (_own(mangled)); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_own(pfm->name)); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
-                /* pass */
+#line 419 "src/taumir/lower.tr"
+                TrStr pfmang2 = ({ __auto_type _ord_t6060 = (({ TrStr _tr_cl = (_own(mangled)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (_ord_t6060); TrStr _tr_cr = (_own(pfm->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); _wr; });
+#line 420 "src/taumir/lower.tr"
                 long long pfrt2 = _tag_of(m, pfm->ret_ty);
-                /* pass */
+#line 421 "src/taumir/lower.tr"
                 List_TrStr_append(m->fn_names, pfmang2);
-                /* pass */
+#line 422 "src/taumir/lower.tr"
                 List_i64_append(m->fn_ret, pfrt2);
-                /* pass */
+#line 423 "src/taumir/lower.tr"
                 if ((pfm->returns_owned && ((pfrt2 == 10LL) || (pfrt2 == 11LL)))) {
-                    /* pass */
+#line 423 "src/taumir/lower.tr"
                     LModule_mark_fn_owned(m, pfmang2);
                 }
             }
-            /* pass */
+#line 424 "src/taumir/lower.tr"
             prereg2 = (prereg2 + 1LL);
         }
-        /* pass */
+#line 425 "src/taumir/lower.tr"
         long long mi = 0LL;
-        /* pass */
+#line 426 "src/taumir/lower.tr"
         while ((mi < m->hir_prog->functions->len)) {
-            /* pass */
+#line 427 "src/taumir/lower.tr"
             HirFunction* mf = ((HirFunction*)List_ptr_get(m->hir_prog->functions, mi));
-            /* pass */
+#line 428 "src/taumir/lower.tr"
             if (((_tr_str_eqv((mf->class_name), (ty->name)) && (!mf->is_extern)) && (mf->generics->len == 0LL))) {
-                /* pass */
+#line 429 "src/taumir/lower.tr"
                 _lir_lower_method(m, mangled, mf);
-                /* pass */
+#line 430 "src/taumir/lower.tr"
                 if ((!m->ok)) {
-                    /* pass */
-                    ({ TrStr _at_t3116 = (({ TrStr _cl = (({ TrStr _cl = (_own(mangled)); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_own(mf->name)); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); List_TrStr_append(m->unavail_names, _at_t3116); _tr_str_release(_at_t3116); });
-                    /* pass */
-                    ({ TrStr _at_t3117 = (_own(m->fail_note)); List_TrStr_append(m->unavail_notes, _at_t3117); _tr_str_release(_at_t3117); });
-                    /* pass */
+#line 432 "src/taumir/lower.tr"
+                    ({ __auto_type _ord_t6061 = (({ TrStr _tr_cl = (_own(mangled)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t6062 = (({ TrStr _tr_cl = (_ord_t6061); TrStr _tr_cr = (_own(mf->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); List_TrStr_append(m->unavail_names, _ord_t6062); _tr_str_release(_ord_t6062); });
+#line 433 "src/taumir/lower.tr"
+                    ({ TrStr _ord_t6063 = (_own(m->fail_note)); List_TrStr_append(m->unavail_notes, _ord_t6063); _tr_str_release(_ord_t6063); });
+#line 434 "src/taumir/lower.tr"
                     m->ok = true;
-                    /* pass */
+#line 435 "src/taumir/lower.tr"
                     m->fail_note = _tr_str_lit_len("", 0LL);
                 }
             }
-            /* pass */
+#line 436 "src/taumir/lower.tr"
             mi = (mi + 1LL);
         }
-        /* pass */
+#line 437 "src/taumir/lower.tr"
         long long mi2 = 0LL;
-        /* pass */
+#line 438 "src/taumir/lower.tr"
         while ((mi2 < c->methods->len)) {
-            /* pass */
+#line 439 "src/taumir/lower.tr"
             HirFunction* mfm = ((HirFunction*)List_ptr_get(c->methods, mi2));
-            /* pass */
+#line 440 "src/taumir/lower.tr"
             if ((((!mfm->is_extern) && (mfm->generics->len == 0LL)) && (!_method_in_prog_functions(m->hir_prog, ty->name, mfm->name)))) {
-                /* pass */
+#line 441 "src/taumir/lower.tr"
                 _lir_lower_method(m, mangled, mfm);
-                /* pass */
+#line 442 "src/taumir/lower.tr"
                 if ((!m->ok)) {
-                    /* pass */
-                    ({ TrStr _at_t3118 = (({ TrStr _cl = (({ TrStr _cl = (_own(mangled)); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_own(mfm->name)); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); List_TrStr_append(m->unavail_names, _at_t3118); _tr_str_release(_at_t3118); });
-                    /* pass */
-                    ({ TrStr _at_t3119 = (_own(m->fail_note)); List_TrStr_append(m->unavail_notes, _at_t3119); _tr_str_release(_at_t3119); });
-                    /* pass */
+#line 443 "src/taumir/lower.tr"
+                    ({ __auto_type _ord_t6064 = (({ TrStr _tr_cl = (_own(mangled)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t6065 = (({ TrStr _tr_cl = (_ord_t6064); TrStr _tr_cr = (_own(mfm->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); List_TrStr_append(m->unavail_names, _ord_t6065); _tr_str_release(_ord_t6065); });
+#line 444 "src/taumir/lower.tr"
+                    ({ TrStr _ord_t6066 = (_own(m->fail_note)); List_TrStr_append(m->unavail_notes, _ord_t6066); _tr_str_release(_ord_t6066); });
+#line 445 "src/taumir/lower.tr"
                     m->ok = true;
-                    /* pass */
+#line 446 "src/taumir/lower.tr"
                     m->fail_note = _tr_str_lit_len("", 0LL);
                 }
             }
-            /* pass */
+#line 447 "src/taumir/lower.tr"
             mi2 = (mi2 + 1LL);
         }
     }
-    /* pass */
+#line 449 "src/taumir/lower.tr"
     sb = 0LL;
-    /* pass */
+#line 450 "src/taumir/lower.tr"
     while ((sb < c->generics->len)) {
-        /* pass */
+#line 451 "src/taumir/lower.tr"
         List_TrStr_pop(m->subst_names);
-        /* pass */
+#line 452 "src/taumir/lower.tr"
         List_ptr_pop(m->subst_tys);
-        /* pass */
+#line 453 "src/taumir/lower.tr"
         sb = (sb + 1LL);
     }
-    /* pass */
+#line 454 "src/taumir/lower.tr"
     if ((!ok)) {
-        /* pass */
+#line 454 "src/taumir/lower.tr"
         _tr_str_release(mangled);
         _tr_obj_release(lay, _trdrop_ClassLayout);
         return _tr_str_lit_len("", 0LL);
     }
-    /* pass */
+#line 455 "src/taumir/lower.tr"
+    TrStr _trret1476 = _tr_str_retain(mangled);
+    _tr_str_release(mangled);
     _tr_obj_release(lay, _trdrop_ClassLayout);
-    return mangled;
+    return _trret1476;
 }
 
 __attribute__((hot)) TrStr _val_obj_cls(LModule* m, LFunc* lf, HirExpr* val) {
-    /* pass */
+#line 462 "src/taumir/lower.tr"
     AstType* t = hir_expr_type(val);
-    /* pass */
+#line 463 "src/taumir/lower.tr"
     if (_is_null_str(t->name)) {
-        /* pass */
+#line 463 "src/taumir/lower.tr"
         return _tr_str_lit_len("", 0LL);
     }
-    /* pass */
+#line 464 "src/taumir/lower.tr"
     if ((LModule_is_class(m, t->name) || LModule_is_enum(m, t->name))) {
-        /* pass */
-        return _own(t->name);
+#line 464 "src/taumir/lower.tr"
+        TrStr _trret1477 = _own(t->name);
+        return _trret1477;
     }
-    /* pass */
+#line 465 "src/taumir/lower.tr"
     if ((_prog_generic_class_index(m, t->name) < 0LL)) {
-        /* pass */
+#line 465 "src/taumir/lower.tr"
         return _tr_str_lit_len("", 0LL);
     }
-    /* pass */
-    AstType* ct = ({ TrStr _at_t3120 = (_own(t->name)); __auto_type _wr = (AstType_init(_at_t3120)); _tr_str_release(_at_t3120); _wr; });
-    /* pass */
+#line 466 "src/taumir/lower.tr"
+    AstType* ct = ({ TrStr _at_t6067 = (_own(t->name)); __auto_type _wr = (AstType_init(_at_t6067)); _tr_str_release(_at_t6067); _wr; });
+#line 467 "src/taumir/lower.tr"
     if ((t->args->len > 0LL)) {
-        /* pass */
+#line 468 "src/taumir/lower.tr"
         long long ai = 0LL;
-        /* pass */
+#line 469 "src/taumir/lower.tr"
         while ((ai < t->args->len)) {
-            /* pass */
-            List_ptr_append(ct->args, box_asttype_lir(_subst_ty(m, (*((AstType**)List_ptr_get(t->args, ai))))));
-            /* pass */
+#line 470 "src/taumir/lower.tr"
+            ({ __auto_type _ord_t6068 = (box_asttype_lir(_subst_ty(m, (*((AstType**)List_ptr_get(t->args, ai)))))); List_ptr_append(ct->args, _ord_t6068); });
+#line 471 "src/taumir/lower.tr"
             ai = (ai + 1LL);
         }
     } else if ((m->subst_names->len > 0LL)) {
-        /* pass */
-        HirClass* gc = ((HirClass*)List_ptr_get(m->hir_prog->classes, _prog_generic_class_index(m, t->name)));
-        /* pass */
+#line 473 "src/taumir/lower.tr"
+        HirClass* gc = ({ __auto_type _ord_t6069 = (_prog_generic_class_index(m, t->name)); __auto_type _wr = (((HirClass*)List_ptr_get(m->hir_prog->classes, _ord_t6069))); _wr; });
+#line 474 "src/taumir/lower.tr"
         long long gi = 0LL;
-        /* pass */
+#line 475 "src/taumir/lower.tr"
         while ((gi < gc->generics->len)) {
-            /* pass */
-            ({ TrStr _at_t3121 = (List_TrStr_get(gc->generics, gi)); TrStr _at_t3122 = (_own(_at_t3121)); List_ptr_append(ct->args, box_asttype_lir(_subst_ty(m, AstType_init(_at_t3122)))); _tr_str_release(_at_t3121); _tr_str_release(_at_t3122); });
-            /* pass */
+#line 476 "src/taumir/lower.tr"
+            ({ TrStr _at_t6070 = (List_TrStr_get(gc->generics, gi)); TrStr _at_t6071 = (_own(_at_t6070)); __auto_type _ord_t6072 = (box_asttype_lir(_subst_ty(m, AstType_init(_at_t6071)))); List_ptr_append(ct->args, _ord_t6072); _tr_str_release(_at_t6070); _tr_str_release(_at_t6071); });
+#line 477 "src/taumir/lower.tr"
             gi = (gi + 1LL);
         }
     }
-    /* pass */
+#line 478 "src/taumir/lower.tr"
     if ((ct->args->len == 0LL)) {
-        /* pass */
+#line 478 "src/taumir/lower.tr"
         return _tr_str_lit_len("", 0LL);
     }
-    /* pass */
-    return _ensure_generic_class(m, ct);
+#line 479 "src/taumir/lower.tr"
+    TrStr _trret1478 = _ensure_generic_class(m, ct);
+    return _trret1478;
 }
 
 __attribute__((hot)) TrStr _cls_of_ty(LModule* m, AstType* ty) {
-    /* pass */
+#line 483 "src/taumir/lower.tr"
     if (_is_null_str(ty->name)) {
-        /* pass */
+#line 483 "src/taumir/lower.tr"
         return _tr_str_lit_len("", 0LL);
     }
-    /* pass */
+#line 484 "src/taumir/lower.tr"
     if ((LModule_is_class(m, ty->name) || LModule_is_enum(m, ty->name))) {
-        /* pass */
+#line 484 "src/taumir/lower.tr"
         return _own(ty->name);
     }
-    /* pass */
+#line 485 "src/taumir/lower.tr"
     if (((ty->args->len > 0LL) && (_prog_generic_class_index(m, ty->name) >= 0LL))) {
-        /* pass */
+#line 486 "src/taumir/lower.tr"
         TrStr gm = _ensure_generic_class(m, ty);
-        /* pass */
+#line 487 "src/taumir/lower.tr"
         if ((!_tr_str_eqv((gm), (_tr_str_lit_len("", 0LL))))) {
-            /* pass */
-            return gm;
+#line 487 "src/taumir/lower.tr"
+            TrStr _trret1479 = _tr_str_retain(gm);
+            _tr_str_release(gm);
+            return _trret1479;
         }
     }
-    /* pass */
+#line 488 "src/taumir/lower.tr"
     return _tr_str_lit_len("", 0LL);
 }
 
 __attribute__((hot)) TrStr _recv_class(LModule* m, LFunc* lf, HirExpr* obj) {
-    /* pass */
+#line 494 "src/taumir/lower.tr"
     TrStr cn = _tr_str_retain(hir_expr_type(obj)->name);
-    /* pass */
+#line 495 "src/taumir/lower.tr"
     if ((_tr_str_eqv((cn), (_tr_str_lit_len("Dict", 4LL))) || _tr_str_eqv((cn), (_tr_str_lit_len("Map", 3LL))))) {
-        /* pass */
+#line 495 "src/taumir/lower.tr"
         _tr_str_release(cn);
         return _tr_str_lit_len("", 0LL);
     }
-    /* pass */
+#line 496 "src/taumir/lower.tr"
     if (((!_is_null_str(cn)) && (LModule_is_class(m, cn) || LModule_is_enum(m, cn)))) {
-        /* pass */
-        return cn;
+#line 496 "src/taumir/lower.tr"
+        TrStr _trret1480 = _tr_str_retain(cn);
+        _tr_str_release(cn);
+        return _trret1480;
     }
-    /* pass */
+#line 497 "src/taumir/lower.tr"
     if ((((!_is_null_str(cn)) && (hir_expr_type(obj)->args->len > 0LL)) && (_prog_generic_class_index(m, cn) >= 0LL))) {
-        /* pass */
+#line 498 "src/taumir/lower.tr"
         TrStr grc = _ensure_generic_class(m, hir_expr_type(obj));
-        /* pass */
+#line 499 "src/taumir/lower.tr"
         if ((!_tr_str_eqv((grc), (_tr_str_lit_len("", 0LL))))) {
-            /* pass */
+#line 499 "src/taumir/lower.tr"
+            TrStr _trret1481 = _tr_str_retain(grc);
             _tr_str_release(cn);
-            return grc;
+            _tr_str_release(grc);
+            return _trret1481;
         }
     }
-    /* pass */
-    __auto_type _t3123 = (*obj);
-    if (_t3123.tag == HirExpr_EIdent) {
-        __auto_type nm = _t3123.data.EIdent.name;
-        /* pass */
+#line 500 "src/taumir/lower.tr"
+    __auto_type _t6073 = (*obj);
+    if (_t6073.tag == HirExpr_EIdent) {
+        __auto_type nm = _t6073.data.EIdent.name;
+#line 502 "src/taumir/lower.tr"
         TrStr vc = LFunc_var_cls_of(lf, nm);
-        /* pass */
+#line 503 "src/taumir/lower.tr"
         if (((!_is_null_str(vc)) && (LModule_is_class(m, vc) || LModule_is_enum(m, vc)))) {
-            /* pass */
+#line 503 "src/taumir/lower.tr"
+            TrStr _trret1482 = _tr_str_retain(vc);
+            _tr_str_release(vc);
             _tr_str_release(cn);
-            return vc;
+            return _trret1482;
         }
         _tr_str_release(vc);
-    } else if (_t3123.tag == HirExpr_EPropAccess) {
-        __auto_type inner = _t3123.data.EPropAccess.obj;
-__auto_type prop = _t3123.data.EPropAccess.prop;
-        /* pass */
+    } else if (_t6073.tag == HirExpr_EPropAccess) {
+        __auto_type inner = _t6073.data.EPropAccess.obj;
+__auto_type prop = _t6073.data.EPropAccess.prop;
+#line 505 "src/taumir/lower.tr"
         TrStr icls = _recv_class(m, lf, inner);
-        /* pass */
+#line 506 "src/taumir/lower.tr"
         if (((!_tr_str_eqv((icls), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, icls))) {
-            /* pass */
+#line 507 "src/taumir/lower.tr"
             TrStr fc = LModule_field_cls(m, icls, prop);
-            /* pass */
+#line 508 "src/taumir/lower.tr"
             if (((!_is_null_str(fc)) && (!_tr_str_eqv((fc), (_tr_str_lit_len("", 0LL)))))) {
-                /* pass */
+#line 508 "src/taumir/lower.tr"
+                TrStr _trret1483 = _tr_str_retain(fc);
                 _tr_str_release(icls);
+                _tr_str_release(fc);
                 _tr_str_release(cn);
-                return fc;
+                return _trret1483;
             }
         }
         _tr_str_release(icls);
     } else if (1) {
-        __auto_type _ = _t3123;
-        /* pass */
+        __auto_type _ = _t6073;
+#line 510 "src/taumir/lower.tr"
         /* pass */
     }
-    /* pass */
+#line 511 "src/taumir/lower.tr"
     _tr_str_release(cn);
     return _tr_str_lit_len("", 0LL);
 }
 
 __attribute__((hot)) long long _lower_list_comp(LModule* m, LFunc* lf, HirExpr* element, List_ptr* generators, AstType* lty) {
-    /* pass */
+#line 517 "src/taumir/lower.tr"
     if ((generators->len != 1LL)) {
-        /* pass */
+#line 517 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 518 "src/taumir/lower.tr"
     HirComprehension* gen = (*((HirComprehension**)List_ptr_get(generators, 0LL)));
-    /* pass */
+#line 519 "src/taumir/lower.tr"
     if (gen->is_async) {
-        /* pass */
+#line 519 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 520 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_new", 15LL));
-    /* pass */
+#line 521 "src/taumir/lower.tr"
     long long hv = LFunc_new_vreg(lf);
-    /* pass */
+#line 522 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(hv, _tr_str_lit_len("_tr_rt_list_new", 15LL), (void*)List_i64_new()));
-    /* pass */
+#line 523 "src/taumir/lower.tr"
     long long ltag = _tag_of(m, lty);
-    /* pass */
+#line 524 "src/taumir/lower.tr"
     if ((!_is_list_tag(ltag))) {
-        /* pass */
+#line 525 "src/taumir/lower.tr"
         long long et = _tag_of(m, hir_expr_type(element));
-        /* pass */
+#line 526 "src/taumir/lower.tr"
         if ((et == 4LL)) {
-            /* pass */
+#line 526 "src/taumir/lower.tr"
             et = 0LL;
         }
-        /* pass */
+#line 527 "src/taumir/lower.tr"
         ltag = _list_tag_for_elem(et);
-        /* pass */
+#line 528 "src/taumir/lower.tr"
         if ((!_is_list_tag(ltag))) {
-            /* pass */
+#line 528 "src/taumir/lower.tr"
             return (-1LL);
         }
     }
-    /* pass */
+#line 529 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, hv, ltag);
-    /* pass */
+#line 530 "src/taumir/lower.tr"
     long long uid = LFunc_fresh_id(lf);
-    /* pass */
-    TrStr lcname = ({ TrStr _cr = (_lir_itoa(uid)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__lc", 4LL)), _cr); _tr_str_release(_cr); _cres; });
-    /* pass */
+#line 531 "src/taumir/lower.tr"
+    TrStr lcname = ({ TrStr _tr_cr = (_lir_itoa(uid)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__lc", 4LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 532 "src/taumir/lower.tr"
     LFunc_add_var(lf, lcname);
-    /* pass */
+#line 533 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, lcname, ltag);
-    /* pass */
+#line 534 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(lcname, hv));
-    /* pass */
-    HirExpr* _tr_v_recv = ({ TrStr _at_t3124 = (_own(lcname)); __auto_type _wr = (box_hirexpr(HirExpr_ctor_EIdent(_at_t3124, lty, false))); _tr_str_release(_at_t3124); _wr; });
-    /* pass */
+#line 536 "src/taumir/lower.tr"
+    HirExpr* _tr_v_recv = ({ TrStr _at_t6074 = (_own(lcname)); __auto_type _wr = (box_hirexpr(HirExpr_ctor_EIdent(_at_t6074, lty, false))); _tr_str_release(_at_t6074); _wr; });
+#line 537 "src/taumir/lower.tr"
     List_ptr* aargs = (void*)List_ptr_new();
-    /* pass */
+#line 538 "src/taumir/lower.tr"
     List_ptr_append(aargs, element);
-    /* pass */
+#line 539 "src/taumir/lower.tr"
     HirStmt* appstmt = box_hirstmt(HirStmt_ctor_SExpr(box_hirexpr(HirExpr_ctor_EMethodCall(_tr_v_recv, _tr_str_lit_len("append", 6LL), aargs, AstType_init(_tr_str_lit_len("void", 4LL))))));
-    /* pass */
+#line 540 "src/taumir/lower.tr"
     HirBlock* body = HirBlock_init();
-    /* pass */
+#line 541 "src/taumir/lower.tr"
     if ((gen->ifs->len == 0LL)) {
-        /* pass */
+#line 542 "src/taumir/lower.tr"
         List_ptr_append(body->stmts, appstmt);
     } else {
-        /* pass */
+#line 544 "src/taumir/lower.tr"
         HirExpr* cond = ((HirExpr*)List_ptr_get(gen->ifs, 0LL));
-        /* pass */
+#line 545 "src/taumir/lower.tr"
         long long ci = 1LL;
-        /* pass */
+#line 546 "src/taumir/lower.tr"
         while ((ci < gen->ifs->len)) {
-            /* pass */
-            cond = box_hirexpr(HirExpr_ctor_EBinOp(_tr_str_lit_len("and", 3LL), cond, ((HirExpr*)List_ptr_get(gen->ifs, ci)), AstType_init(_tr_str_lit_len("bool", 4LL))));
-            /* pass */
+#line 547 "src/taumir/lower.tr"
+            cond = ({ __auto_type _ord_t6075 = (((HirExpr*)List_ptr_get(gen->ifs, ci))); __auto_type _ord_t6076 = (AstType_init(_tr_str_lit_len("bool", 4LL))); __auto_type _wr = (box_hirexpr(HirExpr_ctor_EBinOp(_tr_str_lit_len("and", 3LL), cond, _ord_t6075, _ord_t6076))); _wr; });
+#line 548 "src/taumir/lower.tr"
             ci = (ci + 1LL);
         }
-        /* pass */
+#line 549 "src/taumir/lower.tr"
         HirBlock* thenb = HirBlock_init();
-        /* pass */
+#line 550 "src/taumir/lower.tr"
         List_ptr_append(thenb->stmts, appstmt);
-        /* pass */
-        ({ HirBlock* _aot_t3125 = (HirBlock_init()); List_ptr_append(body->stmts, box_hirstmt(HirStmt_ctor_SIf(cond, thenb, _aot_t3125))); _tr_obj_release(_aot_t3125, _trdrop_HirBlock); });
+#line 551 "src/taumir/lower.tr"
+        ({ HirBlock* _aot_t6077 = (HirBlock_init()); __auto_type _ord_t6078 = (box_hirstmt(HirStmt_ctor_SIf(cond, thenb, _aot_t6077))); List_ptr_append(body->stmts, _ord_t6078); _tr_obj_release(_aot_t6077, _trdrop_HirBlock); });
     }
-    /* pass */
-    if (({ TrStr _at_t3126 = (_own(gen->target)); __auto_type _wr = ((!_lower_for(m, lf, _at_t3126, gen->iter, body))); _tr_str_release(_at_t3126); _wr; })) {
-        /* pass */
+#line 552 "src/taumir/lower.tr"
+    if (({ TrStr _at_t6079 = (_own(gen->target)); __auto_type _wr = ((!_lower_for(m, lf, _at_t6079, gen->iter, body))); _tr_str_release(_at_t6079); _wr; })) {
+#line 552 "src/taumir/lower.tr"
         _tr_str_release(lcname);
         _tr_obj_release(body, _trdrop_HirBlock);
         return (-1LL);
     }
-    /* pass */
+#line 553 "src/taumir/lower.tr"
     long long res = LFunc_new_vreg(lf);
-    /* pass */
+#line 554 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(res, lcname));
-    /* pass */
+#line 555 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, res, ltag);
-    /* pass */
+#line 556 "src/taumir/lower.tr"
+    long long _trret1484 = res;
     _tr_str_release(lcname);
     _tr_obj_release(body, _trdrop_HirBlock);
-    return res;
+    return _trret1484;
 }
 
 __attribute__((hot)) AstType* _hir_method_ret_ty(LModule* m, TrStr cls, TrStr method) {
-    /* pass */
+#line 561 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 562 "src/taumir/lower.tr"
     while ((i < m->hir_prog->functions->len)) {
-        /* pass */
+#line 563 "src/taumir/lower.tr"
         HirFunction* f = ((HirFunction*)List_ptr_get(m->hir_prog->functions, i));
-        /* pass */
+#line 564 "src/taumir/lower.tr"
         if (((_tr_str_eqv((f->class_name), (cls)) && _tr_str_eqv((f->name), (method))) && (!f->is_extern))) {
-            /* pass */
+#line 565 "src/taumir/lower.tr"
             return f->ret_ty;
         }
-        /* pass */
+#line 566 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 567 "src/taumir/lower.tr"
     long long ci = 0LL;
-    /* pass */
+#line 568 "src/taumir/lower.tr"
     while ((ci < m->hir_prog->classes->len)) {
-        /* pass */
+#line 569 "src/taumir/lower.tr"
         HirClass* c = ((HirClass*)List_ptr_get(m->hir_prog->classes, ci));
-        /* pass */
+#line 570 "src/taumir/lower.tr"
         if (_tr_str_eqv((c->name), (cls))) {
-            /* pass */
+#line 571 "src/taumir/lower.tr"
             long long mi = 0LL;
-            /* pass */
+#line 572 "src/taumir/lower.tr"
             while ((mi < c->methods->len)) {
-                /* pass */
+#line 573 "src/taumir/lower.tr"
                 if (_tr_str_eqv((((HirFunction*)List_ptr_get(c->methods, mi))->name), (method))) {
-                    /* pass */
+#line 573 "src/taumir/lower.tr"
                     return ((HirFunction*)List_ptr_get(c->methods, mi))->ret_ty;
                 }
-                /* pass */
+#line 574 "src/taumir/lower.tr"
                 mi = (mi + 1LL);
             }
         }
-        /* pass */
+#line 575 "src/taumir/lower.tr"
         ci = (ci + 1LL);
     }
-    /* pass */
+#line 576 "src/taumir/lower.tr"
     return AstType_init(_tr_str_lit_len("", 0LL));
 }
 
 __attribute__((hot)) long long _prog_class_index(HirProgram* prog, TrStr name) {
-    /* pass */
+#line 580 "src/taumir/lower.tr"
     if (_is_null_str(name)) {
-        /* pass */
+#line 580 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 581 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 582 "src/taumir/lower.tr"
     while ((i < prog->classes->len)) {
-        /* pass */
+#line 583 "src/taumir/lower.tr"
         if (_tr_str_eqv((((HirClass*)List_ptr_get(prog->classes, i))->name), (name))) {
-            /* pass */
+#line 583 "src/taumir/lower.tr"
             return i;
         }
-        /* pass */
+#line 584 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 585 "src/taumir/lower.tr"
     return (-1LL);
 }
 
 __attribute__((hot)) bool _push_field_names_rec(HirProgram* prog, long long ci, ClassLayout* lay, long long depth) {
-    /* pass */
+#line 592 "src/taumir/lower.tr"
     if ((depth > 32LL)) {
-        /* pass */
+#line 592 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 593 "src/taumir/lower.tr"
     HirClass* c = ((HirClass*)List_ptr_get(prog->classes, ci));
-    /* pass */
+#line 594 "src/taumir/lower.tr"
     if ((c->base_classes->len > 1LL)) {
-        /* pass */
+#line 594 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 595 "src/taumir/lower.tr"
     if ((c->base_classes->len == 1LL)) {
-        /* pass */
-        long long bi = ({ TrStr _at_t3127 = (List_TrStr_get(c->base_classes, 0LL)); __auto_type _wr = (_prog_class_index(prog, _at_t3127)); _tr_str_release(_at_t3127); _wr; });
-        /* pass */
+#line 596 "src/taumir/lower.tr"
+        long long bi = ({ TrStr _at_t6080 = (List_TrStr_get(c->base_classes, 0LL)); __auto_type _wr = (_prog_class_index(prog, _at_t6080)); _tr_str_release(_at_t6080); _wr; });
+#line 597 "src/taumir/lower.tr"
         if ((bi < 0LL)) {
-            /* pass */
+#line 597 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 598 "src/taumir/lower.tr"
         if ((!_push_field_names_rec(prog, bi, lay, (depth + 1LL)))) {
-            /* pass */
+#line 598 "src/taumir/lower.tr"
             return false;
         }
     }
-    /* pass */
+#line 599 "src/taumir/lower.tr"
     long long fi = 0LL;
-    /* pass */
+#line 600 "src/taumir/lower.tr"
     while ((fi < c->fields->len)) {
-        /* pass */
-        ({ TrStr _at_t3128 = (_own(((HirField*)List_ptr_get(c->fields, fi))->name)); List_TrStr_append(lay->fields, _at_t3128); _tr_str_release(_at_t3128); });
-        /* pass */
+#line 601 "src/taumir/lower.tr"
+        ({ TrStr _ord_t6081 = (_own(((HirField*)List_ptr_get(c->fields, fi))->name)); List_TrStr_append(lay->fields, _ord_t6081); _tr_str_release(_ord_t6081); });
+#line 602 "src/taumir/lower.tr"
         fi = (fi + 1LL);
     }
-    /* pass */
+#line 603 "src/taumir/lower.tr"
     return true;
 }
 
 __attribute__((hot)) bool _push_field_tags_rec(LModule* m, HirProgram* prog, long long ci, ClassLayout* lay, long long depth) {
-    /* pass */
+#line 608 "src/taumir/lower.tr"
     if ((depth > 32LL)) {
-        /* pass */
+#line 608 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 609 "src/taumir/lower.tr"
     HirClass* c = ((HirClass*)List_ptr_get(prog->classes, ci));
-    /* pass */
+#line 610 "src/taumir/lower.tr"
     if ((c->base_classes->len > 1LL)) {
-        /* pass */
+#line 610 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 611 "src/taumir/lower.tr"
     if ((c->base_classes->len == 1LL)) {
-        /* pass */
-        long long bi = ({ TrStr _at_t3129 = (List_TrStr_get(c->base_classes, 0LL)); __auto_type _wr = (_prog_class_index(prog, _at_t3129)); _tr_str_release(_at_t3129); _wr; });
-        /* pass */
+#line 612 "src/taumir/lower.tr"
+        long long bi = ({ TrStr _at_t6082 = (List_TrStr_get(c->base_classes, 0LL)); __auto_type _wr = (_prog_class_index(prog, _at_t6082)); _tr_str_release(_at_t6082); _wr; });
+#line 613 "src/taumir/lower.tr"
         if ((bi < 0LL)) {
-            /* pass */
+#line 613 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 614 "src/taumir/lower.tr"
         if ((!_push_field_tags_rec(m, prog, bi, lay, (depth + 1LL)))) {
-            /* pass */
+#line 614 "src/taumir/lower.tr"
             return false;
         }
     }
-    /* pass */
+#line 615 "src/taumir/lower.tr"
     long long fi = 0LL;
-    /* pass */
+#line 616 "src/taumir/lower.tr"
     while ((fi < c->fields->len)) {
-        /* pass */
-        List_i64_append(lay->ftags, _tag_of(m, ((HirField*)List_ptr_get(c->fields, fi))->ty));
-        /* pass */
-        ({ TrStr _at_t3130 = (_cls_of_ty(m, ((HirField*)List_ptr_get(c->fields, fi))->ty)); List_TrStr_append(lay->fcls, _at_t3130); _tr_str_release(_at_t3130); });
-        /* pass */
+#line 617 "src/taumir/lower.tr"
+        ({ __auto_type _ord_t6083 = (_tag_of(m, ((HirField*)List_ptr_get(c->fields, fi))->ty)); List_i64_append(lay->ftags, _ord_t6083); });
+#line 618 "src/taumir/lower.tr"
+        ({ TrStr _ord_t6084 = (_cls_of_ty(m, ((HirField*)List_ptr_get(c->fields, fi))->ty)); List_TrStr_append(lay->fcls, _ord_t6084); _tr_str_release(_ord_t6084); });
+#line 619 "src/taumir/lower.tr"
         fi = (fi + 1LL);
     }
-    /* pass */
+#line 620 "src/taumir/lower.tr"
     return true;
 }
 
 __attribute__((hot)) void _register_classes(LModule* m, HirProgram* prog) {
-    /* pass */
+#line 630 "src/taumir/lower.tr"
     EnumLayout* opt = EnumLayout_init(_tr_str_lit_len("Option", 6LL));
-    /* pass */
+#line 631 "src/taumir/lower.tr"
     VariantLayout* opt_some = VariantLayout_init(_tr_str_lit_len("Some", 4LL));
-    /* pass */
+#line 632 "src/taumir/lower.tr"
     List_TrStr_append(opt_some->fields, _tr_str_lit_len("val", 3LL));
-    /* pass */
+#line 633 "src/taumir/lower.tr"
     List_i64_append(opt_some->ftags, (0LL - 2LL));
-    /* pass */
+#line 634 "src/taumir/lower.tr"
     List_TrStr_append(opt_some->fcls, _tr_str_lit_len("", 0LL));
-    /* pass */
+#line 635 "src/taumir/lower.tr"
     List_ptr_append(opt->variants, _tr_obj_retain(opt_some));
-    /* pass */
-    List_ptr_append(opt->variants, VariantLayout_init(_tr_str_lit_len("None", 4LL)));
-    /* pass */
+#line 636 "src/taumir/lower.tr"
+    ({ VariantLayout* _ord_t6085 = (VariantLayout_init(_tr_str_lit_len("None", 4LL))); List_ptr_append(opt->variants, _tr_obj_retain(_ord_t6085)); _tr_obj_release(_ord_t6085, _trdrop_VariantLayout); });
+#line 637 "src/taumir/lower.tr"
     LModule_add_enum(m, opt);
-    /* pass */
+#line 638 "src/taumir/lower.tr"
     EnumLayout* res = EnumLayout_init(_tr_str_lit_len("Result", 6LL));
-    /* pass */
+#line 639 "src/taumir/lower.tr"
     VariantLayout* res_ok = VariantLayout_init(_tr_str_lit_len("Ok", 2LL));
-    /* pass */
+#line 640 "src/taumir/lower.tr"
     List_TrStr_append(res_ok->fields, _tr_str_lit_len("val", 3LL));
-    /* pass */
+#line 641 "src/taumir/lower.tr"
     List_i64_append(res_ok->ftags, (0LL - 2LL));
-    /* pass */
+#line 642 "src/taumir/lower.tr"
     List_TrStr_append(res_ok->fcls, _tr_str_lit_len("", 0LL));
-    /* pass */
+#line 643 "src/taumir/lower.tr"
     List_ptr_append(res->variants, _tr_obj_retain(res_ok));
-    /* pass */
+#line 644 "src/taumir/lower.tr"
     VariantLayout* res_err = VariantLayout_init(_tr_str_lit_len("Err", 3LL));
-    /* pass */
+#line 645 "src/taumir/lower.tr"
     List_TrStr_append(res_err->fields, _tr_str_lit_len("err", 3LL));
-    /* pass */
+#line 646 "src/taumir/lower.tr"
     List_i64_append(res_err->ftags, (0LL - 3LL));
-    /* pass */
+#line 647 "src/taumir/lower.tr"
     List_TrStr_append(res_err->fcls, _tr_str_lit_len("", 0LL));
-    /* pass */
+#line 648 "src/taumir/lower.tr"
     List_ptr_append(res->variants, _tr_obj_retain(res_err));
-    /* pass */
+#line 649 "src/taumir/lower.tr"
     LModule_add_enum(m, res);
-    /* pass */
+#line 652 "src/taumir/lower.tr"
     long long ifi = 0LL;
-    /* pass */
+#line 653 "src/taumir/lower.tr"
     while ((ifi < prog->interfaces->len)) {
-        /* pass */
-        ({ TrStr _at_t3131 = (_own(((HirInterface*)List_ptr_get(prog->interfaces, ifi))->name)); LModule_add_iface(m, _at_t3131); _tr_str_release(_at_t3131); });
-        /* pass */
+#line 654 "src/taumir/lower.tr"
+        ({ TrStr _at_t6086 = (_own(((HirInterface*)List_ptr_get(prog->interfaces, ifi))->name)); LModule_add_iface(m, _at_t6086); _tr_str_release(_at_t6086); });
+#line 655 "src/taumir/lower.tr"
         ifi = (ifi + 1LL);
     }
-    /* pass */
+#line 656 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 657 "src/taumir/lower.tr"
     while ((i < prog->classes->len)) {
-        /* pass */
+#line 658 "src/taumir/lower.tr"
         HirClass* c = ((HirClass*)List_ptr_get(prog->classes, i));
-        /* pass */
+#line 659 "src/taumir/lower.tr"
         if ((c->generics->len > 0LL)) {
-            /* pass */
+#line 660 "src/taumir/lower.tr"
             i = (i + 1LL);
-            /* pass */
+#line 661 "src/taumir/lower.tr"
             continue;
         }
-        /* pass */
-        ClassLayout* lay = ({ TrStr _at_t3132 = (_own(c->name)); __auto_type _wr = (ClassLayout_init(_at_t3132)); _tr_str_release(_at_t3132); _wr; });
-        /* pass */
+#line 662 "src/taumir/lower.tr"
+        ClassLayout* lay = ({ TrStr _at_t6087 = (_own(c->name)); __auto_type _wr = (ClassLayout_init(_at_t6087)); _tr_str_release(_at_t6087); _wr; });
+#line 663 "src/taumir/lower.tr"
         if ((c->base_classes->len == 1LL)) {
-            /* pass */
-            lay->base = ({ TrStr _at_t3133 = (List_TrStr_get(c->base_classes, 0LL)); __auto_type _wr = (_own(_at_t3133)); _tr_str_release(_at_t3133); _wr; });
+#line 663 "src/taumir/lower.tr"
+            lay->base = ({ TrStr _at_t6088 = (List_TrStr_get(c->base_classes, 0LL)); __auto_type _wr = (_own(_at_t6088)); _tr_str_release(_at_t6088); _wr; });
         }
-        /* pass */
+#line 664 "src/taumir/lower.tr"
         lay->is_value = (!c->is_class);
-        /* pass */
+#line 665 "src/taumir/lower.tr"
         if (_push_field_names_rec(prog, i, lay, 0LL)) {
-            /* pass */
+#line 666 "src/taumir/lower.tr"
             LModule_add_class(m, lay);
         }
-        /* pass */
+#line 667 "src/taumir/lower.tr"
         i = (i + 1LL);
         _tr_obj_release(lay, _trdrop_ClassLayout);
     }
-    /* pass */
+#line 668 "src/taumir/lower.tr"
     long long ei = 0LL;
-    /* pass */
+#line 669 "src/taumir/lower.tr"
     while ((ei < prog->enums->len)) {
-        /* pass */
+#line 670 "src/taumir/lower.tr"
         HirEnum* e = ((HirEnum*)List_ptr_get(prog->enums, ei));
-        /* pass */
-        EnumLayout* elay = ({ TrStr _at_t3134 = (_own(e->name)); __auto_type _wr = (EnumLayout_init(_at_t3134)); _tr_str_release(_at_t3134); _wr; });
-        /* pass */
+#line 671 "src/taumir/lower.tr"
+        EnumLayout* elay = ({ TrStr _at_t6089 = (_own(e->name)); __auto_type _wr = (EnumLayout_init(_at_t6089)); _tr_str_release(_at_t6089); _wr; });
+#line 672 "src/taumir/lower.tr"
         long long vi = 0LL;
-        /* pass */
+#line 673 "src/taumir/lower.tr"
         while ((vi < e->variants->len)) {
-            /* pass */
+#line 674 "src/taumir/lower.tr"
             HirVariant* v = ((HirVariant*)List_ptr_get(e->variants, vi));
-            /* pass */
-            VariantLayout* vlay = ({ TrStr _at_t3135 = (_own(v->name)); __auto_type _wr = (VariantLayout_init(_at_t3135)); _tr_str_release(_at_t3135); _wr; });
-            /* pass */
+#line 675 "src/taumir/lower.tr"
+            VariantLayout* vlay = ({ TrStr _at_t6090 = (_own(v->name)); __auto_type _wr = (VariantLayout_init(_at_t6090)); _tr_str_release(_at_t6090); _wr; });
+#line 676 "src/taumir/lower.tr"
             long long pf = 0LL;
-            /* pass */
+#line 677 "src/taumir/lower.tr"
             while ((pf < v->fields->len)) {
-                /* pass */
-                ({ TrStr _at_t3136 = (_own(((HirParam*)List_ptr_get(v->fields, pf))->name)); List_TrStr_append(vlay->fields, _at_t3136); _tr_str_release(_at_t3136); });
-                /* pass */
+#line 678 "src/taumir/lower.tr"
+                ({ TrStr _ord_t6091 = (_own(((HirParam*)List_ptr_get(v->fields, pf))->name)); List_TrStr_append(vlay->fields, _ord_t6091); _tr_str_release(_ord_t6091); });
+#line 679 "src/taumir/lower.tr"
                 pf = (pf + 1LL);
             }
-            /* pass */
+#line 680 "src/taumir/lower.tr"
             List_ptr_append(elay->variants, _tr_obj_retain(vlay));
-            /* pass */
+#line 681 "src/taumir/lower.tr"
             vi = (vi + 1LL);
             _tr_obj_release(vlay, _trdrop_VariantLayout);
         }
-        /* pass */
+#line 682 "src/taumir/lower.tr"
         LModule_add_enum(m, elay);
-        /* pass */
+#line 683 "src/taumir/lower.tr"
         ei = (ei + 1LL);
         _tr_obj_release(elay, _trdrop_EnumLayout);
     }
-    /* pass */
+#line 686 "src/taumir/lower.tr"
     i = 0LL;
-    /* pass */
+#line 687 "src/taumir/lower.tr"
     while ((i < prog->classes->len)) {
-        /* pass */
+#line 688 "src/taumir/lower.tr"
         HirClass* c2 = ((HirClass*)List_ptr_get(prog->classes, i));
-        /* pass */
+#line 689 "src/taumir/lower.tr"
         long long li = LModule_class_index(m, c2->name);
-        /* pass */
+#line 690 "src/taumir/lower.tr"
         if ((li >= 0LL)) {
-            /* pass */
+#line 691 "src/taumir/lower.tr"
             ClassLayout* lay2 = ((ClassLayout*)List_ptr_get(m->classes, li));
-            /* pass */
+#line 692 "src/taumir/lower.tr"
             if ((!_push_field_tags_rec(m, prog, i, lay2, 0LL))) {
-                /* pass */
+#line 693 "src/taumir/lower.tr"
                 m->ok = false;
-                /* pass */
-                m->fail_note = ({ TrStr _cl = (({ TrStr _cr = (_own(((HirClass*)List_ptr_get(prog->classes, i))->name)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("class '", 7LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("': field-tag registration diverged", 34LL))); _tr_str_release(_cl); _cres; });
-                /* pass */
+#line 694 "src/taumir/lower.tr"
+                m->fail_note = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(((HirClass*)List_ptr_get(prog->classes, i))->name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("class '", 7LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': field-tag registration diverged", 34LL))); _tr_str_release(_tr_cl); _tr_cres; });
+#line 695 "src/taumir/lower.tr"
                 _tr_obj_release(opt, _trdrop_EnumLayout);
                 _tr_obj_release(opt_some, _trdrop_VariantLayout);
                 _tr_obj_release(res, _trdrop_EnumLayout);
@@ -1703,76 +1726,76 @@ __attribute__((hot)) void _register_classes(LModule* m, HirProgram* prog) {
                 return;
             }
         }
-        /* pass */
+#line 696 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 697 "src/taumir/lower.tr"
     ei = 0LL;
-    /* pass */
+#line 698 "src/taumir/lower.tr"
     while ((ei < prog->enums->len)) {
-        /* pass */
+#line 699 "src/taumir/lower.tr"
         HirEnum* e2 = ((HirEnum*)List_ptr_get(prog->enums, ei));
-        /* pass */
+#line 702 "src/taumir/lower.tr"
         long long e2ix = LModule_enum_index(m, e2->name);
-        /* pass */
+#line 703 "src/taumir/lower.tr"
         if ((e2ix < 0LL)) {
-            /* pass */
+#line 704 "src/taumir/lower.tr"
             ei = (ei + 1LL);
-            /* pass */
+#line 705 "src/taumir/lower.tr"
             continue;
         }
-        /* pass */
+#line 706 "src/taumir/lower.tr"
         EnumLayout* elay2 = ((EnumLayout*)List_ptr_get(m->enums, e2ix));
-        /* pass */
+#line 707 "src/taumir/lower.tr"
         long long v2 = 0LL;
-        /* pass */
+#line 708 "src/taumir/lower.tr"
         while ((v2 < e2->variants->len)) {
-            /* pass */
+#line 709 "src/taumir/lower.tr"
             HirVariant* vdef = ((HirVariant*)List_ptr_get(e2->variants, v2));
-            /* pass */
+#line 710 "src/taumir/lower.tr"
             VariantLayout* vlay2 = ((VariantLayout*)List_ptr_get(elay2->variants, v2));
-            /* pass */
+#line 711 "src/taumir/lower.tr"
             long long p2 = 0LL;
-            /* pass */
+#line 712 "src/taumir/lower.tr"
             while ((p2 < vdef->fields->len)) {
-                /* pass */
+#line 717 "src/taumir/lower.tr"
                 AstType* p2ty = ((HirParam*)List_ptr_get(vdef->fields, p2))->ty;
-                /* pass */
+#line 718 "src/taumir/lower.tr"
                 long long p2gi = (-1LL);
-                /* pass */
+#line 719 "src/taumir/lower.tr"
                 if ((!_is_null_str(p2ty->name))) {
-                    /* pass */
+#line 720 "src/taumir/lower.tr"
                     long long egk = 0LL;
-                    /* pass */
+#line 721 "src/taumir/lower.tr"
                     while ((egk < e2->generics->len)) {
-                        /* pass */
-                        if (_tr_str_eqv((List_TrStr_get(e2->generics, egk)), (p2ty->name))) {
-                            /* pass */
+#line 722 "src/taumir/lower.tr"
+                        if (({ __auto_type _ord_t6092 = (List_TrStr_get(e2->generics, egk)); __auto_type _wr = (({ TrStr _cmpa_t6093 = (_ord_t6092); TrStr _cmpb_t6094 = (p2ty->name); _Bool _cmpr_t6095 = _tr_str_eqv(_cmpa_t6093, _cmpb_t6094); _tr_str_release(_cmpa_t6093); _cmpr_t6095; })); _wr; })) {
+#line 722 "src/taumir/lower.tr"
                             p2gi = egk;
                         }
-                        /* pass */
+#line 723 "src/taumir/lower.tr"
                         egk = (egk + 1LL);
                     }
                 }
-                /* pass */
+#line 724 "src/taumir/lower.tr"
                 if ((p2gi >= 0LL)) {
-                    /* pass */
+#line 725 "src/taumir/lower.tr"
                     List_i64_append(vlay2->ftags, (0LL - (2LL + p2gi)));
-                    /* pass */
+#line 726 "src/taumir/lower.tr"
                     List_TrStr_append(vlay2->fcls, _tr_str_lit_len("", 0LL));
                 } else {
-                    /* pass */
-                    List_i64_append(vlay2->ftags, _tag_of(m, p2ty));
-                    /* pass */
-                    ({ TrStr _at_t3137 = (_cls_of_ty(m, p2ty)); List_TrStr_append(vlay2->fcls, _at_t3137); _tr_str_release(_at_t3137); });
+#line 728 "src/taumir/lower.tr"
+                    ({ __auto_type _ord_t6096 = (_tag_of(m, p2ty)); List_i64_append(vlay2->ftags, _ord_t6096); });
+#line 729 "src/taumir/lower.tr"
+                    ({ TrStr _ord_t6097 = (_cls_of_ty(m, p2ty)); List_TrStr_append(vlay2->fcls, _ord_t6097); _tr_str_release(_ord_t6097); });
                 }
-                /* pass */
+#line 730 "src/taumir/lower.tr"
                 p2 = (p2 + 1LL);
             }
-            /* pass */
+#line 731 "src/taumir/lower.tr"
             v2 = (v2 + 1LL);
         }
-        /* pass */
+#line 732 "src/taumir/lower.tr"
         ei = (ei + 1LL);
     }
     _tr_obj_release(opt, _trdrop_EnumLayout);
@@ -1783,3396 +1806,3468 @@ __attribute__((hot)) void _register_classes(LModule* m, HirProgram* prog) {
 }
 
 __attribute__((hot)) bool _class_needs_drop(ClassLayout* lay) {
-    /* pass */
+#line 741 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 742 "src/taumir/lower.tr"
     while ((i < lay->ftags->len)) {
-        /* pass */
+#line 743 "src/taumir/lower.tr"
         long long t = List_i64_get(lay->ftags, i);
-        /* pass */
+#line 744 "src/taumir/lower.tr"
         if ((((t == 1LL) || (t == 10LL)) || (t == 11LL))) {
-            /* pass */
+#line 744 "src/taumir/lower.tr"
             return true;
         }
-        /* pass */
+#line 745 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 746 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) bool _class_needs_drop_by_name(LModule* m, TrStr cname) {
-    /* pass */
+#line 749 "src/taumir/lower.tr"
     long long ci = LModule_class_index(m, cname);
-    /* pass */
+#line 750 "src/taumir/lower.tr"
     if ((ci < 0LL)) {
-        /* pass */
+#line 750 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 751 "src/taumir/lower.tr"
     return _class_needs_drop(((ClassLayout*)List_ptr_get(m->classes, ci)));
 }
 
 __attribute__((hot)) void _attach_class_drop(LModule* m, LFunc* lf, long long obj, TrStr cname) {
-    /* pass */
+#line 756 "src/taumir/lower.tr"
     if ((!_class_needs_drop_by_name(m, cname))) {
-        /* pass */
+#line 756 "src/taumir/lower.tr"
         return;
     }
-    /* pass */
+#line 757 "src/taumir/lower.tr"
     long long faddr = LFunc_new_vreg(lf);
-    /* pass */
+#line 758 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, faddr, 12LL);
-    /* pass */
-    ({ TrStr _at_t3138 = (_tr_strx_concatv((cname), (_tr_str_lit_len("__drop", 6LL)))); LFunc_emit(lf, LInst_ctor_IFuncAddr(faddr, _at_t3138)); _tr_str_release(_at_t3138); });
-    /* pass */
+#line 759 "src/taumir/lower.tr"
+    ({ TrStr _at_t6098 = (_tr_strx_concatv((cname), (_tr_str_lit_len("__drop", 6LL)))); LFunc_emit(lf, LInst_ctor_IFuncAddr(faddr, _at_t6098)); _tr_str_release(_at_t6098); });
+#line 760 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_obj_set_drop", 19LL));
-    /* pass */
+#line 761 "src/taumir/lower.tr"
     List_i64* sda = (void*)List_i64_new();
-    /* pass */
+#line 762 "src/taumir/lower.tr"
     List_i64_append(sda, obj);
-    /* pass */
+#line 763 "src/taumir/lower.tr"
     List_i64_append(sda, faddr);
-    /* pass */
+#line 764 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_obj_set_drop", 19LL), sda));
 }
 
 __attribute__((hot)) void _build_class_drop(LModule* m, ClassLayout* lay) {
-    /* pass */
+#line 769 "src/taumir/lower.tr"
     TrStr dname = _tr_strx_concatv((lay->name), (_tr_str_lit_len("__drop", 6LL)));
-    /* pass */
+#line 770 "src/taumir/lower.tr"
     if (LModule_is_user_fn(m, dname)) {
-        /* pass */
+#line 770 "src/taumir/lower.tr"
         _tr_str_release(dname);
         return;
     }
-    /* pass */
+#line 771 "src/taumir/lower.tr"
     List_TrStr_append(m->fn_names, dname);
-    /* pass */
+#line 772 "src/taumir/lower.tr"
     List_i64_append(m->fn_ret, 0LL);
-    /* pass */
+#line 773 "src/taumir/lower.tr"
     LFunc* lf = LFunc_init(dname);
-    /* pass */
+#line 774 "src/taumir/lower.tr"
     List_TrStr_append(lf->params, _tr_str_lit_len("self", 4LL));
-    /* pass */
+#line 775 "src/taumir/lower.tr"
     LFunc_add_var(lf, _tr_str_lit_len("self", 4LL));
-    /* pass */
+#line 776 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, _tr_str_lit_len("self", 4LL), 10LL);
-    /* pass */
-    ({ TrStr _at_t3139 = (_own(lay->name)); LFunc_set_var_cls(lf, _tr_str_lit_len("self", 4LL), _at_t3139); _tr_str_release(_at_t3139); });
-    /* pass */
+#line 777 "src/taumir/lower.tr"
+    ({ TrStr _at_t6099 = (_own(lay->name)); LFunc_set_var_cls(lf, _tr_str_lit_len("self", 4LL), _at_t6099); _tr_str_release(_at_t6099); });
+#line 778 "src/taumir/lower.tr"
     LFunc_set_cur(lf, LFunc_new_block(lf));
-    /* pass */
+#line 779 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 780 "src/taumir/lower.tr"
     while ((i < lay->ftags->len)) {
-        /* pass */
+#line 781 "src/taumir/lower.tr"
         long long t = List_i64_get(lay->ftags, i);
-        /* pass */
+#line 782 "src/taumir/lower.tr"
         if ((t == 1LL)) {
-            /* pass */
+#line 783 "src/taumir/lower.tr"
             long long s0 = LFunc_new_vreg(lf);
-            /* pass */
+#line 784 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ILoadVar(s0, _tr_str_lit_len("self", 4LL)));
-            /* pass */
+#line 785 "src/taumir/lower.tr"
             long long fv = _emit_field_get(m, lf, s0, (i * 8LL), 1LL);
-            /* pass */
+#line 786 "src/taumir/lower.tr"
             _release_str(m, lf, fv);
         } else if (((t == 10LL) || (t == 11LL))) {
-            /* pass */
+#line 788 "src/taumir/lower.tr"
             long long s1 = LFunc_new_vreg(lf);
-            /* pass */
+#line 789 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ILoadVar(s1, _tr_str_lit_len("self", 4LL)));
-            /* pass */
+#line 790 "src/taumir/lower.tr"
             long long fv2 = _emit_field_get(m, lf, s1, (i * 8LL), t);
-            /* pass */
+#line 791 "src/taumir/lower.tr"
             _release_obj(m, lf, fv2);
         }
-        /* pass */
+#line 792 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 793 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TRetInt(0LL));
-    /* pass */
+#line 794 "src/taumir/lower.tr"
     List_ptr_append(m->funcs, _tr_obj_retain(lf));
     _tr_str_release(dname);
     _tr_obj_release(lf, _trdrop_LFunc);
 }
 
 __attribute__((hot)) void _gen_class_drops(LModule* m) {
-    /* pass */
+#line 798 "src/taumir/lower.tr"
     long long ci = 0LL;
-    /* pass */
+#line 799 "src/taumir/lower.tr"
     while ((ci < m->classes->len)) {
-        /* pass */
+#line 800 "src/taumir/lower.tr"
         ClassLayout* lay = ((ClassLayout*)List_ptr_get(m->classes, ci));
-        /* pass */
+#line 801 "src/taumir/lower.tr"
         if (_class_needs_drop(lay)) {
-            /* pass */
+#line 801 "src/taumir/lower.tr"
             _build_class_drop(m, lay);
         }
-        /* pass */
+#line 802 "src/taumir/lower.tr"
         ci = (ci + 1LL);
     }
 }
 
 __attribute__((hot)) bool _method_in_prog_functions(HirProgram* prog, TrStr cls, TrStr name) {
-    /* pass */
+#line 807 "src/taumir/lower.tr"
     long long dfi = 0LL;
-    /* pass */
+#line 808 "src/taumir/lower.tr"
     while ((dfi < prog->functions->len)) {
-        /* pass */
+#line 809 "src/taumir/lower.tr"
         HirFunction* df = ((HirFunction*)List_ptr_get(prog->functions, dfi));
-        /* pass */
+#line 810 "src/taumir/lower.tr"
         if (((_tr_str_eqv((df->class_name), (cls)) && _tr_str_eqv((df->name), (name))) && (!df->is_extern))) {
-            /* pass */
+#line 810 "src/taumir/lower.tr"
             return true;
         }
-        /* pass */
+#line 811 "src/taumir/lower.tr"
         dfi = (dfi + 1LL);
     }
-    /* pass */
+#line 812 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) long long _method_nonself_pcount(HirFunction* f) {
-    /* pass */
+#line 816 "src/taumir/lower.tr"
     long long c = 0LL;
-    /* pass */
+#line 817 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 818 "src/taumir/lower.tr"
     while ((i < f->params->len)) {
-        /* pass */
+#line 819 "src/taumir/lower.tr"
         if ((!_tr_str_eqv((((HirParam*)List_ptr_get(f->params, i))->name), (_tr_str_lit_len("self", 4LL))))) {
-            /* pass */
+#line 819 "src/taumir/lower.tr"
             c = (c + 1LL);
         }
-        /* pass */
+#line 820 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 821 "src/taumir/lower.tr"
     return c;
 }
 
 __attribute__((hot)) TrStr _ov_method_name(LModule* m, TrStr cls, HirFunction* f) {
-    /* pass */
-    TrStr base = ({ TrStr _cl = (({ TrStr _cl = (_own(cls)); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_own(f->name)); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
-    /* pass */
+#line 827 "src/taumir/lower.tr"
+    TrStr base = ({ __auto_type _ord_t6100 = (({ TrStr _tr_cl = (_own(cls)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (_ord_t6100); TrStr _tr_cr = (_own(f->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); _wr; });
+#line 828 "src/taumir/lower.tr"
     if (LModule_is_overloaded(m, cls, f->name)) {
-        /* pass */
-        return ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concatv((base), (_tr_str_lit_len("_", 1LL)))); TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(_method_nonself_pcount(f))))); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("arg", 3LL))); _tr_str_release(_cl); _cres; });
+#line 829 "src/taumir/lower.tr"
+        TrStr _trret1485 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((base), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(_method_nonself_pcount(f))))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("arg", 3LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        _tr_str_release(base);
+        return _trret1485;
     }
-    /* pass */
-    return base;
+#line 830 "src/taumir/lower.tr"
+    TrStr _trret1486 = _tr_str_retain(base);
+    _tr_str_release(base);
+    return _trret1486;
 }
 
 __attribute__((hot)) void _detect_overloads(LModule* m, HirProgram* prog) {
-    /* pass */
+#line 835 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 836 "src/taumir/lower.tr"
     while ((i < prog->classes->len)) {
-        /* pass */
+#line 837 "src/taumir/lower.tr"
         HirClass* ov_cls = ((HirClass*)List_ptr_get(prog->classes, i));
-        /* pass */
+#line 838 "src/taumir/lower.tr"
         if ((ov_cls->generics->len == 0LL)) {
-            /* pass */
+#line 839 "src/taumir/lower.tr"
             long long mi = 0LL;
-            /* pass */
+#line 840 "src/taumir/lower.tr"
             while ((mi < ov_cls->methods->len)) {
-                /* pass */
+#line 841 "src/taumir/lower.tr"
                 HirFunction* m1 = ((HirFunction*)List_ptr_get(ov_cls->methods, mi));
-                /* pass */
+#line 842 "src/taumir/lower.tr"
                 long long mj = (mi + 1LL);
-                /* pass */
+#line 843 "src/taumir/lower.tr"
                 while ((mj < ov_cls->methods->len)) {
-                    /* pass */
-                    if (_tr_str_eqv((((HirFunction*)List_ptr_get(ov_cls->methods, mj))->name), (m1->name))) {
-                        /* pass */
+#line 844 "src/taumir/lower.tr"
+                    if (({ __auto_type _ord_t6101 = (((HirFunction*)List_ptr_get(ov_cls->methods, mj))->name); __auto_type _wr = (_tr_str_eqv((_ord_t6101), (m1->name))); _wr; })) {
+#line 845 "src/taumir/lower.tr"
                         LModule_mark_overloaded(m, ov_cls->name, m1->name);
-                        /* pass */
+#line 846 "src/taumir/lower.tr"
                         mj = ov_cls->methods->len;
                     } else {
-                        /* pass */
+#line 848 "src/taumir/lower.tr"
                         mj = (mj + 1LL);
                     }
                 }
-                /* pass */
+#line 849 "src/taumir/lower.tr"
                 mi = (mi + 1LL);
             }
         }
-        /* pass */
+#line 850 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 851 "src/taumir/lower.tr"
     i = 0LL;
-    /* pass */
+#line 852 "src/taumir/lower.tr"
     while ((i < prog->enums->len)) {
-        /* pass */
+#line 853 "src/taumir/lower.tr"
         HirEnum* ov_enm = ((HirEnum*)List_ptr_get(prog->enums, i));
-        /* pass */
+#line 854 "src/taumir/lower.tr"
         long long mi = 0LL;
-        /* pass */
+#line 855 "src/taumir/lower.tr"
         while ((mi < ov_enm->methods->len)) {
-            /* pass */
+#line 856 "src/taumir/lower.tr"
             HirFunction* m1 = ((HirFunction*)List_ptr_get(ov_enm->methods, mi));
-            /* pass */
+#line 857 "src/taumir/lower.tr"
             long long mj = (mi + 1LL);
-            /* pass */
+#line 858 "src/taumir/lower.tr"
             while ((mj < ov_enm->methods->len)) {
-                /* pass */
-                if (_tr_str_eqv((((HirFunction*)List_ptr_get(ov_enm->methods, mj))->name), (m1->name))) {
-                    /* pass */
+#line 859 "src/taumir/lower.tr"
+                if (({ __auto_type _ord_t6102 = (((HirFunction*)List_ptr_get(ov_enm->methods, mj))->name); __auto_type _wr = (_tr_str_eqv((_ord_t6102), (m1->name))); _wr; })) {
+#line 860 "src/taumir/lower.tr"
                     LModule_mark_overloaded(m, ov_enm->name, m1->name);
-                    /* pass */
+#line 861 "src/taumir/lower.tr"
                     mj = ov_enm->methods->len;
                 } else {
-                    /* pass */
+#line 863 "src/taumir/lower.tr"
                     mj = (mj + 1LL);
                 }
             }
-            /* pass */
+#line 864 "src/taumir/lower.tr"
             mi = (mi + 1LL);
         }
-        /* pass */
+#line 865 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
 }
 
 __attribute__((hot)) long long _arg_limit(LModule* m) {
-    /* pass */
+#line 870 "src/taumir/lower.tr"
     if (m->target_llvm) {
-        /* pass */
+#line 870 "src/taumir/lower.tr"
         return 24LL;
     }
-    /* pass */
+#line 871 "src/taumir/lower.tr"
     return 6LL;
 }
 
 __attribute__((hot)) LModule* lower_to_lir_t(HirProgram* prog, bool llvm) {
-    /* pass */
+#line 874 "src/taumir/lower.tr"
     return lower_to_lir_nh(prog, llvm, false);
 }
 
 __attribute__((hot)) LModule* lower_to_lir_nh(HirProgram* prog, bool llvm, bool no_heap) {
-    /* pass */
+#line 879 "src/taumir/lower.tr"
     LModule* m = LModule_init();
-    /* pass */
+#line 880 "src/taumir/lower.tr"
     m->target_llvm = llvm;
-    /* pass */
+#line 881 "src/taumir/lower.tr"
     m->no_heap = no_heap;
-    /* pass */
-    HirProgram* _cltmp_t3140 = _tr_obj_retain(prog);
+#line 882 "src/taumir/lower.tr"
+    HirProgram* _cltmp_t6103 = _tr_obj_retain(prog);
     _tr_obj_release(m->hir_prog, _trdrop_HirProgram);
-    m->hir_prog = _cltmp_t3140;
-    /* pass */
+    m->hir_prog = _cltmp_t6103;
+#line 883 "src/taumir/lower.tr"
     _register_classes(m, prog);
-    /* pass */
+#line 884 "src/taumir/lower.tr"
     return _lower_to_lir_body(m, prog);
 }
 
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog) {
-    /* pass */
+#line 887 "src/taumir/lower.tr"
     return lower_to_lir_t(prog, false);
 }
 
 __attribute__((hot)) bool _is_extern_c_int(TrStr n) {
-    /* pass */
+#line 899 "src/taumir/lower.tr"
     if (((((_tr_str_eqv((n), (_tr_str_lit_len("c_int", 5LL))) || _tr_str_eqv((n), (_tr_str_lit_len("c_uint", 6LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("c_char", 6LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("c_uchar", 7LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("c_schar", 7LL))))) {
-        /* pass */
+#line 899 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 900 "src/taumir/lower.tr"
     if ((((_tr_str_eqv((n), (_tr_str_lit_len("c_short", 7LL))) || _tr_str_eqv((n), (_tr_str_lit_len("c_ushort", 8LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("c_long", 6LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("c_ulong", 7LL))))) {
-        /* pass */
+#line 900 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 901 "src/taumir/lower.tr"
     if ((((_tr_str_eqv((n), (_tr_str_lit_len("c_longlong", 10LL))) || _tr_str_eqv((n), (_tr_str_lit_len("c_ulonglong", 11LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("c_size_t", 8LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("c_ssize_t", 9LL))))) {
-        /* pass */
+#line 901 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 902 "src/taumir/lower.tr"
     if ((((_tr_str_eqv((n), (_tr_str_lit_len("c_int8_t", 8LL))) || _tr_str_eqv((n), (_tr_str_lit_len("c_int16_t", 9LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("c_int32_t", 9LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("c_int64_t", 9LL))))) {
-        /* pass */
+#line 902 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 903 "src/taumir/lower.tr"
     if ((((_tr_str_eqv((n), (_tr_str_lit_len("c_uint8_t", 9LL))) || _tr_str_eqv((n), (_tr_str_lit_len("c_uint16_t", 10LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("c_uint32_t", 10LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("c_uint64_t", 10LL))))) {
-        /* pass */
+#line 903 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 904 "src/taumir/lower.tr"
     if (((_tr_str_eqv((n), (_tr_str_lit_len("c_intptr_t", 10LL))) || _tr_str_eqv((n), (_tr_str_lit_len("c_uintptr_t", 11LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("c_ptrdiff_t", 11LL))))) {
-        /* pass */
+#line 904 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 905 "src/taumir/lower.tr"
     if (((_tr_str_eqv((n), (_tr_str_lit_len("c_wchar", 7LL))) || _tr_str_eqv((n), (_tr_str_lit_len("c_char16", 8LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("c_char32", 8LL))))) {
-        /* pass */
+#line 905 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 906 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) bool _is_extern_c_float(TrStr n) {
-    /* pass */
+#line 909 "src/taumir/lower.tr"
     return ((_tr_str_eqv((n), (_tr_str_lit_len("c_float", 7LL))) || _tr_str_eqv((n), (_tr_str_lit_len("c_double", 8LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("c_ldouble", 9LL))));
 }
 
 __attribute__((hot)) long long _extern_sig_tag(LModule* m, AstType* ty) {
-    /* pass */
+#line 915 "src/taumir/lower.tr"
     long long t = _tag_of(m, ty);
-    /* pass */
+#line 916 "src/taumir/lower.tr"
     if ((t >= 0LL)) {
-        /* pass */
+#line 916 "src/taumir/lower.tr"
         return t;
     }
-    /* pass */
+#line 917 "src/taumir/lower.tr"
     if (_is_extern_c_int(ty->name)) {
-        /* pass */
+#line 917 "src/taumir/lower.tr"
         return 0LL;
     }
-    /* pass */
+#line 918 "src/taumir/lower.tr"
     if (_is_extern_c_float(ty->name)) {
-        /* pass */
+#line 918 "src/taumir/lower.tr"
         return 5LL;
     }
-    /* pass */
+#line 919 "src/taumir/lower.tr"
     return (-1LL);
 }
 
 __attribute__((hot)) LModule* _lower_to_lir_body(LModule* m, HirProgram* prog) {
-    /* pass */
+#line 922 "src/taumir/lower.tr"
     _detect_overloads(m, prog);
-    /* pass */
+#line 926 "src/taumir/lower.tr"
     long long efx = 0LL;
-    /* pass */
+#line 927 "src/taumir/lower.tr"
     while ((efx < prog->extern_funcs->len)) {
-        /* pass */
+#line 928 "src/taumir/lower.tr"
         HirFunction* ef = ((HirFunction*)List_ptr_get(prog->extern_funcs, efx));
-        /* pass */
+#line 929 "src/taumir/lower.tr"
         bool ef_ok = true;
-        /* pass */
+#line 930 "src/taumir/lower.tr"
         long long epi = 0LL;
-        /* pass */
+#line 931 "src/taumir/lower.tr"
         while ((epi < ef->params->len)) {
-            /* pass */
+#line 932 "src/taumir/lower.tr"
             long long eptag = _extern_sig_tag(m, ((HirParam*)List_ptr_get(ef->params, epi))->ty);
-            /* pass */
+#line 933 "src/taumir/lower.tr"
             if (((((eptag != 0LL) && (eptag != 1LL)) && (eptag != 4LL)) && (eptag != 5LL))) {
-                /* pass */
+#line 934 "src/taumir/lower.tr"
                 ef_ok = false;
             }
-            /* pass */
+#line 935 "src/taumir/lower.tr"
             epi = (epi + 1LL);
         }
-        /* pass */
+#line 936 "src/taumir/lower.tr"
         long long ertag = _extern_sig_tag(m, ef->ret_ty);
-        /* pass */
+#line 937 "src/taumir/lower.tr"
         if (((((ertag != 0LL) && (ertag != 1LL)) && (ertag != 4LL)) && (ertag != 5LL))) {
-            /* pass */
+#line 937 "src/taumir/lower.tr"
             ef_ok = false;
         }
-        /* pass */
+#line 938 "src/taumir/lower.tr"
         if (ef_ok) {
-            /* pass */
-            ({ TrStr _at_t3141 = (_own(ef->name)); List_TrStr_append(m->extfn_names, _at_t3141); _tr_str_release(_at_t3141); });
-            /* pass */
+#line 939 "src/taumir/lower.tr"
+            ({ TrStr _ord_t6104 = (_own(ef->name)); List_TrStr_append(m->extfn_names, _ord_t6104); _tr_str_release(_ord_t6104); });
+#line 940 "src/taumir/lower.tr"
             List_i64_append(m->extfn_ret, ertag);
         }
-        /* pass */
+#line 941 "src/taumir/lower.tr"
         efx = (efx + 1LL);
     }
-    /* pass */
+#line 945 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 946 "src/taumir/lower.tr"
     while ((i < prog->functions->len)) {
-        /* pass */
+#line 947 "src/taumir/lower.tr"
         HirFunction* f0 = ((HirFunction*)List_ptr_get(prog->functions, i));
-        /* pass */
+#line 948 "src/taumir/lower.tr"
         if (((!f0->is_extern) && (!_fn_is_specializable(m, f0)))) {
-            /* pass */
+#line 949 "src/taumir/lower.tr"
             if (((!_tr_str_eqv((f0->class_name), (_tr_str_lit_len("", 0LL)))) && (_prog_generic_class_index(m, f0->class_name) >= 0LL))) {
-                /* pass */
+#line 950 "src/taumir/lower.tr"
                 i = (i + 1LL);
-                /* pass */
+#line 951 "src/taumir/lower.tr"
                 continue;
             }
-            /* pass */
+#line 952 "src/taumir/lower.tr"
             TrStr f0mang = _tr_str_retain(f0->name);
-            /* pass */
+#line 953 "src/taumir/lower.tr"
             if ((!_tr_str_eqv((f0->class_name), (_tr_str_lit_len("", 0LL))))) {
-                /* pass */
-                TrStr _strtmp_t3142 = _ov_method_name(m, f0->class_name, f0);
+#line 953 "src/taumir/lower.tr"
+                TrStr _strtmp_t6105 = _ov_method_name(m, f0->class_name, f0);
                 _tr_str_release(f0mang);
-                f0mang = _strtmp_t3142;
+                f0mang = _strtmp_t6105;
             }
-            /* pass */
+#line 954 "src/taumir/lower.tr"
             long long f0rt = _lir_fn_ret_tag(m, f0);
-            /* pass */
+#line 955 "src/taumir/lower.tr"
             List_TrStr_append(m->fn_names, f0mang);
-            /* pass */
+#line 956 "src/taumir/lower.tr"
             List_i64_append(m->fn_ret, f0rt);
-            /* pass */
+#line 957 "src/taumir/lower.tr"
             if (((f0->returns_owned || LModule_is_value_class(m, f0->ret_ty->name)) && ((f0rt == 10LL) || (f0rt == 11LL)))) {
-                /* pass */
+#line 957 "src/taumir/lower.tr"
                 LModule_mark_fn_owned(m, f0mang);
             }
         }
-        /* pass */
+#line 958 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 961 "src/taumir/lower.tr"
     long long cmi = 0LL;
-    /* pass */
+#line 962 "src/taumir/lower.tr"
     while ((cmi < prog->classes->len)) {
-        /* pass */
+#line 963 "src/taumir/lower.tr"
         HirClass* cm_cls = ((HirClass*)List_ptr_get(prog->classes, cmi));
-        /* pass */
+#line 964 "src/taumir/lower.tr"
         if ((cm_cls->generics->len == 0LL)) {
-            /* pass */
+#line 965 "src/taumir/lower.tr"
             long long cmi2 = 0LL;
-            /* pass */
+#line 966 "src/taumir/lower.tr"
             while ((cmi2 < cm_cls->methods->len)) {
-                /* pass */
+#line 967 "src/taumir/lower.tr"
                 HirFunction* cm_f = ((HirFunction*)List_ptr_get(cm_cls->methods, cmi2));
-                /* pass */
+#line 968 "src/taumir/lower.tr"
                 if ((((!cm_f->is_extern) && (!_fn_is_specializable(m, cm_f))) && (!_method_in_prog_functions(prog, cm_cls->name, cm_f->name)))) {
-                    /* pass */
+#line 969 "src/taumir/lower.tr"
                     TrStr cm_mang = _ov_method_name(m, cm_cls->name, cm_f);
-                    /* pass */
+#line 970 "src/taumir/lower.tr"
                     long long cm_rt = _lir_fn_ret_tag(m, cm_f);
-                    /* pass */
-                    ({ TrStr _at_t3143 = (_own(cm_mang)); List_TrStr_append(m->fn_names, _at_t3143); _tr_str_release(_at_t3143); });
-                    /* pass */
+#line 971 "src/taumir/lower.tr"
+                    ({ TrStr _ord_t6106 = (_own(cm_mang)); List_TrStr_append(m->fn_names, _ord_t6106); _tr_str_release(_ord_t6106); });
+#line 972 "src/taumir/lower.tr"
                     List_i64_append(m->fn_ret, cm_rt);
-                    /* pass */
+#line 973 "src/taumir/lower.tr"
                     if ((cm_f->returns_owned && ((cm_rt == 10LL) || (cm_rt == 11LL)))) {
-                        /* pass */
+#line 973 "src/taumir/lower.tr"
                         LModule_mark_fn_owned(m, cm_mang);
                     }
                 }
-                /* pass */
+#line 974 "src/taumir/lower.tr"
                 cmi2 = (cmi2 + 1LL);
             }
         }
-        /* pass */
+#line 975 "src/taumir/lower.tr"
         cmi = (cmi + 1LL);
     }
-    /* pass */
+#line 976 "src/taumir/lower.tr"
     long long emi = 0LL;
-    /* pass */
+#line 977 "src/taumir/lower.tr"
     while ((emi < prog->enums->len)) {
-        /* pass */
+#line 978 "src/taumir/lower.tr"
         HirEnum* em_en = ((HirEnum*)List_ptr_get(prog->enums, emi));
-        /* pass */
+#line 979 "src/taumir/lower.tr"
         long long emi2 = 0LL;
-        /* pass */
+#line 980 "src/taumir/lower.tr"
         while ((emi2 < em_en->methods->len)) {
-            /* pass */
+#line 981 "src/taumir/lower.tr"
             HirFunction* em_f = ((HirFunction*)List_ptr_get(em_en->methods, emi2));
-            /* pass */
+#line 982 "src/taumir/lower.tr"
             if ((((!em_f->is_extern) && (!_fn_is_specializable(m, em_f))) && (!_method_in_prog_functions(prog, em_en->name, em_f->name)))) {
-                /* pass */
+#line 983 "src/taumir/lower.tr"
                 TrStr em_mang = _ov_method_name(m, em_en->name, em_f);
-                /* pass */
+#line 984 "src/taumir/lower.tr"
                 long long em_rt = _tag_of(m, em_f->ret_ty);
-                /* pass */
-                ({ TrStr _at_t3144 = (_own(em_mang)); List_TrStr_append(m->fn_names, _at_t3144); _tr_str_release(_at_t3144); });
-                /* pass */
+#line 985 "src/taumir/lower.tr"
+                ({ TrStr _ord_t6107 = (_own(em_mang)); List_TrStr_append(m->fn_names, _ord_t6107); _tr_str_release(_ord_t6107); });
+#line 986 "src/taumir/lower.tr"
                 List_i64_append(m->fn_ret, em_rt);
-                /* pass */
+#line 987 "src/taumir/lower.tr"
                 if ((em_f->returns_owned && ((em_rt == 10LL) || (em_rt == 11LL)))) {
-                    /* pass */
+#line 987 "src/taumir/lower.tr"
                     LModule_mark_fn_owned(m, em_mang);
                 }
             }
-            /* pass */
+#line 988 "src/taumir/lower.tr"
             emi2 = (emi2 + 1LL);
         }
-        /* pass */
+#line 989 "src/taumir/lower.tr"
         emi = (emi + 1LL);
     }
-    /* pass */
+#line 992 "src/taumir/lower.tr"
     long long ti = 0LL;
-    /* pass */
+#line 993 "src/taumir/lower.tr"
     while ((ti < prog->top_level_stmts->len)) {
-        /* pass */
+#line 994 "src/taumir/lower.tr"
         if ((!_register_global(m, ((HirStmt*)List_ptr_get(prog->top_level_stmts, ti))))) {
-            /* pass */
+#line 995 "src/taumir/lower.tr"
             m->ok = false;
-            /* pass */
+#line 996 "src/taumir/lower.tr"
             m->fail_note = _tr_str_lit_len("unsupported top-level statement", 31LL);
-            /* pass */
+#line 997 "src/taumir/lower.tr"
             return _tr_obj_retain(m);
         }
-        /* pass */
+#line 998 "src/taumir/lower.tr"
         ti = (ti + 1LL);
     }
-    /* pass */
+#line 999 "src/taumir/lower.tr"
     i = 0LL;
-    /* pass */
+#line 1000 "src/taumir/lower.tr"
     while ((i < prog->functions->len)) {
-        /* pass */
+#line 1001 "src/taumir/lower.tr"
         HirFunction* f = ((HirFunction*)List_ptr_get(prog->functions, i));
-        /* pass */
+#line 1002 "src/taumir/lower.tr"
         if (((!f->is_extern) && (!_fn_is_specializable(m, f)))) {
-            /* pass */
+#line 1003 "src/taumir/lower.tr"
             if (((!_tr_str_eqv((f->class_name), (_tr_str_lit_len("", 0LL)))) && (_prog_generic_class_index(m, f->class_name) >= 0LL))) {
-                /* pass */
+#line 1004 "src/taumir/lower.tr"
                 i = (i + 1LL);
-                /* pass */
+#line 1005 "src/taumir/lower.tr"
                 continue;
             }
-            /* pass */
+#line 1006 "src/taumir/lower.tr"
             if (_tr_str_eqv((f->class_name), (_tr_str_lit_len("", 0LL)))) {
-                /* pass */
+#line 1007 "src/taumir/lower.tr"
                 _lir_lower_function(m, f);
             } else {
-                /* pass */
+#line 1009 "src/taumir/lower.tr"
                 _lir_lower_method(m, f->class_name, f);
             }
-            /* pass */
+#line 1010 "src/taumir/lower.tr"
             if ((!m->ok)) {
-                /* pass */
+#line 1015 "src/taumir/lower.tr"
                 if ((_tr_str_eqv((f->name), (_tr_str_lit_len("main", 4LL))) && _tr_str_eqv((f->class_name), (_tr_str_lit_len("", 0LL))))) {
-                    /* pass */
+#line 1015 "src/taumir/lower.tr"
                     return _tr_obj_retain(m);
                 }
-                /* pass */
+#line 1016 "src/taumir/lower.tr"
                 TrStr un = _tr_str_retain(f->name);
-                /* pass */
+#line 1017 "src/taumir/lower.tr"
                 if ((!_tr_str_eqv((f->class_name), (_tr_str_lit_len("", 0LL))))) {
-                    /* pass */
-                    TrStr _strtmp_t3145 = _ov_method_name(m, f->class_name, f);
+#line 1017 "src/taumir/lower.tr"
+                    TrStr _strtmp_t6108 = _ov_method_name(m, f->class_name, f);
                     _tr_str_release(un);
-                    un = _strtmp_t3145;
+                    un = _strtmp_t6108;
                 }
-                /* pass */
-                ({ TrStr _at_t3146 = (_own(un)); List_TrStr_append(m->unavail_names, _at_t3146); _tr_str_release(_at_t3146); });
-                /* pass */
-                ({ TrStr _at_t3147 = (_own(m->fail_note)); List_TrStr_append(m->unavail_notes, _at_t3147); _tr_str_release(_at_t3147); });
-                /* pass */
+#line 1018 "src/taumir/lower.tr"
+                ({ TrStr _ord_t6109 = (_own(un)); List_TrStr_append(m->unavail_names, _ord_t6109); _tr_str_release(_ord_t6109); });
+#line 1019 "src/taumir/lower.tr"
+                ({ TrStr _ord_t6110 = (_own(m->fail_note)); List_TrStr_append(m->unavail_notes, _ord_t6110); _tr_str_release(_ord_t6110); });
+#line 1020 "src/taumir/lower.tr"
                 m->ok = true;
-                /* pass */
+#line 1021 "src/taumir/lower.tr"
                 m->fail_note = _tr_str_lit_len("", 0LL);
             }
         }
-        /* pass */
+#line 1022 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 1024 "src/taumir/lower.tr"
     long long cml = 0LL;
-    /* pass */
+#line 1025 "src/taumir/lower.tr"
     while ((cml < prog->classes->len)) {
-        /* pass */
+#line 1026 "src/taumir/lower.tr"
         HirClass* cml_cls = ((HirClass*)List_ptr_get(prog->classes, cml));
-        /* pass */
+#line 1027 "src/taumir/lower.tr"
         if ((cml_cls->generics->len == 0LL)) {
-            /* pass */
+#line 1028 "src/taumir/lower.tr"
             long long cml2 = 0LL;
-            /* pass */
+#line 1029 "src/taumir/lower.tr"
             while ((cml2 < cml_cls->methods->len)) {
-                /* pass */
+#line 1030 "src/taumir/lower.tr"
                 HirFunction* cml_f = ((HirFunction*)List_ptr_get(cml_cls->methods, cml2));
-                /* pass */
+#line 1031 "src/taumir/lower.tr"
                 if ((((!cml_f->is_extern) && (!_fn_is_specializable(m, cml_f))) && (!_method_in_prog_functions(prog, cml_cls->name, cml_f->name)))) {
-                    /* pass */
+#line 1032 "src/taumir/lower.tr"
                     _lir_lower_method(m, cml_cls->name, cml_f);
-                    /* pass */
+#line 1033 "src/taumir/lower.tr"
                     if ((!m->ok)) {
-                        /* pass */
+#line 1034 "src/taumir/lower.tr"
                         TrStr cun = _ov_method_name(m, cml_cls->name, cml_f);
-                        /* pass */
-                        ({ TrStr _at_t3148 = (_own(cun)); List_TrStr_append(m->unavail_names, _at_t3148); _tr_str_release(_at_t3148); });
-                        /* pass */
-                        ({ TrStr _at_t3149 = (_own(m->fail_note)); List_TrStr_append(m->unavail_notes, _at_t3149); _tr_str_release(_at_t3149); });
-                        /* pass */
+#line 1035 "src/taumir/lower.tr"
+                        ({ TrStr _ord_t6111 = (_own(cun)); List_TrStr_append(m->unavail_names, _ord_t6111); _tr_str_release(_ord_t6111); });
+#line 1036 "src/taumir/lower.tr"
+                        ({ TrStr _ord_t6112 = (_own(m->fail_note)); List_TrStr_append(m->unavail_notes, _ord_t6112); _tr_str_release(_ord_t6112); });
+#line 1037 "src/taumir/lower.tr"
                         m->ok = true;
-                        /* pass */
+#line 1038 "src/taumir/lower.tr"
                         m->fail_note = _tr_str_lit_len("", 0LL);
                     }
                 }
-                /* pass */
+#line 1039 "src/taumir/lower.tr"
                 cml2 = (cml2 + 1LL);
             }
         }
-        /* pass */
+#line 1040 "src/taumir/lower.tr"
         cml = (cml + 1LL);
     }
-    /* pass */
+#line 1041 "src/taumir/lower.tr"
     long long eml = 0LL;
-    /* pass */
+#line 1042 "src/taumir/lower.tr"
     while ((eml < prog->enums->len)) {
-        /* pass */
+#line 1043 "src/taumir/lower.tr"
         HirEnum* eml_en = ((HirEnum*)List_ptr_get(prog->enums, eml));
-        /* pass */
+#line 1044 "src/taumir/lower.tr"
         long long eml2 = 0LL;
-        /* pass */
+#line 1045 "src/taumir/lower.tr"
         while ((eml2 < eml_en->methods->len)) {
-            /* pass */
+#line 1046 "src/taumir/lower.tr"
             HirFunction* eml_f = ((HirFunction*)List_ptr_get(eml_en->methods, eml2));
-            /* pass */
+#line 1047 "src/taumir/lower.tr"
             if ((((!eml_f->is_extern) && (!_fn_is_specializable(m, eml_f))) && (!_method_in_prog_functions(prog, eml_en->name, eml_f->name)))) {
-                /* pass */
+#line 1048 "src/taumir/lower.tr"
                 _lir_lower_method(m, eml_en->name, eml_f);
-                /* pass */
+#line 1049 "src/taumir/lower.tr"
                 if ((!m->ok)) {
-                    /* pass */
+#line 1050 "src/taumir/lower.tr"
                     TrStr eun = _ov_method_name(m, eml_en->name, eml_f);
-                    /* pass */
-                    ({ TrStr _at_t3150 = (_own(eun)); List_TrStr_append(m->unavail_names, _at_t3150); _tr_str_release(_at_t3150); });
-                    /* pass */
-                    ({ TrStr _at_t3151 = (_own(m->fail_note)); List_TrStr_append(m->unavail_notes, _at_t3151); _tr_str_release(_at_t3151); });
-                    /* pass */
+#line 1051 "src/taumir/lower.tr"
+                    ({ TrStr _ord_t6113 = (_own(eun)); List_TrStr_append(m->unavail_names, _ord_t6113); _tr_str_release(_ord_t6113); });
+#line 1052 "src/taumir/lower.tr"
+                    ({ TrStr _ord_t6114 = (_own(m->fail_note)); List_TrStr_append(m->unavail_notes, _ord_t6114); _tr_str_release(_ord_t6114); });
+#line 1053 "src/taumir/lower.tr"
                     m->ok = true;
-                    /* pass */
+#line 1054 "src/taumir/lower.tr"
                     m->fail_note = _tr_str_lit_len("", 0LL);
                 }
             }
-            /* pass */
+#line 1055 "src/taumir/lower.tr"
             eml2 = (eml2 + 1LL);
         }
-        /* pass */
+#line 1056 "src/taumir/lower.tr"
         eml = (eml + 1LL);
     }
-    /* pass */
+#line 1060 "src/taumir/lower.tr"
     _gen_class_drops(m);
-    /* pass */
+#line 1065 "src/taumir/lower.tr"
     if ((m->unavail_names->len > 0LL)) {
-        /* pass */
+#line 1066 "src/taumir/lower.tr"
         List_i64* dropped = (void*)List_i64_new();
-        /* pass */
+#line 1067 "src/taumir/lower.tr"
         long long di0 = 0LL;
-        /* pass */
+#line 1068 "src/taumir/lower.tr"
         while ((di0 < m->funcs->len)) {
-            /* pass */
+#line 1069 "src/taumir/lower.tr"
             List_i64_append(dropped, 0LL);
-            /* pass */
+#line 1070 "src/taumir/lower.tr"
             di0 = (di0 + 1LL);
         }
-        /* pass */
+#line 1071 "src/taumir/lower.tr"
         bool changed = true;
-        /* pass */
+#line 1072 "src/taumir/lower.tr"
         while (changed) {
-            /* pass */
+#line 1073 "src/taumir/lower.tr"
             changed = false;
-            /* pass */
+#line 1074 "src/taumir/lower.tr"
             long long fi2 = 0LL;
-            /* pass */
+#line 1075 "src/taumir/lower.tr"
             while ((fi2 < m->funcs->len)) {
-                /* pass */
+#line 1076 "src/taumir/lower.tr"
                 if ((List_i64_get(dropped, fi2) == 0LL)) {
-                    /* pass */
+#line 1077 "src/taumir/lower.tr"
                     LFunc* lfc = ((LFunc*)List_ptr_get(m->funcs, fi2));
-                    /* pass */
+#line 1078 "src/taumir/lower.tr"
                     long long hit = (-1LL);
-                    /* pass */
+#line 1079 "src/taumir/lower.tr"
                     long long bi2 = 0LL;
-                    /* pass */
+#line 1080 "src/taumir/lower.tr"
                     while (((bi2 < lfc->blocks->len) && (hit < 0LL))) {
-                        /* pass */
+#line 1081 "src/taumir/lower.tr"
                         LBlock* blk2 = ((LBlock*)List_ptr_get(lfc->blocks, bi2));
-                        /* pass */
+#line 1082 "src/taumir/lower.tr"
                         long long ii2 = 0LL;
-                        /* pass */
+#line 1083 "src/taumir/lower.tr"
                         while (((ii2 < blk2->insts->len) && (hit < 0LL))) {
-                            /* pass */
-                            __auto_type _t3152 = (*((LInst*)List_ptr_get(blk2->insts, ii2)));
-                            if (_t3152.tag == LInst_ICall) {
-                                __auto_type ucallee = _t3152.data.ICall.callee;
-                                /* pass */
+#line 1084 "src/taumir/lower.tr"
+                            __auto_type _t6115 = (*((LInst*)List_ptr_get(blk2->insts, ii2)));
+                            if (_t6115.tag == LInst_ICall) {
+                                __auto_type ucallee = _t6115.data.ICall.callee;
+#line 1086 "src/taumir/lower.tr"
                                 hit = LModule_unavail_index(m, ucallee);
-                            } else if (_t3152.tag == LInst_IFuncAddr) {
-                                __auto_type ufname = _t3152.data.IFuncAddr.fname;
-                                /* pass */
+                            } else if (_t6115.tag == LInst_IFuncAddr) {
+                                __auto_type ufname = _t6115.data.IFuncAddr.fname;
+#line 1088 "src/taumir/lower.tr"
                                 hit = LModule_unavail_index(m, ufname);
                             } else if (1) {
-                                __auto_type _ = _t3152;
+                                __auto_type _ = _t6115;
                                 /* pass */
                             }
-                            /* pass */
+#line 1090 "src/taumir/lower.tr"
                             ii2 = (ii2 + 1LL);
                         }
-                        /* pass */
+#line 1091 "src/taumir/lower.tr"
                         bi2 = (bi2 + 1LL);
                     }
-                    /* pass */
+#line 1092 "src/taumir/lower.tr"
                     if ((hit >= 0LL)) {
-                        /* pass */
-                        TrStr unote = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_own(lfc->name)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("'", 1LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("' calls '", 9LL))); _tr_str_release(_cl); _cres; })); TrStr _cr = (List_TrStr_get(m->unavail_names, hit)); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("' — ", 6LL))); _tr_str_release(_cl); _cres; })); TrStr _cr = (List_TrStr_get(m->unavail_notes, hit)); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; });
-                        /* pass */
+#line 1093 "src/taumir/lower.tr"
+                        TrStr unote = ({ __auto_type _ord_t6116 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(lfc->name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("'", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' calls '", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t6117 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t6116); TrStr _tr_cr = (List_TrStr_get(m->unavail_names, hit)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' — ", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (_ord_t6117); TrStr _tr_cr = (List_TrStr_get(m->unavail_notes, hit)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); _wr; });
+#line 1094 "src/taumir/lower.tr"
                         if (lfc->is_main) {
-                            /* pass */
+#line 1095 "src/taumir/lower.tr"
                             m->ok = false;
-                            /* pass */
+#line 1096 "src/taumir/lower.tr"
                             m->fail_note = _tr_str_retain(unote);
-                            /* pass */
+#line 1097 "src/taumir/lower.tr"
                             List_i64_free(dropped);
                             _tr_str_release(unote);
                             return _tr_obj_retain(m);
                         }
-                        /* pass */
-                        ({ TrStr _at_t3153 = (_own(lfc->name)); List_TrStr_append(m->unavail_names, _at_t3153); _tr_str_release(_at_t3153); });
-                        /* pass */
+#line 1098 "src/taumir/lower.tr"
+                        ({ TrStr _ord_t6118 = (_own(lfc->name)); List_TrStr_append(m->unavail_names, _ord_t6118); _tr_str_release(_ord_t6118); });
+#line 1099 "src/taumir/lower.tr"
                         List_TrStr_append(m->unavail_notes, unote);
-                        /* pass */
+#line 1100 "src/taumir/lower.tr"
                         List_i64_set(dropped, fi2, 1LL);
-                        /* pass */
+#line 1101 "src/taumir/lower.tr"
                         changed = true;
                     }
                 }
-                /* pass */
+#line 1102 "src/taumir/lower.tr"
                 fi2 = (fi2 + 1LL);
             }
         }
-        /* pass */
+#line 1104 "src/taumir/lower.tr"
         List_ptr* kept = (void*)List_ptr_new();
-        /* pass */
+#line 1105 "src/taumir/lower.tr"
         long long ki = 0LL;
-        /* pass */
+#line 1106 "src/taumir/lower.tr"
         while ((ki < m->funcs->len)) {
-            /* pass */
+#line 1107 "src/taumir/lower.tr"
             if ((List_i64_get(dropped, ki) == 0LL)) {
-                /* pass */
+#line 1107 "src/taumir/lower.tr"
                 List_ptr_append(kept, _tr_obj_retain(((LFunc*)List_ptr_get(m->funcs, ki))));
             }
-            /* pass */
+#line 1108 "src/taumir/lower.tr"
             ki = (ki + 1LL);
         }
-        /* pass */
+#line 1109 "src/taumir/lower.tr"
         m->funcs = kept;
     }
-    /* pass */
+#line 1110 "src/taumir/lower.tr"
     return _tr_obj_retain(m);
 }
 
 __attribute__((hot)) bool _fn_has_iface_param(LModule* m, HirFunction* f) {
-    /* pass */
+#line 1115 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 1116 "src/taumir/lower.tr"
     while ((i < f->params->len)) {
-        /* pass */
+#line 1117 "src/taumir/lower.tr"
         TrStr pn = _tr_str_retain(((HirParam*)List_ptr_get(f->params, i))->ty->name);
-        /* pass */
+#line 1118 "src/taumir/lower.tr"
         if (((!_is_null_str(pn)) && LModule_is_iface(m, pn))) {
-            /* pass */
+#line 1118 "src/taumir/lower.tr"
             _tr_str_release(pn);
             return true;
         }
-        /* pass */
+#line 1119 "src/taumir/lower.tr"
         i = (i + 1LL);
         _tr_str_release(pn);
     }
-    /* pass */
+#line 1120 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) bool _fn_is_specializable(LModule* m, HirFunction* f) {
-    /* pass */
+#line 1124 "src/taumir/lower.tr"
     if ((f->generics->len > 0LL)) {
-        /* pass */
+#line 1124 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 1125 "src/taumir/lower.tr"
     return _fn_has_iface_param(m, f);
 }
 
 __attribute__((hot)) long long _find_generic_fn(LModule* m, TrStr name) {
-    /* pass */
+#line 1129 "src/taumir/lower.tr"
     if (_is_null_str(name)) {
-        /* pass */
+#line 1129 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 1130 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 1131 "src/taumir/lower.tr"
     while ((i < m->hir_prog->functions->len)) {
-        /* pass */
+#line 1132 "src/taumir/lower.tr"
         HirFunction* f = ((HirFunction*)List_ptr_get(m->hir_prog->functions, i));
-        /* pass */
+#line 1133 "src/taumir/lower.tr"
         if (((_tr_str_eqv((f->name), (name)) && _tr_str_eqv((f->class_name), (_tr_str_lit_len("", 0LL)))) && (!f->is_extern))) {
-            /* pass */
+#line 1134 "src/taumir/lower.tr"
             if (_fn_is_specializable(m, f)) {
-                /* pass */
-                return i;
+#line 1134 "src/taumir/lower.tr"
+                long long _trret1487 = i;
+                return _trret1487;
             }
         }
-        /* pass */
+#line 1135 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 1136 "src/taumir/lower.tr"
     return (-1LL);
 }
 
 __attribute__((hot)) long long _find_generic_method(LModule* m, TrStr cls, TrStr method) {
-    /* pass */
+#line 1141 "src/taumir/lower.tr"
     if ((_is_null_str(cls) || _is_null_str(method))) {
-        /* pass */
+#line 1141 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 1142 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 1143 "src/taumir/lower.tr"
     while ((i < m->hir_prog->functions->len)) {
-        /* pass */
+#line 1144 "src/taumir/lower.tr"
         HirFunction* f = ((HirFunction*)List_ptr_get(m->hir_prog->functions, i));
-        /* pass */
+#line 1145 "src/taumir/lower.tr"
         if ((((_tr_str_eqv((f->class_name), (cls)) && _tr_str_eqv((f->name), (method))) && (f->generics->len > 0LL)) && (!f->is_extern))) {
-            /* pass */
-            return i;
+#line 1146 "src/taumir/lower.tr"
+            long long _trret1488 = i;
+            return _trret1488;
         }
-        /* pass */
+#line 1147 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 1148 "src/taumir/lower.tr"
     return (-1LL);
 }
 
 __attribute__((hot)) bool _is_generic_param(HirFunction* f, TrStr n) {
-    /* pass */
+#line 1152 "src/taumir/lower.tr"
     if (_is_null_str(n)) {
-        /* pass */
+#line 1152 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 1153 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 1154 "src/taumir/lower.tr"
     while ((i < f->generics->len)) {
-        /* pass */
-        if (_tr_str_eqv((List_TrStr_get(f->generics, i)), (n))) {
-            /* pass */
+#line 1155 "src/taumir/lower.tr"
+        if (({ TrStr _cmpa_t6119 = (List_TrStr_get(f->generics, i)); TrStr _cmpb_t6120 = (n); _Bool _cmpr_t6121 = _tr_str_eqv(_cmpa_t6119, _cmpb_t6120); _tr_str_release(_cmpa_t6119); _cmpr_t6121; })) {
+#line 1155 "src/taumir/lower.tr"
             return true;
         }
-        /* pass */
+#line 1156 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 1157 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) bool _param_is_abstract(LModule* m, HirFunction* f, TrStr ptyname) {
-    /* pass */
+#line 1162 "src/taumir/lower.tr"
     if (_is_generic_param(f, ptyname)) {
-        /* pass */
+#line 1162 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 1163 "src/taumir/lower.tr"
     if (((!_is_null_str(ptyname)) && LModule_is_iface(m, ptyname))) {
-        /* pass */
+#line 1163 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 1164 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) bool _lir_lower_generic(LModule* m, HirFunction* f, List_i64* argtags, List_TrStr* argcls, TrStr mangled) {
-    /* pass */
+#line 1172 "src/taumir/lower.tr"
     if ((f->params->len != argtags->len)) {
-        /* pass */
+#line 1172 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 1174 "src/taumir/lower.tr"
     long long rtag = (-1LL);
-    /* pass */
+#line 1175 "src/taumir/lower.tr"
     if (_param_is_abstract(m, f, f->ret_ty->name)) {
-        /* pass */
+#line 1176 "src/taumir/lower.tr"
         long long ri = 0LL;
-        /* pass */
+#line 1177 "src/taumir/lower.tr"
         while ((ri < f->params->len)) {
-            /* pass */
+#line 1178 "src/taumir/lower.tr"
             if ((!_is_null_str(((HirParam*)List_ptr_get(f->params, ri))->ty->name))) {
-                /* pass */
-                if (_tr_str_eqv((((HirParam*)List_ptr_get(f->params, ri))->ty->name), (f->ret_ty->name))) {
-                    /* pass */
+#line 1179 "src/taumir/lower.tr"
+                if (({ __auto_type _ord_t6122 = (((HirParam*)List_ptr_get(f->params, ri))->ty->name); __auto_type _wr = (_tr_str_eqv((_ord_t6122), (f->ret_ty->name))); _wr; })) {
+#line 1179 "src/taumir/lower.tr"
                     rtag = List_i64_get(argtags, ri);
                 }
             }
-            /* pass */
+#line 1180 "src/taumir/lower.tr"
             ri = (ri + 1LL);
         }
     } else {
-        /* pass */
+#line 1182 "src/taumir/lower.tr"
         rtag = _tag_of(m, f->ret_ty);
     }
-    /* pass */
+#line 1183 "src/taumir/lower.tr"
     if ((rtag < 0LL)) {
-        /* pass */
+#line 1183 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
-    ({ TrStr _at_t3154 = (_own(mangled)); List_TrStr_append(m->fn_names, _at_t3154); _tr_str_release(_at_t3154); });
-    /* pass */
+#line 1184 "src/taumir/lower.tr"
+    ({ TrStr _ord_t6123 = (_own(mangled)); List_TrStr_append(m->fn_names, _ord_t6123); _tr_str_release(_ord_t6123); });
+#line 1185 "src/taumir/lower.tr"
     List_i64_append(m->fn_ret, rtag);
-    /* pass */
+#line 1186 "src/taumir/lower.tr"
     if (((f->returns_owned || LModule_is_value_class(m, f->ret_ty->name)) && ((rtag == 10LL) || (rtag == 11LL)))) {
-        /* pass */
-        ({ TrStr _at_t3155 = (_own(mangled)); LModule_mark_fn_owned(m, _at_t3155); _tr_str_release(_at_t3155); });
+#line 1186 "src/taumir/lower.tr"
+        ({ TrStr _at_t6124 = (_own(mangled)); LModule_mark_fn_owned(m, _at_t6124); _tr_str_release(_at_t6124); });
     }
-    /* pass */
-    LFunc* lf = ({ TrStr _at_t3156 = (_own(mangled)); __auto_type _wr = (LFunc_init(_at_t3156)); _tr_str_release(_at_t3156); _wr; });
-    /* pass */
+#line 1187 "src/taumir/lower.tr"
+    LFunc* lf = ({ TrStr _at_t6125 = (_own(mangled)); __auto_type _wr = (LFunc_init(_at_t6125)); _tr_str_release(_at_t6125); _wr; });
+#line 1188 "src/taumir/lower.tr"
     long long pi = 0LL;
-    /* pass */
+#line 1189 "src/taumir/lower.tr"
     while ((pi < f->params->len)) {
-        /* pass */
+#line 1190 "src/taumir/lower.tr"
         HirParam* p = ((HirParam*)List_ptr_get(f->params, pi));
-        /* pass */
+#line 1191 "src/taumir/lower.tr"
         long long ptag = List_i64_get(argtags, pi);
-        /* pass */
+#line 1193 "src/taumir/lower.tr"
         if ((!_param_is_abstract(m, f, p->ty->name))) {
-            /* pass */
+#line 1194 "src/taumir/lower.tr"
             long long want = _tag_of(m, p->ty);
-            /* pass */
+#line 1195 "src/taumir/lower.tr"
             if (((want < 0LL) || (!_field_tag_ok(ptag, want)))) {
-                /* pass */
+#line 1195 "src/taumir/lower.tr"
                 _tr_obj_release(lf, _trdrop_LFunc);
                 return false;
             }
         }
-        /* pass */
+#line 1196 "src/taumir/lower.tr"
         List_TrStr_append(lf->params, p->name);
-        /* pass */
+#line 1197 "src/taumir/lower.tr"
         LFunc_add_var(lf, p->name);
-        /* pass */
+#line 1198 "src/taumir/lower.tr"
         LFunc_set_var_type(lf, p->name, ptag);
-        /* pass */
-        if ((((ptag == 10LL) || (ptag == 11LL)) && (!_tr_str_eqv((List_TrStr_get(argcls, pi)), (_tr_str_lit_len("", 0LL)))))) {
-            /* pass */
-            ({ TrStr _at_t3157 = (List_TrStr_get(argcls, pi)); TrStr _at_t3158 = (_own(_at_t3157)); LFunc_set_var_cls(lf, p->name, _at_t3158); _tr_str_release(_at_t3157); _tr_str_release(_at_t3158); });
+#line 1199 "src/taumir/lower.tr"
+        if ((((ptag == 10LL) || (ptag == 11LL)) && ({ TrStr _cmpa_t6126 = (List_TrStr_get(argcls, pi)); TrStr _cmpb_t6127 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t6128 = !_tr_str_eqv(_cmpa_t6126, _cmpb_t6127); _tr_str_release(_cmpa_t6126); _cmpr_t6128; }))) {
+#line 1200 "src/taumir/lower.tr"
+            ({ __auto_type _ord_t6129 = (p->name); TrStr _at_t6130 = (List_TrStr_get(argcls, pi)); TrStr _ord_t6131 = (_own(_at_t6130)); LFunc_set_var_cls(lf, _ord_t6129, _ord_t6131); _tr_str_release(_at_t6130); _tr_str_release(_ord_t6131); });
         }
-        /* pass */
+#line 1201 "src/taumir/lower.tr"
         pi = (pi + 1LL);
     }
-    /* pass */
+#line 1202 "src/taumir/lower.tr"
     LFunc_set_cur(lf, LFunc_new_block(lf));
-    /* pass */
+#line 1203 "src/taumir/lower.tr"
     if ((!lower_block(m, lf, f->body))) {
-        /* pass */
+#line 1203 "src/taumir/lower.tr"
         _tr_obj_release(lf, _trdrop_LFunc);
         return false;
     }
-    /* pass */
+#line 1204 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TRetInt(0LL));
-    /* pass */
+#line 1205 "src/taumir/lower.tr"
     List_ptr_append(m->funcs, _tr_obj_retain(lf));
-    /* pass */
+#line 1206 "src/taumir/lower.tr"
     _tr_obj_release(lf, _trdrop_LFunc);
     return true;
 }
 
 __attribute__((hot)) TrStr _mono_base(TrStr name) {
-    /* pass */
+#line 1210 "src/taumir/lower.tr"
     TrStr marker = _tr_str_lit_len("__MONO_", 7LL);
-    /* pass */
+#line 1211 "src/taumir/lower.tr"
     long long idx = _tr_str_index_ofv((name), (marker));
-    /* pass */
+#line 1212 "src/taumir/lower.tr"
     if ((idx < 0LL)) {
-        /* pass */
+#line 1212 "src/taumir/lower.tr"
         _tr_str_release(marker);
         return _tr_str_lit_len("", 0LL);
     }
-    /* pass */
+#line 1213 "src/taumir/lower.tr"
+    TrStr _trret1489 = _tr_str_slicev((name), 0LL, idx);
     _tr_str_release(marker);
-    return _tr_str_slicev((name), 0LL, idx);
+    return _trret1489;
 }
 
 __attribute__((hot)) TrStr _mono_concrete(TrStr name) {
-    /* pass */
+#line 1216 "src/taumir/lower.tr"
     TrStr marker = _tr_str_lit_len("__MONO_", 7LL);
-    /* pass */
+#line 1217 "src/taumir/lower.tr"
     long long idx = _tr_str_index_ofv((name), (marker));
-    /* pass */
+#line 1218 "src/taumir/lower.tr"
     if ((idx < 0LL)) {
-        /* pass */
+#line 1218 "src/taumir/lower.tr"
         _tr_str_release(marker);
         return _tr_str_lit_len("", 0LL);
     }
-    /* pass */
-    return _tr_str_slicev((name), (idx + _tr_str_lenv((marker))), _tr_str_lenv((name)));
+#line 1219 "src/taumir/lower.tr"
+    TrStr _trret1490 = ({ __auto_type _ord_t6132 = ((idx + _tr_str_lenv((marker)))); __auto_type _ord_t6133 = (_tr_str_lenv((name))); __auto_type _wr = (_tr_str_slicev((name), _ord_t6132, _ord_t6133)); _wr; });
+    _tr_str_release(marker);
+    return _trret1490;
 }
 
 __attribute__((hot)) bool _lir_lower_mono_fn(LModule* m, HirFunction* f, TrStr mangled, AstType* concrete) {
-    /* pass */
+#line 1224 "src/taumir/lower.tr"
     if ((f->generics->len != 1LL)) {
-        /* pass */
+#line 1224 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 1225 "src/taumir/lower.tr"
     bool ok = true;
-    /* pass */
-    ({ TrStr _at_t3159 = (List_TrStr_get(f->generics, 0LL)); TrStr _at_t3160 = (_own(_at_t3159)); List_TrStr_append(m->subst_names, _at_t3160); _tr_str_release(_at_t3159); _tr_str_release(_at_t3160); });
-    /* pass */
-    List_ptr_append(m->subst_tys, box_asttype_lir(concrete));
-    /* pass */
+#line 1226 "src/taumir/lower.tr"
+    ({ TrStr _at_t6134 = (List_TrStr_get(f->generics, 0LL)); TrStr _ord_t6135 = (_own(_at_t6134)); List_TrStr_append(m->subst_names, _ord_t6135); _tr_str_release(_at_t6134); _tr_str_release(_ord_t6135); });
+#line 1227 "src/taumir/lower.tr"
+    ({ __auto_type _ord_t6136 = (box_asttype_lir(concrete)); List_ptr_append(m->subst_tys, _ord_t6136); });
+#line 1228 "src/taumir/lower.tr"
     long long rtag = _tag_of(m, f->ret_ty);
-    /* pass */
+#line 1229 "src/taumir/lower.tr"
     if ((rtag < 0LL)) {
-        /* pass */
+#line 1229 "src/taumir/lower.tr"
         ok = false;
     }
-    /* pass */
+#line 1230 "src/taumir/lower.tr"
     if (ok) {
-        /* pass */
-        ({ TrStr _at_t3161 = (_own(mangled)); List_TrStr_append(m->fn_names, _at_t3161); _tr_str_release(_at_t3161); });
-        /* pass */
+#line 1231 "src/taumir/lower.tr"
+        ({ TrStr _ord_t6137 = (_own(mangled)); List_TrStr_append(m->fn_names, _ord_t6137); _tr_str_release(_ord_t6137); });
+#line 1232 "src/taumir/lower.tr"
         List_i64_append(m->fn_ret, rtag);
-        /* pass */
+#line 1233 "src/taumir/lower.tr"
         if ((f->returns_owned && ((rtag == 10LL) || (rtag == 11LL)))) {
-            /* pass */
-            ({ TrStr _at_t3162 = (_own(mangled)); LModule_mark_fn_owned(m, _at_t3162); _tr_str_release(_at_t3162); });
+#line 1233 "src/taumir/lower.tr"
+            ({ TrStr _at_t6138 = (_own(mangled)); LModule_mark_fn_owned(m, _at_t6138); _tr_str_release(_at_t6138); });
         }
-        /* pass */
-        LFunc* lf = ({ TrStr _at_t3163 = (_own(mangled)); __auto_type _wr = (LFunc_init(_at_t3163)); _tr_str_release(_at_t3163); _wr; });
-        /* pass */
+#line 1234 "src/taumir/lower.tr"
+        LFunc* lf = ({ TrStr _at_t6139 = (_own(mangled)); __auto_type _wr = (LFunc_init(_at_t6139)); _tr_str_release(_at_t6139); _wr; });
+#line 1235 "src/taumir/lower.tr"
         long long pi = 0LL;
-        /* pass */
+#line 1236 "src/taumir/lower.tr"
         while ((pi < f->params->len)) {
-            /* pass */
+#line 1237 "src/taumir/lower.tr"
             HirParam* p = ((HirParam*)List_ptr_get(f->params, pi));
-            /* pass */
+#line 1238 "src/taumir/lower.tr"
             long long ptag = _tag_of(m, p->ty);
-            /* pass */
+#line 1239 "src/taumir/lower.tr"
             if ((ptag < 0LL)) {
-                /* pass */
+#line 1240 "src/taumir/lower.tr"
                 ok = false;
-                /* pass */
+#line 1241 "src/taumir/lower.tr"
                 break;
             }
-            /* pass */
+#line 1242 "src/taumir/lower.tr"
             List_TrStr_append(lf->params, p->name);
-            /* pass */
+#line 1243 "src/taumir/lower.tr"
             LFunc_add_var(lf, p->name);
-            /* pass */
+#line 1244 "src/taumir/lower.tr"
             LFunc_set_var_type(lf, p->name, ptag);
-            /* pass */
+#line 1245 "src/taumir/lower.tr"
             if ((((ptag == 10LL) || (ptag == 11LL)) && (!_is_null_str(p->ty->name)))) {
-                /* pass */
-                ({ TrStr _at_t3164 = (_cls_of_ty(m, p->ty)); LFunc_set_var_cls(lf, p->name, _at_t3164); _tr_str_release(_at_t3164); });
+#line 1246 "src/taumir/lower.tr"
+                ({ __auto_type _ord_t6140 = (p->name); TrStr _ord_t6141 = (_cls_of_ty(m, p->ty)); LFunc_set_var_cls(lf, _ord_t6140, _ord_t6141); _tr_str_release(_ord_t6141); });
             }
-            /* pass */
+#line 1247 "src/taumir/lower.tr"
             pi = (pi + 1LL);
         }
-        /* pass */
+#line 1248 "src/taumir/lower.tr"
         if (ok) {
-            /* pass */
+#line 1249 "src/taumir/lower.tr"
             LFunc_set_cur(lf, LFunc_new_block(lf));
-            /* pass */
+#line 1250 "src/taumir/lower.tr"
             if ((!lower_block(m, lf, f->body))) {
-                /* pass */
+#line 1250 "src/taumir/lower.tr"
                 ok = false;
             }
-            /* pass */
+#line 1251 "src/taumir/lower.tr"
             if (ok) {
-                /* pass */
+#line 1252 "src/taumir/lower.tr"
                 LFunc_set_term(lf, LTerm_ctor_TRetInt(0LL));
-                /* pass */
+#line 1253 "src/taumir/lower.tr"
                 List_ptr_append(m->funcs, _tr_obj_retain(lf));
             }
         }
     }
-    /* pass */
+#line 1254 "src/taumir/lower.tr"
     List_TrStr_pop(m->subst_names);
-    /* pass */
+#line 1255 "src/taumir/lower.tr"
     List_ptr_pop(m->subst_tys);
-    /* pass */
+#line 1256 "src/taumir/lower.tr"
     return ok;
 }
 
 __attribute__((hot)) void _lir_lower_method(LModule* m, TrStr class_name, HirFunction* f) {
-    /* pass */
-    LFunc* lf = ({ TrStr _at_t3165 = (_ov_method_name(m, class_name, f)); __auto_type _wr = (LFunc_init(_at_t3165)); _tr_str_release(_at_t3165); _wr; });
-    /* pass */
+#line 1261 "src/taumir/lower.tr"
+    LFunc* lf = ({ TrStr _at_t6142 = (_ov_method_name(m, class_name, f)); __auto_type _wr = (LFunc_init(_at_t6142)); _tr_str_release(_at_t6142); _wr; });
+#line 1262 "src/taumir/lower.tr"
     if (((!_is_null_str(f->throws_ty->name)) && (!_tr_str_eqv((f->throws_ty->name), (_tr_str_lit_len("", 0LL)))))) {
-        /* pass */
+#line 1263 "src/taumir/lower.tr"
         lf->is_throws = true;
-        /* pass */
+#line 1264 "src/taumir/lower.tr"
         lf->throws_ok_tag = _tag_of(m, f->ret_ty);
-        /* pass */
+#line 1265 "src/taumir/lower.tr"
         lf->throws_err_tag = _tag_of(m, f->throws_ty);
     }
-    /* pass */
+#line 1266 "src/taumir/lower.tr"
     long long pi = 0LL;
-    /* pass */
+#line 1267 "src/taumir/lower.tr"
     while ((pi < f->params->len)) {
-        /* pass */
+#line 1268 "src/taumir/lower.tr"
         HirParam* p = ((HirParam*)List_ptr_get(f->params, pi));
-        /* pass */
+#line 1269 "src/taumir/lower.tr"
         long long ptag = 0LL;
-        /* pass */
+#line 1270 "src/taumir/lower.tr"
         if (_tr_str_eqv((p->name), (_tr_str_lit_len("self", 4LL)))) {
-            /* pass */
+#line 1271 "src/taumir/lower.tr"
             ptag = 10LL;
-            /* pass */
+#line 1272 "src/taumir/lower.tr"
             if (LModule_is_enum(m, class_name)) {
-                /* pass */
+#line 1272 "src/taumir/lower.tr"
                 ptag = 11LL;
             }
         } else {
-            /* pass */
+#line 1274 "src/taumir/lower.tr"
             ptag = _tag_of(m, p->ty);
         }
-        /* pass */
+#line 1275 "src/taumir/lower.tr"
         if ((ptag < 0LL)) {
-            /* pass */
+#line 1276 "src/taumir/lower.tr"
             m->ok = false;
-            /* pass */
-            m->fail_note = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_own(class_name)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("method '", 8LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_own(f->name)); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("': unsupported param type", 25LL))); _tr_str_release(_cl); _cres; });
-            /* pass */
+#line 1277 "src/taumir/lower.tr"
+            m->fail_note = ({ __auto_type _ord_t6143 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(class_name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("method '", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t6143); TrStr _tr_cr = (_own(f->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': unsupported param type", 25LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+#line 1278 "src/taumir/lower.tr"
             _tr_obj_release(lf, _trdrop_LFunc);
             return;
         }
-        /* pass */
+#line 1279 "src/taumir/lower.tr"
         List_TrStr_append(lf->params, p->name);
-        /* pass */
+#line 1280 "src/taumir/lower.tr"
         LFunc_add_var(lf, p->name);
-        /* pass */
+#line 1281 "src/taumir/lower.tr"
         LFunc_set_var_type(lf, p->name, ptag);
-        /* pass */
+#line 1282 "src/taumir/lower.tr"
         if (_tr_str_eqv((p->name), (_tr_str_lit_len("self", 4LL)))) {
-            /* pass */
-            ({ TrStr _at_t3166 = (_own(class_name)); LFunc_set_var_cls(lf, p->name, _at_t3166); _tr_str_release(_at_t3166); });
+#line 1283 "src/taumir/lower.tr"
+            ({ __auto_type _ord_t6144 = (p->name); TrStr _ord_t6145 = (_own(class_name)); LFunc_set_var_cls(lf, _ord_t6144, _ord_t6145); _tr_str_release(_ord_t6145); });
         } else if ((((ptag == 10LL) || (ptag == 11LL)) && (!_is_null_str(p->ty->name)))) {
-            /* pass */
-            ({ TrStr _at_t3167 = (_own(p->ty->name)); LFunc_set_var_cls(lf, p->name, _at_t3167); _tr_str_release(_at_t3167); });
+#line 1285 "src/taumir/lower.tr"
+            ({ __auto_type _ord_t6146 = (p->name); TrStr _ord_t6147 = (_own(p->ty->name)); LFunc_set_var_cls(lf, _ord_t6146, _ord_t6147); _tr_str_release(_ord_t6147); });
         }
-        /* pass */
+#line 1286 "src/taumir/lower.tr"
         pi = (pi + 1LL);
     }
-    /* pass */
+#line 1287 "src/taumir/lower.tr"
     LFunc_set_cur(lf, LFunc_new_block(lf));
-    /* pass */
+#line 1288 "src/taumir/lower.tr"
     if ((!lower_block(m, lf, f->body))) {
-        /* pass */
+#line 1289 "src/taumir/lower.tr"
         m->ok = false;
-        /* pass */
+#line 1290 "src/taumir/lower.tr"
         if (_tr_str_eqv((m->fail_note), (_tr_str_lit_len("", 0LL)))) {
-            /* pass */
-            m->fail_note = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_own(class_name)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("method '", 8LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_own(f->name)); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("': body uses an unsupported construct", 37LL))); _tr_str_release(_cl); _cres; });
+#line 1291 "src/taumir/lower.tr"
+            m->fail_note = ({ __auto_type _ord_t6148 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(class_name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("method '", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t6148); TrStr _tr_cr = (_own(f->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': body uses an unsupported construct", 37LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
         }
-        /* pass */
+#line 1292 "src/taumir/lower.tr"
         _tr_obj_release(lf, _trdrop_LFunc);
         return;
     }
-    /* pass */
+#line 1293 "src/taumir/lower.tr"
     if ((!LFunc_cur_terminated(lf))) {
-        /* pass */
+#line 1294 "src/taumir/lower.tr"
         if ((!_run_defers(m, lf))) {
-            /* pass */
+#line 1295 "src/taumir/lower.tr"
             m->ok = false;
-            /* pass */
+#line 1296 "src/taumir/lower.tr"
             if (_tr_str_eqv((m->fail_note), (_tr_str_lit_len("", 0LL)))) {
-                /* pass */
-                m->fail_note = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_own(class_name)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("method '", 8LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_own(f->name)); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("': deferred statement not lowerable", 35LL))); _tr_str_release(_cl); _cres; });
+#line 1297 "src/taumir/lower.tr"
+                m->fail_note = ({ __auto_type _ord_t6149 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(class_name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("method '", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t6149); TrStr _tr_cr = (_own(f->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': deferred statement not lowerable", 35LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
             }
-            /* pass */
+#line 1298 "src/taumir/lower.tr"
             _tr_obj_release(lf, _trdrop_LFunc);
             return;
         }
     }
-    /* pass */
+#line 1299 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TRetInt(0LL));
-    /* pass */
+#line 1300 "src/taumir/lower.tr"
     List_ptr_append(m->funcs, _tr_obj_retain(lf));
     _tr_obj_release(lf, _trdrop_LFunc);
 }
 
 __attribute__((hot)) bool _register_global(LModule* m, HirStmt* s) {
-    /* pass */
-    __auto_type _t3168 = (*s);
-    if (_t3168.tag == HirStmt_SLineMarker) {
-        __auto_type _ = _t3168.data.SLineMarker.n;
+#line 1306 "src/taumir/lower.tr"
+    __auto_type _t6150 = (*s);
+    if (_t6150.tag == HirStmt_SLineMarker) {
+        __auto_type _ = _t6150.data.SLineMarker.n;
         return true;
-    } else if (_t3168.tag == HirStmt_SPass) {
+    } else if (_t6150.tag == HirStmt_SPass) {
         return true;
-    } else if (_t3168.tag == HirStmt_SLet) {
-        __auto_type name = _t3168.data.SLet.name;
-__auto_type ty = _t3168.data.SLet.ty;
-__auto_type val = _t3168.data.SLet.val;
-        /* pass */
+    } else if (_t6150.tag == HirStmt_SLet) {
+        __auto_type name = _t6150.data.SLet.name;
+__auto_type ty = _t6150.data.SLet.ty;
+__auto_type val = _t6150.data.SLet.val;
+#line 1314 "src/taumir/lower.tr"
         if ((((m->target_llvm && _tr_str_eqv((ty->name), (_tr_str_lit_len("Array", 5LL)))) && (ty->array_size > 0LL)) && (ty->args->len > 0LL))) {
-            /* pass */
+#line 1315 "src/taumir/lower.tr"
             long long getag = _tag_of(m, (*((AstType**)List_ptr_get(ty->args, 0LL))));
-            /* pass */
+#line 1316 "src/taumir/lower.tr"
             if (((getag != 0LL) && (getag != 4LL))) {
-                /* pass */
+#line 1316 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 1317 "src/taumir/lower.tr"
             long long gidx_a = LModule_add_global(m, name, getag);
-            /* pass */
+#line 1318 "src/taumir/lower.tr"
             LModule_set_global_arr(m, gidx_a, ty->array_size);
-            /* pass */
+#line 1321 "src/taumir/lower.tr"
             if ((((unsigned long long)(val)) == ((unsigned long long)(0LL)))) {
-                /* pass */
+#line 1321 "src/taumir/lower.tr"
                 return true;
             }
-            /* pass */
+#line 1322 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 1323 "src/taumir/lower.tr"
         if ((((unsigned long long)(val)) == ((unsigned long long)(0LL)))) {
-            /* pass */
+#line 1323 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 1324 "src/taumir/lower.tr"
         long long tag = _ast_type_tag(hir_expr_type(val));
-        /* pass */
+#line 1325 "src/taumir/lower.tr"
         if ((tag < 0LL)) {
-            /* pass */
+#line 1325 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 1326 "src/taumir/lower.tr"
         LModule_add_global(m, name, tag);
-        /* pass */
+#line 1327 "src/taumir/lower.tr"
         List_ptr_append(m->global_inits, s);
-        /* pass */
+#line 1328 "src/taumir/lower.tr"
         return true;
-    } else if (_t3168.tag == HirStmt_SAssign) {
-        __auto_type target = _t3168.data.SAssign.target;
-__auto_type val = _t3168.data.SAssign.val;
-        /* pass */
+    } else if (_t6150.tag == HirStmt_SAssign) {
+        __auto_type target = _t6150.data.SAssign.target;
+__auto_type val = _t6150.data.SAssign.val;
+#line 1330 "src/taumir/lower.tr"
         TrStr nm = _ident_name(target);
-        /* pass */
+#line 1331 "src/taumir/lower.tr"
         if (_tr_str_eqv((nm), (_tr_str_lit_len("", 0LL)))) {
-            /* pass */
+#line 1331 "src/taumir/lower.tr"
             _tr_str_release(nm);
             return false;
         }
-        /* pass */
+#line 1332 "src/taumir/lower.tr"
         long long tag2 = _ast_type_tag(hir_expr_type(val));
-        /* pass */
+#line 1333 "src/taumir/lower.tr"
         if ((tag2 < 0LL)) {
-            /* pass */
+#line 1333 "src/taumir/lower.tr"
             _tr_str_release(nm);
             return false;
         }
-        /* pass */
+#line 1334 "src/taumir/lower.tr"
         LModule_add_global(m, nm, tag2);
-        /* pass */
+#line 1335 "src/taumir/lower.tr"
         List_ptr_append(m->global_inits, s);
-        /* pass */
+#line 1336 "src/taumir/lower.tr"
         _tr_str_release(nm);
         return true;
     } else if (1) {
-        __auto_type _ = _t3168;
-        /* pass */
+        __auto_type _ = _t6150;
+#line 1338 "src/taumir/lower.tr"
         return false;
     }
 }
 
 __attribute__((hot)) bool _lower_global_init(LModule* m, LFunc* lf, HirStmt* s) {
-    /* pass */
-    __auto_type _t3169 = (*s);
-    if (_t3169.tag == HirStmt_SLineMarker) {
-        __auto_type _ = _t3169.data.SLineMarker.n;
+#line 1342 "src/taumir/lower.tr"
+    __auto_type _t6151 = (*s);
+    if (_t6151.tag == HirStmt_SLineMarker) {
+        __auto_type _ = _t6151.data.SLineMarker.n;
         return true;
-    } else if (_t3169.tag == HirStmt_SPass) {
+    } else if (_t6151.tag == HirStmt_SPass) {
         return true;
-    } else if (_t3169.tag == HirStmt_SLet) {
-        __auto_type name = _t3169.data.SLet.name;
-__auto_type val = _t3169.data.SLet.val;
-        /* pass */
+    } else if (_t6151.tag == HirStmt_SLet) {
+        __auto_type name = _t6151.data.SLet.name;
+__auto_type val = _t6151.data.SLet.val;
+#line 1346 "src/taumir/lower.tr"
         long long v = lower_expr(m, lf, val);
-        /* pass */
+#line 1347 "src/taumir/lower.tr"
         if ((v < 0LL)) {
-            /* pass */
+#line 1347 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 1348 "src/taumir/lower.tr"
         long long gidx = LModule_global_index(m, name);
-        /* pass */
+#line 1349 "src/taumir/lower.tr"
         if ((gidx < 0LL)) {
-            /* pass */
+#line 1349 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 1350 "src/taumir/lower.tr"
         if ((LFunc_vreg_type(lf, v) == 1LL)) {
-            /* pass */
+#line 1350 "src/taumir/lower.tr"
             _secure_str(m, lf, v);
         }
-        /* pass */
+#line 1351 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IStoreGlobal(gidx, v));
-        /* pass */
+#line 1352 "src/taumir/lower.tr"
         _flush_fresh_strs(m, lf);
-        /* pass */
+#line 1353 "src/taumir/lower.tr"
         return true;
-    } else if (_t3169.tag == HirStmt_SAssign) {
-        __auto_type target = _t3169.data.SAssign.target;
-__auto_type val = _t3169.data.SAssign.val;
-        /* pass */
+    } else if (_t6151.tag == HirStmt_SAssign) {
+        __auto_type target = _t6151.data.SAssign.target;
+__auto_type val = _t6151.data.SAssign.val;
+#line 1355 "src/taumir/lower.tr"
         long long v2 = lower_expr(m, lf, val);
-        /* pass */
+#line 1356 "src/taumir/lower.tr"
         if ((v2 < 0LL)) {
-            /* pass */
+#line 1356 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
-        long long gidx2 = ({ TrStr _at_t3170 = (_ident_name(target)); __auto_type _wr = (LModule_global_index(m, _at_t3170)); _tr_str_release(_at_t3170); _wr; });
-        /* pass */
+#line 1357 "src/taumir/lower.tr"
+        long long gidx2 = ({ TrStr _at_t6152 = (_ident_name(target)); __auto_type _wr = (LModule_global_index(m, _at_t6152)); _tr_str_release(_at_t6152); _wr; });
+#line 1358 "src/taumir/lower.tr"
         if ((gidx2 < 0LL)) {
-            /* pass */
+#line 1358 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 1359 "src/taumir/lower.tr"
         if ((LFunc_vreg_type(lf, v2) == 1LL)) {
-            /* pass */
+#line 1359 "src/taumir/lower.tr"
             _secure_str(m, lf, v2);
         }
-        /* pass */
+#line 1360 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IStoreGlobal(gidx2, v2));
-        /* pass */
+#line 1361 "src/taumir/lower.tr"
         _flush_fresh_strs(m, lf);
-        /* pass */
+#line 1362 "src/taumir/lower.tr"
         return true;
     } else if (1) {
-        __auto_type _ = _t3169;
-        /* pass */
+        __auto_type _ = _t6151;
+#line 1364 "src/taumir/lower.tr"
         return false;
     }
 }
 
 __attribute__((hot)) void _lir_lower_function(LModule* m, HirFunction* f) {
-    /* pass */
+#line 1367 "src/taumir/lower.tr"
     LFunc* lf = LFunc_init(f->name);
-    /* pass */
+#line 1368 "src/taumir/lower.tr"
     if (_tr_str_eqv((f->name), (_tr_str_lit_len("main", 4LL)))) {
-        /* pass */
+#line 1368 "src/taumir/lower.tr"
         lf->is_main = true;
     }
-    /* pass */
+#line 1369 "src/taumir/lower.tr"
     if ((_tr_str_eqv((f->name), (_tr_str_lit_len("main", 4LL))) && (f->params->len > 0LL))) {
-        /* pass */
+#line 1369 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_argv_list", 16LL));
     }
-    /* pass */
+#line 1370 "src/taumir/lower.tr"
     if (((!_is_null_str(f->throws_ty->name)) && (!_tr_str_eqv((f->throws_ty->name), (_tr_str_lit_len("", 0LL)))))) {
-        /* pass */
+#line 1371 "src/taumir/lower.tr"
         lf->is_throws = true;
-        /* pass */
+#line 1372 "src/taumir/lower.tr"
         lf->throws_ok_tag = _tag_of(m, f->ret_ty);
-        /* pass */
+#line 1373 "src/taumir/lower.tr"
         lf->throws_err_tag = _tag_of(m, f->throws_ty);
     }
-    /* pass */
+#line 1374 "src/taumir/lower.tr"
     long long pi = 0LL;
-    /* pass */
+#line 1375 "src/taumir/lower.tr"
     while ((pi < f->params->len)) {
-        /* pass */
+#line 1376 "src/taumir/lower.tr"
         HirParam* p = ((HirParam*)List_ptr_get(f->params, pi));
-        /* pass */
+#line 1377 "src/taumir/lower.tr"
         if ((!_tr_str_eqv((p->name), (_tr_str_lit_len("self", 4LL))))) {
-            /* pass */
+#line 1378 "src/taumir/lower.tr"
             long long ptag = _tag_of(m, p->ty);
-            /* pass */
+#line 1383 "src/taumir/lower.tr"
             if (((lf->is_main && (_tr_str_eqv((p->ty->name), (_tr_str_lit_len("Vec", 3LL))) || _tr_str_eqv((p->ty->name), (_tr_str_lit_len("List", 4LL))))) && (p->ty->args->len > 0LL))) {
-                /* pass */
+#line 1384 "src/taumir/lower.tr"
                 TrStr _mel = _tr_str_retain(_subst_ty(m, (*((AstType**)List_ptr_get(p->ty->args, 0LL))))->name);
-                /* pass */
+#line 1385 "src/taumir/lower.tr"
                 if ((_tr_str_eqv((_mel), (_tr_str_lit_len("str", 3LL))) || _tr_str_eqv((_mel), (_tr_str_lit_len("String", 6LL))))) {
-                    /* pass */
+#line 1385 "src/taumir/lower.tr"
                     ptag = 3LL;
                 }
                 _tr_str_release(_mel);
             }
-            /* pass */
+#line 1386 "src/taumir/lower.tr"
             if ((ptag < 0LL)) {
-                /* pass */
+#line 1387 "src/taumir/lower.tr"
                 m->ok = false;
-                /* pass */
-                m->fail_note = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_own(f->name)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("fn '", 4LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("': unsupported param type '", 27LL))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_own(p->ty->name)); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("'", 1LL))); _tr_str_release(_cl); _cres; });
-                /* pass */
+#line 1388 "src/taumir/lower.tr"
+                m->fail_note = ({ __auto_type _ord_t6153 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(f->name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("fn '", 4LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': unsupported param type '", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t6153); TrStr _tr_cr = (_own(p->ty->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("'", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+#line 1389 "src/taumir/lower.tr"
                 _tr_obj_release(lf, _trdrop_LFunc);
                 return;
             }
-            /* pass */
+#line 1390 "src/taumir/lower.tr"
             List_TrStr_append(lf->params, p->name);
-            /* pass */
+#line 1391 "src/taumir/lower.tr"
             LFunc_add_var(lf, p->name);
-            /* pass */
+#line 1392 "src/taumir/lower.tr"
             LFunc_set_var_type(lf, p->name, ptag);
-            /* pass */
+#line 1393 "src/taumir/lower.tr"
             if ((((ptag == 10LL) || (ptag == 11LL)) && (!_is_null_str(p->ty->name)))) {
-                /* pass */
-                ({ TrStr _at_t3171 = (_own(p->ty->name)); LFunc_set_var_cls(lf, p->name, _at_t3171); _tr_str_release(_at_t3171); });
+#line 1394 "src/taumir/lower.tr"
+                ({ __auto_type _ord_t6154 = (p->name); TrStr _ord_t6155 = (_own(p->ty->name)); LFunc_set_var_cls(lf, _ord_t6154, _ord_t6155); _tr_str_release(_ord_t6155); });
             }
         }
-        /* pass */
+#line 1395 "src/taumir/lower.tr"
         pi = (pi + 1LL);
     }
-    /* pass */
+#line 1396 "src/taumir/lower.tr"
     LFunc_set_cur(lf, LFunc_new_block(lf));
-    /* pass */
+#line 1397 "src/taumir/lower.tr"
     if (lf->is_main) {
-        /* pass */
+#line 1398 "src/taumir/lower.tr"
         long long gi = 0LL;
-        /* pass */
+#line 1399 "src/taumir/lower.tr"
         while ((gi < m->global_inits->len)) {
-            /* pass */
+#line 1400 "src/taumir/lower.tr"
             if ((!_lower_global_init(m, lf, ((HirStmt*)List_ptr_get(m->global_inits, gi))))) {
-                /* pass */
+#line 1401 "src/taumir/lower.tr"
                 m->ok = false;
-                /* pass */
+#line 1402 "src/taumir/lower.tr"
                 _tr_obj_release(lf, _trdrop_LFunc);
                 return;
             }
-            /* pass */
+#line 1403 "src/taumir/lower.tr"
             gi = (gi + 1LL);
         }
     }
-    /* pass */
+#line 1404 "src/taumir/lower.tr"
     if ((!lower_block(m, lf, f->body))) {
-        /* pass */
+#line 1405 "src/taumir/lower.tr"
         m->ok = false;
-        /* pass */
+#line 1406 "src/taumir/lower.tr"
         if (_tr_str_eqv((m->fail_note), (_tr_str_lit_len("", 0LL)))) {
-            /* pass */
-            m->fail_note = ({ TrStr _cl = (({ TrStr _cr = (_own(f->name)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("fn '", 4LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("': body uses an unsupported construct", 37LL))); _tr_str_release(_cl); _cres; });
+#line 1407 "src/taumir/lower.tr"
+            m->fail_note = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(f->name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("fn '", 4LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': body uses an unsupported construct", 37LL))); _tr_str_release(_tr_cl); _tr_cres; });
         }
-        /* pass */
+#line 1408 "src/taumir/lower.tr"
         _tr_obj_release(lf, _trdrop_LFunc);
         return;
     }
-    /* pass */
+#line 1409 "src/taumir/lower.tr"
     if ((!LFunc_cur_terminated(lf))) {
-        /* pass */
+#line 1410 "src/taumir/lower.tr"
         if ((!_run_defers(m, lf))) {
-            /* pass */
+#line 1411 "src/taumir/lower.tr"
             m->ok = false;
-            /* pass */
+#line 1412 "src/taumir/lower.tr"
             if (_tr_str_eqv((m->fail_note), (_tr_str_lit_len("", 0LL)))) {
-                /* pass */
-                m->fail_note = ({ TrStr _cl = (({ TrStr _cr = (_own(f->name)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("fn '", 4LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("': deferred statement not lowerable", 35LL))); _tr_str_release(_cl); _cres; });
+#line 1413 "src/taumir/lower.tr"
+                m->fail_note = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(f->name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("fn '", 4LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': deferred statement not lowerable", 35LL))); _tr_str_release(_tr_cl); _tr_cres; });
             }
-            /* pass */
+#line 1414 "src/taumir/lower.tr"
             _tr_obj_release(lf, _trdrop_LFunc);
             return;
         }
     }
-    /* pass */
+#line 1415 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TRetInt(0LL));
-    /* pass */
+#line 1416 "src/taumir/lower.tr"
     List_ptr_append(m->funcs, _tr_obj_retain(lf));
     _tr_obj_release(lf, _trdrop_LFunc);
 }
 
 __attribute__((hot)) bool _field_tag_ok(long long vt, long long ftg) {
-    /* pass */
+#line 1421 "src/taumir/lower.tr"
     if ((vt == ftg)) {
-        /* pass */
+#line 1421 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 1422 "src/taumir/lower.tr"
     if ((((vt == 0LL) || (vt == 4LL)) && ((ftg == 0LL) || (ftg == 4LL)))) {
-        /* pass */
+#line 1422 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 1423 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) void _emit_field_set(LModule* m, LFunc* lf, long long obj, long long off, long long val) {
-    /* pass */
+#line 1428 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStore(obj, off, val, 3LL));
 }
 
 __attribute__((hot)) long long _emit_field_get(LModule* m, LFunc* lf, long long obj, long long off, long long tag) {
-    /* pass */
+#line 1432 "src/taumir/lower.tr"
     long long gd = LFunc_new_vreg(lf);
-    /* pass */
+#line 1433 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, gd, tag);
-    /* pass */
+#line 1434 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoad(gd, obj, off, 3LL));
-    /* pass */
+#line 1435 "src/taumir/lower.tr"
     return gd;
 }
 
 __attribute__((hot)) long long _lower_enum_ctor(LModule* m, LFunc* lf, TrStr ename, TrStr vname, List_ptr* margs) {
-    /* pass */
+#line 1441 "src/taumir/lower.tr"
     long long vidx = LModule_enum_variant_index(m, ename, vname);
-    /* pass */
+#line 1442 "src/taumir/lower.tr"
     if ((vidx < 0LL)) {
-        /* pass */
+#line 1442 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 1447 "src/taumir/lower.tr"
     if (m->no_heap) {
-        /* pass */
+#line 1448 "src/taumir/lower.tr"
         m->ok = false;
-        /* pass */
-        m->fail_note = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concatv((_tr_str_lit_len("[H-1] constructing enum '", 25LL)), (ename))); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (vname)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("' heap-allocates, which --no-heap forbids on this backend (it boxes via the object allocator).\n      FIX: use the C backend for --no-heap (it keeps enums as stack tagged unions), or avoid heap enums such as Option/Result on the zero-heap path", 242LL))); _tr_str_release(_cl); _cres; });
-        /* pass */
+#line 1449 "src/taumir/lower.tr"
+        m->fail_note = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[H-1] constructing enum '", 25LL)), (ename))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vname)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' heap-allocates, which --no-heap forbids on this backend (it boxes via the object allocator).\n      FIX: use the C backend for --no-heap (it keeps enums as stack tagged unions), or avoid heap enums such as Option/Result on the zero-heap path", 242LL))); _tr_str_release(_tr_cl); _tr_cres; });
+#line 1450 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
-    EnumLayout* elay = ((EnumLayout*)List_ptr_get(m->enums, LModule_enum_index(m, ename)));
-    /* pass */
+#line 1451 "src/taumir/lower.tr"
+    EnumLayout* elay = ({ __auto_type _ord_t6156 = (LModule_enum_index(m, ename)); __auto_type _wr = (((EnumLayout*)List_ptr_get(m->enums, _ord_t6156))); _wr; });
+#line 1452 "src/taumir/lower.tr"
     VariantLayout* vlay = ((VariantLayout*)List_ptr_get(elay->variants, vidx));
-    /* pass */
+#line 1453 "src/taumir/lower.tr"
     if ((margs->len != vlay->fields->len)) {
-        /* pass */
+#line 1453 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 1455 "src/taumir/lower.tr"
     List_i64* vals = (void*)List_i64_new();
-    /* pass */
+#line 1456 "src/taumir/lower.tr"
     long long ai = 0LL;
-    /* pass */
+#line 1457 "src/taumir/lower.tr"
     while ((ai < margs->len)) {
-        /* pass */
+#line 1458 "src/taumir/lower.tr"
         long long ftg = List_i64_get(vlay->ftags, ai);
-        /* pass */
+#line 1459 "src/taumir/lower.tr"
         long long av = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, ai)));
-        /* pass */
+#line 1460 "src/taumir/lower.tr"
         if ((av < 0LL)) {
-            /* pass */
+#line 1460 "src/taumir/lower.tr"
             List_i64_free(vals);
             return (-1LL);
         }
-        /* pass */
+#line 1461 "src/taumir/lower.tr"
         long long avt = LFunc_vreg_type(lf, av);
-        /* pass */
+#line 1462 "src/taumir/lower.tr"
         if ((ftg <= (0LL - 2LL))) {
-            /* pass */
+#line 1464 "src/taumir/lower.tr"
             ftg = avt;
-            /* pass */
+#line 1465 "src/taumir/lower.tr"
             if ((((_is_list_tag(ftg) || _is_dict_tag(ftg)) || _is_set_tag(ftg)) || (ftg == 12LL))) {
-                /* pass */
+#line 1465 "src/taumir/lower.tr"
                 List_i64_free(vals);
                 return (-1LL);
             }
         }
-        /* pass */
+#line 1466 "src/taumir/lower.tr"
         if ((((ftg < 0LL) || _is_list_tag(ftg)) || _is_dict_tag(ftg))) {
-            /* pass */
+#line 1466 "src/taumir/lower.tr"
             List_i64_free(vals);
             return (-1LL);
         }
-        /* pass */
+#line 1467 "src/taumir/lower.tr"
         if ((ftg == 5LL)) {
-            /* pass */
+#line 1468 "src/taumir/lower.tr"
             if ((avt == 0LL)) {
-                /* pass */
+#line 1468 "src/taumir/lower.tr"
                 av = _promote_f(lf, av);
             } else if ((avt != 5LL)) {
-                /* pass */
+#line 1469 "src/taumir/lower.tr"
                 List_i64_free(vals);
                 return (-1LL);
             }
-            /* pass */
+#line 1470 "src/taumir/lower.tr"
             long long pfb = LFunc_new_vreg(lf);
-            /* pass */
+#line 1471 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IFBits(pfb, av));
-            /* pass */
+#line 1472 "src/taumir/lower.tr"
             av = pfb;
         } else if ((ftg == 1LL)) {
-            /* pass */
+#line 1474 "src/taumir/lower.tr"
             if ((avt != 1LL)) {
-                /* pass */
+#line 1474 "src/taumir/lower.tr"
                 List_i64_free(vals);
                 return (-1LL);
             }
-            /* pass */
+#line 1475 "src/taumir/lower.tr"
             _secure_str(m, lf, av);
         } else if (((ftg == 10LL) || (ftg == 11LL))) {
-            /* pass */
+#line 1477 "src/taumir/lower.tr"
             if ((!_field_tag_ok(avt, ftg))) {
-                /* pass */
+#line 1477 "src/taumir/lower.tr"
                 List_i64_free(vals);
                 return (-1LL);
             }
-            /* pass */
+#line 1478 "src/taumir/lower.tr"
             _secure_obj(m, lf, av);
         } else if ((!_field_tag_ok(avt, ftg))) {
-            /* pass */
+#line 1480 "src/taumir/lower.tr"
             List_i64_free(vals);
             return (-1LL);
         }
-        /* pass */
+#line 1481 "src/taumir/lower.tr"
         List_i64_append(vals, av);
-        /* pass */
+#line 1482 "src/taumir/lower.tr"
         ai = (ai + 1LL);
     }
-    /* pass */
+#line 1483 "src/taumir/lower.tr"
     long long szc = LFunc_new_vreg(lf);
-    /* pass */
+#line 1484 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(szc, LModule_enum_size(m, ename)));
-    /* pass */
+#line 1485 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL));
-    /* pass */
+#line 1486 "src/taumir/lower.tr"
     List_i64* oaa = (void*)List_i64_new();
-    /* pass */
+#line 1487 "src/taumir/lower.tr"
     List_i64_append(oaa, szc);
-    /* pass */
+#line 1488 "src/taumir/lower.tr"
     long long od = LFunc_new_vreg(lf);
-    /* pass */
+#line 1489 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(od, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL), oaa));
-    /* pass */
+#line 1490 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, od, 11LL);
-    /* pass */
+#line 1491 "src/taumir/lower.tr"
     long long tgc = LFunc_new_vreg(lf);
-    /* pass */
+#line 1492 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(tgc, vidx));
-    /* pass */
+#line 1493 "src/taumir/lower.tr"
     _emit_field_set(m, lf, od, 0LL, tgc);
-    /* pass */
+#line 1494 "src/taumir/lower.tr"
     ai = 0LL;
-    /* pass */
+#line 1495 "src/taumir/lower.tr"
     while ((ai < vals->len)) {
-        /* pass */
+#line 1496 "src/taumir/lower.tr"
         _emit_field_set(m, lf, od, ((1LL + ai) * 8LL), List_i64_get(vals, ai));
-        /* pass */
+#line 1497 "src/taumir/lower.tr"
         ai = (ai + 1LL);
     }
-    /* pass */
+#line 1498 "src/taumir/lower.tr"
     _fresh_mark_obj(lf, od);
-    /* pass */
+#line 1499 "src/taumir/lower.tr"
+    long long _trret1491 = od;
     List_i64_free(vals);
-    return od;
+    return _trret1491;
 }
 
 __attribute__((hot)) long long _lir_fn_ret_tag(LModule* m, HirFunction* f) {
-    /* pass */
+#line 1504 "src/taumir/lower.tr"
     if (((!_is_null_str(f->throws_ty->name)) && (!_tr_str_eqv((f->throws_ty->name), (_tr_str_lit_len("", 0LL)))))) {
-        /* pass */
+#line 1504 "src/taumir/lower.tr"
         return 11LL;
     }
-    /* pass */
+#line 1505 "src/taumir/lower.tr"
     return _tag_of(m, f->ret_ty);
 }
 
 __attribute__((hot)) long long _wrap_result(LModule* m, LFunc* lf, long long vidx, long long payv, long long paytag) {
-    /* pass */
+#line 1511 "src/taumir/lower.tr"
     long long pv = payv;
-    /* pass */
+#line 1512 "src/taumir/lower.tr"
     if ((paytag == 5LL)) {
-        /* pass */
+#line 1513 "src/taumir/lower.tr"
         long long fb = LFunc_new_vreg(lf);
-        /* pass */
+#line 1514 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IFBits(fb, pv));
-        /* pass */
+#line 1515 "src/taumir/lower.tr"
         pv = fb;
     } else if ((paytag == 1LL)) {
-        /* pass */
+#line 1517 "src/taumir/lower.tr"
         _secure_str(m, lf, pv);
     } else if (((paytag == 10LL) || (paytag == 11LL))) {
-        /* pass */
+#line 1519 "src/taumir/lower.tr"
         _secure_obj(m, lf, pv);
     }
-    /* pass */
+#line 1520 "src/taumir/lower.tr"
     long long szc = LFunc_new_vreg(lf);
-    /* pass */
+#line 1521 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(szc, LModule_enum_size(m, _tr_str_lit_len("Result", 6LL))));
-    /* pass */
+#line 1522 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL));
-    /* pass */
+#line 1523 "src/taumir/lower.tr"
     List_i64* aa = (void*)List_i64_new();
-    /* pass */
+#line 1524 "src/taumir/lower.tr"
     List_i64_append(aa, szc);
-    /* pass */
+#line 1525 "src/taumir/lower.tr"
     long long od = LFunc_new_vreg(lf);
-    /* pass */
+#line 1526 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(od, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL), aa));
-    /* pass */
+#line 1527 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, od, 11LL);
-    /* pass */
+#line 1528 "src/taumir/lower.tr"
     long long tgc = LFunc_new_vreg(lf);
-    /* pass */
+#line 1529 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(tgc, vidx));
-    /* pass */
+#line 1530 "src/taumir/lower.tr"
     _emit_field_set(m, lf, od, 0LL, tgc);
-    /* pass */
+#line 1531 "src/taumir/lower.tr"
     _emit_field_set(m, lf, od, 8LL, pv);
-    /* pass */
+#line 1532 "src/taumir/lower.tr"
     _fresh_mark_obj(lf, od);
-    /* pass */
+#line 1533 "src/taumir/lower.tr"
     return od;
 }
 
 __attribute__((hot)) long long _find_free_fn_idx(LModule* m, TrStr name) {
-    /* pass */
+#line 1542 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 1543 "src/taumir/lower.tr"
     while ((i < m->hir_prog->functions->len)) {
-        /* pass */
+#line 1544 "src/taumir/lower.tr"
         HirFunction* f = ((HirFunction*)List_ptr_get(m->hir_prog->functions, i));
-        /* pass */
+#line 1545 "src/taumir/lower.tr"
         if ((((_tr_str_eqv((f->name), (name)) && _tr_str_eqv((f->class_name), (_tr_str_lit_len("", 0LL)))) && (!f->is_extern)) && (f->generics->len == 0LL))) {
-            /* pass */
-            return i;
+#line 1545 "src/taumir/lower.tr"
+            long long _trret1492 = i;
+            return _trret1492;
         }
-        /* pass */
+#line 1546 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 1547 "src/taumir/lower.tr"
     return (-1LL);
 }
 
 __attribute__((hot)) bool _ensure_await_wrapper(LModule* m, TrStr fn) {
-    /* pass */
+#line 1550 "src/taumir/lower.tr"
     TrStr wname = _tr_strx_concatv((_tr_str_lit_len("_awaitwrap_", 11LL)), (fn));
-    /* pass */
+#line 1551 "src/taumir/lower.tr"
     if (LModule_is_user_fn(m, wname)) {
-        /* pass */
+#line 1551 "src/taumir/lower.tr"
         _tr_str_release(wname);
         return true;
     }
-    /* pass */
+#line 1552 "src/taumir/lower.tr"
     long long fidx = _find_free_fn_idx(m, fn);
-    /* pass */
+#line 1553 "src/taumir/lower.tr"
     if ((fidx < 0LL)) {
-        /* pass */
+#line 1553 "src/taumir/lower.tr"
         _tr_str_release(wname);
         return false;
     }
-    /* pass */
+#line 1554 "src/taumir/lower.tr"
     HirFunction* hf = ((HirFunction*)List_ptr_get(m->hir_prog->functions, fidx));
-    /* pass */
+#line 1555 "src/taumir/lower.tr"
     long long frtag = _tag_of(m, hf->ret_ty);
-    /* pass */
+#line 1556 "src/taumir/lower.tr"
     if ((frtag < 0LL)) {
-        /* pass */
+#line 1556 "src/taumir/lower.tr"
         _tr_str_release(wname);
         return false;
     }
-    /* pass */
-    ({ TrStr _at_t3172 = (_own(wname)); List_TrStr_append(m->fn_names, _at_t3172); _tr_str_release(_at_t3172); });
-    /* pass */
+#line 1557 "src/taumir/lower.tr"
+    ({ TrStr _ord_t6157 = (_own(wname)); List_TrStr_append(m->fn_names, _ord_t6157); _tr_str_release(_ord_t6157); });
+#line 1558 "src/taumir/lower.tr"
     List_i64_append(m->fn_ret, 0LL);
-    /* pass */
-    LFunc* wlf = ({ TrStr _at_t3173 = (_own(wname)); __auto_type _wr = (LFunc_init(_at_t3173)); _tr_str_release(_at_t3173); _wr; });
-    /* pass */
+#line 1559 "src/taumir/lower.tr"
+    LFunc* wlf = ({ TrStr _at_t6158 = (_own(wname)); __auto_type _wr = (LFunc_init(_at_t6158)); _tr_str_release(_at_t6158); _wr; });
+#line 1560 "src/taumir/lower.tr"
     List_TrStr_append(wlf->params, _tr_str_lit_len("__vp", 4LL));
-    /* pass */
+#line 1561 "src/taumir/lower.tr"
     LFunc_add_var(wlf, _tr_str_lit_len("__vp", 4LL));
-    /* pass */
+#line 1562 "src/taumir/lower.tr"
     LFunc_set_var_type(wlf, _tr_str_lit_len("__vp", 4LL), 0LL);
-    /* pass */
+#line 1563 "src/taumir/lower.tr"
     LFunc_set_cur(wlf, LFunc_new_block(wlf));
-    /* pass */
+#line 1564 "src/taumir/lower.tr"
     List_i64* callargs = (void*)List_i64_new();
-    /* pass */
+#line 1565 "src/taumir/lower.tr"
     long long pi = 0LL;
-    /* pass */
+#line 1566 "src/taumir/lower.tr"
     while ((pi < hf->params->len)) {
-        /* pass */
+#line 1567 "src/taumir/lower.tr"
         long long ptag = _tag_of(m, ((HirParam*)List_ptr_get(hf->params, pi))->ty);
-        /* pass */
+#line 1568 "src/taumir/lower.tr"
         if ((ptag < 0LL)) {
-            /* pass */
+#line 1568 "src/taumir/lower.tr"
             _tr_str_release(wname);
             _tr_obj_release(wlf, _trdrop_LFunc);
             List_i64_free(callargs);
             return false;
         }
-        /* pass */
+#line 1569 "src/taumir/lower.tr"
         long long vpv = LFunc_new_vreg(wlf);
-        /* pass */
+#line 1570 "src/taumir/lower.tr"
         LFunc_emit(wlf, LInst_ctor_ILoadVar(vpv, _tr_str_lit_len("__vp", 4LL)));
-        /* pass */
+#line 1571 "src/taumir/lower.tr"
         LFunc_set_vreg_type(wlf, vpv, 0LL);
-        /* pass */
+#line 1572 "src/taumir/lower.tr"
         long long argi = _emit_field_get(m, wlf, vpv, (pi * 8LL), ptag);
-        /* pass */
+#line 1573 "src/taumir/lower.tr"
         if ((ptag == 5LL)) {
-            /* pass */
+#line 1574 "src/taumir/lower.tr"
             long long fb = LFunc_new_vreg(wlf);
-            /* pass */
+#line 1575 "src/taumir/lower.tr"
             LFunc_emit(wlf, LInst_ctor_IBitsF(fb, argi));
-            /* pass */
+#line 1576 "src/taumir/lower.tr"
             LFunc_set_vreg_type(wlf, fb, 5LL);
-            /* pass */
+#line 1577 "src/taumir/lower.tr"
             argi = fb;
         }
-        /* pass */
+#line 1578 "src/taumir/lower.tr"
         List_i64_append(callargs, argi);
-        /* pass */
+#line 1579 "src/taumir/lower.tr"
         pi = (pi + 1LL);
     }
-    /* pass */
+#line 1580 "src/taumir/lower.tr"
     if ((callargs->len > 6LL)) {
-        /* pass */
+#line 1580 "src/taumir/lower.tr"
         _tr_str_release(wname);
         _tr_obj_release(wlf, _trdrop_LFunc);
         List_i64_free(callargs);
         return false;
     }
-    /* pass */
+#line 1581 "src/taumir/lower.tr"
     long long rd = LFunc_new_vreg(wlf);
-    /* pass */
-    ({ TrStr _at_t3174 = (_own(fn)); LFunc_emit(wlf, LInst_ctor_ICall(rd, _at_t3174, callargs)); _tr_str_release(_at_t3174); });
-    /* pass */
+#line 1582 "src/taumir/lower.tr"
+    ({ TrStr _at_t6159 = (_own(fn)); LFunc_emit(wlf, LInst_ctor_ICall(rd, _at_t6159, callargs)); _tr_str_release(_at_t6159); });
+#line 1583 "src/taumir/lower.tr"
     LFunc_set_vreg_type(wlf, rd, frtag);
-    /* pass */
+#line 1584 "src/taumir/lower.tr"
     long long vpf = LFunc_new_vreg(wlf);
-    /* pass */
+#line 1585 "src/taumir/lower.tr"
     LFunc_emit(wlf, LInst_ctor_ILoadVar(vpf, _tr_str_lit_len("__vp", 4LL)));
-    /* pass */
+#line 1586 "src/taumir/lower.tr"
     LFunc_set_vreg_type(wlf, vpf, 0LL);
-    /* pass */
+#line 1587 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_raw_free", 15LL));
-    /* pass */
+#line 1588 "src/taumir/lower.tr"
     List_i64* fa = (void*)List_i64_new();
-    /* pass */
+#line 1589 "src/taumir/lower.tr"
     List_i64_append(fa, vpf);
-    /* pass */
+#line 1590 "src/taumir/lower.tr"
     LFunc_emit(wlf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_raw_free", 15LL), fa));
-    /* pass */
+#line 1591 "src/taumir/lower.tr"
     long long ret = rd;
-    /* pass */
+#line 1592 "src/taumir/lower.tr"
     if ((frtag == 5LL)) {
-        /* pass */
+#line 1593 "src/taumir/lower.tr"
         long long rb = LFunc_new_vreg(wlf);
-        /* pass */
+#line 1594 "src/taumir/lower.tr"
         LFunc_emit(wlf, LInst_ctor_IFBits(rb, rd));
-        /* pass */
+#line 1595 "src/taumir/lower.tr"
         ret = rb;
     }
-    /* pass */
+#line 1596 "src/taumir/lower.tr"
     LFunc_set_term(wlf, LTerm_ctor_TRetVal(ret));
-    /* pass */
+#line 1597 "src/taumir/lower.tr"
     List_ptr_append(m->funcs, _tr_obj_retain(wlf));
-    /* pass */
+#line 1598 "src/taumir/lower.tr"
     _tr_str_release(wname);
     _tr_obj_release(wlf, _trdrop_LFunc);
     return true;
 }
 
 __attribute__((hot)) long long _lower_await(LModule* m, LFunc* lf, HirExpr* awexpr) {
-    /* pass */
-    __auto_type _t3175 = (*awexpr);
-    if (_t3175.tag == HirExpr_ECall) {
-        __auto_type callee = _t3175.data.ECall.callee;
-__auto_type args = _t3175.data.ECall.args;
-__auto_type callty = _t3175.data.ECall.ty;
-        /* pass */
+#line 1601 "src/taumir/lower.tr"
+    __auto_type _t6160 = (*awexpr);
+    if (_t6160.tag == HirExpr_ECall) {
+        __auto_type callee = _t6160.data.ECall.callee;
+__auto_type args = _t6160.data.ECall.args;
+__auto_type callty = _t6160.data.ECall.ty;
+#line 1603 "src/taumir/lower.tr"
         TrStr fn = _ident_name(callee);
-        /* pass */
+#line 1604 "src/taumir/lower.tr"
         if (((_is_null_str(fn) || _tr_str_eqv((fn), (_tr_str_lit_len("", 0LL)))) || (!LModule_is_user_fn(m, fn)))) {
-            /* pass */
+#line 1605 "src/taumir/lower.tr"
+            long long _trret1493 = lower_expr(m, lf, awexpr);
             _tr_str_release(fn);
-            return lower_expr(m, lf, awexpr);
+            return _trret1493;
         }
-        /* pass */
+#line 1606 "src/taumir/lower.tr"
         if ((!_ensure_await_wrapper(m, fn))) {
-            /* pass */
+#line 1606 "src/taumir/lower.tr"
             _tr_str_release(fn);
             return (-1LL);
         }
-        /* pass */
+#line 1607 "src/taumir/lower.tr"
         long long nargs = args->len;
-        /* pass */
+#line 1608 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_raw_alloc", 16LL));
-        /* pass */
+#line 1609 "src/taumir/lower.tr"
         long long packsz = (nargs * 8LL);
-        /* pass */
+#line 1610 "src/taumir/lower.tr"
         if ((packsz < 8LL)) {
-            /* pass */
+#line 1610 "src/taumir/lower.tr"
             packsz = 8LL;
         }
-        /* pass */
+#line 1611 "src/taumir/lower.tr"
         long long szc = LFunc_new_vreg(lf);
-        /* pass */
+#line 1612 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(szc, packsz));
-        /* pass */
+#line 1613 "src/taumir/lower.tr"
         List_i64* aa = (void*)List_i64_new();
-        /* pass */
+#line 1614 "src/taumir/lower.tr"
         List_i64_append(aa, szc);
-        /* pass */
+#line 1615 "src/taumir/lower.tr"
         long long ab = LFunc_new_vreg(lf);
-        /* pass */
+#line 1616 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(ab, _tr_str_lit_len("_tr_rt_raw_alloc", 16LL), aa));
-        /* pass */
+#line 1617 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, ab, 0LL);
-        /* pass */
+#line 1618 "src/taumir/lower.tr"
         long long ai = 0LL;
-        /* pass */
+#line 1619 "src/taumir/lower.tr"
         while ((ai < nargs)) {
-            /* pass */
+#line 1620 "src/taumir/lower.tr"
             long long argv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, ai)));
-            /* pass */
+#line 1621 "src/taumir/lower.tr"
             if ((argv < 0LL)) {
-                /* pass */
+#line 1621 "src/taumir/lower.tr"
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 1622 "src/taumir/lower.tr"
             long long argt = LFunc_vreg_type(lf, argv);
-            /* pass */
+#line 1623 "src/taumir/lower.tr"
             if ((argt == 5LL)) {
-                /* pass */
+#line 1624 "src/taumir/lower.tr"
                 long long afb = LFunc_new_vreg(lf);
-                /* pass */
+#line 1625 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFBits(afb, argv));
-                /* pass */
+#line 1626 "src/taumir/lower.tr"
                 argv = afb;
             } else if ((argt == 1LL)) {
-                /* pass */
+#line 1627 "src/taumir/lower.tr"
                 _secure_str(m, lf, argv);
             } else if (((argt == 10LL) || (argt == 11LL))) {
-                /* pass */
+#line 1628 "src/taumir/lower.tr"
                 _secure_obj(m, lf, argv);
             }
-            /* pass */
+#line 1629 "src/taumir/lower.tr"
             _emit_field_set(m, lf, ab, (ai * 8LL), argv);
-            /* pass */
+#line 1630 "src/taumir/lower.tr"
             ai = (ai + 1LL);
         }
-        /* pass */
+#line 1631 "src/taumir/lower.tr"
         long long faddr = LFunc_new_vreg(lf);
-        /* pass */
+#line 1632 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, faddr, 12LL);
-        /* pass */
-        ({ TrStr _at_t3176 = (_tr_strx_concatv((_tr_str_lit_len("_awaitwrap_", 11LL)), (fn))); LFunc_emit(lf, LInst_ctor_IFuncAddr(faddr, _at_t3176)); _tr_str_release(_at_t3176); });
-        /* pass */
+#line 1633 "src/taumir/lower.tr"
+        ({ TrStr _at_t6161 = (_tr_strx_concatv((_tr_str_lit_len("_awaitwrap_", 11LL)), (fn))); LFunc_emit(lf, LInst_ctor_IFuncAddr(faddr, _at_t6161)); _tr_str_release(_at_t6161); });
+#line 1634 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_co_go_h", 11LL));
-        /* pass */
+#line 1635 "src/taumir/lower.tr"
         List_i64* ga = (void*)List_i64_new();
-        /* pass */
+#line 1636 "src/taumir/lower.tr"
         List_i64_append(ga, faddr);
-        /* pass */
+#line 1637 "src/taumir/lower.tr"
         List_i64_append(ga, ab);
-        /* pass */
+#line 1638 "src/taumir/lower.tr"
         long long co = LFunc_new_vreg(lf);
-        /* pass */
+#line 1639 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(co, _tr_str_lit_len("_tr_co_go_h", 11LL), ga));
-        /* pass */
+#line 1640 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, co, 0LL);
-        /* pass */
+#line 1641 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_co_await_h", 14LL));
-        /* pass */
+#line 1642 "src/taumir/lower.tr"
         List_i64* wa = (void*)List_i64_new();
-        /* pass */
+#line 1643 "src/taumir/lower.tr"
         List_i64_append(wa, co);
-        /* pass */
+#line 1644 "src/taumir/lower.tr"
         long long r = LFunc_new_vreg(lf);
-        /* pass */
+#line 1645 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(r, _tr_str_lit_len("_tr_co_await_h", 14LL), wa));
-        /* pass */
+#line 1646 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_co_free_h", 13LL));
-        /* pass */
+#line 1647 "src/taumir/lower.tr"
         List_i64* fca = (void*)List_i64_new();
-        /* pass */
+#line 1648 "src/taumir/lower.tr"
         List_i64_append(fca, co);
-        /* pass */
+#line 1649 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_co_free_h", 13LL), fca));
-        /* pass */
+#line 1650 "src/taumir/lower.tr"
         long long rtag = _tag_of(m, callty);
-        /* pass */
+#line 1651 "src/taumir/lower.tr"
         if ((rtag < 0LL)) {
-            /* pass */
+#line 1651 "src/taumir/lower.tr"
             rtag = 0LL;
         }
-        /* pass */
+#line 1652 "src/taumir/lower.tr"
         if ((rtag == 5LL)) {
-            /* pass */
+#line 1653 "src/taumir/lower.tr"
             long long rf = LFunc_new_vreg(lf);
-            /* pass */
+#line 1654 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IBitsF(rf, r));
-            /* pass */
+#line 1655 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, rf, 5LL);
-            /* pass */
+#line 1656 "src/taumir/lower.tr"
+            long long _trret1494 = rf;
             _tr_str_release(fn);
-            return rf;
+            return _trret1494;
         }
-        /* pass */
+#line 1657 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, r, rtag);
-        /* pass */
+#line 1658 "src/taumir/lower.tr"
+        long long _trret1495 = r;
         _tr_str_release(fn);
-        return r;
+        return _trret1495;
     } else if (1) {
-        __auto_type _ = _t3175;
-        /* pass */
+        __auto_type _ = _t6160;
+#line 1660 "src/taumir/lower.tr"
         return lower_expr(m, lf, awexpr);
     }
 }
 
 __attribute__((hot)) bool _lower_spawn(LModule* m, LFunc* lf, HirExpr* expr) {
-    /* pass */
-    __auto_type _t3177 = (*expr);
-    if (_t3177.tag == HirExpr_ECall) {
-        __auto_type callee = _t3177.data.ECall.callee;
-__auto_type args = _t3177.data.ECall.args;
-        /* pass */
+#line 1668 "src/taumir/lower.tr"
+    __auto_type _t6162 = (*expr);
+    if (_t6162.tag == HirExpr_ECall) {
+        __auto_type callee = _t6162.data.ECall.callee;
+__auto_type args = _t6162.data.ECall.args;
+#line 1670 "src/taumir/lower.tr"
         TrStr fn = _ident_name(callee);
-        /* pass */
+#line 1671 "src/taumir/lower.tr"
         if (((_is_null_str(fn) || _tr_str_eqv((fn), (_tr_str_lit_len("", 0LL)))) || (!LModule_is_user_fn(m, fn)))) {
-            /* pass */
+#line 1671 "src/taumir/lower.tr"
             _tr_str_release(fn);
             return false;
         }
-        /* pass */
+#line 1672 "src/taumir/lower.tr"
         if ((!_ensure_await_wrapper(m, fn))) {
-            /* pass */
+#line 1672 "src/taumir/lower.tr"
             _tr_str_release(fn);
             return false;
         }
-        /* pass */
+#line 1673 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_raw_alloc", 16LL));
-        /* pass */
+#line 1674 "src/taumir/lower.tr"
         long long packsz = (args->len * 8LL);
-        /* pass */
+#line 1675 "src/taumir/lower.tr"
         if ((packsz < 8LL)) {
-            /* pass */
+#line 1675 "src/taumir/lower.tr"
             packsz = 8LL;
         }
-        /* pass */
+#line 1676 "src/taumir/lower.tr"
         long long szc = LFunc_new_vreg(lf);
-        /* pass */
+#line 1677 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(szc, packsz));
-        /* pass */
+#line 1678 "src/taumir/lower.tr"
         List_i64* aa = (void*)List_i64_new();
-        /* pass */
+#line 1679 "src/taumir/lower.tr"
         List_i64_append(aa, szc);
-        /* pass */
+#line 1680 "src/taumir/lower.tr"
         long long buf = LFunc_new_vreg(lf);
-        /* pass */
+#line 1681 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(buf, _tr_str_lit_len("_tr_rt_raw_alloc", 16LL), aa));
-        /* pass */
+#line 1682 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, buf, 0LL);
-        /* pass */
+#line 1683 "src/taumir/lower.tr"
         long long ai = 0LL;
-        /* pass */
+#line 1684 "src/taumir/lower.tr"
         while ((ai < args->len)) {
-            /* pass */
+#line 1685 "src/taumir/lower.tr"
             long long argv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, ai)));
-            /* pass */
+#line 1686 "src/taumir/lower.tr"
             if ((argv < 0LL)) {
-                /* pass */
+#line 1686 "src/taumir/lower.tr"
                 _tr_str_release(fn);
                 return false;
             }
-            /* pass */
+#line 1687 "src/taumir/lower.tr"
             long long argt = LFunc_vreg_type(lf, argv);
-            /* pass */
+#line 1688 "src/taumir/lower.tr"
             if ((argt == 5LL)) {
-                /* pass */
+#line 1689 "src/taumir/lower.tr"
                 long long afb = LFunc_new_vreg(lf);
-                /* pass */
+#line 1690 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFBits(afb, argv));
-                /* pass */
+#line 1691 "src/taumir/lower.tr"
                 argv = afb;
             } else if ((argt == 1LL)) {
-                /* pass */
+#line 1692 "src/taumir/lower.tr"
                 _secure_str(m, lf, argv);
             } else if (((argt == 10LL) || (argt == 11LL))) {
-                /* pass */
+#line 1693 "src/taumir/lower.tr"
                 _secure_obj(m, lf, argv);
             }
-            /* pass */
+#line 1694 "src/taumir/lower.tr"
             _emit_field_set(m, lf, buf, (ai * 8LL), argv);
-            /* pass */
+#line 1695 "src/taumir/lower.tr"
             ai = (ai + 1LL);
         }
-        /* pass */
+#line 1696 "src/taumir/lower.tr"
         long long faddr = LFunc_new_vreg(lf);
-        /* pass */
+#line 1697 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, faddr, 12LL);
-        /* pass */
-        ({ TrStr _at_t3178 = (_tr_strx_concatv((_tr_str_lit_len("_awaitwrap_", 11LL)), (fn))); LFunc_emit(lf, LInst_ctor_IFuncAddr(faddr, _at_t3178)); _tr_str_release(_at_t3178); });
-        /* pass */
+#line 1698 "src/taumir/lower.tr"
+        ({ TrStr _at_t6163 = (_tr_strx_concatv((_tr_str_lit_len("_awaitwrap_", 11LL)), (fn))); LFunc_emit(lf, LInst_ctor_IFuncAddr(faddr, _at_t6163)); _tr_str_release(_at_t6163); });
+#line 1699 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_thread_start", 16LL));
-        /* pass */
+#line 1700 "src/taumir/lower.tr"
         List_i64* sa = (void*)List_i64_new();
-        /* pass */
+#line 1701 "src/taumir/lower.tr"
         List_i64_append(sa, faddr);
-        /* pass */
+#line 1702 "src/taumir/lower.tr"
         List_i64_append(sa, buf);
-        /* pass */
+#line 1703 "src/taumir/lower.tr"
         long long handle = LFunc_new_vreg(lf);
-        /* pass */
+#line 1704 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(handle, _tr_str_lit_len("_tr_thread_start", 16LL), sa));
-        /* pass */
+#line 1705 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, handle, 0LL);
-        /* pass */
+#line 1706 "src/taumir/lower.tr"
         if ((lf->in_taskgroup > 0LL)) {
-            /* pass */
+#line 1707 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_tg_push", 11LL));
-            /* pass */
+#line 1708 "src/taumir/lower.tr"
             List_i64* pa = (void*)List_i64_new();
-            /* pass */
+#line 1709 "src/taumir/lower.tr"
             List_i64_append(pa, handle);
-            /* pass */
+#line 1710 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_tg_push", 11LL), pa));
         } else {
-            /* pass */
+#line 1712 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_thread_detach", 17LL));
-            /* pass */
+#line 1713 "src/taumir/lower.tr"
             List_i64* da = (void*)List_i64_new();
-            /* pass */
+#line 1714 "src/taumir/lower.tr"
             List_i64_append(da, handle);
-            /* pass */
+#line 1715 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_thread_detach", 17LL), da));
         }
-        /* pass */
+#line 1716 "src/taumir/lower.tr"
         _flush_fresh_strs(m, lf);
-        /* pass */
+#line 1717 "src/taumir/lower.tr"
         _tr_str_release(fn);
         return true;
     } else if (1) {
-        __auto_type _ = _t3177;
-        /* pass */
+        __auto_type _ = _t6162;
+#line 1719 "src/taumir/lower.tr"
         return false;
     }
 }
 
 __attribute__((hot)) long long _box_call(LModule* m, LFunc* lf, long long selfv, TrStr rtfn, List_ptr* margs, long long nargs, long long rtag) {
-    /* pass */
+#line 1724 "src/taumir/lower.tr"
     if ((margs->len != nargs)) {
-        /* pass */
+#line 1724 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 1725 "src/taumir/lower.tr"
     LModule_add_extern(m, rtfn);
-    /* pass */
+#line 1726 "src/taumir/lower.tr"
     List_i64* a = (void*)List_i64_new();
-    /* pass */
+#line 1727 "src/taumir/lower.tr"
     List_i64_append(a, selfv);
-    /* pass */
+#line 1728 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 1729 "src/taumir/lower.tr"
     while ((i < nargs)) {
-        /* pass */
+#line 1730 "src/taumir/lower.tr"
         long long av = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, i)));
-        /* pass */
+#line 1731 "src/taumir/lower.tr"
         if (((av < 0LL) || (LFunc_vreg_type(lf, av) != 0LL))) {
-            /* pass */
+#line 1731 "src/taumir/lower.tr"
             List_i64_free(a);
             return (-1LL);
         }
-        /* pass */
+#line 1732 "src/taumir/lower.tr"
         List_i64_append(a, av);
-        /* pass */
+#line 1733 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 1734 "src/taumir/lower.tr"
     if ((rtag < 0LL)) {
-        /* pass */
+#line 1735 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall((-1LL), rtfn, a));
-        /* pass */
+#line 1736 "src/taumir/lower.tr"
         return selfv;
     }
-    /* pass */
+#line 1737 "src/taumir/lower.tr"
     long long d = LFunc_new_vreg(lf);
-    /* pass */
+#line 1738 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(d, rtfn, a));
-    /* pass */
+#line 1739 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, d, rtag);
-    /* pass */
+#line 1740 "src/taumir/lower.tr"
     return d;
 }
 
 __attribute__((hot)) long long _pack_spawn_args(LModule* m, LFunc* lf, List_ptr* margs, long long start) {
-    /* pass */
+#line 1745 "src/taumir/lower.tr"
     long long nargs = (margs->len - start);
-    /* pass */
+#line 1746 "src/taumir/lower.tr"
     long long packsz = (nargs * 8LL);
-    /* pass */
+#line 1747 "src/taumir/lower.tr"
     if ((packsz < 8LL)) {
-        /* pass */
+#line 1747 "src/taumir/lower.tr"
         packsz = 8LL;
     }
-    /* pass */
+#line 1748 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_raw_alloc", 16LL));
-    /* pass */
+#line 1749 "src/taumir/lower.tr"
     long long szc = LFunc_new_vreg(lf);
-    /* pass */
+#line 1750 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(szc, packsz));
-    /* pass */
+#line 1751 "src/taumir/lower.tr"
     List_i64* aa = (void*)List_i64_new();
-    /* pass */
+#line 1752 "src/taumir/lower.tr"
     List_i64_append(aa, szc);
-    /* pass */
+#line 1753 "src/taumir/lower.tr"
     long long buf = LFunc_new_vreg(lf);
-    /* pass */
+#line 1754 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(buf, _tr_str_lit_len("_tr_rt_raw_alloc", 16LL), aa));
-    /* pass */
+#line 1755 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, buf, 0LL);
-    /* pass */
+#line 1756 "src/taumir/lower.tr"
     long long ai = start;
-    /* pass */
+#line 1757 "src/taumir/lower.tr"
     while ((ai < margs->len)) {
-        /* pass */
+#line 1758 "src/taumir/lower.tr"
         long long argv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, ai)));
-        /* pass */
+#line 1759 "src/taumir/lower.tr"
         if ((argv < 0LL)) {
-            /* pass */
+#line 1759 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 1760 "src/taumir/lower.tr"
         long long argt = LFunc_vreg_type(lf, argv);
-        /* pass */
+#line 1761 "src/taumir/lower.tr"
         if ((argt == 5LL)) {
-            /* pass */
+#line 1762 "src/taumir/lower.tr"
             long long afb = LFunc_new_vreg(lf);
-            /* pass */
+#line 1763 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IFBits(afb, argv));
-            /* pass */
+#line 1764 "src/taumir/lower.tr"
             argv = afb;
         } else if ((argt == 1LL)) {
-            /* pass */
+#line 1765 "src/taumir/lower.tr"
             _secure_str(m, lf, argv);
         } else if (((argt == 10LL) || (argt == 11LL))) {
-            /* pass */
+#line 1766 "src/taumir/lower.tr"
             _secure_obj(m, lf, argv);
         }
-        /* pass */
+#line 1767 "src/taumir/lower.tr"
         _emit_field_set(m, lf, buf, ((ai - start) * 8LL), argv);
-        /* pass */
+#line 1768 "src/taumir/lower.tr"
         ai = (ai + 1LL);
     }
-    /* pass */
+#line 1769 "src/taumir/lower.tr"
     return buf;
 }
 
 __attribute__((hot)) long long _lower_pool_spawn(LModule* m, LFunc* lf, long long poolv, List_ptr* margs) {
-    /* pass */
+#line 1774 "src/taumir/lower.tr"
     if ((margs->len != 2LL)) {
-        /* pass */
+#line 1774 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 1775 "src/taumir/lower.tr"
     TrStr pfn = _ident_name(((HirExpr*)List_ptr_get(margs, 0LL)));
-    /* pass */
+#line 1776 "src/taumir/lower.tr"
     if (((_is_null_str(pfn) || _tr_str_eqv((pfn), (_tr_str_lit_len("", 0LL)))) || (!LModule_is_user_fn(m, pfn)))) {
-        /* pass */
+#line 1776 "src/taumir/lower.tr"
         _tr_str_release(pfn);
         return (-1LL);
     }
-    /* pass */
+#line 1777 "src/taumir/lower.tr"
     if ((!_ensure_await_wrapper(m, pfn))) {
-        /* pass */
+#line 1777 "src/taumir/lower.tr"
         _tr_str_release(pfn);
         return (-1LL);
     }
-    /* pass */
+#line 1778 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_raw_alloc", 16LL));
-    /* pass */
+#line 1779 "src/taumir/lower.tr"
     long long pszc = LFunc_new_vreg(lf);
-    /* pass */
+#line 1780 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(pszc, 8LL));
-    /* pass */
+#line 1781 "src/taumir/lower.tr"
     List_i64* paa = (void*)List_i64_new();
-    /* pass */
+#line 1782 "src/taumir/lower.tr"
     List_i64_append(paa, pszc);
-    /* pass */
+#line 1783 "src/taumir/lower.tr"
     long long pbuf = LFunc_new_vreg(lf);
-    /* pass */
+#line 1784 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(pbuf, _tr_str_lit_len("_tr_rt_raw_alloc", 16LL), paa));
-    /* pass */
+#line 1785 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, pbuf, 0LL);
-    /* pass */
+#line 1786 "src/taumir/lower.tr"
     long long parg = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
-    /* pass */
+#line 1787 "src/taumir/lower.tr"
     if (((parg < 0LL) || (LFunc_vreg_type(lf, parg) != 0LL))) {
-        /* pass */
+#line 1787 "src/taumir/lower.tr"
         _tr_str_release(pfn);
         return (-1LL);
     }
-    /* pass */
+#line 1788 "src/taumir/lower.tr"
     _emit_field_set(m, lf, pbuf, 0LL, parg);
-    /* pass */
+#line 1789 "src/taumir/lower.tr"
     long long pfaddr = LFunc_new_vreg(lf);
-    /* pass */
+#line 1790 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, pfaddr, 12LL);
-    /* pass */
-    ({ TrStr _at_t3179 = (_tr_strx_concatv((_tr_str_lit_len("_awaitwrap_", 11LL)), (pfn))); LFunc_emit(lf, LInst_ctor_IFuncAddr(pfaddr, _at_t3179)); _tr_str_release(_at_t3179); });
-    /* pass */
+#line 1791 "src/taumir/lower.tr"
+    ({ TrStr _at_t6164 = (_tr_strx_concatv((_tr_str_lit_len("_awaitwrap_", 11LL)), (pfn))); LFunc_emit(lf, LInst_ctor_IFuncAddr(pfaddr, _at_t6164)); _tr_str_release(_at_t6164); });
+#line 1792 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_threadpool_spawn", 20LL));
-    /* pass */
+#line 1793 "src/taumir/lower.tr"
     List_i64* psa = (void*)List_i64_new();
-    /* pass */
+#line 1794 "src/taumir/lower.tr"
     List_i64_append(psa, poolv);
-    /* pass */
+#line 1795 "src/taumir/lower.tr"
     List_i64_append(psa, pfaddr);
-    /* pass */
+#line 1796 "src/taumir/lower.tr"
     List_i64_append(psa, pbuf);
-    /* pass */
+#line 1797 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_threadpool_spawn", 20LL), psa));
-    /* pass */
+#line 1798 "src/taumir/lower.tr"
+    long long _trret1496 = poolv;
     _tr_str_release(pfn);
-    return poolv;
+    return _trret1496;
 }
 
 __attribute__((hot)) bool _is_runtime_fn(TrStr fn) {
-    /* pass */
+#line 1802 "src/taumir/lower.tr"
     if ((_is_null_str(fn) || (((long long)_tr_str_lenv((fn))) < 4LL))) {
-        /* pass */
+#line 1802 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
-    return _tr_str_eqv((_tr_str_slicev((fn), 0LL, 4LL)), (_tr_str_lit_len("_tr_", 4LL)));
+#line 1803 "src/taumir/lower.tr"
+    return ({ TrStr _cmpa_t6165 = (_tr_str_slicev((fn), 0LL, 4LL)); TrStr _cmpb_t6166 = (_tr_str_lit_len("_tr_", 4LL)); _Bool _cmpr_t6167 = _tr_str_eqv(_cmpa_t6165, _cmpb_t6166); _tr_str_release(_cmpa_t6165); _cmpr_t6167; });
 }
 
 __attribute__((hot)) bool _is_rc_str_runtime_fn(TrStr fn) {
-    /* pass */
+#line 1809 "src/taumir/lower.tr"
     if ((_is_null_str(fn) || (((long long)_tr_str_lenv((fn))) < 7LL))) {
-        /* pass */
+#line 1809 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
-    return _tr_str_eqv((_tr_str_slicev((fn), 0LL, 7LL)), (_tr_str_lit_len("_tr_rt_", 7LL)));
+#line 1810 "src/taumir/lower.tr"
+    return ({ TrStr _cmpa_t6168 = (_tr_str_slicev((fn), 0LL, 7LL)); TrStr _cmpb_t6169 = (_tr_str_lit_len("_tr_rt_", 7LL)); _Bool _cmpr_t6170 = _tr_str_eqv(_cmpa_t6168, _cmpb_t6169); _tr_str_release(_cmpa_t6168); _cmpr_t6170; });
 }
 
 __attribute__((hot)) void _track_mutex_unlock(LFunc* lf, HirExpr* obj) {
-    /* pass */
+#line 1814 "src/taumir/lower.tr"
     TrStr nm = _ident_name(obj);
-    /* pass */
+#line 1815 "src/taumir/lower.tr"
     if ((_is_null_str(nm) || _tr_str_eqv((nm), (_tr_str_lit_len("", 0LL))))) {
-        /* pass */
+#line 1815 "src/taumir/lower.tr"
         _tr_str_release(nm);
         return;
     }
-    /* pass */
+#line 1816 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 1817 "src/taumir/lower.tr"
     while ((i < lf->mutex_unlocks->len)) {
-        /* pass */
-        if (_tr_str_eqv((List_TrStr_get(lf->mutex_unlocks, i)), (nm))) {
-            /* pass */
+#line 1818 "src/taumir/lower.tr"
+        if (({ TrStr _cmpa_t6171 = (List_TrStr_get(lf->mutex_unlocks, i)); TrStr _cmpb_t6172 = (nm); _Bool _cmpr_t6173 = _tr_str_eqv(_cmpa_t6171, _cmpb_t6172); _tr_str_release(_cmpa_t6171); _cmpr_t6173; })) {
+#line 1818 "src/taumir/lower.tr"
             _tr_str_release(nm);
             return;
         }
-        /* pass */
+#line 1819 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
-    ({ TrStr _at_t3180 = (_own(nm)); List_TrStr_append(lf->mutex_unlocks, _at_t3180); _tr_str_release(_at_t3180); });
+#line 1820 "src/taumir/lower.tr"
+    ({ TrStr _ord_t6174 = (_own(nm)); List_TrStr_append(lf->mutex_unlocks, _ord_t6174); _tr_str_release(_ord_t6174); });
     _tr_str_release(nm);
 }
 
 __attribute__((hot)) long long _atomic_delta(LModule* m, LFunc* lf, long long selfv, TrStr rtfn) {
-    /* pass */
+#line 1824 "src/taumir/lower.tr"
     LModule_add_extern(m, rtfn);
-    /* pass */
+#line 1825 "src/taumir/lower.tr"
     long long one = LFunc_new_vreg(lf);
-    /* pass */
+#line 1826 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(one, 1LL));
-    /* pass */
+#line 1827 "src/taumir/lower.tr"
     List_i64* a = (void*)List_i64_new();
-    /* pass */
+#line 1828 "src/taumir/lower.tr"
     List_i64_append(a, selfv);
-    /* pass */
+#line 1829 "src/taumir/lower.tr"
     List_i64_append(a, one);
-    /* pass */
+#line 1830 "src/taumir/lower.tr"
     long long d = LFunc_new_vreg(lf);
-    /* pass */
+#line 1831 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(d, rtfn, a));
-    /* pass */
+#line 1832 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, d, 0LL);
-    /* pass */
+#line 1833 "src/taumir/lower.tr"
     return d;
 }
 
 __attribute__((hot)) long long _lower_box_method(LModule* m, LFunc* lf, HirExpr* obj, TrStr method, List_ptr* margs) {
-    /* pass */
+#line 1838 "src/taumir/lower.tr"
     TrStr btn = _tr_str_retain(hir_expr_type(obj)->name);
-    /* pass */
+#line 1839 "src/taumir/lower.tr"
     if (((((((!_tr_str_eqv((btn), (_tr_str_lit_len("Mutex", 5LL)))) && (!_tr_str_eqv((btn), (_tr_str_lit_len("RwLock", 6LL))))) && (!_tr_str_eqv((btn), (_tr_str_lit_len("Atomic", 6LL))))) && (!_tr_str_eqv((btn), (_tr_str_lit_len("ThreadPool", 10LL))))) && (!_tr_str_eqv((btn), (_tr_str_lit_len("Thread", 6LL))))) && (!_tr_str_eqv((btn), (_tr_str_lit_len("ThreadLocal", 11LL)))))) {
-        /* pass */
+#line 1839 "src/taumir/lower.tr"
         _tr_str_release(btn);
         return (-2LL);
     }
-    /* pass */
+#line 1843 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("init", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("new", 3LL))))) {
-        /* pass */
+#line 1843 "src/taumir/lower.tr"
         _tr_str_release(btn);
         return (-2LL);
     }
-    /* pass */
+#line 1844 "src/taumir/lower.tr"
     if ((_tr_str_eqv((btn), (_tr_str_lit_len("Thread", 6LL))) && ((_tr_str_eqv((method), (_tr_str_lit_len("id", 2LL))) || _tr_str_eqv((method), (_tr_str_lit_len("current_id", 10LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("sleep", 5LL)))))) {
-        /* pass */
+#line 1844 "src/taumir/lower.tr"
         _tr_str_release(btn);
         return (-2LL);
     }
-    /* pass */
+#line 1845 "src/taumir/lower.tr"
     long long bself = lower_expr(m, lf, obj);
-    /* pass */
+#line 1846 "src/taumir/lower.tr"
     if ((bself < 0LL)) {
-        /* pass */
+#line 1846 "src/taumir/lower.tr"
         _tr_str_release(btn);
         return (-1LL);
     }
-    /* pass */
+#line 1847 "src/taumir/lower.tr"
     if (_tr_str_eqv((btn), (_tr_str_lit_len("Mutex", 5LL)))) {
-        /* pass */
+#line 1848 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("lock", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("get", 3LL))))) {
-            /* pass */
+#line 1849 "src/taumir/lower.tr"
             _track_mutex_unlock(lf, obj);
-            /* pass */
+#line 1850 "src/taumir/lower.tr"
+            long long _trret1497 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_mutexbox_lock_get", 21LL), margs, 0LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_mutexbox_lock_get", 21LL), margs, 0LL, 0LL);
+            return _trret1497;
         }
-        /* pass */
+#line 1851 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("set", 3LL)))) {
-            /* pass */
+#line 1851 "src/taumir/lower.tr"
+            long long _trret1498 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_mutexbox_set_unlock", 23LL), margs, 1LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_mutexbox_set_unlock", 23LL), margs, 1LL, (-1LL));
+            return _trret1498;
         }
-        /* pass */
+#line 1852 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("unlock", 6LL)))) {
-            /* pass */
+#line 1852 "src/taumir/lower.tr"
+            long long _trret1499 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_mutexbox_unlock", 19LL), margs, 0LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_mutexbox_unlock", 19LL), margs, 0LL, (-1LL));
+            return _trret1499;
         }
     } else if (_tr_str_eqv((btn), (_tr_str_lit_len("RwLock", 6LL)))) {
-        /* pass */
+#line 1854 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("read", 4LL)))) {
-            /* pass */
+#line 1854 "src/taumir/lower.tr"
+            long long _trret1531 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_rwlbox_read_get", 19LL), margs, 0LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_rwlbox_read_get", 19LL), margs, 0LL, 0LL);
+            return _trret1531;
         }
-        /* pass */
+#line 1855 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("read_unlock", 11LL)))) {
-            /* pass */
+#line 1855 "src/taumir/lower.tr"
+            long long _trret1532 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_rwlbox_read_unlock", 22LL), margs, 0LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_rwlbox_read_unlock", 22LL), margs, 0LL, (-1LL));
+            return _trret1532;
         }
-        /* pass */
+#line 1856 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("write", 5LL)))) {
-            /* pass */
+#line 1856 "src/taumir/lower.tr"
+            long long _trret1533 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_rwlbox_write_get", 20LL), margs, 0LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_rwlbox_write_get", 20LL), margs, 0LL, 0LL);
+            return _trret1533;
         }
-        /* pass */
+#line 1857 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("write_set", 9LL)))) {
-            /* pass */
+#line 1857 "src/taumir/lower.tr"
+            long long _trret1534 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_rwlbox_write_set_unlock", 27LL), margs, 1LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_rwlbox_write_set_unlock", 27LL), margs, 1LL, (-1LL));
+            return _trret1534;
         }
     } else if (_tr_str_eqv((btn), (_tr_str_lit_len("Atomic", 6LL)))) {
-        /* pass */
+#line 1859 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("load", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("get", 3LL))))) {
-            /* pass */
+#line 1859 "src/taumir/lower.tr"
+            long long _trret1509 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_load", 15LL), margs, 0LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_load", 15LL), margs, 0LL, 0LL);
+            return _trret1509;
         }
-        /* pass */
+#line 1860 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("store", 5LL))) || _tr_str_eqv((method), (_tr_str_lit_len("set", 3LL))))) {
-            /* pass */
+#line 1860 "src/taumir/lower.tr"
+            long long _trret1510 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_store", 16LL), margs, 1LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_store", 16LL), margs, 1LL, (-1LL));
+            return _trret1510;
         }
-        /* pass */
+#line 1861 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("add", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("fetch_add", 9LL))))) {
-            /* pass */
+#line 1861 "src/taumir/lower.tr"
+            long long _trret1511 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_add", 14LL), margs, 1LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_add", 14LL), margs, 1LL, 0LL);
+            return _trret1511;
         }
-        /* pass */
+#line 1862 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("sub", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("fetch_sub", 9LL))))) {
-            /* pass */
+#line 1862 "src/taumir/lower.tr"
+            long long _trret1512 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_sub", 14LL), margs, 1LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_sub", 14LL), margs, 1LL, 0LL);
+            return _trret1512;
         }
-        /* pass */
+#line 1863 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("cas", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("compare_and_swap", 16LL))))) {
-            /* pass */
+#line 1863 "src/taumir/lower.tr"
+            long long _trret1513 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_cas", 14LL), margs, 2LL, 4LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_cas", 14LL), margs, 2LL, 4LL);
+            return _trret1513;
         }
-        /* pass */
+#line 1864 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("increment", 9LL))) || _tr_str_eqv((method), (_tr_str_lit_len("inc", 3LL))))) {
-            /* pass */
+#line 1864 "src/taumir/lower.tr"
+            long long _trret1514 = _atomic_delta(m, lf, bself, _tr_str_lit_len("_tr_atomic_add", 14LL));
             _tr_str_release(btn);
-            return _atomic_delta(m, lf, bself, _tr_str_lit_len("_tr_atomic_add", 14LL));
+            return _trret1514;
         }
-        /* pass */
+#line 1865 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("decrement", 9LL))) || _tr_str_eqv((method), (_tr_str_lit_len("dec", 3LL))))) {
-            /* pass */
+#line 1865 "src/taumir/lower.tr"
+            long long _trret1515 = _atomic_delta(m, lf, bself, _tr_str_lit_len("_tr_atomic_sub", 14LL));
             _tr_str_release(btn);
-            return _atomic_delta(m, lf, bself, _tr_str_lit_len("_tr_atomic_sub", 14LL));
+            return _trret1515;
         }
-        /* pass */
+#line 1867 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("load_acquire", 12LL)))) {
-            /* pass */
+#line 1867 "src/taumir/lower.tr"
+            long long _trret1516 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_load_acquire", 23LL), margs, 0LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_load_acquire", 23LL), margs, 0LL, 0LL);
+            return _trret1516;
         }
-        /* pass */
+#line 1868 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("load_relaxed", 12LL)))) {
-            /* pass */
+#line 1868 "src/taumir/lower.tr"
+            long long _trret1517 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_load_relaxed", 23LL), margs, 0LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_load_relaxed", 23LL), margs, 0LL, 0LL);
+            return _trret1517;
         }
-        /* pass */
+#line 1869 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("load_seqcst", 11LL)))) {
-            /* pass */
+#line 1869 "src/taumir/lower.tr"
+            long long _trret1518 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_load_seqcst", 22LL), margs, 0LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_load_seqcst", 22LL), margs, 0LL, 0LL);
+            return _trret1518;
         }
-        /* pass */
+#line 1870 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("store_release", 13LL)))) {
-            /* pass */
+#line 1870 "src/taumir/lower.tr"
+            long long _trret1519 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_store_release", 24LL), margs, 1LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_store_release", 24LL), margs, 1LL, (-1LL));
+            return _trret1519;
         }
-        /* pass */
+#line 1871 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("store_relaxed", 13LL)))) {
-            /* pass */
+#line 1871 "src/taumir/lower.tr"
+            long long _trret1520 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_store_relaxed", 24LL), margs, 1LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_store_relaxed", 24LL), margs, 1LL, (-1LL));
+            return _trret1520;
         }
-        /* pass */
+#line 1872 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("store_seqcst", 12LL)))) {
-            /* pass */
+#line 1872 "src/taumir/lower.tr"
+            long long _trret1521 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_store_seqcst", 23LL), margs, 1LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_store_seqcst", 23LL), margs, 1LL, (-1LL));
+            return _trret1521;
         }
-        /* pass */
+#line 1873 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("add_relaxed", 11LL)))) {
-            /* pass */
+#line 1873 "src/taumir/lower.tr"
+            long long _trret1522 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_add_relaxed", 22LL), margs, 1LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_add_relaxed", 22LL), margs, 1LL, 0LL);
+            return _trret1522;
         }
-        /* pass */
+#line 1874 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("add_release", 11LL)))) {
-            /* pass */
+#line 1874 "src/taumir/lower.tr"
+            long long _trret1523 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_add_release", 22LL), margs, 1LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_add_release", 22LL), margs, 1LL, 0LL);
+            return _trret1523;
         }
-        /* pass */
+#line 1875 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("add_acqrel", 10LL)))) {
-            /* pass */
+#line 1875 "src/taumir/lower.tr"
+            long long _trret1524 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_add_acqrel", 21LL), margs, 1LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_add_acqrel", 21LL), margs, 1LL, 0LL);
+            return _trret1524;
         }
-        /* pass */
+#line 1876 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("sub_relaxed", 11LL)))) {
-            /* pass */
+#line 1876 "src/taumir/lower.tr"
+            long long _trret1525 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_sub_relaxed", 22LL), margs, 1LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_sub_relaxed", 22LL), margs, 1LL, 0LL);
+            return _trret1525;
         }
-        /* pass */
+#line 1877 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("sub_release", 11LL)))) {
-            /* pass */
+#line 1877 "src/taumir/lower.tr"
+            long long _trret1526 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_sub_release", 22LL), margs, 1LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_sub_release", 22LL), margs, 1LL, 0LL);
+            return _trret1526;
         }
-        /* pass */
+#line 1878 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("swap", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("exchange", 8LL))))) {
-            /* pass */
+#line 1878 "src/taumir/lower.tr"
+            long long _trret1527 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_swap", 15LL), margs, 1LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_swap", 15LL), margs, 1LL, 0LL);
+            return _trret1527;
         }
-        /* pass */
+#line 1879 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("cas_weak", 8LL)))) {
-            /* pass */
+#line 1879 "src/taumir/lower.tr"
+            long long _trret1528 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_cas_weak", 19LL), margs, 2LL, 4LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_cas_weak", 19LL), margs, 2LL, 4LL);
+            return _trret1528;
         }
-        /* pass */
+#line 1880 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("cas_acqrel", 10LL)))) {
-            /* pass */
+#line 1880 "src/taumir/lower.tr"
+            long long _trret1529 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_cas_acqrel", 21LL), margs, 2LL, 4LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_cas_acqrel", 21LL), margs, 2LL, 4LL);
+            return _trret1529;
         }
-        /* pass */
+#line 1881 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("free", 4LL)))) {
-            /* pass */
+#line 1881 "src/taumir/lower.tr"
+            long long _trret1530 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_free", 15LL), margs, 0LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_atomic_free", 15LL), margs, 0LL, (-1LL));
+            return _trret1530;
         }
     } else if (_tr_str_eqv((btn), (_tr_str_lit_len("ThreadPool", 10LL)))) {
-        /* pass */
+#line 1883 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("wait", 4LL)))) {
-            /* pass */
+#line 1883 "src/taumir/lower.tr"
+            long long _trret1506 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_threadpool_wait", 19LL), margs, 0LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_threadpool_wait", 19LL), margs, 0LL, (-1LL));
+            return _trret1506;
         }
-        /* pass */
+#line 1884 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("free", 4LL)))) {
-            /* pass */
+#line 1884 "src/taumir/lower.tr"
+            long long _trret1507 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_threadpool_free", 19LL), margs, 0LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_threadpool_free", 19LL), margs, 0LL, (-1LL));
+            return _trret1507;
         }
-        /* pass */
+#line 1885 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("spawn", 5LL)))) {
-            /* pass */
+#line 1885 "src/taumir/lower.tr"
+            long long _trret1508 = _lower_pool_spawn(m, lf, bself, margs);
             _tr_str_release(btn);
-            return _lower_pool_spawn(m, lf, bself, margs);
+            return _trret1508;
         }
     } else if (_tr_str_eqv((btn), (_tr_str_lit_len("Thread", 6LL)))) {
-        /* pass */
+#line 1887 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("join", 4LL)))) {
-            /* pass */
+#line 1887 "src/taumir/lower.tr"
+            long long _trret1503 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_threadobj_join", 18LL), margs, 0LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_threadobj_join", 18LL), margs, 0LL, (-1LL));
+            return _trret1503;
         }
-        /* pass */
+#line 1888 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("detach", 6LL)))) {
-            /* pass */
+#line 1888 "src/taumir/lower.tr"
+            long long _trret1504 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_threadobj_detach", 20LL), margs, 0LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_threadobj_detach", 20LL), margs, 0LL, (-1LL));
+            return _trret1504;
         }
-        /* pass */
+#line 1889 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("free", 4LL)))) {
-            /* pass */
+#line 1889 "src/taumir/lower.tr"
+            long long _trret1505 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_threadobj_free", 18LL), margs, 0LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_threadobj_free", 18LL), margs, 0LL, (-1LL));
+            return _trret1505;
         }
     } else if (_tr_str_eqv((btn), (_tr_str_lit_len("ThreadLocal", 11LL)))) {
-        /* pass */
+#line 1891 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("get", 3LL)))) {
-            /* pass */
+#line 1891 "src/taumir/lower.tr"
+            long long _trret1500 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_tls_get", 11LL), margs, 0LL, 0LL);
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_tls_get", 11LL), margs, 0LL, 0LL);
+            return _trret1500;
         }
-        /* pass */
+#line 1892 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("set", 3LL)))) {
-            /* pass */
+#line 1892 "src/taumir/lower.tr"
+            long long _trret1501 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_tls_set", 11LL), margs, 1LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_tls_set", 11LL), margs, 1LL, (-1LL));
+            return _trret1501;
         }
-        /* pass */
+#line 1893 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("free", 4LL)))) {
-            /* pass */
+#line 1893 "src/taumir/lower.tr"
+            long long _trret1502 = _box_call(m, lf, bself, _tr_str_lit_len("_tr_tls_free", 12LL), margs, 0LL, (-1LL));
             _tr_str_release(btn);
-            return _box_call(m, lf, bself, _tr_str_lit_len("_tr_tls_free", 12LL), margs, 0LL, (-1LL));
+            return _trret1502;
         }
     }
-    /* pass */
+#line 1894 "src/taumir/lower.tr"
     _tr_str_release(btn);
     return (-1LL);
 }
 
 __attribute__((hot)) bool _lower_taskgroup(LModule* m, LFunc* lf, HirBlock* body) {
-    /* pass */
+#line 1900 "src/taumir/lower.tr"
     if ((lf->in_taskgroup > 0LL)) {
-        /* pass */
+#line 1900 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 1901 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_tg_begin", 12LL));
-    /* pass */
+#line 1902 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_tg_begin", 12LL), (void*)List_i64_new()));
-    /* pass */
+#line 1903 "src/taumir/lower.tr"
     lf->in_taskgroup = (lf->in_taskgroup + 1LL);
-    /* pass */
+#line 1904 "src/taumir/lower.tr"
     bool ok = lower_block(m, lf, body);
-    /* pass */
+#line 1905 "src/taumir/lower.tr"
     lf->in_taskgroup = (lf->in_taskgroup - 1LL);
-    /* pass */
+#line 1906 "src/taumir/lower.tr"
     if ((!ok)) {
-        /* pass */
+#line 1906 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 1907 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_taskgroup_wait", 18LL));
-    /* pass */
+#line 1908 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_taskgroup_wait", 18LL), (void*)List_i64_new()));
-    /* pass */
+#line 1909 "src/taumir/lower.tr"
     return true;
 }
 
 __attribute__((hot)) long long _lower_obj_call(LModule* m, LFunc* lf, TrStr mangled, long long self_vreg, List_ptr* margs) {
-    /* pass */
+#line 1915 "src/taumir/lower.tr"
     if ((!LModule_is_user_fn(m, mangled))) {
-        /* pass */
+#line 1915 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 1916 "src/taumir/lower.tr"
     long long rtag = LModule_fn_ret_tag(m, mangled);
-    /* pass */
+#line 1917 "src/taumir/lower.tr"
     if ((rtag < 0LL)) {
-        /* pass */
+#line 1917 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 1918 "src/taumir/lower.tr"
     List_i64* cargs = (void*)List_i64_new();
-    /* pass */
+#line 1919 "src/taumir/lower.tr"
     if ((self_vreg >= 0LL)) {
-        /* pass */
+#line 1919 "src/taumir/lower.tr"
         List_i64_append(cargs, self_vreg);
     }
-    /* pass */
+#line 1920 "src/taumir/lower.tr"
     long long ai = 0LL;
-    /* pass */
+#line 1921 "src/taumir/lower.tr"
     while ((ai < margs->len)) {
-        /* pass */
+#line 1922 "src/taumir/lower.tr"
         long long av = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, ai)));
-        /* pass */
+#line 1923 "src/taumir/lower.tr"
         if ((av < 0LL)) {
-            /* pass */
+#line 1923 "src/taumir/lower.tr"
             List_i64_free(cargs);
             return (-1LL);
         }
-        /* pass */
+#line 1924 "src/taumir/lower.tr"
         List_i64_append(cargs, av);
-        /* pass */
+#line 1925 "src/taumir/lower.tr"
         ai = (ai + 1LL);
     }
-    /* pass */
-    if ((cargs->len > _arg_limit(m))) {
-        /* pass */
+#line 1926 "src/taumir/lower.tr"
+    if (({ __auto_type _ord_t6175 = (cargs->len); __auto_type _wr = ((_ord_t6175 > _arg_limit(m))); _wr; })) {
+#line 1926 "src/taumir/lower.tr"
         List_i64_free(cargs);
         return (-1LL);
     }
-    /* pass */
+#line 1927 "src/taumir/lower.tr"
     long long rd = LFunc_new_vreg(lf);
-    /* pass */
+#line 1928 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(rd, mangled, cargs));
-    /* pass */
+#line 1929 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, rd, rtag);
-    /* pass */
+#line 1930 "src/taumir/lower.tr"
     if ((rtag == 1LL)) {
-        /* pass */
+#line 1930 "src/taumir/lower.tr"
         _fresh_mark(lf, rd);
     }
-    /* pass */
+#line 1931 "src/taumir/lower.tr"
     if ((((rtag == 10LL) || (rtag == 11LL)) && LModule_fn_ret_owned(m, mangled))) {
-        /* pass */
+#line 1932 "src/taumir/lower.tr"
         _fresh_mark_obj(lf, rd);
     }
-    /* pass */
+#line 1933 "src/taumir/lower.tr"
     return rd;
 }
 
 __attribute__((hot)) bool lower_block(LModule* m, LFunc* lf, HirBlock* hb) {
-    /* pass */
+#line 1936 "src/taumir/lower.tr"
     lf->blk_depth = (lf->blk_depth + 1LL);
-    /* pass */
+#line 1937 "src/taumir/lower.tr"
     long long si = 0LL;
-    /* pass */
+#line 1938 "src/taumir/lower.tr"
     while ((si < hb->stmts->len)) {
-        /* pass */
+#line 1939 "src/taumir/lower.tr"
         if ((!lower_stmt(m, lf, ((HirStmt*)List_ptr_get(hb->stmts, si))))) {
-            /* pass */
+#line 1940 "src/taumir/lower.tr"
             lf->blk_depth = (lf->blk_depth - 1LL);
-            /* pass */
+#line 1941 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 1942 "src/taumir/lower.tr"
         si = (si + 1LL);
     }
-    /* pass */
+#line 1943 "src/taumir/lower.tr"
     lf->blk_depth = (lf->blk_depth - 1LL);
-    /* pass */
+#line 1944 "src/taumir/lower.tr"
     return true;
 }
 
 __attribute__((hot)) bool _run_defers(LModule* m, LFunc* lf) {
-    /* pass */
+#line 1948 "src/taumir/lower.tr"
     if ((lf->defers->len > 0LL)) {
-        /* pass */
+#line 1949 "src/taumir/lower.tr"
         if (lf->in_defer) {
-            /* pass */
+#line 1949 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 1950 "src/taumir/lower.tr"
         lf->in_defer = true;
-        /* pass */
+#line 1951 "src/taumir/lower.tr"
         long long di = (lf->defers->len - 1LL);
-        /* pass */
+#line 1952 "src/taumir/lower.tr"
         while ((di >= 0LL)) {
-            /* pass */
+#line 1953 "src/taumir/lower.tr"
             if ((!lower_stmt(m, lf, ((HirStmt*)List_ptr_get(lf->defers, di))))) {
-                /* pass */
+#line 1954 "src/taumir/lower.tr"
                 lf->in_defer = false;
-                /* pass */
+#line 1955 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 1956 "src/taumir/lower.tr"
             di = (di - 1LL);
         }
-        /* pass */
+#line 1957 "src/taumir/lower.tr"
         lf->in_defer = false;
     }
-    /* pass */
+#line 1961 "src/taumir/lower.tr"
     long long mi = 0LL;
-    /* pass */
+#line 1962 "src/taumir/lower.tr"
     while ((mi < lf->mutex_unlocks->len)) {
-        /* pass */
+#line 1963 "src/taumir/lower.tr"
         TrStr mn = List_TrStr_get(lf->mutex_unlocks, mi);
-        /* pass */
+#line 1964 "src/taumir/lower.tr"
         if ((LFunc_var_index(lf, mn) >= 0LL)) {
-            /* pass */
+#line 1965 "src/taumir/lower.tr"
             long long ma = LFunc_new_vreg(lf);
-            /* pass */
+#line 1966 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, ma, 12LL);
-            /* pass */
+#line 1967 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IAddrVar(ma, mn));
-            /* pass */
+#line 1968 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_mutexbox_cleanup", 20LL));
-            /* pass */
+#line 1969 "src/taumir/lower.tr"
             List_i64* mca = (void*)List_i64_new();
-            /* pass */
+#line 1970 "src/taumir/lower.tr"
             List_i64_append(mca, ma);
-            /* pass */
+#line 1971 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_mutexbox_cleanup", 20LL), mca));
         }
-        /* pass */
+#line 1972 "src/taumir/lower.tr"
         mi = (mi + 1LL);
         _tr_str_release(mn);
     }
-    /* pass */
+#line 1973 "src/taumir/lower.tr"
     return true;
 }
 
 __attribute__((hot)) long long _sizeof_tyname(TrStr n) {
-    /* pass */
+#line 1977 "src/taumir/lower.tr"
     if (_is_null_str(n)) {
-        /* pass */
+#line 1977 "src/taumir/lower.tr"
         return 8LL;
     }
-    /* pass */
+#line 1978 "src/taumir/lower.tr"
     if ((((_tr_str_eqv((n), (_tr_str_lit_len("bool", 4LL))) || _tr_str_eqv((n), (_tr_str_lit_len("char", 4LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("i8", 2LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("u8", 2LL))))) {
-        /* pass */
+#line 1978 "src/taumir/lower.tr"
         return 1LL;
     }
-    /* pass */
+#line 1979 "src/taumir/lower.tr"
     if ((_tr_str_eqv((n), (_tr_str_lit_len("i16", 3LL))) || _tr_str_eqv((n), (_tr_str_lit_len("u16", 3LL))))) {
-        /* pass */
+#line 1979 "src/taumir/lower.tr"
         return 2LL;
     }
-    /* pass */
+#line 1980 "src/taumir/lower.tr"
     if ((((_tr_str_eqv((n), (_tr_str_lit_len("i32", 3LL))) || _tr_str_eqv((n), (_tr_str_lit_len("u32", 3LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("f32", 3LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("float32", 7LL))))) {
-        /* pass */
+#line 1980 "src/taumir/lower.tr"
         return 4LL;
     }
-    /* pass */
+#line 1981 "src/taumir/lower.tr"
     return 8LL;
 }
 
 __attribute__((hot)) long long _ptr_stride(LModule* m, AstType* pty) {
-    /* pass */
+#line 1987 "src/taumir/lower.tr"
     if ((pty->args->len == 0LL)) {
-        /* pass */
+#line 1987 "src/taumir/lower.tr"
         return 8LL;
     }
-    /* pass */
+#line 1988 "src/taumir/lower.tr"
     TrStr en = _tr_str_retain(_subst_ty(m, (*((AstType**)List_ptr_get(pty->args, 0LL))))->name);
-    /* pass */
+#line 1989 "src/taumir/lower.tr"
     if (_is_null_str(en)) {
-        /* pass */
+#line 1989 "src/taumir/lower.tr"
         _tr_str_release(en);
         return 8LL;
     }
-    /* pass */
+#line 1990 "src/taumir/lower.tr"
     if (((((_tr_str_eqv((en), (_tr_str_lit_len("int", 3LL))) || _tr_str_eqv((en), (_tr_str_lit_len("i64", 3LL)))) || _tr_str_eqv((en), (_tr_str_lit_len("u64", 3LL)))) || _tr_str_eqv((en), (_tr_str_lit_len("usize", 5LL)))) || _tr_str_eqv((en), (_tr_str_lit_len("isize", 5LL))))) {
-        /* pass */
+#line 1990 "src/taumir/lower.tr"
         _tr_str_release(en);
         return 8LL;
     }
-    /* pass */
+#line 1991 "src/taumir/lower.tr"
     if ((_tr_str_eqv((en), (_tr_str_lit_len("float", 5LL))) || _tr_str_eqv((en), (_tr_str_lit_len("f64", 3LL))))) {
-        /* pass */
+#line 1991 "src/taumir/lower.tr"
         _tr_str_release(en);
         return 8LL;
     }
-    /* pass */
+#line 1992 "src/taumir/lower.tr"
     if ((((_tr_str_eqv((en), (_tr_str_lit_len("char", 4LL))) || _tr_str_eqv((en), (_tr_str_lit_len("u8", 2LL)))) || _tr_str_eqv((en), (_tr_str_lit_len("i8", 2LL)))) || _tr_str_eqv((en), (_tr_str_lit_len("bool", 4LL))))) {
-        /* pass */
+#line 1992 "src/taumir/lower.tr"
         _tr_str_release(en);
         return 1LL;
     }
-    /* pass */
+#line 1993 "src/taumir/lower.tr"
     if (((_tr_str_eqv((en), (_tr_str_lit_len("i32", 3LL))) || _tr_str_eqv((en), (_tr_str_lit_len("u32", 3LL)))) || _tr_str_eqv((en), (_tr_str_lit_len("f32", 3LL))))) {
-        /* pass */
+#line 1993 "src/taumir/lower.tr"
         _tr_str_release(en);
         return 4LL;
     }
-    /* pass */
+#line 1994 "src/taumir/lower.tr"
     if ((_tr_str_eqv((en), (_tr_str_lit_len("str", 3LL))) || _tr_str_eqv((en), (_tr_str_lit_len("String", 6LL))))) {
-        /* pass */
+#line 1994 "src/taumir/lower.tr"
         _tr_str_release(en);
         return 8LL;
     }
-    /* pass */
+#line 1995 "src/taumir/lower.tr"
     if (LModule_is_value_class(m, en)) {
-        /* pass */
-        return LModule_class_size(m, en);
+#line 1995 "src/taumir/lower.tr"
+        long long _trret1535 = LModule_class_size(m, en);
+        _tr_str_release(en);
+        return _trret1535;
     }
-    /* pass */
+#line 1996 "src/taumir/lower.tr"
     long long _pg = _value_struct_generic_size(m, (*((AstType**)List_ptr_get(pty->args, 0LL))));
-    /* pass */
+#line 1997 "src/taumir/lower.tr"
     if ((_pg > 0LL)) {
-        /* pass */
+#line 1997 "src/taumir/lower.tr"
+        long long _trret1536 = _pg;
         _tr_str_release(en);
-        return _pg;
+        return _trret1536;
     }
-    /* pass */
+#line 1998 "src/taumir/lower.tr"
     if ((LModule_is_class(m, en) || LModule_is_enum(m, en))) {
-        /* pass */
+#line 1998 "src/taumir/lower.tr"
         _tr_str_release(en);
         return 8LL;
     }
-    /* pass */
+#line 1999 "src/taumir/lower.tr"
     if (_tr_str_eqv((en), (_tr_str_lit_len("Pointer", 7LL)))) {
-        /* pass */
+#line 1999 "src/taumir/lower.tr"
         _tr_str_release(en);
         return 8LL;
     }
-    /* pass */
+#line 2000 "src/taumir/lower.tr"
     _tr_str_release(en);
     return 0LL;
 }
 
 __attribute__((hot)) AstType* _class_field_ty(LModule* m, TrStr cls, TrStr fld) {
-    /* pass */
+#line 2011 "src/taumir/lower.tr"
     TrStr cur = _tr_str_retain(cls);
-    /* pass */
+#line 2012 "src/taumir/lower.tr"
     long long depth = 0LL;
-    /* pass */
+#line 2013 "src/taumir/lower.tr"
     while (((depth < 32LL) && (!_is_null_str(cur)))) {
-        /* pass */
+#line 2014 "src/taumir/lower.tr"
         long long ci = 0LL;
-        /* pass */
+#line 2015 "src/taumir/lower.tr"
         while ((ci < m->hir_prog->classes->len)) {
-            /* pass */
+#line 2016 "src/taumir/lower.tr"
             HirClass* c = ((HirClass*)List_ptr_get(m->hir_prog->classes, ci));
-            /* pass */
+#line 2017 "src/taumir/lower.tr"
             if (_tr_str_eqv((c->name), (cur))) {
-                /* pass */
+#line 2018 "src/taumir/lower.tr"
                 long long fi = 0LL;
-                /* pass */
+#line 2019 "src/taumir/lower.tr"
                 while ((fi < c->fields->len)) {
-                    /* pass */
+#line 2020 "src/taumir/lower.tr"
                     if (_tr_str_eqv((((HirField*)List_ptr_get(c->fields, fi))->name), (fld))) {
-                        /* pass */
+#line 2020 "src/taumir/lower.tr"
                         _tr_str_release(cur);
                         return ((HirField*)List_ptr_get(c->fields, fi))->ty;
                     }
-                    /* pass */
+#line 2021 "src/taumir/lower.tr"
                     fi = (fi + 1LL);
                 }
-                /* pass */
+#line 2022 "src/taumir/lower.tr"
                 if ((c->base_classes->len == 1LL)) {
-                    /* pass */
-                    TrStr _strtmp_t3182 = ({ TrStr _at_t3181 = (List_TrStr_get(c->base_classes, 0LL)); __auto_type _wr = (_own(_at_t3181)); _tr_str_release(_at_t3181); _wr; });
+#line 2022 "src/taumir/lower.tr"
+                    TrStr _strtmp_t6177 = ({ TrStr _at_t6176 = (List_TrStr_get(c->base_classes, 0LL)); __auto_type _wr = (_own(_at_t6176)); _tr_str_release(_at_t6176); _wr; });
                     _tr_str_release(cur);
-                    cur = _strtmp_t3182;
+                    cur = _strtmp_t6177;
                 } else {
-                    /* pass */
+#line 2023 "src/taumir/lower.tr"
                     _tr_str_release(cur);
                     return AstType_init(_tr_str_lit_len("", 0LL));
                 }
             }
-            /* pass */
+#line 2024 "src/taumir/lower.tr"
             ci = (ci + 1LL);
         }
-        /* pass */
+#line 2025 "src/taumir/lower.tr"
         depth = (depth + 1LL);
     }
-    /* pass */
+#line 2026 "src/taumir/lower.tr"
     _tr_str_release(cur);
     return AstType_init(_tr_str_lit_len("", 0LL));
 }
 
 __attribute__((hot)) AstType* _ptr_chain_ty(LModule* m, HirExpr* e) {
-    /* pass */
-    __auto_type _t3183 = (*e);
-    if (_t3183.tag == HirExpr_EMethodCall) {
-        __auto_type mobj = _t3183.data.EMethodCall.obj;
-__auto_type mname = _t3183.data.EMethodCall.method;
-__auto_type mty = _t3183.data.EMethodCall.ty;
-        /* pass */
+#line 2029 "src/taumir/lower.tr"
+    __auto_type _t6178 = (*e);
+    if (_t6178.tag == HirExpr_EMethodCall) {
+        __auto_type mobj = _t6178.data.EMethodCall.obj;
+__auto_type mname = _t6178.data.EMethodCall.method;
+__auto_type mty = _t6178.data.EMethodCall.ty;
+#line 2031 "src/taumir/lower.tr"
         if (((_tr_str_eqv((mname), (_tr_str_lit_len("offset", 6LL))) || _tr_str_eqv((mname), (_tr_str_lit_len("add", 3LL)))) && _tr_str_eqv((hir_expr_type(mobj)->name), (_tr_str_lit_len("Pointer", 7LL))))) {
-            /* pass */
+#line 2032 "src/taumir/lower.tr"
             AstType* inner = _ptr_chain_ty(m, mobj);
-            /* pass */
+#line 2033 "src/taumir/lower.tr"
             if ((inner->args->len > 0LL)) {
-                /* pass */
+#line 2033 "src/taumir/lower.tr"
                 return inner;
             }
         }
-        /* pass */
+#line 2034 "src/taumir/lower.tr"
         return mty;
-    } else if (_t3183.tag == HirExpr_EPropAccess) {
-        __auto_type pobj = _t3183.data.EPropAccess.obj;
-__auto_type pfld = _t3183.data.EPropAccess.prop;
-__auto_type pty = _t3183.data.EPropAccess.ty;
-        /* pass */
+    } else if (_t6178.tag == HirExpr_EPropAccess) {
+        __auto_type pobj = _t6178.data.EPropAccess.obj;
+__auto_type pfld = _t6178.data.EPropAccess.prop;
+__auto_type pty = _t6178.data.EPropAccess.ty;
+#line 2036 "src/taumir/lower.tr"
         if ((pty->args->len > 0LL)) {
-            /* pass */
+#line 2036 "src/taumir/lower.tr"
             return pty;
         }
-        /* pass */
+#line 2037 "src/taumir/lower.tr"
         AstType* ft = _class_field_ty(m, hir_expr_type(pobj)->name, pfld);
-        /* pass */
+#line 2038 "src/taumir/lower.tr"
         if ((_tr_str_eqv((ft->name), (_tr_str_lit_len("Pointer", 7LL))) && (ft->args->len > 0LL))) {
-            /* pass */
+#line 2038 "src/taumir/lower.tr"
             return ft;
         }
-        /* pass */
+#line 2039 "src/taumir/lower.tr"
         return pty;
     } else if (1) {
-        __auto_type _ = _t3183;
-        /* pass */
+        __auto_type _ = _t6178;
+#line 2041 "src/taumir/lower.tr"
         return hir_expr_type(e);
     }
 }
 
 __attribute__((hot)) TrStr _dunder_for_op(TrStr op) {
-    /* pass */
+#line 2045 "src/taumir/lower.tr"
     if (_tr_str_eqv((op), (_tr_str_lit_len("+", 1LL)))) {
-        /* pass */
+#line 2045 "src/taumir/lower.tr"
         return _tr_str_lit_len("__add__", 7LL);
     }
-    /* pass */
+#line 2046 "src/taumir/lower.tr"
     if (_tr_str_eqv((op), (_tr_str_lit_len("-", 1LL)))) {
-        /* pass */
+#line 2046 "src/taumir/lower.tr"
         return _tr_str_lit_len("__sub__", 7LL);
     }
-    /* pass */
+#line 2047 "src/taumir/lower.tr"
     if (_tr_str_eqv((op), (_tr_str_lit_len("*", 1LL)))) {
-        /* pass */
+#line 2047 "src/taumir/lower.tr"
         return _tr_str_lit_len("__mul__", 7LL);
     }
-    /* pass */
+#line 2048 "src/taumir/lower.tr"
     if (_tr_str_eqv((op), (_tr_str_lit_len("/", 1LL)))) {
-        /* pass */
+#line 2048 "src/taumir/lower.tr"
         return _tr_str_lit_len("__truediv__", 11LL);
     }
-    /* pass */
+#line 2049 "src/taumir/lower.tr"
     if (_tr_str_eqv((op), (_tr_str_lit_len("%", 1LL)))) {
-        /* pass */
+#line 2049 "src/taumir/lower.tr"
         return _tr_str_lit_len("__mod__", 7LL);
     }
-    /* pass */
+#line 2050 "src/taumir/lower.tr"
     if (_tr_str_eqv((op), (_tr_str_lit_len("**", 2LL)))) {
-        /* pass */
+#line 2050 "src/taumir/lower.tr"
         return _tr_str_lit_len("__pow__", 7LL);
     }
-    /* pass */
+#line 2051 "src/taumir/lower.tr"
     if (_tr_str_eqv((op), (_tr_str_lit_len("//", 2LL)))) {
-        /* pass */
+#line 2051 "src/taumir/lower.tr"
         return _tr_str_lit_len("__floordiv__", 12LL);
     }
-    /* pass */
+#line 2052 "src/taumir/lower.tr"
     if (_tr_str_eqv((op), (_tr_str_lit_len("==", 2LL)))) {
-        /* pass */
+#line 2052 "src/taumir/lower.tr"
         return _tr_str_lit_len("__eq__", 6LL);
     }
-    /* pass */
+#line 2053 "src/taumir/lower.tr"
     if (_tr_str_eqv((op), (_tr_str_lit_len("!=", 2LL)))) {
-        /* pass */
+#line 2053 "src/taumir/lower.tr"
         return _tr_str_lit_len("__ne__", 6LL);
     }
-    /* pass */
+#line 2054 "src/taumir/lower.tr"
     if (_tr_str_eqv((op), (_tr_str_lit_len("<", 1LL)))) {
-        /* pass */
+#line 2054 "src/taumir/lower.tr"
         return _tr_str_lit_len("__lt__", 6LL);
     }
-    /* pass */
+#line 2055 "src/taumir/lower.tr"
     if (_tr_str_eqv((op), (_tr_str_lit_len("<=", 2LL)))) {
-        /* pass */
+#line 2055 "src/taumir/lower.tr"
         return _tr_str_lit_len("__le__", 6LL);
     }
-    /* pass */
+#line 2056 "src/taumir/lower.tr"
     if (_tr_str_eqv((op), (_tr_str_lit_len(">", 1LL)))) {
-        /* pass */
+#line 2056 "src/taumir/lower.tr"
         return _tr_str_lit_len("__gt__", 6LL);
     }
-    /* pass */
+#line 2057 "src/taumir/lower.tr"
     if (_tr_str_eqv((op), (_tr_str_lit_len(">=", 2LL)))) {
-        /* pass */
+#line 2057 "src/taumir/lower.tr"
         return _tr_str_lit_len("__ge__", 6LL);
     }
-    /* pass */
+#line 2058 "src/taumir/lower.tr"
     return _tr_str_lit_len("", 0LL);
 }
 
 __attribute__((hot)) TrStr _stmt_expr_kind(HirExpr* e) {
-    /* pass */
-    __auto_type _t3184 = (*e);
-    if (_t3184.tag == HirExpr_ECall) {
-        __auto_type callee = _t3184.data.ECall.callee;
-        return ({ TrStr _at_t3185 = (_ident_name(callee)); __auto_type _wr = (({ TrStr _cl = (({ TrStr _cr = (_own(_at_t3185)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("call ", 5LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("()", 2LL))); _tr_str_release(_cl); _cres; })); _tr_str_release(_at_t3185); _wr; });
-    } else if (_t3184.tag == HirExpr_EMethodCall) {
-        __auto_type meth = _t3184.data.EMethodCall.method;
-        return ({ TrStr _cl = (({ TrStr _cr = (_own(meth)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("method .", 8LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("()", 2LL))); _tr_str_release(_cl); _cres; });
+#line 2062 "src/taumir/lower.tr"
+    __auto_type _t6179 = (*e);
+    if (_t6179.tag == HirExpr_ECall) {
+        __auto_type callee = _t6179.data.ECall.callee;
+        return ({ TrStr _at_t6180 = (_ident_name(callee)); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(_at_t6180)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("call ", 5LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("()", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_str_release(_at_t6180); _wr; });
+    } else if (_t6179.tag == HirExpr_EMethodCall) {
+        __auto_type meth = _t6179.data.EMethodCall.method;
+        TrStr _trret1537 = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(meth)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("method .", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("()", 2LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        return _trret1537;
     } else if (1) {
-        __auto_type _ = _t3184;
+        __auto_type _ = _t6179;
         return _tr_str_lit_len("expression", 10LL);
     }
 }
 
 __attribute__((hot)) TrStr _expr_kind(HirExpr* e) {
-    /* pass */
-    __auto_type _t3186 = (*e);
-    if (_t3186.tag == HirExpr_ELitInt) {
+#line 2068 "src/taumir/lower.tr"
+    __auto_type _t6181 = (*e);
+    if (_t6181.tag == HirExpr_ELitInt) {
         return _tr_str_lit_len("int literal", 11LL);
-    } else if (_t3186.tag == HirExpr_ELitStr) {
+    } else if (_t6181.tag == HirExpr_ELitStr) {
         return _tr_str_lit_len("str literal", 11LL);
-    } else if (_t3186.tag == HirExpr_ELitBool) {
+    } else if (_t6181.tag == HirExpr_ELitBool) {
         return _tr_str_lit_len("bool literal", 12LL);
-    } else if (_t3186.tag == HirExpr_ELitChar) {
+    } else if (_t6181.tag == HirExpr_ELitChar) {
         return _tr_str_lit_len("char literal", 12LL);
-    } else if (_t3186.tag == HirExpr_ELitFloat) {
+    } else if (_t6181.tag == HirExpr_ELitFloat) {
         return _tr_str_lit_len("float literal", 13LL);
-    } else if (_t3186.tag == HirExpr_ERawStr) {
+    } else if (_t6181.tag == HirExpr_ERawStr) {
         return _tr_str_lit_len("raw str literal", 15LL);
-    } else if (_t3186.tag == HirExpr_EIdent) {
-        __auto_type n = _t3186.data.EIdent.name;
-        return ({ TrStr _cl = (({ TrStr _cr = (_own(n)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("ident '", 7LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("'", 1LL))); _tr_str_release(_cl); _cres; });
-    } else if (_t3186.tag == HirExpr_ECall) {
-        __auto_type callee = _t3186.data.ECall.callee;
-        return ({ TrStr _at_t3187 = (_ident_name(callee)); __auto_type _wr = (({ TrStr _cl = (({ TrStr _cr = (_own(_at_t3187)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("call ", 5LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("()", 2LL))); _tr_str_release(_cl); _cres; })); _tr_str_release(_at_t3187); _wr; });
-    } else if (_t3186.tag == HirExpr_EMethodCall) {
-        __auto_type meth = _t3186.data.EMethodCall.method;
-        return ({ TrStr _cl = (({ TrStr _cr = (_own(meth)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("method .", 8LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("()", 2LL))); _tr_str_release(_cl); _cres; });
-    } else if (_t3186.tag == HirExpr_EIndex) {
+    } else if (_t6181.tag == HirExpr_EIdent) {
+        __auto_type n = _t6181.data.EIdent.name;
+        TrStr _trret1538 = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(n)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("ident '", 7LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("'", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        return _trret1538;
+    } else if (_t6181.tag == HirExpr_ECall) {
+        __auto_type callee = _t6181.data.ECall.callee;
+        return ({ TrStr _at_t6182 = (_ident_name(callee)); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(_at_t6182)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("call ", 5LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("()", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_str_release(_at_t6182); _wr; });
+    } else if (_t6181.tag == HirExpr_EMethodCall) {
+        __auto_type meth = _t6181.data.EMethodCall.method;
+        TrStr _trret1539 = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(meth)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("method .", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("()", 2LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        return _trret1539;
+    } else if (_t6181.tag == HirExpr_EIndex) {
         return _tr_str_lit_len("index expr", 10LL);
-    } else if (_t3186.tag == HirExpr_EPropAccess) {
-        __auto_type p = _t3186.data.EPropAccess.prop;
-        return ({ TrStr _cr = (_own(p)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("prop .", 6LL)), _cr); _tr_str_release(_cr); _cres; });
-    } else if (_t3186.tag == HirExpr_EBinOp) {
-        __auto_type op = _t3186.data.EBinOp.op;
-        return ({ TrStr _cl = (({ TrStr _cr = (_own(op)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("binary op '", 11LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("'", 1LL))); _tr_str_release(_cl); _cres; });
-    } else if (_t3186.tag == HirExpr_EUnaryOp) {
-        __auto_type op = _t3186.data.EUnaryOp.op;
-        return ({ TrStr _cl = (({ TrStr _cr = (_own(op)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("unary op '", 10LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("'", 1LL))); _tr_str_release(_cl); _cres; });
-    } else if (_t3186.tag == HirExpr_ECast) {
-        __auto_type ctty = _t3186.data.ECast.target_ty;
-        return ({ TrStr _cr = (_own(ctty->name)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("cast to ", 8LL)), _cr); _tr_str_release(_cr); _cres; });
-    } else if (_t3186.tag == HirExpr_EIfElse) {
+    } else if (_t6181.tag == HirExpr_EPropAccess) {
+        __auto_type p = _t6181.data.EPropAccess.prop;
+        TrStr _trret1540 = ({ TrStr _tr_cr = (_own(p)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("prop .", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+        return _trret1540;
+    } else if (_t6181.tag == HirExpr_EBinOp) {
+        __auto_type op = _t6181.data.EBinOp.op;
+        TrStr _trret1541 = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(op)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("binary op '", 11LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("'", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        return _trret1541;
+    } else if (_t6181.tag == HirExpr_EUnaryOp) {
+        __auto_type op = _t6181.data.EUnaryOp.op;
+        TrStr _trret1542 = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(op)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("unary op '", 10LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("'", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        return _trret1542;
+    } else if (_t6181.tag == HirExpr_ECast) {
+        __auto_type ctty = _t6181.data.ECast.target_ty;
+        TrStr _trret1543 = ({ TrStr _tr_cr = (_own(ctty->name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("cast to ", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+        return _trret1543;
+    } else if (_t6181.tag == HirExpr_EIfElse) {
         return _tr_str_lit_len("if-else expr", 12LL);
-    } else if (_t3186.tag == HirExpr_EClosure) {
+    } else if (_t6181.tag == HirExpr_EClosure) {
         return _tr_str_lit_len("closure", 7LL);
-    } else if (_t3186.tag == HirExpr_ETuple) {
+    } else if (_t6181.tag == HirExpr_ETuple) {
         return _tr_str_lit_len("tuple", 5LL);
-    } else if (_t3186.tag == HirExpr_EList) {
+    } else if (_t6181.tag == HirExpr_EList) {
         return _tr_str_lit_len("list literal", 12LL);
-    } else if (_t3186.tag == HirExpr_ESet) {
+    } else if (_t6181.tag == HirExpr_ESet) {
         return _tr_str_lit_len("set literal", 11LL);
-    } else if (_t3186.tag == HirExpr_EDict) {
+    } else if (_t6181.tag == HirExpr_EDict) {
         return _tr_str_lit_len("dict literal", 12LL);
-    } else if (_t3186.tag == HirExpr_EFString) {
+    } else if (_t6181.tag == HirExpr_EFString) {
         return _tr_str_lit_len("f-string", 8LL);
-    } else if (_t3186.tag == HirExpr_ESuperMethodCall) {
-        __auto_type meth = _t3186.data.ESuperMethodCall.method;
-        return ({ TrStr _cr = (_own(meth)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("super.", 6LL)), _cr); _tr_str_release(_cr); _cres; });
-    } else if (_t3186.tag == HirExpr_ESuperPropAccess) {
-        __auto_type p = _t3186.data.ESuperPropAccess.prop;
-        return ({ TrStr _cr = (_own(p)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("super.", 6LL)), _cr); _tr_str_release(_cr); _cres; });
+    } else if (_t6181.tag == HirExpr_ESuperMethodCall) {
+        __auto_type meth = _t6181.data.ESuperMethodCall.method;
+        TrStr _trret1544 = ({ TrStr _tr_cr = (_own(meth)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("super.", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+        return _trret1544;
+    } else if (_t6181.tag == HirExpr_ESuperPropAccess) {
+        __auto_type p = _t6181.data.ESuperPropAccess.prop;
+        TrStr _trret1545 = ({ TrStr _tr_cr = (_own(p)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("super.", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+        return _trret1545;
     } else if (1) {
-        __auto_type _ = _t3186;
+        __auto_type _ = _t6181;
         return _tr_str_lit_len("expression", 10LL);
     }
 }
 
 __attribute__((hot)) TrStr _stmt_kind(HirStmt* s) {
-    /* pass */
-    __auto_type _t3188 = (*s);
-    if (_t3188.tag == HirStmt_SLineMarker) {
-        __auto_type _ = _t3188.data.SLineMarker.n;
+#line 2095 "src/taumir/lower.tr"
+    __auto_type _t6183 = (*s);
+    if (_t6183.tag == HirStmt_SLineMarker) {
+        __auto_type _ = _t6183.data.SLineMarker.n;
         return _tr_str_lit_len("line marker", 11LL);
-    } else if (_t3188.tag == HirStmt_SPass) {
+    } else if (_t6183.tag == HirStmt_SPass) {
         return _tr_str_lit_len("pass", 4LL);
-    } else if (_t3188.tag == HirStmt_SAutoDrop) {
+    } else if (_t6183.tag == HirStmt_SAutoDrop) {
         return _tr_str_lit_len("auto-drop", 9LL);
-    } else if (_t3188.tag == HirStmt_SFree) {
-        __auto_type _ = _t3188.data.SFree.name;
+    } else if (_t6183.tag == HirStmt_SFree) {
+        __auto_type _ = _t6183.data.SFree.name;
         return _tr_str_lit_len("free", 4LL);
-    } else if (_t3188.tag == HirStmt_SReturn) {
-        __auto_type _ = _t3188.data.SReturn.val;
+    } else if (_t6183.tag == HirStmt_SReturn) {
+        __auto_type _ = _t6183.data.SReturn.val;
         return _tr_str_lit_len("return", 6LL);
-    } else if (_t3188.tag == HirStmt_SLet) {
-        __auto_type n = _t3188.data.SLet.name;
-        return ({ TrStr _cr = (_own(n)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("let ", 4LL)), _cr); _tr_str_release(_cr); _cres; });
-    } else if (_t3188.tag == HirStmt_SAssign) {
+    } else if (_t6183.tag == HirStmt_SLet) {
+        __auto_type n = _t6183.data.SLet.name;
+        TrStr _trret1546 = ({ TrStr _tr_cr = (_own(n)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("let ", 4LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+        return _trret1546;
+    } else if (_t6183.tag == HirStmt_SAssign) {
         return _tr_str_lit_len("assign", 6LL);
-    } else if (_t3188.tag == HirStmt_SIf) {
+    } else if (_t6183.tag == HirStmt_SIf) {
         return _tr_str_lit_len("if", 2LL);
-    } else if (_t3188.tag == HirStmt_SWhile) {
+    } else if (_t6183.tag == HirStmt_SWhile) {
         return _tr_str_lit_len("while", 5LL);
-    } else if (_t3188.tag == HirStmt_SBreak) {
-        __auto_type _ = _t3188.data.SBreak.val;
+    } else if (_t6183.tag == HirStmt_SBreak) {
+        __auto_type _ = _t6183.data.SBreak.val;
         return _tr_str_lit_len("break", 5LL);
-    } else if (_t3188.tag == HirStmt_SContinue) {
+    } else if (_t6183.tag == HirStmt_SContinue) {
         return _tr_str_lit_len("continue", 8LL);
-    } else if (_t3188.tag == HirStmt_SAssert) {
+    } else if (_t6183.tag == HirStmt_SAssert) {
         return _tr_str_lit_len("assert", 6LL);
-    } else if (_t3188.tag == HirStmt_SMultiLet) {
+    } else if (_t6183.tag == HirStmt_SMultiLet) {
         return _tr_str_lit_len("multi-let", 9LL);
-    } else if (_t3188.tag == HirStmt_SDefer) {
-        __auto_type _ = _t3188.data.SDefer.stmt;
+    } else if (_t6183.tag == HirStmt_SDefer) {
+        __auto_type _ = _t6183.data.SDefer.stmt;
         return _tr_str_lit_len("defer", 5LL);
-    } else if (_t3188.tag == HirStmt_SWith) {
+    } else if (_t6183.tag == HirStmt_SWith) {
         return _tr_str_lit_len("with", 4LL);
-    } else if (_t3188.tag == HirStmt_STry) {
+    } else if (_t6183.tag == HirStmt_STry) {
         return _tr_str_lit_len("try", 3LL);
-    } else if (_t3188.tag == HirStmt_SRaise) {
-        __auto_type _ = _t3188.data.SRaise.val;
+    } else if (_t6183.tag == HirStmt_SRaise) {
+        __auto_type _ = _t6183.data.SRaise.val;
         return _tr_str_lit_len("raise", 5LL);
-    } else if (_t3188.tag == HirStmt_SMatch) {
+    } else if (_t6183.tag == HirStmt_SMatch) {
         return _tr_str_lit_len("match", 5LL);
-    } else if (_t3188.tag == HirStmt_SFor) {
+    } else if (_t6183.tag == HirStmt_SFor) {
         return _tr_str_lit_len("for", 3LL);
-    } else if (_t3188.tag == HirStmt_SForUnpack) {
+    } else if (_t6183.tag == HirStmt_SForUnpack) {
         return _tr_str_lit_len("for-unpack", 10LL);
-    } else if (_t3188.tag == HirStmt_SExpr) {
-        __auto_type _ = _t3188.data.SExpr.expr;
+    } else if (_t6183.tag == HirStmt_SExpr) {
+        __auto_type _ = _t6183.data.SExpr.expr;
         return _tr_str_lit_len("expr", 4LL);
-    } else if (_t3188.tag == HirStmt_SUnsafe) {
-        __auto_type _ = _t3188.data.SUnsafe.body;
+    } else if (_t6183.tag == HirStmt_SUnsafe) {
+        __auto_type _ = _t6183.data.SUnsafe.body;
         return _tr_str_lit_len("unsafe", 6LL);
     } else if (1) {
-        __auto_type _ = _t3188;
+        __auto_type _ = _t6183;
         return _tr_str_lit_len("statement", 9LL);
     }
 }
 
 __attribute__((hot)) bool _stmt_has_cf(HirStmt* s) {
-    /* pass */
-    __auto_type _t3189 = (*s);
-    if (_t3189.tag == HirStmt_SReturn) {
-        __auto_type _ = _t3189.data.SReturn.val;
+#line 2125 "src/taumir/lower.tr"
+    __auto_type _t6184 = (*s);
+    if (_t6184.tag == HirStmt_SReturn) {
+        __auto_type _ = _t6184.data.SReturn.val;
         return true;
-    } else if (_t3189.tag == HirStmt_SBreak) {
-        __auto_type _ = _t3189.data.SBreak.val;
+    } else if (_t6184.tag == HirStmt_SBreak) {
+        __auto_type _ = _t6184.data.SBreak.val;
         return true;
-    } else if (_t3189.tag == HirStmt_SContinue) {
+    } else if (_t6184.tag == HirStmt_SContinue) {
         return true;
-    } else if (_t3189.tag == HirStmt_SIf) {
-        __auto_type tb = _t3189.data.SIf.then_b;
-__auto_type eb = _t3189.data.SIf.else_b;
-        return (_block_has_cf(tb) || _block_has_cf(eb));
-    } else if (_t3189.tag == HirStmt_SWhile) {
-        __auto_type wb = _t3189.data.SWhile.body;
-        return _block_has_cf(wb);
-    } else if (_t3189.tag == HirStmt_SFor) {
-        __auto_type fb = _t3189.data.SFor.body;
-        return _block_has_cf(fb);
-    } else if (_t3189.tag == HirStmt_SForUnpack) {
-        __auto_type fb = _t3189.data.SForUnpack.body;
-        return _block_has_cf(fb);
-    } else if (_t3189.tag == HirStmt_SMatch) {
-        __auto_type arms = _t3189.data.SMatch.arms;
-        /* pass */
+    } else if (_t6184.tag == HirStmt_SIf) {
+        __auto_type tb = _t6184.data.SIf.then_b;
+__auto_type eb = _t6184.data.SIf.else_b;
+        bool _trret1547 = (_block_has_cf(tb) || _block_has_cf(eb));
+        return _trret1547;
+    } else if (_t6184.tag == HirStmt_SWhile) {
+        __auto_type wb = _t6184.data.SWhile.body;
+        bool _trret1548 = _block_has_cf(wb);
+        return _trret1548;
+    } else if (_t6184.tag == HirStmt_SFor) {
+        __auto_type fb = _t6184.data.SFor.body;
+        bool _trret1549 = _block_has_cf(fb);
+        return _trret1549;
+    } else if (_t6184.tag == HirStmt_SForUnpack) {
+        __auto_type fb = _t6184.data.SForUnpack.body;
+        bool _trret1550 = _block_has_cf(fb);
+        return _trret1550;
+    } else if (_t6184.tag == HirStmt_SMatch) {
+        __auto_type arms = _t6184.data.SMatch.arms;
+#line 2134 "src/taumir/lower.tr"
         long long j = 0LL;
-        /* pass */
+#line 2135 "src/taumir/lower.tr"
         while ((j < arms->len)) {
-            /* pass */
+#line 2136 "src/taumir/lower.tr"
             if (_block_has_cf(((HirMatchArm*)List_ptr_get(arms, j))->body)) {
-                /* pass */
+#line 2136 "src/taumir/lower.tr"
                 return true;
             }
-            /* pass */
+#line 2137 "src/taumir/lower.tr"
             j = (j + 1LL);
         }
-        /* pass */
+#line 2138 "src/taumir/lower.tr"
         return false;
-    } else if (_t3189.tag == HirStmt_SWith) {
-        __auto_type wb = _t3189.data.SWith.body;
-        return _block_has_cf(wb);
-    } else if (_t3189.tag == HirStmt_SUnsafe) {
-        __auto_type ub = _t3189.data.SUnsafe.body;
-        return _block_has_cf(ub);
-    } else if (_t3189.tag == HirStmt_SDefer) {
-        __auto_type ds = _t3189.data.SDefer.stmt;
+    } else if (_t6184.tag == HirStmt_SWith) {
+        __auto_type wb = _t6184.data.SWith.body;
+        bool _trret1551 = _block_has_cf(wb);
+        return _trret1551;
+    } else if (_t6184.tag == HirStmt_SUnsafe) {
+        __auto_type ub = _t6184.data.SUnsafe.body;
+        bool _trret1552 = _block_has_cf(ub);
+        return _trret1552;
+    } else if (_t6184.tag == HirStmt_SDefer) {
+        __auto_type ds = _t6184.data.SDefer.stmt;
         return _stmt_has_cf(ds);
-    } else if (_t3189.tag == HirStmt_STry) {
-        __auto_type tb = _t3189.data.STry.try_body;
-__auto_type cs = _t3189.data.STry.catches;
-__auto_type fb = _t3189.data.STry.finally_b;
-        /* pass */
+    } else if (_t6184.tag == HirStmt_STry) {
+        __auto_type tb = _t6184.data.STry.try_body;
+__auto_type cs = _t6184.data.STry.catches;
+__auto_type fb = _t6184.data.STry.finally_b;
+#line 2143 "src/taumir/lower.tr"
         if ((_block_has_cf(tb) || _block_has_cf(fb))) {
-            /* pass */
+#line 2143 "src/taumir/lower.tr"
             return true;
         }
-        /* pass */
+#line 2144 "src/taumir/lower.tr"
         long long k = 0LL;
-        /* pass */
+#line 2145 "src/taumir/lower.tr"
         while ((k < cs->len)) {
-            /* pass */
+#line 2146 "src/taumir/lower.tr"
             if (_block_has_cf((*((HirCatchClause**)List_ptr_get(cs, k)))->body)) {
-                /* pass */
+#line 2146 "src/taumir/lower.tr"
                 return true;
             }
-            /* pass */
+#line 2147 "src/taumir/lower.tr"
             k = (k + 1LL);
         }
-        /* pass */
+#line 2148 "src/taumir/lower.tr"
         return false;
     } else if (1) {
-        __auto_type _ = _t3189;
+        __auto_type _ = _t6184;
         return false;
     }
 }
 
 __attribute__((hot)) bool _block_has_cf(HirBlock* b) {
-    /* pass */
+#line 2152 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 2153 "src/taumir/lower.tr"
     while ((i < b->stmts->len)) {
-        /* pass */
+#line 2154 "src/taumir/lower.tr"
         if (_stmt_has_cf(((HirStmt*)List_ptr_get(b->stmts, i)))) {
-            /* pass */
+#line 2154 "src/taumir/lower.tr"
             return true;
         }
-        /* pass */
+#line 2155 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 2156 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) bool _lower_try_setjmp(LModule* m, LFunc* lf, HirBlock* try_body, List_ptr* catches, HirBlock* finally_b) {
-    /* pass */
+#line 2165 "src/taumir/lower.tr"
     bool has_catch = (catches->len == 1LL);
-    /* pass */
+#line 2166 "src/taumir/lower.tr"
     TrStr ename = _tr_str_lit_len("__exmsg", 7LL);
-    /* pass */
+#line 2167 "src/taumir/lower.tr"
     if (has_catch) {
-        /* pass */
+#line 2168 "src/taumir/lower.tr"
         HirCatchClause* tcc0 = (*((HirCatchClause**)List_ptr_get(catches, 0LL)));
-        /* pass */
+#line 2169 "src/taumir/lower.tr"
         if (((!_is_null_str(tcc0->err_name)) && (!_tr_str_eqv((tcc0->err_name), (_tr_str_lit_len("", 0LL)))))) {
-            /* pass */
-            TrStr _strtmp_t3190 = _tr_str_retain(tcc0->err_name);
+#line 2169 "src/taumir/lower.tr"
+            TrStr _strtmp_t6185 = _tr_str_retain(tcc0->err_name);
             _tr_str_release(ename);
-            ename = _strtmp_t3190;
+            ename = _strtmp_t6185;
         }
     }
-    /* pass */
+#line 2172 "src/taumir/lower.tr"
     List_TrStr* capn = (void*)List_TrStr_new();
-    /* pass */
+#line 2173 "src/taumir/lower.tr"
     List_i64* capt = (void*)List_i64_new();
-    /* pass */
+#line 2174 "src/taumir/lower.tr"
     long long vi = 0LL;
-    /* pass */
+#line 2175 "src/taumir/lower.tr"
     while ((vi < lf->vars->len)) {
-        /* pass */
+#line 2176 "src/taumir/lower.tr"
         TrStr vn = List_TrStr_get(lf->vars, vi);
-        /* pass */
-        ({ TrStr _at_t3191 = (_own(vn)); List_TrStr_append(capn, _at_t3191); _tr_str_release(_at_t3191); });
-        /* pass */
+#line 2177 "src/taumir/lower.tr"
+        ({ TrStr _at_t6186 = (_own(vn)); List_TrStr_append(capn, _at_t6186); _tr_str_release(_at_t6186); });
+#line 2178 "src/taumir/lower.tr"
         List_i64_append(capt, LFunc_var_type(lf, vn));
-        /* pass */
+#line 2179 "src/taumir/lower.tr"
         vi = (vi + 1LL);
         _tr_str_release(vn);
     }
-    /* pass */
-    TrStr tname = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(m->funcs->len)))); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("_trytry_", 8LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (lf->name)); _tr_str_release(_cl); _cres; });
-    /* pass */
-    LFunc* tlf = ({ TrStr _at_t3192 = (_own(tname)); __auto_type _wr = (LFunc_init(_at_t3192)); _tr_str_release(_at_t3192); _wr; });
-    /* pass */
+#line 2181 "src/taumir/lower.tr"
+    TrStr tname = ({ __auto_type _ord_t6187 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(m->funcs->len)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("_trytry_", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (_ord_t6187); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (lf->name)); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+#line 2182 "src/taumir/lower.tr"
+    LFunc* tlf = ({ TrStr _at_t6188 = (_own(tname)); __auto_type _wr = (LFunc_init(_at_t6188)); _tr_str_release(_at_t6188); _wr; });
+#line 2183 "src/taumir/lower.tr"
     List_TrStr_append(tlf->params, _tr_str_lit_len("__env", 5LL));
-    /* pass */
+#line 2184 "src/taumir/lower.tr"
     LFunc_add_var(tlf, _tr_str_lit_len("__env", 5LL));
-    /* pass */
+#line 2185 "src/taumir/lower.tr"
     long long ci = 0LL;
-    /* pass */
+#line 2186 "src/taumir/lower.tr"
     while ((ci < capn->len)) {
-        /* pass */
-        ({ TrStr _at_t3193 = (List_TrStr_get(capn, ci)); TrStr _at_t3194 = (_own(_at_t3193)); List_TrStr_append(tlf->captures, _at_t3194); _tr_str_release(_at_t3193); _tr_str_release(_at_t3194); });
-        /* pass */
-        List_i64_append(tlf->cap_tags, List_i64_get(capt, ci));
-        /* pass */
+#line 2187 "src/taumir/lower.tr"
+        ({ TrStr _at_t6189 = (List_TrStr_get(capn, ci)); TrStr _ord_t6190 = (_own(_at_t6189)); List_TrStr_append(tlf->captures, _ord_t6190); _tr_str_release(_at_t6189); _tr_str_release(_ord_t6190); });
+#line 2188 "src/taumir/lower.tr"
+        ({ __auto_type _ord_t6191 = (List_i64_get(capt, ci)); List_i64_append(tlf->cap_tags, _ord_t6191); });
+#line 2189 "src/taumir/lower.tr"
         ci = (ci + 1LL);
     }
-    /* pass */
-    ({ TrStr _at_t3195 = (_own(tname)); List_TrStr_append(m->fn_names, _at_t3195); _tr_str_release(_at_t3195); });
-    /* pass */
+#line 2190 "src/taumir/lower.tr"
+    ({ TrStr _ord_t6192 = (_own(tname)); List_TrStr_append(m->fn_names, _ord_t6192); _tr_str_release(_ord_t6192); });
+#line 2191 "src/taumir/lower.tr"
     List_i64_append(m->fn_ret, 0LL);
-    /* pass */
+#line 2192 "src/taumir/lower.tr"
     LFunc_set_cur(tlf, LFunc_new_block(tlf));
-    /* pass */
+#line 2193 "src/taumir/lower.tr"
     if ((!lower_block(m, tlf, try_body))) {
-        /* pass */
+#line 2193 "src/taumir/lower.tr"
         _tr_str_release(ename);
         List_TrStr_free(capn);
         List_i64_free(capt);
@@ -5180,50 +5275,50 @@ __attribute__((hot)) bool _lower_try_setjmp(LModule* m, LFunc* lf, HirBlock* try
         _tr_obj_release(tlf, _trdrop_LFunc);
         return false;
     }
-    /* pass */
+#line 2194 "src/taumir/lower.tr"
     LFunc_set_term(tlf, LTerm_ctor_TRetInt(0LL));
-    /* pass */
+#line 2195 "src/taumir/lower.tr"
     List_ptr_append(m->funcs, _tr_obj_retain(tlf));
-    /* pass */
+#line 2197 "src/taumir/lower.tr"
     TrStr cname = _tr_str_lit_len("", 0LL);
-    /* pass */
+#line 2198 "src/taumir/lower.tr"
     if (has_catch) {
-        /* pass */
-        TrStr _strtmp_t3196 = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(m->funcs->len)))); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("_trycatch_", 10LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (lf->name)); _tr_str_release(_cl); _cres; });
+#line 2199 "src/taumir/lower.tr"
+        TrStr _strtmp_t6194 = ({ __auto_type _ord_t6193 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(m->funcs->len)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("_trycatch_", 10LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (_ord_t6193); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (lf->name)); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
         _tr_str_release(cname);
-        cname = _strtmp_t3196;
-        /* pass */
-        LFunc* clf = ({ TrStr _at_t3197 = (_own(cname)); __auto_type _wr = (LFunc_init(_at_t3197)); _tr_str_release(_at_t3197); _wr; });
-        /* pass */
+        cname = _strtmp_t6194;
+#line 2200 "src/taumir/lower.tr"
+        LFunc* clf = ({ TrStr _at_t6195 = (_own(cname)); __auto_type _wr = (LFunc_init(_at_t6195)); _tr_str_release(_at_t6195); _wr; });
+#line 2201 "src/taumir/lower.tr"
         List_TrStr_append(clf->params, _tr_str_lit_len("__env", 5LL));
-        /* pass */
+#line 2202 "src/taumir/lower.tr"
         LFunc_add_var(clf, _tr_str_lit_len("__env", 5LL));
-        /* pass */
-        ({ TrStr _at_t3198 = (_own(ename)); List_TrStr_append(clf->params, _at_t3198); _tr_str_release(_at_t3198); });
-        /* pass */
-        ({ TrStr _at_t3199 = (_own(ename)); LFunc_add_var(clf, _at_t3199); _tr_str_release(_at_t3199); });
-        /* pass */
+#line 2203 "src/taumir/lower.tr"
+        ({ TrStr _ord_t6196 = (_own(ename)); List_TrStr_append(clf->params, _ord_t6196); _tr_str_release(_ord_t6196); });
+#line 2204 "src/taumir/lower.tr"
+        ({ TrStr _at_t6197 = (_own(ename)); LFunc_add_var(clf, _at_t6197); _tr_str_release(_at_t6197); });
+#line 2205 "src/taumir/lower.tr"
         LFunc_set_var_type(clf, ename, 1LL);
-        /* pass */
+#line 2206 "src/taumir/lower.tr"
         long long ci2 = 0LL;
-        /* pass */
+#line 2207 "src/taumir/lower.tr"
         while ((ci2 < capn->len)) {
-            /* pass */
-            ({ TrStr _at_t3200 = (List_TrStr_get(capn, ci2)); TrStr _at_t3201 = (_own(_at_t3200)); List_TrStr_append(clf->captures, _at_t3201); _tr_str_release(_at_t3200); _tr_str_release(_at_t3201); });
-            /* pass */
-            List_i64_append(clf->cap_tags, List_i64_get(capt, ci2));
-            /* pass */
+#line 2208 "src/taumir/lower.tr"
+            ({ TrStr _at_t6198 = (List_TrStr_get(capn, ci2)); TrStr _ord_t6199 = (_own(_at_t6198)); List_TrStr_append(clf->captures, _ord_t6199); _tr_str_release(_at_t6198); _tr_str_release(_ord_t6199); });
+#line 2209 "src/taumir/lower.tr"
+            ({ __auto_type _ord_t6200 = (List_i64_get(capt, ci2)); List_i64_append(clf->cap_tags, _ord_t6200); });
+#line 2210 "src/taumir/lower.tr"
             ci2 = (ci2 + 1LL);
         }
-        /* pass */
-        ({ TrStr _at_t3202 = (_own(cname)); List_TrStr_append(m->fn_names, _at_t3202); _tr_str_release(_at_t3202); });
-        /* pass */
+#line 2211 "src/taumir/lower.tr"
+        ({ TrStr _ord_t6201 = (_own(cname)); List_TrStr_append(m->fn_names, _ord_t6201); _tr_str_release(_ord_t6201); });
+#line 2212 "src/taumir/lower.tr"
         List_i64_append(m->fn_ret, 0LL);
-        /* pass */
+#line 2213 "src/taumir/lower.tr"
         LFunc_set_cur(clf, LFunc_new_block(clf));
-        /* pass */
+#line 2214 "src/taumir/lower.tr"
         if ((!lower_block(m, clf, (*((HirCatchClause**)List_ptr_get(catches, 0LL)))->body))) {
-            /* pass */
+#line 2214 "src/taumir/lower.tr"
             _tr_str_release(ename);
             List_TrStr_free(capn);
             List_i64_free(capt);
@@ -5233,77 +5328,77 @@ __attribute__((hot)) bool _lower_try_setjmp(LModule* m, LFunc* lf, HirBlock* try
             _tr_obj_release(clf, _trdrop_LFunc);
             return false;
         }
-        /* pass */
+#line 2215 "src/taumir/lower.tr"
         LFunc_set_term(clf, LTerm_ctor_TRetInt(0LL));
-        /* pass */
+#line 2216 "src/taumir/lower.tr"
         List_ptr_append(m->funcs, _tr_obj_retain(clf));
     }
-    /* pass */
+#line 2218 "src/taumir/lower.tr"
     long long envsz = LFunc_new_vreg(lf);
-    /* pass */
+#line 2219 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(envsz, ((1LL + capn->len) * 8LL)));
-    /* pass */
+#line 2220 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL));
-    /* pass */
+#line 2221 "src/taumir/lower.tr"
     List_i64* ea = (void*)List_i64_new();
-    /* pass */
+#line 2222 "src/taumir/lower.tr"
     List_i64_append(ea, envsz);
-    /* pass */
+#line 2223 "src/taumir/lower.tr"
     long long env = LFunc_new_vreg(lf);
-    /* pass */
+#line 2224 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(env, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL), ea));
-    /* pass */
+#line 2225 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, env, 12LL);
-    /* pass */
+#line 2226 "src/taumir/lower.tr"
     long long ci3 = 0LL;
-    /* pass */
+#line 2227 "src/taumir/lower.tr"
     while ((ci3 < capn->len)) {
-        /* pass */
+#line 2228 "src/taumir/lower.tr"
         long long av = LFunc_new_vreg(lf);
-        /* pass */
-        ({ TrStr _at_t3203 = (List_TrStr_get(capn, ci3)); LFunc_emit(lf, LInst_ctor_IAddrVar(av, _at_t3203)); _tr_str_release(_at_t3203); });
-        /* pass */
+#line 2229 "src/taumir/lower.tr"
+        ({ TrStr _at_t6202 = (List_TrStr_get(capn, ci3)); LFunc_emit(lf, LInst_ctor_IAddrVar(av, _at_t6202)); _tr_str_release(_at_t6202); });
+#line 2230 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, av, 12LL);
-        /* pass */
+#line 2231 "src/taumir/lower.tr"
         _emit_field_set(m, lf, env, ((1LL + ci3) * 8LL), av);
-        /* pass */
+#line 2232 "src/taumir/lower.tr"
         ci3 = (ci3 + 1LL);
     }
-    /* pass */
+#line 2233 "src/taumir/lower.tr"
     long long tfa = LFunc_new_vreg(lf);
-    /* pass */
-    ({ TrStr _at_t3204 = (_own(tname)); LFunc_emit(lf, LInst_ctor_IFuncAddr(tfa, _at_t3204)); _tr_str_release(_at_t3204); });
-    /* pass */
+#line 2234 "src/taumir/lower.tr"
+    ({ TrStr _at_t6203 = (_own(tname)); LFunc_emit(lf, LInst_ctor_IFuncAddr(tfa, _at_t6203)); _tr_str_release(_at_t6203); });
+#line 2235 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, tfa, 12LL);
-    /* pass */
+#line 2236 "src/taumir/lower.tr"
     long long cfa = LFunc_new_vreg(lf);
-    /* pass */
+#line 2237 "src/taumir/lower.tr"
     if (has_catch) {
-        /* pass */
-        ({ TrStr _at_t3205 = (_own(cname)); LFunc_emit(lf, LInst_ctor_IFuncAddr(cfa, _at_t3205)); _tr_str_release(_at_t3205); });
+#line 2238 "src/taumir/lower.tr"
+        ({ TrStr _at_t6204 = (_own(cname)); LFunc_emit(lf, LInst_ctor_IFuncAddr(cfa, _at_t6204)); _tr_str_release(_at_t6204); });
     } else {
-        /* pass */
+#line 2240 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(cfa, 0LL));
     }
-    /* pass */
+#line 2241 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, cfa, 12LL);
-    /* pass */
+#line 2242 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_try_catch", 16LL));
-    /* pass */
+#line 2243 "src/taumir/lower.tr"
     List_i64* ta = (void*)List_i64_new();
-    /* pass */
+#line 2244 "src/taumir/lower.tr"
     List_i64_append(ta, tfa);
-    /* pass */
+#line 2245 "src/taumir/lower.tr"
     List_i64_append(ta, cfa);
-    /* pass */
+#line 2246 "src/taumir/lower.tr"
     List_i64_append(ta, env);
-    /* pass */
+#line 2247 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_try_catch", 16LL), ta));
-    /* pass */
+#line 2248 "src/taumir/lower.tr"
     _release_obj(m, lf, env);
-    /* pass */
+#line 2250 "src/taumir/lower.tr"
     if ((!lower_block(m, lf, finally_b))) {
-        /* pass */
+#line 2250 "src/taumir/lower.tr"
         _tr_str_release(ename);
         List_TrStr_free(capn);
         List_i64_free(capt);
@@ -5312,7 +5407,7 @@ __attribute__((hot)) bool _lower_try_setjmp(LModule* m, LFunc* lf, HirBlock* try
         _tr_str_release(cname);
         return false;
     }
-    /* pass */
+#line 2251 "src/taumir/lower.tr"
     _tr_str_release(ename);
     List_TrStr_free(capn);
     List_i64_free(capt);
@@ -5323,2921 +5418,2947 @@ __attribute__((hot)) bool _lower_try_setjmp(LModule* m, LFunc* lf, HirBlock* try
 }
 
 __attribute__((hot)) bool _is_vstruct_lvalue(HirExpr* e) {
-    /* pass */
-    __auto_type _t3206 = (*e);
-    if (_t3206.tag == HirExpr_EIdent) {
+#line 2256 "src/taumir/lower.tr"
+    __auto_type _t6205 = (*e);
+    if (_t6205.tag == HirExpr_EIdent) {
         return true;
-    } else if (_t3206.tag == HirExpr_EPropAccess) {
+    } else if (_t6205.tag == HirExpr_EPropAccess) {
         return true;
     } else if (1) {
-        __auto_type _ = _t3206;
+        __auto_type _ = _t6205;
         return false;
     }
 }
 
 __attribute__((hot)) long long _copy_value_struct(LModule* m, LFunc* lf, long long src, TrStr cls) {
-    /* pass */
+#line 2265 "src/taumir/lower.tr"
     long long ci = LModule_class_index(m, cls);
-    /* pass */
+#line 2266 "src/taumir/lower.tr"
     if ((ci < 0LL)) {
-        /* pass */
+#line 2266 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 2267 "src/taumir/lower.tr"
     ClassLayout* lay = ((ClassLayout*)List_ptr_get(m->classes, ci));
-    /* pass */
+#line 2268 "src/taumir/lower.tr"
     long long fi = 0LL;
-    /* pass */
+#line 2269 "src/taumir/lower.tr"
     while ((fi < lay->ftags->len)) {
-        /* pass */
+#line 2270 "src/taumir/lower.tr"
         long long ft = List_i64_get(lay->ftags, fi);
-        /* pass */
+#line 2271 "src/taumir/lower.tr"
         if (((((((ft != 0LL) && (ft != 4LL)) && (ft != 5LL)) && (ft != 1LL)) && (ft != 10LL)) && (ft != 11LL))) {
-            /* pass */
+#line 2271 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 2272 "src/taumir/lower.tr"
         fi = (fi + 1LL);
     }
-    /* pass */
+#line 2273 "src/taumir/lower.tr"
     long long szc = LFunc_new_vreg(lf);
-    /* pass */
+#line 2274 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(szc, LModule_class_size(m, cls)));
-    /* pass */
+#line 2275 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL));
-    /* pass */
+#line 2276 "src/taumir/lower.tr"
     List_i64* aa = (void*)List_i64_new();
-    /* pass */
+#line 2277 "src/taumir/lower.tr"
     List_i64_append(aa, szc);
-    /* pass */
+#line 2278 "src/taumir/lower.tr"
     long long dst = LFunc_new_vreg(lf);
-    /* pass */
+#line 2279 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(dst, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL), aa));
-    /* pass */
+#line 2280 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, dst, 10LL);
-    /* pass */
+#line 2282 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_c_memcpy", 12LL));
-    /* pass */
+#line 2283 "src/taumir/lower.tr"
     List_i64* cpa = (void*)List_i64_new();
-    /* pass */
+#line 2284 "src/taumir/lower.tr"
     List_i64_append(cpa, dst);
-    /* pass */
+#line 2285 "src/taumir/lower.tr"
     List_i64_append(cpa, src);
-    /* pass */
+#line 2286 "src/taumir/lower.tr"
     List_i64_append(cpa, szc);
-    /* pass */
+#line 2287 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_c_memcpy", 12LL), cpa));
-    /* pass */
+#line 2290 "src/taumir/lower.tr"
     _attach_class_drop(m, lf, dst, cls);
-    /* pass */
+#line 2291 "src/taumir/lower.tr"
     long long fi2 = 0LL;
-    /* pass */
+#line 2292 "src/taumir/lower.tr"
     while ((fi2 < lay->ftags->len)) {
-        /* pass */
+#line 2293 "src/taumir/lower.tr"
         long long ft2 = List_i64_get(lay->ftags, fi2);
-        /* pass */
+#line 2294 "src/taumir/lower.tr"
         if ((((ft2 == 1LL) || (ft2 == 10LL)) || (ft2 == 11LL))) {
-            /* pass */
+#line 2295 "src/taumir/lower.tr"
             long long fv = _emit_field_get(m, lf, dst, (fi2 * 8LL), ft2);
-            /* pass */
+#line 2296 "src/taumir/lower.tr"
             if ((ft2 == 1LL)) {
-                /* pass */
+#line 2296 "src/taumir/lower.tr"
                 _retain_str(m, lf, fv);
             } else {
-                /* pass */
+#line 2297 "src/taumir/lower.tr"
                 _retain_obj(m, lf, fv);
             }
         }
-        /* pass */
+#line 2298 "src/taumir/lower.tr"
         fi2 = (fi2 + 1LL);
     }
-    /* pass */
+#line 2299 "src/taumir/lower.tr"
     _fresh_mark_obj(lf, dst);
-    /* pass */
-    return dst;
+#line 2300 "src/taumir/lower.tr"
+    long long _trret1553 = dst;
+    return _trret1553;
 }
 
 __attribute__((hot)) long long _value_struct_generic_size(LModule* m, AstType* ty) {
-    /* pass */
+#line 2306 "src/taumir/lower.tr"
     long long gi = 0LL;
-    /* pass */
+#line 2307 "src/taumir/lower.tr"
     while ((gi < m->hir_prog->classes->len)) {
-        /* pass */
+#line 2308 "src/taumir/lower.tr"
         HirClass* gc = ((HirClass*)List_ptr_get(m->hir_prog->classes, gi));
-        /* pass */
+#line 2309 "src/taumir/lower.tr"
         if (((_tr_str_eqv((gc->name), (ty->name)) && (gc->generics->len > 0LL)) && (!gc->is_class))) {
-            /* pass */
+#line 2310 "src/taumir/lower.tr"
             long long n = gc->fields->len;
-            /* pass */
+#line 2311 "src/taumir/lower.tr"
             if ((n < 1LL)) {
-                /* pass */
+#line 2311 "src/taumir/lower.tr"
                 n = 1LL;
             }
-            /* pass */
-            return (n * 8LL);
+#line 2312 "src/taumir/lower.tr"
+            long long _trret1554 = (n * 8LL);
+            return _trret1554;
         }
-        /* pass */
+#line 2313 "src/taumir/lower.tr"
         gi = (gi + 1LL);
     }
-    /* pass */
+#line 2314 "src/taumir/lower.tr"
     return 0LL;
 }
 
 __attribute__((hot)) bool _lower_stmt_impl(LModule* m, LFunc* lf, HirStmt* s) {
-    /* pass */
-    __auto_type _t3207 = (*s);
-    if (_t3207.tag == HirStmt_SLineMarker) {
-        __auto_type _ = _t3207.data.SLineMarker.n;
+#line 2317 "src/taumir/lower.tr"
+    __auto_type _t6206 = (*s);
+    if (_t6206.tag == HirStmt_SLineMarker) {
+        __auto_type _ = _t6206.data.SLineMarker.n;
         return true;
-    } else if (_t3207.tag == HirStmt_SPass) {
+    } else if (_t6206.tag == HirStmt_SPass) {
         return true;
-    } else if (_t3207.tag == HirStmt_SAutoDrop) {
-        __auto_type name = _t3207.data.SAutoDrop.name;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SAutoDrop) {
+        __auto_type name = _t6206.data.SAutoDrop.name;
+#line 2325 "src/taumir/lower.tr"
         if (_tr_str_eqv((name), (_tr_str_lit_len("_", 1LL)))) {
-            /* pass */
+#line 2325 "src/taumir/lower.tr"
             return true;
         }
-        /* pass */
+#line 2330 "src/taumir/lower.tr"
         if (((LFunc_var_index(lf, name) >= 0LL) && (!_is_param(lf, name)))) {
-            /* pass */
+#line 2331 "src/taumir/lower.tr"
             long long dvt = LFunc_var_type(lf, name);
-            /* pass */
+#line 2332 "src/taumir/lower.tr"
             if ((dvt == 1LL)) {
-                /* pass */
+#line 2333 "src/taumir/lower.tr"
                 long long dv = LFunc_new_vreg(lf);
-                /* pass */
+#line 2334 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ILoadVar(dv, name));
-                /* pass */
+#line 2335 "src/taumir/lower.tr"
                 _release_str(m, lf, dv);
             } else if (((dvt == 10LL) || (dvt == 11LL))) {
-                /* pass */
+#line 2337 "src/taumir/lower.tr"
                 long long ov = LFunc_new_vreg(lf);
-                /* pass */
+#line 2338 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ILoadVar(ov, name));
-                /* pass */
+#line 2339 "src/taumir/lower.tr"
                 _release_obj(m, lf, ov);
             }
         }
-        /* pass */
+#line 2340 "src/taumir/lower.tr"
         return true;
-    } else if (_t3207.tag == HirStmt_SFree) {
-        __auto_type _ = _t3207.data.SFree.name;
+    } else if (_t6206.tag == HirStmt_SFree) {
+        __auto_type _ = _t6206.data.SFree.name;
         return true;
-    } else if (_t3207.tag == HirStmt_SReturn) {
-        __auto_type val = _t3207.data.SReturn.val;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SReturn) {
+        __auto_type val = _t6206.data.SReturn.val;
+#line 2343 "src/taumir/lower.tr"
         if (lf->in_defer) {
-            /* pass */
+#line 2343 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2344 "src/taumir/lower.tr"
         if ((lf->is_throws && (((unsigned long long)(val)) != ((unsigned long long)(0LL))))) {
-            /* pass */
+#line 2346 "src/taumir/lower.tr"
             long long orv = lower_expr(m, lf, val);
-            /* pass */
+#line 2347 "src/taumir/lower.tr"
             if ((orv < 0LL)) {
-                /* pass */
+#line 2347 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 2348 "src/taumir/lower.tr"
             long long okr = _wrap_result(m, lf, 0LL, orv, lf->throws_ok_tag);
-            /* pass */
+#line 2349 "src/taumir/lower.tr"
             _fresh_take_obj(lf, okr);
-            /* pass */
+#line 2350 "src/taumir/lower.tr"
             _flush_fresh_strs(m, lf);
-            /* pass */
+#line 2351 "src/taumir/lower.tr"
             if ((!_run_defers(m, lf))) {
-                /* pass */
+#line 2351 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 2352 "src/taumir/lower.tr"
             LFunc_set_term(lf, LTerm_ctor_TRetVal(okr));
-            /* pass */
+#line 2353 "src/taumir/lower.tr"
             return true;
         }
-        /* pass */
+#line 2354 "src/taumir/lower.tr"
         if ((((unsigned long long)(val)) != ((unsigned long long)(0LL)))) {
-            /* pass */
+#line 2355 "src/taumir/lower.tr"
             long long rv = lower_expr(m, lf, val);
-            /* pass */
+#line 2356 "src/taumir/lower.tr"
             if ((rv < 0LL)) {
-                /* pass */
+#line 2356 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 2357 "src/taumir/lower.tr"
             if ((LFunc_vreg_type(lf, rv) == 1LL)) {
-                /* pass */
+#line 2357 "src/taumir/lower.tr"
                 _secure_str(m, lf, rv);
             }
-            /* pass */
+#line 2358 "src/taumir/lower.tr"
             if (((LFunc_vreg_type(lf, rv) == 10LL) || (LFunc_vreg_type(lf, rv) == 11LL))) {
-                /* pass */
+#line 2363 "src/taumir/lower.tr"
                 if ((!_is_owned_local_return(lf, val))) {
-                    /* pass */
+#line 2364 "src/taumir/lower.tr"
                     _secure_obj(m, lf, rv);
                 } else {
-                    /* pass */
+#line 2366 "src/taumir/lower.tr"
                     _fresh_take_obj(lf, rv);
                 }
             }
-            /* pass */
+#line 2367 "src/taumir/lower.tr"
             _flush_fresh_strs(m, lf);
-            /* pass */
+#line 2368 "src/taumir/lower.tr"
             if ((!_run_defers(m, lf))) {
-                /* pass */
+#line 2368 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 2369 "src/taumir/lower.tr"
             LFunc_set_term(lf, LTerm_ctor_TRetVal(rv));
         } else {
-            /* pass */
+#line 2371 "src/taumir/lower.tr"
             _flush_fresh_strs(m, lf);
-            /* pass */
+#line 2372 "src/taumir/lower.tr"
             if ((!_run_defers(m, lf))) {
-                /* pass */
+#line 2372 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 2373 "src/taumir/lower.tr"
             LFunc_set_term(lf, LTerm_ctor_TRetInt(0LL));
         }
-        /* pass */
+#line 2374 "src/taumir/lower.tr"
         return true;
-    } else if (_t3207.tag == HirStmt_SLet) {
-        __auto_type name = _t3207.data.SLet.name;
-__auto_type ty = _t3207.data.SLet.ty;
-__auto_type val = _t3207.data.SLet.val;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SLet) {
+        __auto_type name = _t6206.data.SLet.name;
+__auto_type ty = _t6206.data.SLet.ty;
+__auto_type val = _t6206.data.SLet.val;
+#line 2376 "src/taumir/lower.tr"
         if ((((unsigned long long)(val)) == ((unsigned long long)(0LL)))) {
-            /* pass */
+#line 2389 "src/taumir/lower.tr"
             if ((((m->target_llvm && _tr_str_eqv((ty->name), (_tr_str_lit_len("Array", 5LL)))) && (ty->array_size > 0LL)) && (ty->args->len > 0LL))) {
-                /* pass */
+#line 2390 "src/taumir/lower.tr"
                 long long aetag = _tag_of(m, (*((AstType**)List_ptr_get(ty->args, 0LL))));
-                /* pass */
+#line 2391 "src/taumir/lower.tr"
                 if (((aetag != 0LL) && (aetag != 4LL))) {
-                    /* pass */
+#line 2391 "src/taumir/lower.tr"
                     return false;
                 }
-                /* pass */
+#line 2392 "src/taumir/lower.tr"
                 long long alen = ty->array_size;
-                /* pass */
+#line 2393 "src/taumir/lower.tr"
                 LFunc_add_var(lf, name);
-                /* pass */
+#line 2394 "src/taumir/lower.tr"
                 LFunc_set_var_type(lf, name, aetag);
-                /* pass */
+#line 2395 "src/taumir/lower.tr"
                 LFunc_set_var_arr(lf, name, alen);
-                /* pass */
+#line 2396 "src/taumir/lower.tr"
                 long long zc = LFunc_new_vreg(lf);
-                /* pass */
+#line 2397 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IConst(zc, 0LL));
-                /* pass */
+#line 2398 "src/taumir/lower.tr"
                 long long zi = 0LL;
-                /* pass */
+#line 2399 "src/taumir/lower.tr"
                 while ((zi < alen)) {
-                    /* pass */
+#line 2400 "src/taumir/lower.tr"
                     long long zidx = LFunc_new_vreg(lf);
-                    /* pass */
+#line 2401 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_IConst(zidx, zi));
-                    /* pass */
+#line 2402 "src/taumir/lower.tr"
                     long long zaddr = _array_elem_addr(m, lf, name, zidx);
-                    /* pass */
+#line 2403 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_IStore(zaddr, 0LL, zc, 2LL));
-                    /* pass */
+#line 2404 "src/taumir/lower.tr"
                     zi = (zi + 1LL);
                 }
-                /* pass */
+#line 2405 "src/taumir/lower.tr"
                 return true;
             }
-            /* pass */
+#line 2406 "src/taumir/lower.tr"
             long long dtag = _tag_of(m, ty);
-            /* pass */
+#line 2407 "src/taumir/lower.tr"
             if ((((dtag != 0LL) && (dtag != 4LL)) && (dtag != 5LL))) {
-                /* pass */
+#line 2407 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 2408 "src/taumir/lower.tr"
             LFunc_add_var(lf, name);
-            /* pass */
+#line 2409 "src/taumir/lower.tr"
             LFunc_set_var_type(lf, name, dtag);
-            /* pass */
+#line 2410 "src/taumir/lower.tr"
             return true;
         }
-        /* pass */
+#line 2411 "src/taumir/lower.tr"
         long long v = lower_expr(m, lf, val);
-        /* pass */
+#line 2412 "src/taumir/lower.tr"
         if ((v < 0LL)) {
-            /* pass */
+#line 2412 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2415 "src/taumir/lower.tr"
         long long vtag = LFunc_vreg_type(lf, v);
-        /* pass */
+#line 2416 "src/taumir/lower.tr"
         if (((((vtag == 2LL) || (vtag == 3LL)) || (vtag == 14LL)) || (vtag == 19LL))) {
-            /* pass */
+#line 2417 "src/taumir/lower.tr"
             long long ann_lt = _list_tag_from_ann(m, ty);
-            /* pass */
+#line 2418 "src/taumir/lower.tr"
             if (((ann_lt >= 0LL) && (ann_lt != vtag))) {
-                /* pass */
+#line 2419 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, v, ann_lt);
-                /* pass */
+#line 2420 "src/taumir/lower.tr"
                 vtag = ann_lt;
             }
         } else if (_is_dict_tag(vtag)) {
-            /* pass */
+#line 2422 "src/taumir/lower.tr"
             long long ann_dt = _dict_tag_from_ann(m, ty);
-            /* pass */
+#line 2423 "src/taumir/lower.tr"
             if (((ann_dt >= 0LL) && (ann_dt != vtag))) {
-                /* pass */
+#line 2424 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, v, ann_dt);
-                /* pass */
+#line 2425 "src/taumir/lower.tr"
                 vtag = ann_dt;
             }
         } else if (((vtag == 4LL) && _is_int_typename(ty->name))) {
-            /* pass */
+#line 2428 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, v, 0LL);
-            /* pass */
+#line 2429 "src/taumir/lower.tr"
             vtag = 0LL;
         } else if (((vtag == 0LL) && _tr_str_eqv((ty->name), (_tr_str_lit_len("bool", 4LL))))) {
-            /* pass */
+#line 2432 "src/taumir/lower.tr"
             long long nbv = _norm_bool(lf, v);
-            /* pass */
+#line 2433 "src/taumir/lower.tr"
             v = nbv;
-            /* pass */
+#line 2434 "src/taumir/lower.tr"
             vtag = 4LL;
         }
-        /* pass */
+#line 2435 "src/taumir/lower.tr"
         if ((vtag == 1LL)) {
-            /* pass */
+#line 2435 "src/taumir/lower.tr"
             _secure_str(m, lf, v);
         }
-        /* pass */
+#line 2439 "src/taumir/lower.tr"
         TrStr _vs_cls = _tr_str_lit_len("", 0LL);
-        /* pass */
+#line 2440 "src/taumir/lower.tr"
         if ((vtag == 10LL)) {
-            /* pass */
-            TrStr _strtmp_t3208 = _val_obj_cls(m, lf, val);
+#line 2440 "src/taumir/lower.tr"
+            TrStr _strtmp_t6207 = _val_obj_cls(m, lf, val);
             _tr_str_release(_vs_cls);
-            _vs_cls = _strtmp_t3208;
+            _vs_cls = _strtmp_t6207;
         }
-        /* pass */
+#line 2441 "src/taumir/lower.tr"
         bool _is_vstruct = (((vtag == 10LL) && (!_is_null_str(_vs_cls))) && LModule_is_value_class(m, _vs_cls));
-        /* pass */
+#line 2442 "src/taumir/lower.tr"
         if ((_is_vstruct && _is_vstruct_lvalue(val))) {
-            /* pass */
+#line 2443 "src/taumir/lower.tr"
             long long _cpv = _copy_value_struct(m, lf, v, _vs_cls);
-            /* pass */
+#line 2444 "src/taumir/lower.tr"
             if ((_cpv < 0LL)) {
-                /* pass */
+#line 2444 "src/taumir/lower.tr"
                 _tr_str_release(_vs_cls);
                 return false;
             }
-            /* pass */
+#line 2445 "src/taumir/lower.tr"
             v = _cpv;
-            /* pass */
+#line 2446 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, v, 10LL);
         }
-        /* pass */
+#line 2447 "src/taumir/lower.tr"
         if (((vtag == 10LL) || (vtag == 11LL))) {
-            /* pass */
+#line 2448 "src/taumir/lower.tr"
             _secure_obj(m, lf, v);
         }
-        /* pass */
+#line 2449 "src/taumir/lower.tr"
         LFunc_add_var(lf, name);
-        /* pass */
+#line 2450 "src/taumir/lower.tr"
         LFunc_set_var_type(lf, name, vtag);
-        /* pass */
+#line 2451 "src/taumir/lower.tr"
         if (((LFunc_vreg_type(lf, v) == 10LL) || (LFunc_vreg_type(lf, v) == 11LL))) {
-            /* pass */
+#line 2452 "src/taumir/lower.tr"
             TrStr lvcn = _val_obj_cls(m, lf, val);
-            /* pass */
+#line 2453 "src/taumir/lower.tr"
             if ((((!_is_null_str(lvcn)) && (!_tr_str_eqv((lvcn), (_tr_str_lit_len("", 0LL))))) && (LModule_is_class(m, lvcn) || LModule_is_enum(m, lvcn)))) {
-                /* pass */
-                ({ TrStr _at_t3209 = (_own(lvcn)); LFunc_set_var_cls(lf, name, _at_t3209); _tr_str_release(_at_t3209); });
+#line 2454 "src/taumir/lower.tr"
+                ({ TrStr _at_t6208 = (_own(lvcn)); LFunc_set_var_cls(lf, name, _at_t6208); _tr_str_release(_at_t6208); });
             }
         }
-        /* pass */
+#line 2455 "src/taumir/lower.tr"
         if ((LFunc_vreg_type(lf, v) == 12LL)) {
-            /* pass */
+#line 2456 "src/taumir/lower.tr"
             LFunc_set_var_xret(lf, name, LFunc_vreg_xret_of(lf, v));
         }
-        /* pass */
+#line 2457 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IStoreVar(name, v));
-        /* pass */
+#line 2458 "src/taumir/lower.tr"
         _flush_fresh_strs(m, lf);
-        /* pass */
+#line 2459 "src/taumir/lower.tr"
         _tr_str_release(_vs_cls);
         return true;
-    } else if (_t3207.tag == HirStmt_SAssign) {
-        __auto_type target = _t3207.data.SAssign.target;
-__auto_type val = _t3207.data.SAssign.val;
-        /* pass */
-        __auto_type _t3210 = (*target);
-        if (_t3210.tag == HirExpr_EMethodCall) {
-            __auto_type mobj = _t3210.data.EMethodCall.obj;
-__auto_type mmeth = _t3210.data.EMethodCall.method;
-__auto_type midx = _t3210.data.EMethodCall.args;
-            /* pass */
+    } else if (_t6206.tag == HirStmt_SAssign) {
+        __auto_type target = _t6206.data.SAssign.target;
+__auto_type val = _t6206.data.SAssign.val;
+#line 2462 "src/taumir/lower.tr"
+        __auto_type _t6209 = (*target);
+        if (_t6209.tag == HirExpr_EMethodCall) {
+            __auto_type mobj = _t6209.data.EMethodCall.obj;
+__auto_type mmeth = _t6209.data.EMethodCall.method;
+__auto_type midx = _t6209.data.EMethodCall.args;
+#line 2464 "src/taumir/lower.tr"
             if ((_tr_str_eqv((mmeth), (_tr_str_lit_len("get_index", 9LL))) && (midx->len == 1LL))) {
-                /* pass */
-                return _lower_index_set(m, lf, mobj, ((HirExpr*)List_ptr_get(midx, 0LL)), val);
+#line 2465 "src/taumir/lower.tr"
+                bool _trret1555 = _lower_index_set(m, lf, mobj, ((HirExpr*)List_ptr_get(midx, 0LL)), val);
+                return _trret1555;
             }
-            /* pass */
+#line 2466 "src/taumir/lower.tr"
             return false;
-        } else if (_t3210.tag == HirExpr_EIndex) {
-            __auto_type iobj = _t3210.data.EIndex.obj;
-__auto_type iidx = _t3210.data.EIndex._tr_v_index;
-            /* pass */
+        } else if (_t6209.tag == HirExpr_EIndex) {
+            __auto_type iobj = _t6209.data.EIndex.obj;
+__auto_type iidx = _t6209.data.EIndex._tr_v_index;
+#line 2468 "src/taumir/lower.tr"
             return _lower_index_set(m, lf, iobj, iidx, val);
-        } else if (_t3210.tag == HirExpr_EPropAccess) {
-            __auto_type pobj = _t3210.data.EPropAccess.obj;
-__auto_type pprop = _t3210.data.EPropAccess.prop;
-            /* pass */
-            return _lower_field_set(m, lf, pobj, pprop, val);
+        } else if (_t6209.tag == HirExpr_EPropAccess) {
+            __auto_type pobj = _t6209.data.EPropAccess.obj;
+__auto_type pprop = _t6209.data.EPropAccess.prop;
+#line 2470 "src/taumir/lower.tr"
+            bool _trret1556 = _lower_field_set(m, lf, pobj, pprop, val);
+            return _trret1556;
         } else if (1) {
-            __auto_type _ = _t3210;
-            /* pass */
+            __auto_type _ = _t6209;
+#line 2472 "src/taumir/lower.tr"
             /* pass */
         }
-        /* pass */
+#line 2473 "src/taumir/lower.tr"
         TrStr tn = _ident_name(target);
-        /* pass */
+#line 2474 "src/taumir/lower.tr"
         if (_tr_str_eqv((tn), (_tr_str_lit_len("", 0LL)))) {
-            /* pass */
+#line 2474 "src/taumir/lower.tr"
             _tr_str_release(tn);
             return false;
         }
-        /* pass */
+#line 2478 "src/taumir/lower.tr"
         if (((LFunc_var_index(lf, tn) < 0LL) && (LFunc_capture_index(lf, tn) >= 0LL))) {
-            /* pass */
+#line 2479 "src/taumir/lower.tr"
             long long wcix = LFunc_capture_index(lf, tn);
-            /* pass */
+#line 2480 "src/taumir/lower.tr"
             long long wtag = List_i64_get(lf->cap_tags, wcix);
-            /* pass */
+#line 2481 "src/taumir/lower.tr"
             if ((((wtag != 0LL) && (wtag != 4LL)) && (wtag != 5LL))) {
-                /* pass */
+#line 2481 "src/taumir/lower.tr"
                 _tr_str_release(tn);
                 return false;
             }
-            /* pass */
+#line 2482 "src/taumir/lower.tr"
             long long wv = lower_expr(m, lf, val);
-            /* pass */
+#line 2483 "src/taumir/lower.tr"
             if ((wv < 0LL)) {
-                /* pass */
+#line 2483 "src/taumir/lower.tr"
                 _tr_str_release(tn);
                 return false;
             }
-            /* pass */
+#line 2484 "src/taumir/lower.tr"
             long long wvt = LFunc_vreg_type(lf, wv);
-            /* pass */
+#line 2485 "src/taumir/lower.tr"
             if ((wtag == 5LL)) {
-                /* pass */
+#line 2486 "src/taumir/lower.tr"
                 if ((wvt == 0LL)) {
-                    /* pass */
+#line 2486 "src/taumir/lower.tr"
                     wv = _promote_f(lf, wv);
                 } else if ((wvt != 5LL)) {
-                    /* pass */
+#line 2487 "src/taumir/lower.tr"
                     _tr_str_release(tn);
                     return false;
                 }
-                /* pass */
+#line 2488 "src/taumir/lower.tr"
                 long long wb = LFunc_new_vreg(lf);
-                /* pass */
+#line 2489 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFBits(wb, wv));
-                /* pass */
+#line 2490 "src/taumir/lower.tr"
                 wv = wb;
             } else if ((!_field_tag_ok(wvt, wtag))) {
-                /* pass */
+#line 2492 "src/taumir/lower.tr"
                 _tr_str_release(tn);
                 return false;
             }
-            /* pass */
+#line 2493 "src/taumir/lower.tr"
             long long wenv = LFunc_new_vreg(lf);
-            /* pass */
+#line 2494 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ILoadVar(wenv, _tr_str_lit_len("__env", 5LL)));
-            /* pass */
+#line 2495 "src/taumir/lower.tr"
             long long waddr = _emit_field_get(m, lf, wenv, ((1LL + wcix) * 8LL), 0LL);
-            /* pass */
+#line 2496 "src/taumir/lower.tr"
             _emit_field_set(m, lf, waddr, 0LL, wv);
-            /* pass */
+#line 2497 "src/taumir/lower.tr"
             _flush_fresh_strs(m, lf);
-            /* pass */
+#line 2498 "src/taumir/lower.tr"
             _tr_str_release(tn);
             return true;
         }
-        /* pass */
+#line 2499 "src/taumir/lower.tr"
         long long v2 = lower_expr(m, lf, val);
-        /* pass */
+#line 2500 "src/taumir/lower.tr"
         if ((v2 < 0LL)) {
-            /* pass */
+#line 2500 "src/taumir/lower.tr"
             _tr_str_release(tn);
             return false;
         }
-        /* pass */
+#line 2501 "src/taumir/lower.tr"
         bool had_old_str = ((LFunc_var_index(lf, tn) >= 0LL) && (LFunc_var_type(lf, tn) == 1LL));
-        /* pass */
+#line 2502 "src/taumir/lower.tr"
         long long oldot = 0LL;
-        /* pass */
+#line 2503 "src/taumir/lower.tr"
         if ((LFunc_var_index(lf, tn) >= 0LL)) {
-            /* pass */
+#line 2503 "src/taumir/lower.tr"
             oldot = LFunc_var_type(lf, tn);
         }
-        /* pass */
+#line 2504 "src/taumir/lower.tr"
         bool had_old_obj = ((oldot == 10LL) || (oldot == 11LL));
-        /* pass */
+#line 2505 "src/taumir/lower.tr"
         if ((LFunc_vreg_type(lf, v2) == 1LL)) {
-            /* pass */
+#line 2505 "src/taumir/lower.tr"
             _secure_str(m, lf, v2);
         }
-        /* pass */
+#line 2506 "src/taumir/lower.tr"
         if ((LFunc_vreg_type(lf, v2) == 10LL)) {
-            /* pass */
+#line 2507 "src/taumir/lower.tr"
             TrStr _av_cls = _val_obj_cls(m, lf, val);
-            /* pass */
+#line 2508 "src/taumir/lower.tr"
             if ((((!_is_null_str(_av_cls)) && LModule_is_value_class(m, _av_cls)) && _is_vstruct_lvalue(val))) {
-                /* pass */
+#line 2509 "src/taumir/lower.tr"
                 long long _acp = _copy_value_struct(m, lf, v2, _av_cls);
-                /* pass */
+#line 2510 "src/taumir/lower.tr"
                 if ((_acp < 0LL)) {
-                    /* pass */
+#line 2510 "src/taumir/lower.tr"
                     _tr_str_release(tn);
                     _tr_str_release(_av_cls);
                     return false;
                 }
-                /* pass */
+#line 2511 "src/taumir/lower.tr"
                 v2 = _acp;
-                /* pass */
+#line 2512 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, v2, 10LL);
             }
         }
-        /* pass */
+#line 2513 "src/taumir/lower.tr"
         if (((LFunc_vreg_type(lf, v2) == 10LL) || (LFunc_vreg_type(lf, v2) == 11LL))) {
-            /* pass */
+#line 2513 "src/taumir/lower.tr"
             _secure_obj(m, lf, v2);
         }
-        /* pass */
+#line 2514 "src/taumir/lower.tr"
         if (((LFunc_var_index(lf, tn) < 0LL) && LModule_is_global(m, tn))) {
-            /* pass */
+#line 2515 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IStoreGlobal(LModule_global_index(m, tn), v2));
-            /* pass */
+#line 2516 "src/taumir/lower.tr"
             _flush_fresh_strs(m, lf);
-            /* pass */
+#line 2517 "src/taumir/lower.tr"
             _tr_str_release(tn);
             return true;
         }
-        /* pass */
+#line 2518 "src/taumir/lower.tr"
         if (had_old_str) {
-            /* pass */
+#line 2519 "src/taumir/lower.tr"
             long long oldv = LFunc_new_vreg(lf);
-            /* pass */
+#line 2520 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ILoadVar(oldv, tn));
-            /* pass */
+#line 2521 "src/taumir/lower.tr"
             _release_str(m, lf, oldv);
         }
-        /* pass */
+#line 2522 "src/taumir/lower.tr"
         if (had_old_obj) {
-            /* pass */
+#line 2523 "src/taumir/lower.tr"
             long long oldov = LFunc_new_vreg(lf);
-            /* pass */
+#line 2524 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ILoadVar(oldov, tn));
-            /* pass */
+#line 2525 "src/taumir/lower.tr"
             _release_obj(m, lf, oldov);
         }
-        /* pass */
+#line 2526 "src/taumir/lower.tr"
         LFunc_add_var(lf, tn);
-        /* pass */
+#line 2527 "src/taumir/lower.tr"
         LFunc_set_var_type(lf, tn, LFunc_vreg_type(lf, v2));
-        /* pass */
+#line 2528 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IStoreVar(tn, v2));
-        /* pass */
+#line 2529 "src/taumir/lower.tr"
         _flush_fresh_strs(m, lf);
-        /* pass */
+#line 2530 "src/taumir/lower.tr"
         _tr_str_release(tn);
         return true;
-    } else if (_t3207.tag == HirStmt_SIf) {
-        __auto_type cond = _t3207.data.SIf.cond;
-__auto_type then_b = _t3207.data.SIf.then_b;
-__auto_type else_b = _t3207.data.SIf.else_b;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SIf) {
+        __auto_type cond = _t6206.data.SIf.cond;
+__auto_type then_b = _t6206.data.SIf.then_b;
+__auto_type else_b = _t6206.data.SIf.else_b;
+#line 2532 "src/taumir/lower.tr"
         long long cv = lower_expr(m, lf, cond);
-        /* pass */
+#line 2533 "src/taumir/lower.tr"
         if ((cv < 0LL)) {
-            /* pass */
+#line 2533 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2534 "src/taumir/lower.tr"
         _flush_fresh_strs(m, lf);
-        /* pass */
+#line 2535 "src/taumir/lower.tr"
         long long then_id = LFunc_new_block(lf);
-        /* pass */
+#line 2536 "src/taumir/lower.tr"
         long long else_id = LFunc_new_block(lf);
-        /* pass */
+#line 2537 "src/taumir/lower.tr"
         long long end_id = LFunc_new_block(lf);
-        /* pass */
+#line 2538 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TCondBr(cv, then_id, else_id));
-        /* pass */
+#line 2539 "src/taumir/lower.tr"
         LFunc_set_cur(lf, then_id);
-        /* pass */
+#line 2540 "src/taumir/lower.tr"
         if ((!lower_block(m, lf, then_b))) {
-            /* pass */
+#line 2540 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2541 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TBr(end_id));
-        /* pass */
+#line 2542 "src/taumir/lower.tr"
         LFunc_set_cur(lf, else_id);
-        /* pass */
+#line 2543 "src/taumir/lower.tr"
         if ((!lower_block(m, lf, else_b))) {
-            /* pass */
+#line 2543 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2544 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TBr(end_id));
-        /* pass */
+#line 2545 "src/taumir/lower.tr"
         LFunc_set_cur(lf, end_id);
-        /* pass */
+#line 2546 "src/taumir/lower.tr"
         return true;
-    } else if (_t3207.tag == HirStmt_SWhile) {
-        __auto_type cond = _t3207.data.SWhile.cond;
-__auto_type body = _t3207.data.SWhile.body;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SWhile) {
+        __auto_type cond = _t6206.data.SWhile.cond;
+__auto_type body = _t6206.data.SWhile.body;
+#line 2548 "src/taumir/lower.tr"
         long long hdr = LFunc_new_block(lf);
-        /* pass */
+#line 2549 "src/taumir/lower.tr"
         long long bdy = LFunc_new_block(lf);
-        /* pass */
+#line 2550 "src/taumir/lower.tr"
         long long ext = LFunc_new_block(lf);
-        /* pass */
+#line 2551 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-        /* pass */
+#line 2552 "src/taumir/lower.tr"
         LFunc_set_cur(lf, hdr);
-        /* pass */
+#line 2553 "src/taumir/lower.tr"
         long long cv2 = lower_expr(m, lf, cond);
-        /* pass */
+#line 2554 "src/taumir/lower.tr"
         if ((cv2 < 0LL)) {
-            /* pass */
+#line 2554 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2555 "src/taumir/lower.tr"
         _flush_fresh_strs(m, lf);
-        /* pass */
+#line 2556 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TCondBr(cv2, bdy, ext));
-        /* pass */
+#line 2557 "src/taumir/lower.tr"
         LFunc_set_cur(lf, bdy);
-        /* pass */
+#line 2558 "src/taumir/lower.tr"
         List_i64_append(lf->loop_cont, hdr);
-        /* pass */
+#line 2559 "src/taumir/lower.tr"
         List_i64_append(lf->loop_brk, ext);
-        /* pass */
+#line 2560 "src/taumir/lower.tr"
         bool wok = lower_block(m, lf, body);
-        /* pass */
+#line 2561 "src/taumir/lower.tr"
         List_i64_pop(lf->loop_cont);
-        /* pass */
+#line 2562 "src/taumir/lower.tr"
         List_i64_pop(lf->loop_brk);
-        /* pass */
+#line 2563 "src/taumir/lower.tr"
         if ((!wok)) {
-            /* pass */
+#line 2563 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2564 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-        /* pass */
+#line 2565 "src/taumir/lower.tr"
         LFunc_set_cur(lf, ext);
-        /* pass */
+#line 2566 "src/taumir/lower.tr"
         return true;
-    } else if (_t3207.tag == HirStmt_SBreak) {
-        __auto_type bval = _t3207.data.SBreak.val;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SBreak) {
+        __auto_type bval = _t6206.data.SBreak.val;
+#line 2568 "src/taumir/lower.tr"
         if ((((unsigned long long)(bval)) != ((unsigned long long)(0LL)))) {
-            /* pass */
+#line 2568 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2569 "src/taumir/lower.tr"
         if ((lf->loop_brk->len == 0LL)) {
-            /* pass */
+#line 2569 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2570 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TBr(List_i64_get(lf->loop_brk, (lf->loop_brk->len - 1LL))));
-        /* pass */
+#line 2571 "src/taumir/lower.tr"
         LFunc_set_cur(lf, LFunc_new_block(lf));
-        /* pass */
+#line 2572 "src/taumir/lower.tr"
         return true;
-    } else if (_t3207.tag == HirStmt_SContinue) {
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SContinue) {
+#line 2574 "src/taumir/lower.tr"
         if ((lf->loop_cont->len == 0LL)) {
-            /* pass */
+#line 2574 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2575 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TBr(List_i64_get(lf->loop_cont, (lf->loop_cont->len - 1LL))));
-        /* pass */
+#line 2576 "src/taumir/lower.tr"
         LFunc_set_cur(lf, LFunc_new_block(lf));
-        /* pass */
+#line 2577 "src/taumir/lower.tr"
         return true;
-    } else if (_t3207.tag == HirStmt_SAssert) {
-        __auto_type acond = _t3207.data.SAssert.cond;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SAssert) {
+        __auto_type acond = _t6206.data.SAssert.cond;
+#line 2580 "src/taumir/lower.tr"
         long long acv = lower_expr(m, lf, acond);
-        /* pass */
+#line 2581 "src/taumir/lower.tr"
         if ((acv < 0LL)) {
-            /* pass */
+#line 2581 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2582 "src/taumir/lower.tr"
         _flush_fresh_strs(m, lf);
-        /* pass */
+#line 2583 "src/taumir/lower.tr"
         long long a_ok = LFunc_new_block(lf);
-        /* pass */
+#line 2584 "src/taumir/lower.tr"
         long long a_fail = LFunc_new_block(lf);
-        /* pass */
+#line 2585 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TCondBr(acv, a_ok, a_fail));
-        /* pass */
+#line 2586 "src/taumir/lower.tr"
         LFunc_set_cur(lf, a_fail);
-        /* pass */
+#line 2587 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_assert_fail", 18LL));
-        /* pass */
+#line 2588 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_assert_fail", 18LL), (void*)List_i64_new()));
-        /* pass */
+#line 2589 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TBr(a_ok));
-        /* pass */
+#line 2590 "src/taumir/lower.tr"
         LFunc_set_cur(lf, a_ok);
-        /* pass */
+#line 2591 "src/taumir/lower.tr"
         return true;
-    } else if (_t3207.tag == HirStmt_SMultiLet) {
-        __auto_type mnames = _t3207.data.SMultiLet.names;
-__auto_type mval = _t3207.data.SMultiLet.val;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SMultiLet) {
+        __auto_type mnames = _t6206.data.SMultiLet.names;
+__auto_type mval = _t6206.data.SMultiLet.val;
+#line 2594 "src/taumir/lower.tr"
         long long mtv = lower_expr(m, lf, mval);
-        /* pass */
+#line 2595 "src/taumir/lower.tr"
         if ((mtv < 0LL)) {
-            /* pass */
+#line 2595 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2596 "src/taumir/lower.tr"
         if ((LFunc_vreg_type(lf, mtv) != 15LL)) {
-            /* pass */
+#line 2596 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2597 "src/taumir/lower.tr"
         AstType* mty = hir_expr_type(mval);
-        /* pass */
+#line 2600 "src/taumir/lower.tr"
         if (((mty->args->len != mnames->len) && (mty->args->len != 0LL))) {
-            /* pass */
+#line 2600 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2601 "src/taumir/lower.tr"
         bool use_decl = (mty->args->len == mnames->len);
-        /* pass */
+#line 2602 "src/taumir/lower.tr"
         long long mi = 0LL;
-        /* pass */
+#line 2603 "src/taumir/lower.tr"
         while ((mi < mnames->len)) {
-            /* pass */
+#line 2604 "src/taumir/lower.tr"
             long long mtag = 0LL;
-            /* pass */
+#line 2605 "src/taumir/lower.tr"
             TrStr mcls = _tr_str_lit_len("", 0LL);
-            /* pass */
+#line 2606 "src/taumir/lower.tr"
             if (use_decl) {
-                /* pass */
+#line 2607 "src/taumir/lower.tr"
                 AstType* dty = (*((AstType**)List_ptr_get(mty->args, mi)));
-                /* pass */
+#line 2608 "src/taumir/lower.tr"
                 mtag = _tag_of(m, dty);
-                /* pass */
+#line 2609 "src/taumir/lower.tr"
                 if (((((mtag < 0LL) || _is_list_tag(mtag)) || _is_dict_tag(mtag)) || _is_set_tag(mtag))) {
-                    /* pass */
+#line 2609 "src/taumir/lower.tr"
                     _tr_str_release(mcls);
                     return false;
                 }
-                /* pass */
+#line 2610 "src/taumir/lower.tr"
                 if (((mtag == 10LL) || (mtag == 11LL))) {
-                    /* pass */
-                    TrStr _strtmp_t3211 = _cls_of_ty(m, dty);
+#line 2610 "src/taumir/lower.tr"
+                    TrStr _strtmp_t6210 = _cls_of_ty(m, dty);
                     _tr_str_release(mcls);
-                    mcls = _strtmp_t3211;
+                    mcls = _strtmp_t6210;
                 }
             }
-            /* pass */
+#line 2611 "src/taumir/lower.tr"
             long long mv = (-1LL);
-            /* pass */
+#line 2612 "src/taumir/lower.tr"
             if ((mtag == 5LL)) {
-                /* pass */
+#line 2613 "src/taumir/lower.tr"
                 long long mraw = _emit_field_get(m, lf, mtv, (mi * 8LL), 0LL);
-                /* pass */
+#line 2614 "src/taumir/lower.tr"
                 mv = LFunc_new_vreg(lf);
-                /* pass */
+#line 2615 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IBitsF(mv, mraw));
-                /* pass */
+#line 2616 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, mv, 5LL);
             } else {
-                /* pass */
+#line 2618 "src/taumir/lower.tr"
                 mv = _emit_field_get(m, lf, mtv, (mi * 8LL), mtag);
-                /* pass */
+#line 2619 "src/taumir/lower.tr"
                 if ((mtag == 1LL)) {
-                    /* pass */
+#line 2619 "src/taumir/lower.tr"
                     _secure_str(m, lf, mv);
                 }
-                /* pass */
+#line 2620 "src/taumir/lower.tr"
                 if (((mtag == 10LL) || (mtag == 11LL))) {
-                    /* pass */
+#line 2620 "src/taumir/lower.tr"
                     _secure_obj(m, lf, mv);
                 }
             }
-            /* pass */
+#line 2621 "src/taumir/lower.tr"
             TrStr mnm = List_TrStr_get(mnames, mi);
-            /* pass */
+#line 2622 "src/taumir/lower.tr"
             LFunc_add_var(lf, mnm);
-            /* pass */
+#line 2623 "src/taumir/lower.tr"
             LFunc_set_var_type(lf, mnm, mtag);
-            /* pass */
+#line 2624 "src/taumir/lower.tr"
             if ((((mtag == 10LL) || (mtag == 11LL)) && (!_tr_str_eqv((mcls), (_tr_str_lit_len("", 0LL)))))) {
-                /* pass */
+#line 2625 "src/taumir/lower.tr"
                 LFunc_set_var_cls(lf, mnm, mcls);
             }
-            /* pass */
+#line 2626 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IStoreVar(mnm, mv));
-            /* pass */
+#line 2627 "src/taumir/lower.tr"
             mi = (mi + 1LL);
             _tr_str_release(mcls);
             _tr_str_release(mnm);
         }
-        /* pass */
+#line 2628 "src/taumir/lower.tr"
         _flush_fresh_strs(m, lf);
-        /* pass */
+#line 2629 "src/taumir/lower.tr"
         return true;
-    } else if (_t3207.tag == HirStmt_SDefer) {
-        __auto_type dstmt = _t3207.data.SDefer.stmt;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SDefer) {
+        __auto_type dstmt = _t6206.data.SDefer.stmt;
+#line 2633 "src/taumir/lower.tr"
         if (lf->in_defer) {
-            /* pass */
+#line 2633 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2634 "src/taumir/lower.tr"
         if ((lf->blk_depth != 1LL)) {
-            /* pass */
+#line 2634 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2635 "src/taumir/lower.tr"
         List_ptr_append(lf->defers, dstmt);
-        /* pass */
+#line 2636 "src/taumir/lower.tr"
         return true;
-    } else if (_t3207.tag == HirStmt_SWith) {
-        __auto_type witems = _t3207.data.SWith.items;
-__auto_type waliases = _t3207.data.SWith.aliases;
-__auto_type wbody = _t3207.data.SWith.body;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SWith) {
+        __auto_type witems = _t6206.data.SWith.items;
+__auto_type waliases = _t6206.data.SWith.aliases;
+__auto_type wbody = _t6206.data.SWith.body;
+#line 2639 "src/taumir/lower.tr"
         if ((witems->len != 1LL)) {
-            /* pass */
+#line 2639 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2640 "src/taumir/lower.tr"
         long long wctx = lower_expr(m, lf, ((HirExpr*)List_ptr_get(witems, 0LL)));
-        /* pass */
+#line 2641 "src/taumir/lower.tr"
         if ((wctx < 0LL)) {
-            /* pass */
+#line 2641 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2642 "src/taumir/lower.tr"
         TrStr wcls = _recv_class(m, lf, ((HirExpr*)List_ptr_get(witems, 0LL)));
-        /* pass */
+#line 2643 "src/taumir/lower.tr"
         if ((_tr_str_eqv((wcls), (_tr_str_lit_len("", 0LL))) || (!LModule_is_class(m, wcls)))) {
-            /* pass */
+#line 2643 "src/taumir/lower.tr"
             _tr_str_release(wcls);
             return false;
         }
-        /* pass */
+#line 2644 "src/taumir/lower.tr"
         TrStr w_enter = LModule_resolve_method(m, wcls, _tr_str_lit_len("__enter__", 9LL));
-        /* pass */
+#line 2645 "src/taumir/lower.tr"
         TrStr w_exit = LModule_resolve_method(m, wcls, _tr_str_lit_len("__exit__", 8LL));
-        /* pass */
+#line 2646 "src/taumir/lower.tr"
         if ((_tr_str_eqv((w_enter), (_tr_str_lit_len("", 0LL))) || _tr_str_eqv((w_exit), (_tr_str_lit_len("", 0LL))))) {
-            /* pass */
+#line 2646 "src/taumir/lower.tr"
             _tr_str_release(wcls);
             _tr_str_release(w_enter);
             _tr_str_release(w_exit);
             return false;
         }
-        /* pass */
-        TrStr w_var = ({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(LFunc_fresh_id(lf))))); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__with", 6LL)), _cr); _tr_str_release(_cr); _cres; });
-        /* pass */
+#line 2648 "src/taumir/lower.tr"
+        TrStr w_var = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(LFunc_fresh_id(lf))))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__with", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 2649 "src/taumir/lower.tr"
         LFunc_add_var(lf, w_var);
-        /* pass */
+#line 2650 "src/taumir/lower.tr"
         LFunc_set_var_type(lf, w_var, 10LL);
-        /* pass */
+#line 2651 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IStoreVar(w_var, wctx));
-        /* pass */
+#line 2655 "src/taumir/lower.tr"
         bool w_owns = _fresh_take_obj(lf, wctx);
-        /* pass */
+#line 2656 "src/taumir/lower.tr"
         List_i64* w_ea = (void*)List_i64_new();
-        /* pass */
+#line 2657 "src/taumir/lower.tr"
         List_i64_append(w_ea, wctx);
-        /* pass */
+#line 2658 "src/taumir/lower.tr"
         long long w_rd = LFunc_new_vreg(lf);
-        /* pass */
+#line 2659 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(w_rd, w_enter, w_ea));
-        /* pass */
+#line 2660 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, w_rd, LModule_fn_ret_tag(m, w_enter));
-        /* pass */
-        if (({ TrStr _at_t3212 = (List_TrStr_get(waliases, 0LL)); __auto_type _wr = ((((waliases->len > 0LL) && (!_is_null_str(_at_t3212))) && (!_tr_str_eqv((List_TrStr_get(waliases, 0LL)), (_tr_str_lit_len("", 0LL)))))); _tr_str_release(_at_t3212); _wr; })) {
-            /* pass */
+#line 2661 "src/taumir/lower.tr"
+        if ((((waliases->len > 0LL) && ({ TrStr _at_t6211 = (List_TrStr_get(waliases, 0LL)); __auto_type _wr = ((!_is_null_str(_at_t6211))); _tr_str_release(_at_t6211); _wr; })) && ({ TrStr _cmpa_t6212 = (List_TrStr_get(waliases, 0LL)); TrStr _cmpb_t6213 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t6214 = !_tr_str_eqv(_cmpa_t6212, _cmpb_t6213); _tr_str_release(_cmpa_t6212); _cmpr_t6214; }))) {
+#line 2662 "src/taumir/lower.tr"
             TrStr w_an = List_TrStr_get(waliases, 0LL);
-            /* pass */
+#line 2663 "src/taumir/lower.tr"
             LFunc_add_var(lf, w_an);
-            /* pass */
+#line 2664 "src/taumir/lower.tr"
             LFunc_set_var_type(lf, w_an, LFunc_vreg_type(lf, w_rd));
-            /* pass */
+#line 2665 "src/taumir/lower.tr"
             if (((LFunc_vreg_type(lf, w_rd) == 10LL) || (LFunc_vreg_type(lf, w_rd) == 11LL))) {
-                /* pass */
-                ({ TrStr _at_t3213 = (_own(wcls)); LFunc_set_var_cls(lf, w_an, _at_t3213); _tr_str_release(_at_t3213); });
+#line 2666 "src/taumir/lower.tr"
+                ({ TrStr _at_t6215 = (_own(wcls)); LFunc_set_var_cls(lf, w_an, _at_t6215); _tr_str_release(_at_t6215); });
             }
-            /* pass */
+#line 2667 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IStoreVar(w_an, w_rd));
         }
-        /* pass */
+#line 2668 "src/taumir/lower.tr"
         if ((!lower_block(m, lf, wbody))) {
-            /* pass */
+#line 2668 "src/taumir/lower.tr"
             _tr_str_release(wcls);
             _tr_str_release(w_enter);
             _tr_str_release(w_exit);
             _tr_str_release(w_var);
             return false;
         }
-        /* pass */
+#line 2671 "src/taumir/lower.tr"
         long long w_c2 = LFunc_new_vreg(lf);
-        /* pass */
+#line 2672 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ILoadVar(w_c2, w_var));
-        /* pass */
+#line 2673 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, w_c2, 10LL);
-        /* pass */
+#line 2674 "src/taumir/lower.tr"
         List_i64* w_xa = (void*)List_i64_new();
-        /* pass */
+#line 2675 "src/taumir/lower.tr"
         List_i64_append(w_xa, w_c2);
-        /* pass */
+#line 2676 "src/taumir/lower.tr"
         long long w_ei = 0LL;
-        /* pass */
+#line 2677 "src/taumir/lower.tr"
         while ((w_ei < 3LL)) {
-            /* pass */
+#line 2678 "src/taumir/lower.tr"
             long long w_es = LFunc_new_vreg(lf);
-            /* pass */
+#line 2679 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IStr(w_es, LModule_add_string(m, _tr_str_lit_len("", 0LL), 0LL)));
-            /* pass */
+#line 2680 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, w_es, 1LL);
-            /* pass */
+#line 2681 "src/taumir/lower.tr"
             List_i64_append(w_xa, w_es);
-            /* pass */
+#line 2682 "src/taumir/lower.tr"
             w_ei = (w_ei + 1LL);
         }
-        /* pass */
+#line 2683 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall((-1LL), w_exit, w_xa));
-        /* pass */
+#line 2684 "src/taumir/lower.tr"
         if (w_owns) {
-            /* pass */
+#line 2684 "src/taumir/lower.tr"
             _release_obj(m, lf, w_c2);
         }
-        /* pass */
+#line 2685 "src/taumir/lower.tr"
         _tr_str_release(wcls);
         _tr_str_release(w_enter);
         _tr_str_release(w_exit);
         _tr_str_release(w_var);
         return true;
-    } else if (_t3207.tag == HirStmt_STry) {
-        __auto_type try_body = _t3207.data.STry.try_body;
-__auto_type catches = _t3207.data.STry.catches;
-__auto_type finally_b = _t3207.data.STry.finally_b;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_STry) {
+        __auto_type try_body = _t6206.data.STry.try_body;
+__auto_type catches = _t6206.data.STry.catches;
+__auto_type finally_b = _t6206.data.STry.finally_b;
+#line 2693 "src/taumir/lower.tr"
         if ((catches->len == 0LL)) {
-            /* pass */
+#line 2694 "src/taumir/lower.tr"
             if (((!_block_has_cf(try_body)) && (!_block_has_cf(finally_b)))) {
-                /* pass */
-                return _lower_try_setjmp(m, lf, try_body, catches, finally_b);
+#line 2695 "src/taumir/lower.tr"
+                bool _trret1557 = _lower_try_setjmp(m, lf, try_body, catches, finally_b);
+                return _trret1557;
             }
-            /* pass */
+#line 2696 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2697 "src/taumir/lower.tr"
         if ((catches->len != 1LL)) {
-            /* pass */
+#line 2697 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2698 "src/taumir/lower.tr"
         HirCatchClause* tcc = (*((HirCatchClause**)List_ptr_get(catches, 0LL)));
-        /* pass */
+#line 2699 "src/taumir/lower.tr"
         if ((!_is_null_str(tcc->err_type->name))) {
-            /* pass */
+#line 2700 "src/taumir/lower.tr"
             if ((((!_tr_str_eqv((tcc->err_type->name), (_tr_str_lit_len("", 0LL)))) && (!_tr_str_eqv((tcc->err_type->name), (_tr_str_lit_len("void", 4LL))))) && (!_tr_str_eqv((tcc->err_type->name), (_tr_str_lit_len("str", 3LL)))))) {
-                /* pass */
+#line 2700 "src/taumir/lower.tr"
                 return false;
             }
         }
-        /* pass */
+#line 2705 "src/taumir/lower.tr"
         if ((((!_block_has_cf(try_body)) && (!_block_has_cf(tcc->body))) && (!_block_has_cf(finally_b)))) {
-            /* pass */
-            return _lower_try_setjmp(m, lf, try_body, catches, finally_b);
+#line 2706 "src/taumir/lower.tr"
+            bool _trret1558 = _lower_try_setjmp(m, lf, try_body, catches, finally_b);
+            return _trret1558;
         }
-        /* pass */
+#line 2707 "src/taumir/lower.tr"
         long long t_exc = LFunc_new_block(lf);
-        /* pass */
+#line 2708 "src/taumir/lower.tr"
         long long t_end = LFunc_new_block(lf);
-        /* pass */
-        TrStr t_msg = ({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(LFunc_fresh_id(lf))))); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__exmsg", 7LL)), _cr); _tr_str_release(_cr); _cres; });
-        /* pass */
+#line 2709 "src/taumir/lower.tr"
+        TrStr t_msg = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(LFunc_fresh_id(lf))))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__exmsg", 7LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 2710 "src/taumir/lower.tr"
         LFunc_add_var(lf, t_msg);
-        /* pass */
+#line 2711 "src/taumir/lower.tr"
         LFunc_set_var_type(lf, t_msg, 1LL);
-        /* pass */
+#line 2712 "src/taumir/lower.tr"
         long long t_seed = _heap_lit(m, lf, _tr_str_lit_len("", 0LL));
-        /* pass */
+#line 2713 "src/taumir/lower.tr"
         _fresh_take(lf, t_seed);
-        /* pass */
+#line 2714 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IStoreVar(t_msg, t_seed));
-        /* pass */
+#line 2715 "src/taumir/lower.tr"
         List_i64_append(lf->try_blks, t_exc);
-        /* pass */
+#line 2716 "src/taumir/lower.tr"
         List_TrStr_append(lf->try_msgs, t_msg);
-        /* pass */
+#line 2717 "src/taumir/lower.tr"
         bool t_ok = lower_block(m, lf, try_body);
-        /* pass */
+#line 2718 "src/taumir/lower.tr"
         List_i64_pop(lf->try_blks);
-        /* pass */
+#line 2719 "src/taumir/lower.tr"
         List_TrStr_pop(lf->try_msgs);
-        /* pass */
+#line 2720 "src/taumir/lower.tr"
         if ((!t_ok)) {
-            /* pass */
+#line 2720 "src/taumir/lower.tr"
             _tr_str_release(t_msg);
             return false;
         }
-        /* pass */
+#line 2721 "src/taumir/lower.tr"
         if ((!lower_block(m, lf, finally_b))) {
-            /* pass */
+#line 2721 "src/taumir/lower.tr"
             _tr_str_release(t_msg);
             return false;
         }
-        /* pass */
+#line 2722 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TBr(t_end));
-        /* pass */
+#line 2723 "src/taumir/lower.tr"
         LFunc_set_cur(lf, t_exc);
-        /* pass */
+#line 2724 "src/taumir/lower.tr"
         if (((!_is_null_str(tcc->err_name)) && (!_tr_str_eqv((tcc->err_name), (_tr_str_lit_len("", 0LL)))))) {
-            /* pass */
+#line 2725 "src/taumir/lower.tr"
             long long t_ev = LFunc_new_vreg(lf);
-            /* pass */
+#line 2726 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ILoadVar(t_ev, t_msg));
-            /* pass */
+#line 2727 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, t_ev, 1LL);
-            /* pass */
+#line 2728 "src/taumir/lower.tr"
             _retain_str(m, lf, t_ev);
-            /* pass */
+#line 2729 "src/taumir/lower.tr"
             LFunc_add_var(lf, tcc->err_name);
-            /* pass */
+#line 2730 "src/taumir/lower.tr"
             LFunc_set_var_type(lf, tcc->err_name, 1LL);
-            /* pass */
+#line 2731 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IStoreVar(tcc->err_name, t_ev));
         }
-        /* pass */
+#line 2732 "src/taumir/lower.tr"
         if ((!lower_block(m, lf, tcc->body))) {
-            /* pass */
+#line 2732 "src/taumir/lower.tr"
             _tr_str_release(t_msg);
             return false;
         }
-        /* pass */
+#line 2733 "src/taumir/lower.tr"
         if ((!lower_block(m, lf, finally_b))) {
-            /* pass */
+#line 2733 "src/taumir/lower.tr"
             _tr_str_release(t_msg);
             return false;
         }
-        /* pass */
+#line 2734 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TBr(t_end));
-        /* pass */
+#line 2735 "src/taumir/lower.tr"
         LFunc_set_cur(lf, t_end);
-        /* pass */
+#line 2736 "src/taumir/lower.tr"
         _tr_str_release(t_msg);
         return true;
-    } else if (_t3207.tag == HirStmt_SRaise) {
-        __auto_type rval = _t3207.data.SRaise.val;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SRaise) {
+        __auto_type rval = _t6206.data.SRaise.val;
+#line 2739 "src/taumir/lower.tr"
         if ((((lf->try_blks->len == 0LL) && lf->is_throws) && (((unsigned long long)(rval)) != ((unsigned long long)(0LL))))) {
-            /* pass */
+#line 2740 "src/taumir/lower.tr"
             long long erv = lower_expr(m, lf, rval);
-            /* pass */
+#line 2741 "src/taumir/lower.tr"
             if ((erv < 0LL)) {
-                /* pass */
+#line 2741 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 2742 "src/taumir/lower.tr"
             long long errr = _wrap_result(m, lf, 1LL, erv, lf->throws_err_tag);
-            /* pass */
+#line 2743 "src/taumir/lower.tr"
             _fresh_take_obj(lf, errr);
-            /* pass */
+#line 2744 "src/taumir/lower.tr"
             _flush_fresh_strs(m, lf);
-            /* pass */
+#line 2745 "src/taumir/lower.tr"
             if ((!_run_defers(m, lf))) {
-                /* pass */
+#line 2745 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 2746 "src/taumir/lower.tr"
             LFunc_set_term(lf, LTerm_ctor_TRetVal(errr));
-            /* pass */
+#line 2747 "src/taumir/lower.tr"
             LFunc_set_cur(lf, LFunc_new_block(lf));
-            /* pass */
+#line 2748 "src/taumir/lower.tr"
             return true;
         }
-        /* pass */
+#line 2754 "src/taumir/lower.tr"
         if ((lf->try_blks->len == 0LL)) {
-            /* pass */
+#line 2755 "src/taumir/lower.tr"
             if ((((unsigned long long)(rval)) == ((unsigned long long)(0LL)))) {
-                /* pass */
+#line 2755 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 2756 "src/taumir/lower.tr"
             long long pv = lower_expr(m, lf, rval);
-            /* pass */
+#line 2757 "src/taumir/lower.tr"
             if ((pv < 0LL)) {
-                /* pass */
+#line 2757 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 2758 "src/taumir/lower.tr"
             if ((LFunc_vreg_type(lf, pv) != 1LL)) {
-                /* pass */
+#line 2758 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 2759 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_exc_raise", 13LL));
-            /* pass */
+#line 2760 "src/taumir/lower.tr"
             List_i64* pa = (void*)List_i64_new();
-            /* pass */
+#line 2761 "src/taumir/lower.tr"
             List_i64_append(pa, pv);
-            /* pass */
+#line 2762 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_exc_raise", 13LL), pa));
-            /* pass */
+#line 2763 "src/taumir/lower.tr"
             _flush_fresh_strs(m, lf);
-            /* pass */
+#line 2764 "src/taumir/lower.tr"
             return true;
         }
-        /* pass */
+#line 2765 "src/taumir/lower.tr"
         if ((((unsigned long long)(rval)) != ((unsigned long long)(0LL)))) {
-            /* pass */
+#line 2766 "src/taumir/lower.tr"
             long long rv = lower_expr(m, lf, rval);
-            /* pass */
+#line 2767 "src/taumir/lower.tr"
             if ((rv < 0LL)) {
-                /* pass */
+#line 2767 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 2768 "src/taumir/lower.tr"
             if ((LFunc_vreg_type(lf, rv) != 1LL)) {
-                /* pass */
+#line 2768 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 2769 "src/taumir/lower.tr"
             _secure_str(m, lf, rv);
-            /* pass */
-            ({ TrStr _at_t3214 = (List_TrStr_get(lf->try_msgs, (lf->try_msgs->len - 1LL))); LFunc_emit(lf, LInst_ctor_IStoreVar(_at_t3214, rv)); _tr_str_release(_at_t3214); });
+#line 2770 "src/taumir/lower.tr"
+            ({ TrStr _at_t6216 = (List_TrStr_get(lf->try_msgs, (lf->try_msgs->len - 1LL))); LFunc_emit(lf, LInst_ctor_IStoreVar(_at_t6216, rv)); _tr_str_release(_at_t6216); });
         }
-        /* pass */
+#line 2771 "src/taumir/lower.tr"
         _flush_fresh_strs(m, lf);
-        /* pass */
+#line 2772 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TBr(List_i64_get(lf->try_blks, (lf->try_blks->len - 1LL))));
-        /* pass */
+#line 2773 "src/taumir/lower.tr"
         LFunc_set_cur(lf, LFunc_new_block(lf));
-        /* pass */
+#line 2774 "src/taumir/lower.tr"
         return true;
-    } else if (_t3207.tag == HirStmt_SMatch) {
-        __auto_type mexpr = _t3207.data.SMatch.expr;
-__auto_type marms = _t3207.data.SMatch.arms;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SMatch) {
+        __auto_type mexpr = _t6206.data.SMatch.expr;
+__auto_type marms = _t6206.data.SMatch.arms;
+#line 2776 "src/taumir/lower.tr"
         return _lower_match(m, lf, mexpr, marms);
-    } else if (_t3207.tag == HirStmt_SFor) {
-        __auto_type var = _t3207.data.SFor.var;
-__auto_type iter = _t3207.data.SFor.iter;
-__auto_type body = _t3207.data.SFor.body;
-        /* pass */
-        return _lower_for(m, lf, var, iter, body);
-    } else if (_t3207.tag == HirStmt_SForUnpack) {
-        __auto_type vars = _t3207.data.SForUnpack.vars;
-__auto_type iter = _t3207.data.SForUnpack.iter;
-__auto_type body = _t3207.data.SForUnpack.body;
-        /* pass */
-        return _lower_for_unpack(m, lf, vars, iter, body);
-    } else if (_t3207.tag == HirStmt_SExpr) {
-        __auto_type e = _t3207.data.SExpr.expr;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SFor) {
+        __auto_type var = _t6206.data.SFor.var;
+__auto_type iter = _t6206.data.SFor.iter;
+__auto_type body = _t6206.data.SFor.body;
+#line 2778 "src/taumir/lower.tr"
+        bool _trret1559 = _lower_for(m, lf, var, iter, body);
+        return _trret1559;
+    } else if (_t6206.tag == HirStmt_SForUnpack) {
+        __auto_type vars = _t6206.data.SForUnpack.vars;
+__auto_type iter = _t6206.data.SForUnpack.iter;
+__auto_type body = _t6206.data.SForUnpack.body;
+#line 2780 "src/taumir/lower.tr"
+        bool _trret1560 = _lower_for_unpack(m, lf, vars, iter, body);
+        return _trret1560;
+    } else if (_t6206.tag == HirStmt_SExpr) {
+        __auto_type e = _t6206.data.SExpr.expr;
+#line 2782 "src/taumir/lower.tr"
         bool se_ok = lower_expr_stmt(m, lf, e);
-        /* pass */
+#line 2783 "src/taumir/lower.tr"
         _flush_fresh_strs(m, lf);
-        /* pass */
+#line 2784 "src/taumir/lower.tr"
         if (((!se_ok) && _tr_str_eqv((m->fail_note), (_tr_str_lit_len("", 0LL))))) {
-            /* pass */
-            m->fail_note = ({ TrStr _cl = (({ TrStr _cr = (_stmt_expr_kind(e)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("unsupported expression statement (", 34LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_cl); _cres; });
+#line 2785 "src/taumir/lower.tr"
+            m->fail_note = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_stmt_expr_kind(e)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("unsupported expression statement (", 34LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
         }
-        /* pass */
+#line 2786 "src/taumir/lower.tr"
         return se_ok;
-    } else if (_t3207.tag == HirStmt_SUnsafe) {
-        __auto_type ubody = _t3207.data.SUnsafe.body;
-        /* pass */
-        return lower_block(m, lf, ubody);
-    } else if (_t3207.tag == HirStmt_SSpawn) {
-        __auto_type sexpr = _t3207.data.SSpawn.expr;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SUnsafe) {
+        __auto_type ubody = _t6206.data.SUnsafe.body;
+#line 2788 "src/taumir/lower.tr"
+        bool _trret1561 = lower_block(m, lf, ubody);
+        return _trret1561;
+    } else if (_t6206.tag == HirStmt_SSpawn) {
+        __auto_type sexpr = _t6206.data.SSpawn.expr;
+#line 2790 "src/taumir/lower.tr"
         return _lower_spawn(m, lf, sexpr);
-    } else if (_t3207.tag == HirStmt_STaskGroup) {
-        __auto_type tgbody = _t3207.data.STaskGroup.body;
-        /* pass */
-        return _lower_taskgroup(m, lf, tgbody);
-    } else if (_t3207.tag == HirStmt_SChanSelect) {
-        __auto_type scases = _t3207.data.SChanSelect.cases;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_STaskGroup) {
+        __auto_type tgbody = _t6206.data.STaskGroup.body;
+#line 2792 "src/taumir/lower.tr"
+        bool _trret1562 = _lower_taskgroup(m, lf, tgbody);
+        return _trret1562;
+    } else if (_t6206.tag == HirStmt_SChanSelect) {
+        __auto_type scases = _t6206.data.SChanSelect.cases;
+#line 2794 "src/taumir/lower.tr"
         return _lower_chan_select(m, lf, scases);
-    } else if (_t3207.tag == HirStmt_SAsm) {
-        __auto_type code = _t3207.data.SAsm.code;
-__auto_type outputs = _t3207.data.SAsm.outputs;
-__auto_type inputs = _t3207.data.SAsm.inputs;
-__auto_type clobbers = _t3207.data.SAsm.clobbers;
-        /* pass */
+    } else if (_t6206.tag == HirStmt_SAsm) {
+        __auto_type code = _t6206.data.SAsm.code;
+__auto_type outputs = _t6206.data.SAsm.outputs;
+__auto_type inputs = _t6206.data.SAsm.inputs;
+__auto_type clobbers = _t6206.data.SAsm.clobbers;
+#line 2800 "src/taumir/lower.tr"
         if (((!_is_null_str(outputs)) && (!_tr_str_eqv((outputs), (_tr_str_lit_len("", 0LL)))))) {
-            /* pass */
+#line 2800 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2801 "src/taumir/lower.tr"
         if (((!_is_null_str(inputs)) && (!_tr_str_eqv((inputs), (_tr_str_lit_len("", 0LL)))))) {
-            /* pass */
+#line 2801 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 2802 "src/taumir/lower.tr"
         TrStr cons = _tr_str_lit_len("", 0LL);
-        /* pass */
+#line 2803 "src/taumir/lower.tr"
         if (((!_is_null_str(clobbers)) && (!_tr_str_eqv((clobbers), (_tr_str_lit_len("", 0LL)))))) {
-            /* pass */
+#line 2804 "src/taumir/lower.tr"
             if (_tr_str_containsv((clobbers), (_tr_str_lit_len(",", 1LL)))) {
-                /* pass */
+#line 2804 "src/taumir/lower.tr"
                 _tr_str_release(cons);
                 return false;
             }
-            /* pass */
-            TrStr _strtmp_t3215 = ({ TrStr _cl = (_tr_strx_concatv((_tr_str_lit_len("~{", 2LL)), (clobbers))); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("}", 1LL))); _tr_str_release(_cl); _cres; });
+#line 2805 "src/taumir/lower.tr"
+            TrStr _strtmp_t6217 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("~{", 2LL)), (clobbers))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("}", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
             _tr_str_release(cons);
-            cons = _strtmp_t3215;
+            cons = _strtmp_t6217;
         }
-        /* pass */
-        ({ TrStr _at_t3216 = (_own(code)); LFunc_emit(lf, LInst_ctor_IAsm(_at_t3216, cons)); _tr_str_release(_at_t3216); });
-        /* pass */
+#line 2806 "src/taumir/lower.tr"
+        ({ TrStr _at_t6218 = (_own(code)); LFunc_emit(lf, LInst_ctor_IAsm(_at_t6218, cons)); _tr_str_release(_at_t6218); });
+#line 2807 "src/taumir/lower.tr"
         _tr_str_release(cons);
         return true;
     } else if (1) {
-        __auto_type _ = _t3207;
-        /* pass */
+        __auto_type _ = _t6206;
+#line 2809 "src/taumir/lower.tr"
         if (_tr_str_eqv((m->fail_note), (_tr_str_lit_len("", 0LL)))) {
-            /* pass */
-            m->fail_note = ({ TrStr _cr = (_stmt_kind(s)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("unsupported statement kind: ", 28LL)), _cr); _tr_str_release(_cr); _cres; });
+#line 2809 "src/taumir/lower.tr"
+            m->fail_note = ({ TrStr _tr_cr = (_stmt_kind(s)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("unsupported statement kind: ", 28LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
         }
-        /* pass */
+#line 2810 "src/taumir/lower.tr"
         return false;
     }
 }
 
 __attribute__((hot)) bool lower_stmt(LModule* m, LFunc* lf, HirStmt* s) {
-    /* pass */
+#line 2813 "src/taumir/lower.tr"
     bool ok = _lower_stmt_impl(m, lf, s);
-    /* pass */
+#line 2814 "src/taumir/lower.tr"
     if (((!ok) && _tr_str_eqv((m->fail_note), (_tr_str_lit_len("", 0LL))))) {
-        /* pass */
-        m->fail_note = ({ TrStr _cr = (_stmt_kind(s)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("unsupported statement: ", 23LL)), _cr); _tr_str_release(_cr); _cres; });
+#line 2815 "src/taumir/lower.tr"
+        m->fail_note = ({ TrStr _tr_cr = (_stmt_kind(s)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("unsupported statement: ", 23LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
     }
-    /* pass */
+#line 2816 "src/taumir/lower.tr"
     return ok;
 }
 
 __attribute__((hot)) long long _lower_set_method(LModule* m, LFunc* lf, long long shv, long long stag, TrStr method, List_ptr* margs) {
-    /* pass */
+#line 2821 "src/taumir/lower.tr"
     long long want_e = 0LL;
-    /* pass */
+#line 2822 "src/taumir/lower.tr"
     if ((stag == 16LL)) {
-        /* pass */
+#line 2822 "src/taumir/lower.tr"
         want_e = 1LL;
     }
-    /* pass */
+#line 2823 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("len", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("length", 6LL))))) {
-        /* pass */
+#line 2824 "src/taumir/lower.tr"
         TrStr slsym = _set_sym(stag, _tr_str_lit_len("len", 3LL));
-        /* pass */
+#line 2825 "src/taumir/lower.tr"
         LModule_add_extern(m, slsym);
-        /* pass */
+#line 2826 "src/taumir/lower.tr"
         List_i64* sla = (void*)List_i64_new();
-        /* pass */
+#line 2827 "src/taumir/lower.tr"
         List_i64_append(sla, shv);
-        /* pass */
+#line 2828 "src/taumir/lower.tr"
         long long sld = LFunc_new_vreg(lf);
-        /* pass */
+#line 2829 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(sld, slsym, sla));
-        /* pass */
+#line 2830 "src/taumir/lower.tr"
+        long long _trret1563 = sld;
         _tr_str_release(slsym);
-        return sld;
+        return _trret1563;
     }
-    /* pass */
+#line 2831 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("is_empty", 8LL)))) {
-        /* pass */
+#line 2832 "src/taumir/lower.tr"
         TrStr sesym = _set_sym(stag, _tr_str_lit_len("len", 3LL));
-        /* pass */
+#line 2833 "src/taumir/lower.tr"
         LModule_add_extern(m, sesym);
-        /* pass */
+#line 2834 "src/taumir/lower.tr"
         List_i64* sea = (void*)List_i64_new();
-        /* pass */
+#line 2835 "src/taumir/lower.tr"
         List_i64_append(sea, shv);
-        /* pass */
+#line 2836 "src/taumir/lower.tr"
         long long sed = LFunc_new_vreg(lf);
-        /* pass */
+#line 2837 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(sed, sesym, sea));
-        /* pass */
+#line 2838 "src/taumir/lower.tr"
         long long sez = LFunc_new_vreg(lf);
-        /* pass */
+#line 2839 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(sez, 0LL));
-        /* pass */
+#line 2840 "src/taumir/lower.tr"
         long long ser = LFunc_new_vreg(lf);
-        /* pass */
+#line 2841 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IBinOp(ser, _tr_str_lit_len("==", 2LL), sed, sez));
-        /* pass */
+#line 2842 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, ser, 4LL);
-        /* pass */
+#line 2843 "src/taumir/lower.tr"
+        long long _trret1564 = ser;
         _tr_str_release(sesym);
-        return ser;
+        return _trret1564;
     }
-    /* pass */
+#line 2844 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("to_list", 7LL))) && (margs->len == 0LL))) {
-        /* pass */
+#line 2845 "src/taumir/lower.tr"
         TrStr tlsym = _tr_str_lit_len("_tr_rt_iset_to_list", 19LL);
-        /* pass */
+#line 2846 "src/taumir/lower.tr"
         long long tltag = 2LL;
-        /* pass */
+#line 2847 "src/taumir/lower.tr"
         if ((stag == 16LL)) {
-            /* pass */
-            TrStr _strtmp_t3217 = _tr_str_lit_len("_tr_rt_sset_to_list", 19LL);
+#line 2848 "src/taumir/lower.tr"
+            TrStr _strtmp_t6219 = _tr_str_lit_len("_tr_rt_sset_to_list", 19LL);
             _tr_str_release(tlsym);
-            tlsym = _strtmp_t3217;
-            /* pass */
+            tlsym = _strtmp_t6219;
+#line 2849 "src/taumir/lower.tr"
             tltag = 3LL;
         }
-        /* pass */
+#line 2850 "src/taumir/lower.tr"
         LModule_add_extern(m, tlsym);
-        /* pass */
+#line 2851 "src/taumir/lower.tr"
         List_i64* tla = (void*)List_i64_new();
-        /* pass */
+#line 2852 "src/taumir/lower.tr"
         List_i64_append(tla, shv);
-        /* pass */
+#line 2853 "src/taumir/lower.tr"
         long long tld = LFunc_new_vreg(lf);
-        /* pass */
+#line 2854 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(tld, tlsym, tla));
-        /* pass */
+#line 2855 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, tld, tltag);
-        /* pass */
+#line 2856 "src/taumir/lower.tr"
+        long long _trret1565 = tld;
         _tr_str_release(tlsym);
-        return tld;
+        return _trret1565;
     }
-    /* pass */
+#line 2857 "src/taumir/lower.tr"
     if ((margs->len != 1LL)) {
-        /* pass */
+#line 2857 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 2858 "src/taumir/lower.tr"
     long long sav = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-    /* pass */
+#line 2859 "src/taumir/lower.tr"
     if ((sav < 0LL)) {
-        /* pass */
+#line 2859 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 2860 "src/taumir/lower.tr"
     if ((LFunc_vreg_type(lf, sav) != want_e)) {
-        /* pass */
+#line 2860 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 2861 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("add", 3LL)))) {
-        /* pass */
+#line 2862 "src/taumir/lower.tr"
         TrStr sasym = _set_sym(stag, _tr_str_lit_len("set", 3LL));
-        /* pass */
+#line 2863 "src/taumir/lower.tr"
         LModule_add_extern(m, sasym);
-        /* pass */
+#line 2864 "src/taumir/lower.tr"
         long long saone = LFunc_new_vreg(lf);
-        /* pass */
+#line 2865 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(saone, 1LL));
-        /* pass */
+#line 2866 "src/taumir/lower.tr"
         List_i64* saa = (void*)List_i64_new();
-        /* pass */
+#line 2867 "src/taumir/lower.tr"
         List_i64_append(saa, shv);
-        /* pass */
+#line 2868 "src/taumir/lower.tr"
         List_i64_append(saa, sav);
-        /* pass */
+#line 2869 "src/taumir/lower.tr"
         List_i64_append(saa, saone);
-        /* pass */
+#line 2870 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall((-1LL), sasym, saa));
-        /* pass */
+#line 2871 "src/taumir/lower.tr"
+        long long _trret1566 = shv;
         _tr_str_release(sasym);
-        return shv;
+        return _trret1566;
     }
-    /* pass */
+#line 2872 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("contains", 8LL))) || _tr_str_eqv((method), (_tr_str_lit_len("has", 3LL))))) {
-        /* pass */
+#line 2873 "src/taumir/lower.tr"
         TrStr scsym = _set_sym(stag, _tr_str_lit_len("has", 3LL));
-        /* pass */
+#line 2874 "src/taumir/lower.tr"
         LModule_add_extern(m, scsym);
-        /* pass */
+#line 2875 "src/taumir/lower.tr"
         List_i64* sca = (void*)List_i64_new();
-        /* pass */
+#line 2876 "src/taumir/lower.tr"
         List_i64_append(sca, shv);
-        /* pass */
+#line 2877 "src/taumir/lower.tr"
         List_i64_append(sca, sav);
-        /* pass */
+#line 2878 "src/taumir/lower.tr"
         long long scd = LFunc_new_vreg(lf);
-        /* pass */
+#line 2879 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(scd, scsym, sca));
-        /* pass */
+#line 2880 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, scd, 4LL);
-        /* pass */
+#line 2881 "src/taumir/lower.tr"
+        long long _trret1567 = scd;
         _tr_str_release(scsym);
-        return scd;
+        return _trret1567;
     }
-    /* pass */
+#line 2882 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("remove", 6LL)))) {
-        /* pass */
+#line 2883 "src/taumir/lower.tr"
         TrStr srsym = _set_sym(stag, _tr_str_lit_len("remove", 6LL));
-        /* pass */
+#line 2884 "src/taumir/lower.tr"
         LModule_add_extern(m, srsym);
-        /* pass */
+#line 2885 "src/taumir/lower.tr"
         List_i64* sra = (void*)List_i64_new();
-        /* pass */
+#line 2886 "src/taumir/lower.tr"
         List_i64_append(sra, shv);
-        /* pass */
+#line 2887 "src/taumir/lower.tr"
         List_i64_append(sra, sav);
-        /* pass */
+#line 2888 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall((-1LL), srsym, sra));
-        /* pass */
+#line 2889 "src/taumir/lower.tr"
+        long long _trret1568 = shv;
         _tr_str_release(srsym);
-        return shv;
+        return _trret1568;
     }
-    /* pass */
+#line 2890 "src/taumir/lower.tr"
     return (-1LL);
 }
 
 __attribute__((hot)) long long _lit_pat_cond(LModule* m, LFunc* lf, Pattern pat, long long subj, long long st) {
-    /* pass */
-    __auto_type _t3218 = pat;
-    if (_t3218.tag == Pattern_PLitInt) {
-        __auto_type v = _t3218.data.PLitInt.val;
-        /* pass */
+#line 2896 "src/taumir/lower.tr"
+    __auto_type _t6220 = pat;
+    if (_t6220.tag == Pattern_PLitInt) {
+        __auto_type v = _t6220.data.PLitInt.val;
+#line 2898 "src/taumir/lower.tr"
         if ((st != 0LL)) {
-            /* pass */
+#line 2898 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 2899 "src/taumir/lower.tr"
         long long cv = LFunc_new_vreg(lf);
-        /* pass */
+#line 2900 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(cv, v));
-        /* pass */
+#line 2901 "src/taumir/lower.tr"
         long long d = LFunc_new_vreg(lf);
-        /* pass */
+#line 2902 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IBinOp(d, _tr_str_lit_len("==", 2LL), subj, cv));
-        /* pass */
+#line 2903 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, d, 4LL);
-        /* pass */
+#line 2904 "src/taumir/lower.tr"
         return d;
-    } else if (_t3218.tag == Pattern_PLitBool) {
-        __auto_type bv = _t3218.data.PLitBool.val;
-        /* pass */
+    } else if (_t6220.tag == Pattern_PLitBool) {
+        __auto_type bv = _t6220.data.PLitBool.val;
+#line 2906 "src/taumir/lower.tr"
         if ((st != 4LL)) {
-            /* pass */
+#line 2906 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 2907 "src/taumir/lower.tr"
         long long bc = 0LL;
-        /* pass */
+#line 2908 "src/taumir/lower.tr"
         if (bv) {
-            /* pass */
+#line 2908 "src/taumir/lower.tr"
             bc = 1LL;
         }
-        /* pass */
+#line 2909 "src/taumir/lower.tr"
         long long cvb = LFunc_new_vreg(lf);
-        /* pass */
+#line 2910 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(cvb, bc));
-        /* pass */
+#line 2911 "src/taumir/lower.tr"
         long long db = LFunc_new_vreg(lf);
-        /* pass */
+#line 2912 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IBinOp(db, _tr_str_lit_len("==", 2LL), subj, cvb));
-        /* pass */
+#line 2913 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, db, 4LL);
-        /* pass */
+#line 2914 "src/taumir/lower.tr"
         return db;
-    } else if (_t3218.tag == Pattern_PLitStr) {
-        __auto_type sv = _t3218.data.PLitStr.val;
-__auto_type sv_blen = _t3218.data.PLitStr.blen;
-        /* pass */
+    } else if (_t6220.tag == Pattern_PLitStr) {
+        __auto_type sv = _t6220.data.PLitStr.val;
+__auto_type sv_blen = _t6220.data.PLitStr.blen;
+#line 2916 "src/taumir/lower.tr"
         if ((st != 1LL)) {
-            /* pass */
+#line 2916 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 2917 "src/taumir/lower.tr"
         long long idx = LModule_add_string(m, sv, sv_blen);
-        /* pass */
+#line 2918 "src/taumir/lower.tr"
         long long lit = LFunc_new_vreg(lf);
-        /* pass */
+#line 2919 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IStr(lit, idx));
-        /* pass */
+#line 2920 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, lit, 1LL);
-        /* pass */
+#line 2921 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_cmp", 14LL));
-        /* pass */
+#line 2922 "src/taumir/lower.tr"
         List_i64* sa = (void*)List_i64_new();
-        /* pass */
+#line 2923 "src/taumir/lower.tr"
         List_i64_append(sa, subj);
-        /* pass */
+#line 2924 "src/taumir/lower.tr"
         List_i64_append(sa, lit);
-        /* pass */
+#line 2925 "src/taumir/lower.tr"
         long long cmpv = LFunc_new_vreg(lf);
-        /* pass */
+#line 2926 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(cmpv, _tr_str_lit_len("_tr_rt_str_cmp", 14LL), sa));
-        /* pass */
+#line 2927 "src/taumir/lower.tr"
         long long z = LFunc_new_vreg(lf);
-        /* pass */
+#line 2928 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(z, 0LL));
-        /* pass */
+#line 2929 "src/taumir/lower.tr"
         long long ds = LFunc_new_vreg(lf);
-        /* pass */
+#line 2930 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IBinOp(ds, _tr_str_lit_len("==", 2LL), cmpv, z));
-        /* pass */
+#line 2931 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, ds, 4LL);
-        /* pass */
-        return ds;
+#line 2932 "src/taumir/lower.tr"
+        long long _trret1569 = ds;
+        return _trret1569;
     } else if (1) {
-        __auto_type _ = _t3218;
-        /* pass */
+        __auto_type _ = _t6220;
+#line 2934 "src/taumir/lower.tr"
         return (-1LL);
     }
 }
 
 __attribute__((hot)) bool _lower_match(LModule* m, LFunc* lf, HirExpr* expr, List_ptr* arms) {
-    /* pass */
+#line 2942 "src/taumir/lower.tr"
     TrStr subj_ty = _tr_str_retain(hir_expr_type(expr)->name);
-    /* pass */
+#line 2943 "src/taumir/lower.tr"
     bool subj_is_str = false;
-    /* pass */
+#line 2944 "src/taumir/lower.tr"
     if ((!_is_null_str(subj_ty))) {
-        /* pass */
+#line 2944 "src/taumir/lower.tr"
         subj_is_str = _tr_str_eqv((subj_ty), (_tr_str_lit_len("str", 3LL)));
     }
-    /* pass */
+#line 2945 "src/taumir/lower.tr"
     if (subj_is_str) {
-        /* pass */
-        __auto_type _t3219 = (*expr);
-        if (_t3219.tag == HirExpr_EIdent) {
+#line 2947 "src/taumir/lower.tr"
+        __auto_type _t6221 = (*expr);
+        if (_t6221.tag == HirExpr_EIdent) {
             /* pass */
         } else if (1) {
-            __auto_type _ = _t3219;
+            __auto_type _ = _t6221;
             _tr_str_release(subj_ty);
             return false;
         }
     }
-    /* pass */
+#line 2950 "src/taumir/lower.tr"
     long long subj = lower_expr(m, lf, expr);
-    /* pass */
+#line 2951 "src/taumir/lower.tr"
     if ((subj < 0LL)) {
-        /* pass */
+#line 2951 "src/taumir/lower.tr"
         _tr_str_release(subj_ty);
         return false;
     }
-    /* pass */
+#line 2952 "src/taumir/lower.tr"
     long long st = LFunc_vreg_type(lf, subj);
-    /* pass */
+#line 2953 "src/taumir/lower.tr"
     if ((st == 11LL)) {
-        /* pass */
+#line 2954 "src/taumir/lower.tr"
+        bool _trret1570 = _lower_match_enum(m, lf, expr, subj, arms);
         _tr_str_release(subj_ty);
-        return _lower_match_enum(m, lf, expr, subj, arms);
+        return _trret1570;
     }
-    /* pass */
+#line 2955 "src/taumir/lower.tr"
     if ((((st != 0LL) && (st != 1LL)) && (st != 4LL))) {
-        /* pass */
+#line 2955 "src/taumir/lower.tr"
         _tr_str_release(subj_ty);
         return false;
     }
-    /* pass */
+#line 2956 "src/taumir/lower.tr"
     _flush_fresh_strs(m, lf);
-    /* pass */
+#line 2957 "src/taumir/lower.tr"
     long long end_id = LFunc_new_block(lf);
-    /* pass */
+#line 2958 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 2959 "src/taumir/lower.tr"
     while ((i < arms->len)) {
-        /* pass */
+#line 2960 "src/taumir/lower.tr"
         HirMatchArm* arm = ((HirMatchArm*)List_ptr_get(arms, i));
-        /* pass */
+#line 2961 "src/taumir/lower.tr"
         bool is_default = false;
-        /* pass */
+#line 2962 "src/taumir/lower.tr"
         TrStr bind_name = _tr_str_lit_len("", 0LL);
-        /* pass */
+#line 2963 "src/taumir/lower.tr"
         long long cond = (-1LL);
-        /* pass */
-        __auto_type _t3220 = arm->pat;
-        if (_t3220.tag == Pattern_PWild) {
-            /* pass */
+#line 2964 "src/taumir/lower.tr"
+        __auto_type _t6222 = arm->pat;
+        if (_t6222.tag == Pattern_PWild) {
+#line 2966 "src/taumir/lower.tr"
             is_default = true;
-        } else if (_t3220.tag == Pattern_PBind) {
-            __auto_type nm = _t3220.data.PBind.name;
-            /* pass */
+        } else if (_t6222.tag == Pattern_PBind) {
+            __auto_type nm = _t6222.data.PBind.name;
+#line 2968 "src/taumir/lower.tr"
             is_default = true;
-            /* pass */
-            TrStr _strtmp_t3221 = _tr_str_retain(nm);
+#line 2969 "src/taumir/lower.tr"
+            TrStr _strtmp_t6223 = _tr_str_retain(nm);
             _tr_str_release(bind_name);
-            bind_name = _strtmp_t3221;
-        } else if (_t3220.tag == Pattern_POr) {
-            __auto_type pats = _t3220.data.POr.patterns;
-            /* pass */
+            bind_name = _strtmp_t6223;
+        } else if (_t6222.tag == Pattern_POr) {
+            __auto_type pats = _t6222.data.POr.patterns;
+#line 2972 "src/taumir/lower.tr"
             long long oi = 0LL;
-            /* pass */
+#line 2973 "src/taumir/lower.tr"
             while ((oi < pats->len)) {
-                /* pass */
+#line 2974 "src/taumir/lower.tr"
                 long long sc = _lit_pat_cond(m, lf, List_Pattern_get(pats, oi), subj, st);
-                /* pass */
+#line 2975 "src/taumir/lower.tr"
                 if ((sc < 0LL)) {
-                    /* pass */
+#line 2975 "src/taumir/lower.tr"
                     _tr_str_release(subj_ty);
                     return false;
                 }
-                /* pass */
+#line 2976 "src/taumir/lower.tr"
                 if ((cond < 0LL)) {
-                    /* pass */
+#line 2977 "src/taumir/lower.tr"
                     cond = sc;
                 } else {
-                    /* pass */
+#line 2979 "src/taumir/lower.tr"
                     long long merged = LFunc_new_vreg(lf);
-                    /* pass */
+#line 2980 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_IBinOp(merged, _tr_str_lit_len("+", 1LL), cond, sc));
-                    /* pass */
+#line 2981 "src/taumir/lower.tr"
                     cond = _norm_bool(lf, merged);
                 }
-                /* pass */
+#line 2982 "src/taumir/lower.tr"
                 oi = (oi + 1LL);
             }
-            /* pass */
+#line 2983 "src/taumir/lower.tr"
             if ((cond < 0LL)) {
-                /* pass */
+#line 2983 "src/taumir/lower.tr"
                 _tr_str_release(subj_ty);
                 return false;
             }
         } else if (1) {
-            __auto_type _ = _t3220;
-            /* pass */
+            __auto_type _ = _t6222;
+#line 2985 "src/taumir/lower.tr"
             cond = _lit_pat_cond(m, lf, arm->pat, subj, st);
-            /* pass */
+#line 2986 "src/taumir/lower.tr"
             if ((cond < 0LL)) {
-                /* pass */
+#line 2986 "src/taumir/lower.tr"
                 _tr_str_release(subj_ty);
                 return false;
             }
         }
-        /* pass */
+#line 2987 "src/taumir/lower.tr"
         long long body_id = LFunc_new_block(lf);
-        /* pass */
+#line 2988 "src/taumir/lower.tr"
         long long next_id = LFunc_new_block(lf);
-        /* pass */
+#line 2989 "src/taumir/lower.tr"
         if (is_default) {
-            /* pass */
+#line 2990 "src/taumir/lower.tr"
             LFunc_set_term(lf, LTerm_ctor_TBr(body_id));
         } else {
-            /* pass */
+#line 2992 "src/taumir/lower.tr"
             LFunc_set_term(lf, LTerm_ctor_TCondBr(cond, body_id, next_id));
         }
-        /* pass */
+#line 2993 "src/taumir/lower.tr"
         LFunc_set_cur(lf, body_id);
-        /* pass */
+#line 2994 "src/taumir/lower.tr"
         if ((!_tr_str_eqv((bind_name), (_tr_str_lit_len("", 0LL))))) {
-            /* pass */
+#line 2995 "src/taumir/lower.tr"
             LFunc_add_var(lf, bind_name);
-            /* pass */
+#line 2996 "src/taumir/lower.tr"
             LFunc_set_var_type(lf, bind_name, st);
-            /* pass */
+#line 2997 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IStoreVar(bind_name, subj));
         }
-        /* pass */
+#line 2999 "src/taumir/lower.tr"
         if ((((unsigned long long)(arm->guard)) != ((unsigned long long)(0LL)))) {
-            /* pass */
+#line 3000 "src/taumir/lower.tr"
             long long gv = lower_expr(m, lf, arm->guard);
-            /* pass */
+#line 3001 "src/taumir/lower.tr"
             if ((gv < 0LL)) {
-                /* pass */
+#line 3001 "src/taumir/lower.tr"
                 _tr_str_release(subj_ty);
                 _tr_str_release(bind_name);
                 return false;
             }
-            /* pass */
+#line 3002 "src/taumir/lower.tr"
             _flush_fresh_strs(m, lf);
-            /* pass */
+#line 3003 "src/taumir/lower.tr"
             long long gbody = LFunc_new_block(lf);
-            /* pass */
+#line 3004 "src/taumir/lower.tr"
             LFunc_set_term(lf, LTerm_ctor_TCondBr(gv, gbody, next_id));
-            /* pass */
+#line 3005 "src/taumir/lower.tr"
             LFunc_set_cur(lf, gbody);
         }
-        /* pass */
+#line 3006 "src/taumir/lower.tr"
         if ((!lower_block(m, lf, arm->body))) {
-            /* pass */
+#line 3006 "src/taumir/lower.tr"
             _tr_str_release(subj_ty);
             _tr_str_release(bind_name);
             return false;
         }
-        /* pass */
+#line 3007 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TBr(end_id));
-        /* pass */
+#line 3008 "src/taumir/lower.tr"
         LFunc_set_cur(lf, next_id);
-        /* pass */
+#line 3009 "src/taumir/lower.tr"
         i = (i + 1LL);
         _tr_str_release(bind_name);
     }
-    /* pass */
+#line 3010 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(end_id));
-    /* pass */
+#line 3011 "src/taumir/lower.tr"
     LFunc_set_cur(lf, end_id);
-    /* pass */
+#line 3012 "src/taumir/lower.tr"
     _tr_str_release(subj_ty);
     return true;
 }
 
 __attribute__((hot)) TrStr _norm_variant(TrStr ename, TrStr vn) {
-    /* pass */
+#line 3018 "src/taumir/lower.tr"
     if (_tr_str_eqv((ename), (_tr_str_lit_len("Option", 6LL)))) {
-        /* pass */
+#line 3019 "src/taumir/lower.tr"
         if (((_is_null_str(vn) || _tr_str_eqv((vn), (_tr_str_lit_len("", 0LL)))) || _tr_str_eqv((vn), (_tr_str_lit_len("none", 4LL))))) {
-            /* pass */
+#line 3019 "src/taumir/lower.tr"
             return _tr_str_lit_len("None", 4LL);
         }
-        /* pass */
+#line 3020 "src/taumir/lower.tr"
         if (_tr_str_eqv((vn), (_tr_str_lit_len("some", 4LL)))) {
-            /* pass */
+#line 3020 "src/taumir/lower.tr"
             return _tr_str_lit_len("Some", 4LL);
         }
     }
-    /* pass */
+#line 3021 "src/taumir/lower.tr"
     if (_tr_str_eqv((ename), (_tr_str_lit_len("Result", 6LL)))) {
-        /* pass */
+#line 3022 "src/taumir/lower.tr"
         if (_tr_str_eqv((vn), (_tr_str_lit_len("ok", 2LL)))) {
-            /* pass */
+#line 3022 "src/taumir/lower.tr"
             return _tr_str_lit_len("Ok", 2LL);
         }
-        /* pass */
+#line 3023 "src/taumir/lower.tr"
         if (_tr_str_eqv((vn), (_tr_str_lit_len("err", 3LL)))) {
-            /* pass */
+#line 3023 "src/taumir/lower.tr"
             return _tr_str_lit_len("Err", 3LL);
         }
     }
-    /* pass */
+#line 3024 "src/taumir/lower.tr"
     return _tr_str_retain(vn);
 }
 
 __attribute__((hot)) long long _variant_tag_cond(LFunc* lf, long long tagv, long long vidx) {
-    /* pass */
+#line 3028 "src/taumir/lower.tr"
     long long cv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3029 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(cv, vidx));
-    /* pass */
+#line 3030 "src/taumir/lower.tr"
     long long dv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3031 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(dv, _tr_str_lit_len("==", 2LL), tagv, cv));
-    /* pass */
+#line 3032 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, dv, 4LL);
-    /* pass */
+#line 3033 "src/taumir/lower.tr"
     return dv;
 }
 
 __attribute__((hot)) long long _load_enum_payload_field(LModule* m, LFunc* lf, long long subj, AstType* subj_ty, VariantLayout* vlay, long long fldidx) {
-    /* pass */
+#line 3037 "src/taumir/lower.tr"
     if ((fldidx >= vlay->ftags->len)) {
-        /* pass */
+#line 3037 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 3038 "src/taumir/lower.tr"
     long long ftg = List_i64_get(vlay->ftags, fldidx);
-    /* pass */
+#line 3039 "src/taumir/lower.tr"
     TrStr bcls = List_TrStr_get(vlay->fcls, fldidx);
-    /* pass */
+#line 3040 "src/taumir/lower.tr"
     if ((ftg <= (0LL - 2LL))) {
-        /* pass */
+#line 3041 "src/taumir/lower.tr"
         long long bgi = ((0LL - ftg) - 2LL);
-        /* pass */
+#line 3042 "src/taumir/lower.tr"
         if ((bgi >= subj_ty->args->len)) {
-            /* pass */
+#line 3042 "src/taumir/lower.tr"
             _tr_str_release(bcls);
             return (-1LL);
         }
-        /* pass */
+#line 3043 "src/taumir/lower.tr"
         ftg = _tag_of(m, (*((AstType**)List_ptr_get(subj_ty->args, bgi))));
-        /* pass */
-        TrStr _strtmp_t3222 = _cls_of_ty(m, (*((AstType**)List_ptr_get(subj_ty->args, bgi))));
+#line 3044 "src/taumir/lower.tr"
+        TrStr _strtmp_t6224 = _cls_of_ty(m, (*((AstType**)List_ptr_get(subj_ty->args, bgi))));
         _tr_str_release(bcls);
-        bcls = _strtmp_t3222;
+        bcls = _strtmp_t6224;
     }
-    /* pass */
+#line 3045 "src/taumir/lower.tr"
     if ((((((ftg < 0LL) || _is_list_tag(ftg)) || _is_dict_tag(ftg)) || _is_set_tag(ftg)) || (ftg == 12LL))) {
-        /* pass */
+#line 3045 "src/taumir/lower.tr"
         _tr_str_release(bcls);
         return (-1LL);
     }
-    /* pass */
+#line 3046 "src/taumir/lower.tr"
     if ((ftg == 5LL)) {
-        /* pass */
+#line 3047 "src/taumir/lower.tr"
         long long praw = _emit_field_get(m, lf, subj, ((1LL + fldidx) * 8LL), 0LL);
-        /* pass */
+#line 3048 "src/taumir/lower.tr"
         long long pv = LFunc_new_vreg(lf);
-        /* pass */
+#line 3049 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IBitsF(pv, praw));
-        /* pass */
+#line 3050 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, pv, 5LL);
-        /* pass */
+#line 3051 "src/taumir/lower.tr"
+        long long _trret1571 = pv;
         _tr_str_release(bcls);
-        return pv;
+        return _trret1571;
     }
-    /* pass */
+#line 3052 "src/taumir/lower.tr"
     long long pv2 = _emit_field_get(m, lf, subj, ((1LL + fldidx) * 8LL), ftg);
-    /* pass */
+#line 3053 "src/taumir/lower.tr"
+    long long _trret1572 = pv2;
     _tr_str_release(bcls);
-    return pv2;
+    return _trret1572;
 }
 
 __attribute__((hot)) long long _lower_enum_prop(LModule* m, LFunc* lf, HirExpr* obj, TrStr ename, TrStr prop) {
-    /* pass */
+#line 3057 "src/taumir/lower.tr"
     long long subj = lower_expr(m, lf, obj);
-    /* pass */
+#line 3058 "src/taumir/lower.tr"
     if ((subj < 0LL)) {
-        /* pass */
+#line 3058 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 3059 "src/taumir/lower.tr"
     long long eidx = LModule_enum_index(m, ename);
-    /* pass */
+#line 3060 "src/taumir/lower.tr"
     if ((eidx < 0LL)) {
-        /* pass */
+#line 3060 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 3061 "src/taumir/lower.tr"
     EnumLayout* elay = ((EnumLayout*)List_ptr_get(m->enums, eidx));
-    /* pass */
+#line 3062 "src/taumir/lower.tr"
     AstType* subj_ty = hir_expr_type(obj);
-    /* pass */
+#line 3063 "src/taumir/lower.tr"
     if ((_tr_str_eqv((prop), (_tr_str_lit_len("is_ok", 5LL))) || _tr_str_eqv((prop), (_tr_str_lit_len("is_some", 7LL))))) {
-        /* pass */
-        long long vix = ({ TrStr _at_t3223 = (_norm_variant(ename, _tr_str_lit_len("Ok", 2LL))); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t3223)); _tr_str_release(_at_t3223); _wr; });
-        /* pass */
+#line 3064 "src/taumir/lower.tr"
+        long long vix = ({ TrStr _at_t6225 = (_norm_variant(ename, _tr_str_lit_len("Ok", 2LL))); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t6225)); _tr_str_release(_at_t6225); _wr; });
+#line 3065 "src/taumir/lower.tr"
         if ((vix < 0LL)) {
-            /* pass */
-            vix = ({ TrStr _at_t3224 = (_norm_variant(ename, _tr_str_lit_len("Some", 4LL))); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t3224)); _tr_str_release(_at_t3224); _wr; });
+#line 3065 "src/taumir/lower.tr"
+            vix = ({ TrStr _at_t6226 = (_norm_variant(ename, _tr_str_lit_len("Some", 4LL))); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t6226)); _tr_str_release(_at_t6226); _wr; });
         }
-        /* pass */
+#line 3066 "src/taumir/lower.tr"
         if ((vix < 0LL)) {
-            /* pass */
+#line 3066 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 3067 "src/taumir/lower.tr"
         long long tagv = _emit_field_get(m, lf, subj, 0LL, 0LL);
-        /* pass */
-        return _variant_tag_cond(lf, tagv, vix);
+#line 3068 "src/taumir/lower.tr"
+        long long _trret1573 = _variant_tag_cond(lf, tagv, vix);
+        return _trret1573;
     }
-    /* pass */
+#line 3069 "src/taumir/lower.tr"
     if ((_tr_str_eqv((prop), (_tr_str_lit_len("is_err", 6LL))) || _tr_str_eqv((prop), (_tr_str_lit_len("is_none", 7LL))))) {
-        /* pass */
-        long long vix = ({ TrStr _at_t3225 = (_norm_variant(ename, _tr_str_lit_len("Err", 3LL))); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t3225)); _tr_str_release(_at_t3225); _wr; });
-        /* pass */
+#line 3070 "src/taumir/lower.tr"
+        long long vix = ({ TrStr _at_t6227 = (_norm_variant(ename, _tr_str_lit_len("Err", 3LL))); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t6227)); _tr_str_release(_at_t6227); _wr; });
+#line 3071 "src/taumir/lower.tr"
         if ((vix < 0LL)) {
-            /* pass */
-            vix = ({ TrStr _at_t3226 = (_norm_variant(ename, _tr_str_lit_len("None", 4LL))); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t3226)); _tr_str_release(_at_t3226); _wr; });
+#line 3071 "src/taumir/lower.tr"
+            vix = ({ TrStr _at_t6228 = (_norm_variant(ename, _tr_str_lit_len("None", 4LL))); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t6228)); _tr_str_release(_at_t6228); _wr; });
         }
-        /* pass */
+#line 3072 "src/taumir/lower.tr"
         if ((vix < 0LL)) {
-            /* pass */
+#line 3072 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 3073 "src/taumir/lower.tr"
         long long tagv = _emit_field_get(m, lf, subj, 0LL, 0LL);
-        /* pass */
-        return _variant_tag_cond(lf, tagv, vix);
+#line 3074 "src/taumir/lower.tr"
+        long long _trret1574 = _variant_tag_cond(lf, tagv, vix);
+        return _trret1574;
     }
-    /* pass */
+#line 3075 "src/taumir/lower.tr"
     if (((_tr_str_eqv((prop), (_tr_str_lit_len("ok", 2LL))) || _tr_str_eqv((prop), (_tr_str_lit_len("value", 5LL)))) || _tr_str_eqv((prop), (_tr_str_lit_len("some", 4LL))))) {
-        /* pass */
-        long long vix = ({ TrStr _at_t3227 = (_norm_variant(ename, _tr_str_lit_len("Ok", 2LL))); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t3227)); _tr_str_release(_at_t3227); _wr; });
-        /* pass */
+#line 3076 "src/taumir/lower.tr"
+        long long vix = ({ TrStr _at_t6229 = (_norm_variant(ename, _tr_str_lit_len("Ok", 2LL))); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t6229)); _tr_str_release(_at_t6229); _wr; });
+#line 3077 "src/taumir/lower.tr"
         if ((vix < 0LL)) {
-            /* pass */
-            vix = ({ TrStr _at_t3228 = (_norm_variant(ename, _tr_str_lit_len("Some", 4LL))); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t3228)); _tr_str_release(_at_t3228); _wr; });
+#line 3077 "src/taumir/lower.tr"
+            vix = ({ TrStr _at_t6230 = (_norm_variant(ename, _tr_str_lit_len("Some", 4LL))); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t6230)); _tr_str_release(_at_t6230); _wr; });
         }
-        /* pass */
+#line 3078 "src/taumir/lower.tr"
         if ((vix < 0LL)) {
-            /* pass */
+#line 3078 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
-        return _load_enum_payload_field(m, lf, subj, subj_ty, ((VariantLayout*)List_ptr_get(elay->variants, vix)), 0LL);
+#line 3079 "src/taumir/lower.tr"
+        long long _trret1575 = _load_enum_payload_field(m, lf, subj, subj_ty, ((VariantLayout*)List_ptr_get(elay->variants, vix)), 0LL);
+        return _trret1575;
     }
-    /* pass */
+#line 3080 "src/taumir/lower.tr"
     if (_tr_str_eqv((prop), (_tr_str_lit_len("err", 3LL)))) {
-        /* pass */
-        long long vix = ({ TrStr _at_t3229 = (_norm_variant(ename, _tr_str_lit_len("Err", 3LL))); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t3229)); _tr_str_release(_at_t3229); _wr; });
-        /* pass */
+#line 3081 "src/taumir/lower.tr"
+        long long vix = ({ TrStr _at_t6231 = (_norm_variant(ename, _tr_str_lit_len("Err", 3LL))); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t6231)); _tr_str_release(_at_t6231); _wr; });
+#line 3082 "src/taumir/lower.tr"
         if ((vix < 0LL)) {
-            /* pass */
+#line 3082 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
-        return _load_enum_payload_field(m, lf, subj, subj_ty, ((VariantLayout*)List_ptr_get(elay->variants, vix)), 0LL);
+#line 3083 "src/taumir/lower.tr"
+        long long _trret1576 = _load_enum_payload_field(m, lf, subj, subj_ty, ((VariantLayout*)List_ptr_get(elay->variants, vix)), 0LL);
+        return _trret1576;
     }
-    /* pass */
+#line 3084 "src/taumir/lower.tr"
     return (-1LL);
 }
 
 __attribute__((hot)) bool _bind_payload(LModule* m, LFunc* lf, VariantLayout* vlay, long long subj, AstType* subj_ty, long long fldidx, TrStr bindname) {
-    /* pass */
+#line 3090 "src/taumir/lower.tr"
     if ((fldidx >= vlay->ftags->len)) {
-        /* pass */
+#line 3090 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3091 "src/taumir/lower.tr"
     long long ftg = List_i64_get(vlay->ftags, fldidx);
-    /* pass */
+#line 3092 "src/taumir/lower.tr"
     TrStr bcls = List_TrStr_get(vlay->fcls, fldidx);
-    /* pass */
+#line 3093 "src/taumir/lower.tr"
     if ((ftg <= (0LL - 2LL))) {
-        /* pass */
+#line 3094 "src/taumir/lower.tr"
         long long bgi = ((0LL - ftg) - 2LL);
-        /* pass */
+#line 3095 "src/taumir/lower.tr"
         if ((bgi >= subj_ty->args->len)) {
-            /* pass */
+#line 3095 "src/taumir/lower.tr"
             _tr_str_release(bcls);
             return false;
         }
-        /* pass */
+#line 3096 "src/taumir/lower.tr"
         ftg = _tag_of(m, (*((AstType**)List_ptr_get(subj_ty->args, bgi))));
-        /* pass */
-        TrStr _strtmp_t3230 = _cls_of_ty(m, (*((AstType**)List_ptr_get(subj_ty->args, bgi))));
+#line 3097 "src/taumir/lower.tr"
+        TrStr _strtmp_t6232 = _cls_of_ty(m, (*((AstType**)List_ptr_get(subj_ty->args, bgi))));
         _tr_str_release(bcls);
-        bcls = _strtmp_t3230;
+        bcls = _strtmp_t6232;
     }
-    /* pass */
+#line 3098 "src/taumir/lower.tr"
     if ((((((ftg < 0LL) || _is_list_tag(ftg)) || _is_dict_tag(ftg)) || _is_set_tag(ftg)) || (ftg == 12LL))) {
-        /* pass */
+#line 3098 "src/taumir/lower.tr"
         _tr_str_release(bcls);
         return false;
     }
-    /* pass */
+#line 3099 "src/taumir/lower.tr"
     long long pv = (-1LL);
-    /* pass */
+#line 3100 "src/taumir/lower.tr"
     if ((ftg == 5LL)) {
-        /* pass */
+#line 3101 "src/taumir/lower.tr"
         long long praw = _emit_field_get(m, lf, subj, ((1LL + fldidx) * 8LL), 0LL);
-        /* pass */
+#line 3102 "src/taumir/lower.tr"
         pv = LFunc_new_vreg(lf);
-        /* pass */
+#line 3103 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IBitsF(pv, praw));
-        /* pass */
+#line 3104 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, pv, 5LL);
     } else {
-        /* pass */
+#line 3106 "src/taumir/lower.tr"
         pv = _emit_field_get(m, lf, subj, ((1LL + fldidx) * 8LL), ftg);
-        /* pass */
+#line 3109 "src/taumir/lower.tr"
         if ((ftg == 1LL)) {
-            /* pass */
+#line 3109 "src/taumir/lower.tr"
             _secure_str(m, lf, pv);
         }
-        /* pass */
+#line 3110 "src/taumir/lower.tr"
         if (((ftg == 10LL) || (ftg == 11LL))) {
-            /* pass */
+#line 3110 "src/taumir/lower.tr"
             _secure_obj(m, lf, pv);
         }
     }
-    /* pass */
+#line 3111 "src/taumir/lower.tr"
     LFunc_add_var(lf, bindname);
-    /* pass */
+#line 3112 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, bindname, ftg);
-    /* pass */
+#line 3113 "src/taumir/lower.tr"
     if (((ftg == 10LL) || (ftg == 11LL))) {
-        /* pass */
+#line 3114 "src/taumir/lower.tr"
         if (((!_is_null_str(bcls)) && (!_tr_str_eqv((bcls), (_tr_str_lit_len("", 0LL)))))) {
-            /* pass */
-            ({ TrStr _at_t3231 = (_own(bcls)); LFunc_set_var_cls(lf, bindname, _at_t3231); _tr_str_release(_at_t3231); });
+#line 3114 "src/taumir/lower.tr"
+            ({ TrStr _at_t6233 = (_own(bcls)); LFunc_set_var_cls(lf, bindname, _at_t6233); _tr_str_release(_at_t6233); });
         }
     }
-    /* pass */
+#line 3115 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(bindname, pv));
-    /* pass */
+#line 3116 "src/taumir/lower.tr"
     _tr_str_release(bcls);
     return true;
 }
 
 __attribute__((hot)) bool _lower_match_enum(LModule* m, LFunc* lf, HirExpr* expr, long long subj, List_ptr* arms) {
-    /* pass */
+#line 3121 "src/taumir/lower.tr"
     TrStr ename = _recv_class(m, lf, expr);
-    /* pass */
+#line 3122 "src/taumir/lower.tr"
     if ((_tr_str_eqv((ename), (_tr_str_lit_len("", 0LL))) || (!LModule_is_enum(m, ename)))) {
-        /* pass */
+#line 3122 "src/taumir/lower.tr"
         _tr_str_release(ename);
         return false;
     }
-    /* pass */
+#line 3123 "src/taumir/lower.tr"
     AstType* subj_hty = hir_expr_type(expr);
-    /* pass */
-    EnumLayout* elay = ((EnumLayout*)List_ptr_get(m->enums, LModule_enum_index(m, ename)));
-    /* pass */
+#line 3124 "src/taumir/lower.tr"
+    EnumLayout* elay = ({ __auto_type _ord_t6234 = (LModule_enum_index(m, ename)); __auto_type _wr = (((EnumLayout*)List_ptr_get(m->enums, _ord_t6234))); _wr; });
+#line 3125 "src/taumir/lower.tr"
     long long tagv = _emit_field_get(m, lf, subj, 0LL, 0LL);
-    /* pass */
+#line 3126 "src/taumir/lower.tr"
     long long end_id = LFunc_new_block(lf);
-    /* pass */
+#line 3127 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 3128 "src/taumir/lower.tr"
     while ((i < arms->len)) {
-        /* pass */
+#line 3129 "src/taumir/lower.tr"
         HirMatchArm* arm = ((HirMatchArm*)List_ptr_get(arms, i));
-        /* pass */
+#line 3130 "src/taumir/lower.tr"
         bool is_default = false;
-        /* pass */
+#line 3131 "src/taumir/lower.tr"
         TrStr bind_subj = _tr_str_lit_len("", 0LL);
-        /* pass */
+#line 3132 "src/taumir/lower.tr"
         long long cond = (-1LL);
-        /* pass */
-        __auto_type _t3232 = arm->pat;
-        if (_t3232.tag == Pattern_PWild) {
-            /* pass */
+#line 3133 "src/taumir/lower.tr"
+        __auto_type _t6235 = arm->pat;
+        if (_t6235.tag == Pattern_PWild) {
+#line 3135 "src/taumir/lower.tr"
             is_default = true;
-        } else if (_t3232.tag == Pattern_PBind) {
-            __auto_type nm = _t3232.data.PBind.name;
-            /* pass */
+        } else if (_t6235.tag == Pattern_PBind) {
+            __auto_type nm = _t6235.data.PBind.name;
+#line 3137 "src/taumir/lower.tr"
             is_default = true;
-            /* pass */
-            TrStr _strtmp_t3233 = _tr_str_retain(nm);
+#line 3138 "src/taumir/lower.tr"
+            TrStr _strtmp_t6236 = _tr_str_retain(nm);
             _tr_str_release(bind_subj);
-            bind_subj = _strtmp_t3233;
-        } else if (_t3232.tag == Pattern_PVariant) {
-            __auto_type vn = _t3232.data.PVariant.variant;
-            /* pass */
-            long long vix = ({ TrStr _at_t3234 = (_norm_variant(ename, vn)); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t3234)); _tr_str_release(_at_t3234); _wr; });
-            /* pass */
+            bind_subj = _strtmp_t6236;
+        } else if (_t6235.tag == Pattern_PVariant) {
+            __auto_type vn = _t6235.data.PVariant.variant;
+#line 3140 "src/taumir/lower.tr"
+            long long vix = ({ TrStr _at_t6237 = (_norm_variant(ename, vn)); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t6237)); _tr_str_release(_at_t6237); _wr; });
+#line 3141 "src/taumir/lower.tr"
             if ((vix < 0LL)) {
-                /* pass */
+#line 3141 "src/taumir/lower.tr"
                 _tr_str_release(ename);
                 return false;
             }
-            /* pass */
+#line 3142 "src/taumir/lower.tr"
             cond = _variant_tag_cond(lf, tagv, vix);
-        } else if (_t3232.tag == Pattern_PVariantBind) {
-            __auto_type vnb = _t3232.data.PVariantBind.variant;
-            /* pass */
-            long long vixb = ({ TrStr _at_t3235 = (_norm_variant(ename, vnb)); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t3235)); _tr_str_release(_at_t3235); _wr; });
-            /* pass */
+        } else if (_t6235.tag == Pattern_PVariantBind) {
+            __auto_type vnb = _t6235.data.PVariantBind.variant;
+#line 3144 "src/taumir/lower.tr"
+            long long vixb = ({ TrStr _at_t6238 = (_norm_variant(ename, vnb)); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t6238)); _tr_str_release(_at_t6238); _wr; });
+#line 3145 "src/taumir/lower.tr"
             if ((vixb < 0LL)) {
-                /* pass */
+#line 3145 "src/taumir/lower.tr"
                 _tr_str_release(ename);
                 return false;
             }
-            /* pass */
+#line 3146 "src/taumir/lower.tr"
             cond = _variant_tag_cond(lf, tagv, vixb);
-        } else if (_t3232.tag == Pattern_PVariantBindMany) {
-            __auto_type vnm = _t3232.data.PVariantBindMany.variant;
-            /* pass */
-            long long vixm = ({ TrStr _at_t3236 = (_norm_variant(ename, vnm)); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t3236)); _tr_str_release(_at_t3236); _wr; });
-            /* pass */
+        } else if (_t6235.tag == Pattern_PVariantBindMany) {
+            __auto_type vnm = _t6235.data.PVariantBindMany.variant;
+#line 3148 "src/taumir/lower.tr"
+            long long vixm = ({ TrStr _at_t6239 = (_norm_variant(ename, vnm)); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t6239)); _tr_str_release(_at_t6239); _wr; });
+#line 3149 "src/taumir/lower.tr"
             if ((vixm < 0LL)) {
-                /* pass */
+#line 3149 "src/taumir/lower.tr"
                 _tr_str_release(ename);
                 return false;
             }
-            /* pass */
+#line 3150 "src/taumir/lower.tr"
             cond = _variant_tag_cond(lf, tagv, vixm);
-        } else if (_t3232.tag == Pattern_POr) {
-            __auto_type orpats = _t3232.data.POr.patterns;
-            /* pass */
+        } else if (_t6235.tag == Pattern_POr) {
+            __auto_type orpats = _t6235.data.POr.patterns;
+#line 3152 "src/taumir/lower.tr"
             long long oi = 0LL;
-            /* pass */
+#line 3153 "src/taumir/lower.tr"
             while ((oi < orpats->len)) {
-                /* pass */
+#line 3154 "src/taumir/lower.tr"
                 long long oc = (-1LL);
-                /* pass */
-                __auto_type _t3237 = List_Pattern_get(orpats, oi);
-                if (_t3237.tag == Pattern_PVariant) {
-                    __auto_type ovn = _t3237.data.PVariant.variant;
-                    /* pass */
-                    long long ovix = ({ TrStr _at_t3238 = (_norm_variant(ename, ovn)); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t3238)); _tr_str_release(_at_t3238); _wr; });
-                    /* pass */
+#line 3155 "src/taumir/lower.tr"
+                __auto_type _t6240 = List_Pattern_get(orpats, oi);
+                if (_t6240.tag == Pattern_PVariant) {
+                    __auto_type ovn = _t6240.data.PVariant.variant;
+#line 3157 "src/taumir/lower.tr"
+                    long long ovix = ({ TrStr _at_t6241 = (_norm_variant(ename, ovn)); __auto_type _wr = (EnumLayout_variant_index(elay, _at_t6241)); _tr_str_release(_at_t6241); _wr; });
+#line 3158 "src/taumir/lower.tr"
                     if ((ovix < 0LL)) {
-                        /* pass */
+#line 3158 "src/taumir/lower.tr"
                         _tr_str_release(ename);
                         return false;
                     }
-                    /* pass */
+#line 3159 "src/taumir/lower.tr"
                     oc = _variant_tag_cond(lf, tagv, ovix);
                 } else if (1) {
-                    __auto_type _ = _t3237;
-                    /* pass */
+                    __auto_type _ = _t6240;
+#line 3161 "src/taumir/lower.tr"
                     _tr_str_release(ename);
                     return false;
                 }
-                /* pass */
+#line 3162 "src/taumir/lower.tr"
                 if ((cond < 0LL)) {
-                    /* pass */
+#line 3163 "src/taumir/lower.tr"
                     cond = oc;
                 } else {
-                    /* pass */
+#line 3165 "src/taumir/lower.tr"
                     long long merged = LFunc_new_vreg(lf);
-                    /* pass */
+#line 3166 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_IBinOp(merged, _tr_str_lit_len("+", 1LL), cond, oc));
-                    /* pass */
+#line 3167 "src/taumir/lower.tr"
                     cond = _norm_bool(lf, merged);
                 }
-                /* pass */
+#line 3168 "src/taumir/lower.tr"
                 oi = (oi + 1LL);
             }
-            /* pass */
+#line 3169 "src/taumir/lower.tr"
             if ((cond < 0LL)) {
-                /* pass */
+#line 3169 "src/taumir/lower.tr"
                 _tr_str_release(ename);
                 return false;
             }
         } else if (1) {
-            __auto_type _ = _t3232;
-            /* pass */
+            __auto_type _ = _t6235;
+#line 3171 "src/taumir/lower.tr"
             _tr_str_release(ename);
             return false;
         }
-        /* pass */
+#line 3172 "src/taumir/lower.tr"
         long long body_id = LFunc_new_block(lf);
-        /* pass */
+#line 3173 "src/taumir/lower.tr"
         long long next_id = LFunc_new_block(lf);
-        /* pass */
+#line 3174 "src/taumir/lower.tr"
         if (is_default) {
-            /* pass */
+#line 3175 "src/taumir/lower.tr"
             LFunc_set_term(lf, LTerm_ctor_TBr(body_id));
         } else {
-            /* pass */
+#line 3177 "src/taumir/lower.tr"
             LFunc_set_term(lf, LTerm_ctor_TCondBr(cond, body_id, next_id));
         }
-        /* pass */
+#line 3178 "src/taumir/lower.tr"
         LFunc_set_cur(lf, body_id);
-        /* pass */
+#line 3179 "src/taumir/lower.tr"
         if (((!_tr_str_eqv((bind_subj), (_tr_str_lit_len("", 0LL)))) && (!_tr_str_eqv((bind_subj), (_tr_str_lit_len("_", 1LL)))))) {
-            /* pass */
+#line 3180 "src/taumir/lower.tr"
             LFunc_add_var(lf, bind_subj);
-            /* pass */
+#line 3181 "src/taumir/lower.tr"
             LFunc_set_var_type(lf, bind_subj, 11LL);
-            /* pass */
-            ({ TrStr _at_t3239 = (_own(ename)); LFunc_set_var_cls(lf, bind_subj, _at_t3239); _tr_str_release(_at_t3239); });
-            /* pass */
+#line 3182 "src/taumir/lower.tr"
+            ({ TrStr _at_t6242 = (_own(ename)); LFunc_set_var_cls(lf, bind_subj, _at_t6242); _tr_str_release(_at_t6242); });
+#line 3183 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IStoreVar(bind_subj, subj));
         }
-        /* pass */
-        __auto_type _t3240 = arm->pat;
-        if (_t3240.tag == Pattern_PVariantBind) {
-            __auto_type vnb2 = _t3240.data.PVariantBind.variant;
-__auto_type bnm = _t3240.data.PVariantBind.field;
-            /* pass */
-            VariantLayout* vlay1 = ({ TrStr _at_t3241 = (_norm_variant(ename, vnb2)); __auto_type _wr = (((VariantLayout*)List_ptr_get(elay->variants, EnumLayout_variant_index(elay, _at_t3241)))); _tr_str_release(_at_t3241); _wr; });
-            /* pass */
+#line 3185 "src/taumir/lower.tr"
+        __auto_type _t6243 = arm->pat;
+        if (_t6243.tag == Pattern_PVariantBind) {
+            __auto_type vnb2 = _t6243.data.PVariantBind.variant;
+__auto_type bnm = _t6243.data.PVariantBind.field;
+#line 3187 "src/taumir/lower.tr"
+            VariantLayout* vlay1 = ({ TrStr _at_t6244 = (_norm_variant(ename, vnb2)); __auto_type _ord_t6245 = (EnumLayout_variant_index(elay, _at_t6244)); __auto_type _wr = (((VariantLayout*)List_ptr_get(elay->variants, _ord_t6245))); _tr_str_release(_at_t6244); _wr; });
+#line 3188 "src/taumir/lower.tr"
             if ((!_tr_str_eqv((bnm), (_tr_str_lit_len("_", 1LL))))) {
-                /* pass */
+#line 3189 "src/taumir/lower.tr"
                 if ((!_bind_payload(m, lf, vlay1, subj, subj_hty, 0LL, bnm))) {
-                    /* pass */
+#line 3189 "src/taumir/lower.tr"
                     _tr_str_release(ename);
                     return false;
                 }
             }
-        } else if (_t3240.tag == Pattern_PVariantBindMany) {
-            __auto_type vnm2 = _t3240.data.PVariantBindMany.variant;
-__auto_type bnames = _t3240.data.PVariantBindMany.fields;
-            /* pass */
-            VariantLayout* vlay2 = ({ TrStr _at_t3242 = (_norm_variant(ename, vnm2)); __auto_type _wr = (((VariantLayout*)List_ptr_get(elay->variants, EnumLayout_variant_index(elay, _at_t3242)))); _tr_str_release(_at_t3242); _wr; });
-            /* pass */
+        } else if (_t6243.tag == Pattern_PVariantBindMany) {
+            __auto_type vnm2 = _t6243.data.PVariantBindMany.variant;
+__auto_type bnames = _t6243.data.PVariantBindMany.fields;
+#line 3191 "src/taumir/lower.tr"
+            VariantLayout* vlay2 = ({ TrStr _at_t6246 = (_norm_variant(ename, vnm2)); __auto_type _ord_t6247 = (EnumLayout_variant_index(elay, _at_t6246)); __auto_type _wr = (((VariantLayout*)List_ptr_get(elay->variants, _ord_t6247))); _tr_str_release(_at_t6246); _wr; });
+#line 3192 "src/taumir/lower.tr"
             long long bi = 0LL;
-            /* pass */
+#line 3193 "src/taumir/lower.tr"
             while ((bi < bnames->len)) {
-                /* pass */
-                if ((!_tr_str_eqv((List_TrStr_get(bnames, bi)), (_tr_str_lit_len("_", 1LL))))) {
-                    /* pass */
-                    if (({ TrStr _at_t3243 = (List_TrStr_get(bnames, bi)); __auto_type _wr = ((!_bind_payload(m, lf, vlay2, subj, subj_hty, bi, _at_t3243))); _tr_str_release(_at_t3243); _wr; })) {
-                        /* pass */
+#line 3194 "src/taumir/lower.tr"
+                if (({ TrStr _cmpa_t6248 = (List_TrStr_get(bnames, bi)); TrStr _cmpb_t6249 = (_tr_str_lit_len("_", 1LL)); _Bool _cmpr_t6250 = !_tr_str_eqv(_cmpa_t6248, _cmpb_t6249); _tr_str_release(_cmpa_t6248); _cmpr_t6250; })) {
+#line 3195 "src/taumir/lower.tr"
+                    if (({ TrStr _at_t6251 = (List_TrStr_get(bnames, bi)); __auto_type _wr = ((!_bind_payload(m, lf, vlay2, subj, subj_hty, bi, _at_t6251))); _tr_str_release(_at_t6251); _wr; })) {
+#line 3195 "src/taumir/lower.tr"
                         _tr_str_release(ename);
                         return false;
                     }
                 }
-                /* pass */
+#line 3196 "src/taumir/lower.tr"
                 bi = (bi + 1LL);
             }
         } else if (1) {
-            __auto_type _ = _t3240;
-            /* pass */
+            __auto_type _ = _t6243;
+#line 3198 "src/taumir/lower.tr"
             /* pass */
         }
-        /* pass */
+#line 3200 "src/taumir/lower.tr"
         if ((((unsigned long long)(arm->guard)) != ((unsigned long long)(0LL)))) {
-            /* pass */
+#line 3201 "src/taumir/lower.tr"
             long long egv = lower_expr(m, lf, arm->guard);
-            /* pass */
+#line 3202 "src/taumir/lower.tr"
             if ((egv < 0LL)) {
-                /* pass */
+#line 3202 "src/taumir/lower.tr"
                 _tr_str_release(ename);
                 _tr_str_release(bind_subj);
                 return false;
             }
-            /* pass */
+#line 3203 "src/taumir/lower.tr"
             _flush_fresh_strs(m, lf);
-            /* pass */
+#line 3204 "src/taumir/lower.tr"
             long long egbody = LFunc_new_block(lf);
-            /* pass */
+#line 3205 "src/taumir/lower.tr"
             LFunc_set_term(lf, LTerm_ctor_TCondBr(egv, egbody, next_id));
-            /* pass */
+#line 3206 "src/taumir/lower.tr"
             LFunc_set_cur(lf, egbody);
         }
-        /* pass */
+#line 3207 "src/taumir/lower.tr"
         if ((!lower_block(m, lf, arm->body))) {
-            /* pass */
+#line 3207 "src/taumir/lower.tr"
             _tr_str_release(ename);
             _tr_str_release(bind_subj);
             return false;
         }
-        /* pass */
+#line 3208 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TBr(end_id));
-        /* pass */
+#line 3209 "src/taumir/lower.tr"
         LFunc_set_cur(lf, next_id);
-        /* pass */
+#line 3210 "src/taumir/lower.tr"
         i = (i + 1LL);
         _tr_str_release(bind_subj);
     }
-    /* pass */
+#line 3211 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(end_id));
-    /* pass */
+#line 3212 "src/taumir/lower.tr"
     LFunc_set_cur(lf, end_id);
-    /* pass */
+#line 3213 "src/taumir/lower.tr"
     _tr_str_release(ename);
     return true;
 }
 
 __attribute__((hot)) bool _lower_for(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body) {
-    /* pass */
-    __auto_type _t3244 = (*iter);
-    if (_t3244.tag == HirExpr_ECall) {
-        __auto_type callee = _t3244.data.ECall.callee;
-__auto_type args = _t3244.data.ECall.args;
-        /* pass */
-        if (_tr_str_eqv((_ident_name(callee)), (_tr_str_lit_len("range", 5LL)))) {
-            /* pass */
+#line 3219 "src/taumir/lower.tr"
+    __auto_type _t6252 = (*iter);
+    if (_t6252.tag == HirExpr_ECall) {
+        __auto_type callee = _t6252.data.ECall.callee;
+__auto_type args = _t6252.data.ECall.args;
+#line 3221 "src/taumir/lower.tr"
+        if (({ TrStr _cmpa_t6253 = (_ident_name(callee)); TrStr _cmpb_t6254 = (_tr_str_lit_len("range", 5LL)); _Bool _cmpr_t6255 = _tr_str_eqv(_cmpa_t6253, _cmpb_t6254); _tr_str_release(_cmpa_t6253); _cmpr_t6255; })) {
+#line 3222 "src/taumir/lower.tr"
             return _lower_for_range(m, lf, var, args, body);
         }
-    } else if (_t3244.tag == HirExpr_ERange) {
-        __auto_type rstart = _t3244.data.ERange.start;
-__auto_type rend = _t3244.data.ERange.end;
-__auto_type rincl = _t3244.data.ERange.inclusive;
-        /* pass */
+    } else if (_t6252.tag == HirExpr_ERange) {
+        __auto_type rstart = _t6252.data.ERange.start;
+__auto_type rend = _t6252.data.ERange.end;
+__auto_type rincl = _t6252.data.ERange.inclusive;
+#line 3224 "src/taumir/lower.tr"
         return _lower_for_erange(m, lf, var, rstart, rend, rincl, body);
     } else if (1) {
-        __auto_type _ = _t3244;
-        /* pass */
+        __auto_type _ = _t6252;
+#line 3226 "src/taumir/lower.tr"
         /* pass */
     }
-    /* pass */
+#line 3229 "src/taumir/lower.tr"
     if (_tr_str_eqv((hir_expr_type(iter)->name), (_tr_str_lit_len("Chan", 4LL)))) {
-        /* pass */
+#line 3230 "src/taumir/lower.tr"
         return _lower_for_chan(m, lf, var, iter, body);
     }
-    /* pass */
+#line 3233 "src/taumir/lower.tr"
     TrStr fic = _recv_class(m, lf, iter);
-    /* pass */
-    if ((((!_tr_str_eqv((fic), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, fic)) && (!_tr_str_eqv((LModule_resolve_method(m, fic, _tr_str_lit_len("__iter__", 8LL))), (_tr_str_lit_len("", 0LL)))))) {
-        /* pass */
+#line 3234 "src/taumir/lower.tr"
+    if ((((!_tr_str_eqv((fic), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, fic)) && ({ TrStr _cmpa_t6256 = (LModule_resolve_method(m, fic, _tr_str_lit_len("__iter__", 8LL))); TrStr _cmpb_t6257 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t6258 = !_tr_str_eqv(_cmpa_t6256, _cmpb_t6257); _tr_str_release(_cmpa_t6256); _cmpr_t6258; }))) {
+#line 3235 "src/taumir/lower.tr"
+        bool _trret1577 = _lower_for_iterproto(m, lf, var, iter, body);
         _tr_str_release(fic);
-        return _lower_for_iterproto(m, lf, var, iter, body);
+        return _trret1577;
     }
-    /* pass */
+#line 3236 "src/taumir/lower.tr"
+    bool _trret1578 = _lower_for_list(m, lf, var, iter, body);
     _tr_str_release(fic);
-    return _lower_for_list(m, lf, var, iter, body);
+    return _trret1578;
 }
 
 __attribute__((hot)) bool _sel_recv_arm(LModule* m, LFunc* lf, TrStr donev, HirChanSelectArm* arm) {
-    /* pass */
+#line 3243 "src/taumir/lower.tr"
     long long dov = LFunc_new_vreg(lf);
-    /* pass */
+#line 3244 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(dov, donev));
-    /* pass */
+#line 3245 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, dov, 0LL);
-    /* pass */
+#line 3246 "src/taumir/lower.tr"
     long long armb = LFunc_new_block(lf);
-    /* pass */
+#line 3247 "src/taumir/lower.tr"
     long long skipb = LFunc_new_block(lf);
-    /* pass */
+#line 3248 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(dov, skipb, armb));
-    /* pass */
+#line 3249 "src/taumir/lower.tr"
     LFunc_set_cur(lf, armb);
-    /* pass */
+#line 3251 "src/taumir/lower.tr"
     HirExpr* chexpr = arm->chan_expr;
-    /* pass */
-    __auto_type _t3245 = (*chexpr);
-    if (_t3245.tag == HirExpr_EMethodCall) {
-        __auto_type mobj = _t3245.data.EMethodCall.obj;
+#line 3252 "src/taumir/lower.tr"
+    __auto_type _t6259 = (*chexpr);
+    if (_t6259.tag == HirExpr_EMethodCall) {
+        __auto_type mobj = _t6259.data.EMethodCall.obj;
         chexpr = mobj;
     } else if (1) {
-        __auto_type _ = _t3245;
+        __auto_type _ = _t6259;
         /* pass */
     }
-    /* pass */
+#line 3255 "src/taumir/lower.tr"
     long long chv = lower_expr(m, lf, chexpr);
-    /* pass */
+#line 3256 "src/taumir/lower.tr"
     if ((chv < 0LL)) {
-        /* pass */
+#line 3256 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3257 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_chan_try_recv_val", 21LL));
-    /* pass */
+#line 3258 "src/taumir/lower.tr"
     List_i64* ra = (void*)List_i64_new();
-    /* pass */
+#line 3259 "src/taumir/lower.tr"
     List_i64_append(ra, chv);
-    /* pass */
+#line 3260 "src/taumir/lower.tr"
     long long rv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3261 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(rv, _tr_str_lit_len("_tr_chan_try_recv_val", 21LL), ra));
-    /* pass */
+#line 3262 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, rv, 0LL);
-    /* pass */
+#line 3263 "src/taumir/lower.tr"
     long long minc = LFunc_new_vreg(lf);
-    /* pass */
+#line 3264 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(minc, ((-9223372036854775807LL) - 1LL)));
-    /* pass */
+#line 3265 "src/taumir/lower.tr"
     long long cmp = LFunc_new_vreg(lf);
-    /* pass */
+#line 3266 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(cmp, _tr_str_lit_len("!=", 2LL), rv, minc));
-    /* pass */
+#line 3267 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, cmp, 4LL);
-    /* pass */
+#line 3268 "src/taumir/lower.tr"
     long long gotb = LFunc_new_block(lf);
-    /* pass */
+#line 3269 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(cmp, gotb, skipb));
-    /* pass */
+#line 3270 "src/taumir/lower.tr"
     LFunc_set_cur(lf, gotb);
-    /* pass */
+#line 3271 "src/taumir/lower.tr"
     if (((!_is_null_str(arm->var_name)) && (!_tr_str_eqv((arm->var_name), (_tr_str_lit_len("", 0LL)))))) {
-        /* pass */
+#line 3272 "src/taumir/lower.tr"
         LFunc_add_var(lf, arm->var_name);
-        /* pass */
+#line 3273 "src/taumir/lower.tr"
         LFunc_set_var_type(lf, arm->var_name, 0LL);
-        /* pass */
+#line 3274 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IStoreVar(arm->var_name, rv));
     }
-    /* pass */
+#line 3275 "src/taumir/lower.tr"
     if ((!lower_block(m, lf, arm->body))) {
-        /* pass */
+#line 3275 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3276 "src/taumir/lower.tr"
     long long one = LFunc_new_vreg(lf);
-    /* pass */
+#line 3277 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(one, 1LL));
-    /* pass */
+#line 3278 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(donev, one));
-    /* pass */
+#line 3279 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(skipb));
-    /* pass */
+#line 3280 "src/taumir/lower.tr"
     LFunc_set_cur(lf, skipb);
-    /* pass */
+#line 3281 "src/taumir/lower.tr"
     return true;
 }
 
 __attribute__((hot)) bool _sel_send_arm(LModule* m, LFunc* lf, TrStr donev, HirChanSelectArm* arm) {
-    /* pass */
+#line 3284 "src/taumir/lower.tr"
     long long dov = LFunc_new_vreg(lf);
-    /* pass */
+#line 3285 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(dov, donev));
-    /* pass */
+#line 3286 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, dov, 0LL);
-    /* pass */
+#line 3287 "src/taumir/lower.tr"
     long long armb = LFunc_new_block(lf);
-    /* pass */
+#line 3288 "src/taumir/lower.tr"
     long long skipb = LFunc_new_block(lf);
-    /* pass */
+#line 3289 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(dov, skipb, armb));
-    /* pass */
+#line 3290 "src/taumir/lower.tr"
     LFunc_set_cur(lf, armb);
-    /* pass */
+#line 3292 "src/taumir/lower.tr"
     HirExpr* chexpr = arm->chan_expr;
-    /* pass */
+#line 3293 "src/taumir/lower.tr"
     HirExpr* valexpr = arm->val_expr;
-    /* pass */
-    __auto_type _t3246 = (*chexpr);
-    if (_t3246.tag == HirExpr_EMethodCall) {
-        __auto_type mobj = _t3246.data.EMethodCall.obj;
-__auto_type sargs = _t3246.data.EMethodCall.args;
-        /* pass */
+#line 3294 "src/taumir/lower.tr"
+    __auto_type _t6260 = (*chexpr);
+    if (_t6260.tag == HirExpr_EMethodCall) {
+        __auto_type mobj = _t6260.data.EMethodCall.obj;
+__auto_type sargs = _t6260.data.EMethodCall.args;
+#line 3296 "src/taumir/lower.tr"
         chexpr = mobj;
-        /* pass */
+#line 3297 "src/taumir/lower.tr"
         if ((sargs->len == 1LL)) {
-            /* pass */
+#line 3297 "src/taumir/lower.tr"
             valexpr = ((HirExpr*)List_ptr_get(sargs, 0LL));
         }
     } else if (1) {
-        __auto_type _ = _t3246;
+        __auto_type _ = _t6260;
         /* pass */
     }
-    /* pass */
+#line 3299 "src/taumir/lower.tr"
     long long chv = lower_expr(m, lf, chexpr);
-    /* pass */
+#line 3300 "src/taumir/lower.tr"
     if ((chv < 0LL)) {
-        /* pass */
+#line 3300 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3301 "src/taumir/lower.tr"
     long long sv = lower_expr(m, lf, valexpr);
-    /* pass */
+#line 3302 "src/taumir/lower.tr"
     if (((sv < 0LL) || (LFunc_vreg_type(lf, sv) != 0LL))) {
-        /* pass */
+#line 3302 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3303 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_chan_try_send", 17LL));
-    /* pass */
+#line 3304 "src/taumir/lower.tr"
     List_i64* sa = (void*)List_i64_new();
-    /* pass */
+#line 3305 "src/taumir/lower.tr"
     List_i64_append(sa, chv);
-    /* pass */
+#line 3306 "src/taumir/lower.tr"
     List_i64_append(sa, sv);
-    /* pass */
+#line 3307 "src/taumir/lower.tr"
     long long okv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3308 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(okv, _tr_str_lit_len("_tr_chan_try_send", 17LL), sa));
-    /* pass */
+#line 3309 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, okv, 4LL);
-    /* pass */
+#line 3310 "src/taumir/lower.tr"
     long long gotb = LFunc_new_block(lf);
-    /* pass */
+#line 3311 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(okv, gotb, skipb));
-    /* pass */
+#line 3312 "src/taumir/lower.tr"
     LFunc_set_cur(lf, gotb);
-    /* pass */
+#line 3313 "src/taumir/lower.tr"
     if ((!lower_block(m, lf, arm->body))) {
-        /* pass */
+#line 3313 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3314 "src/taumir/lower.tr"
     long long one = LFunc_new_vreg(lf);
-    /* pass */
+#line 3315 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(one, 1LL));
-    /* pass */
+#line 3316 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(donev, one));
-    /* pass */
+#line 3317 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(skipb));
-    /* pass */
+#line 3318 "src/taumir/lower.tr"
     LFunc_set_cur(lf, skipb);
-    /* pass */
+#line 3319 "src/taumir/lower.tr"
     return true;
 }
 
 __attribute__((hot)) bool _sel_uncond_arm(LModule* m, LFunc* lf, TrStr donev, HirBlock* body) {
-    /* pass */
+#line 3323 "src/taumir/lower.tr"
     long long dov = LFunc_new_vreg(lf);
-    /* pass */
+#line 3324 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(dov, donev));
-    /* pass */
+#line 3325 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, dov, 0LL);
-    /* pass */
+#line 3326 "src/taumir/lower.tr"
     long long armb = LFunc_new_block(lf);
-    /* pass */
+#line 3327 "src/taumir/lower.tr"
     long long skipb = LFunc_new_block(lf);
-    /* pass */
+#line 3328 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(dov, skipb, armb));
-    /* pass */
+#line 3329 "src/taumir/lower.tr"
     LFunc_set_cur(lf, armb);
-    /* pass */
+#line 3330 "src/taumir/lower.tr"
     if ((!lower_block(m, lf, body))) {
-        /* pass */
+#line 3330 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3331 "src/taumir/lower.tr"
     long long one = LFunc_new_vreg(lf);
-    /* pass */
+#line 3332 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(one, 1LL));
-    /* pass */
+#line 3333 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(donev, one));
-    /* pass */
+#line 3334 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(skipb));
-    /* pass */
+#line 3335 "src/taumir/lower.tr"
     LFunc_set_cur(lf, skipb);
-    /* pass */
+#line 3336 "src/taumir/lower.tr"
     return true;
 }
 
 __attribute__((hot)) bool _sel_timeout_arm(LModule* m, LFunc* lf, TrStr donev, TrStr tstart, HirChanSelectArm* arm) {
-    /* pass */
+#line 3340 "src/taumir/lower.tr"
     long long dov = LFunc_new_vreg(lf);
-    /* pass */
+#line 3341 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(dov, donev));
-    /* pass */
+#line 3342 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, dov, 0LL);
-    /* pass */
+#line 3343 "src/taumir/lower.tr"
     long long chkb = LFunc_new_block(lf);
-    /* pass */
+#line 3344 "src/taumir/lower.tr"
     long long skipb = LFunc_new_block(lf);
-    /* pass */
+#line 3345 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(dov, skipb, chkb));
-    /* pass */
+#line 3346 "src/taumir/lower.tr"
     LFunc_set_cur(lf, chkb);
-    /* pass */
+#line 3347 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_time_ms", 11LL));
-    /* pass */
+#line 3348 "src/taumir/lower.tr"
     long long nowv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3349 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(nowv, _tr_str_lit_len("_tr_time_ms", 11LL), (void*)List_i64_new()));
-    /* pass */
+#line 3350 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, nowv, 0LL);
-    /* pass */
+#line 3351 "src/taumir/lower.tr"
     long long sv2 = LFunc_new_vreg(lf);
-    /* pass */
+#line 3352 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(sv2, tstart));
-    /* pass */
+#line 3353 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, sv2, 0LL);
-    /* pass */
+#line 3354 "src/taumir/lower.tr"
     long long elapsed = LFunc_new_vreg(lf);
-    /* pass */
+#line 3355 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(elapsed, _tr_str_lit_len("-", 1LL), nowv, sv2));
-    /* pass */
+#line 3356 "src/taumir/lower.tr"
     long long msv = lower_expr(m, lf, arm->timeout_ms);
-    /* pass */
+#line 3357 "src/taumir/lower.tr"
     if (((msv < 0LL) || (LFunc_vreg_type(lf, msv) != 0LL))) {
-        /* pass */
+#line 3357 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3358 "src/taumir/lower.tr"
     long long cmp = LFunc_new_vreg(lf);
-    /* pass */
+#line 3359 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(cmp, _tr_str_lit_len(">=", 2LL), elapsed, msv));
-    /* pass */
+#line 3360 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, cmp, 4LL);
-    /* pass */
+#line 3361 "src/taumir/lower.tr"
     long long fireb = LFunc_new_block(lf);
-    /* pass */
+#line 3362 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(cmp, fireb, skipb));
-    /* pass */
+#line 3363 "src/taumir/lower.tr"
     LFunc_set_cur(lf, fireb);
-    /* pass */
+#line 3364 "src/taumir/lower.tr"
     if ((!lower_block(m, lf, arm->body))) {
-        /* pass */
+#line 3364 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3365 "src/taumir/lower.tr"
     long long one = LFunc_new_vreg(lf);
-    /* pass */
+#line 3366 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(one, 1LL));
-    /* pass */
+#line 3367 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(donev, one));
-    /* pass */
+#line 3368 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(skipb));
-    /* pass */
+#line 3369 "src/taumir/lower.tr"
     LFunc_set_cur(lf, skipb);
-    /* pass */
+#line 3370 "src/taumir/lower.tr"
     return true;
 }
 
 __attribute__((hot)) bool _lower_chan_select(LModule* m, LFunc* lf, List_ptr* cases) {
-    /* pass */
-    TrStr donev = ({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(LFunc_fresh_id(lf))))); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__seldone", 9LL)), _cr); _tr_str_release(_cr); _cres; });
-    /* pass */
+#line 3373 "src/taumir/lower.tr"
+    TrStr donev = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(LFunc_fresh_id(lf))))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__seldone", 9LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 3374 "src/taumir/lower.tr"
     LFunc_add_var(lf, donev);
-    /* pass */
+#line 3375 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, donev, 0LL);
-    /* pass */
+#line 3376 "src/taumir/lower.tr"
     long long z = LFunc_new_vreg(lf);
-    /* pass */
+#line 3377 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(z, 0LL));
-    /* pass */
+#line 3378 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(donev, z));
-    /* pass */
+#line 3379 "src/taumir/lower.tr"
     bool has_timeout = false;
-    /* pass */
+#line 3380 "src/taumir/lower.tr"
     long long ci = 0LL;
-    /* pass */
+#line 3381 "src/taumir/lower.tr"
     while ((ci < cases->len)) {
-        /* pass */
+#line 3382 "src/taumir/lower.tr"
         if (((*((HirChanSelectArm**)List_ptr_get(cases, ci)))->kind == 2LL)) {
-            /* pass */
+#line 3382 "src/taumir/lower.tr"
             has_timeout = true;
         }
-        /* pass */
+#line 3383 "src/taumir/lower.tr"
         ci = (ci + 1LL);
     }
-    /* pass */
+#line 3384 "src/taumir/lower.tr"
     TrStr tstart = _tr_str_lit_len("", 0LL);
-    /* pass */
+#line 3385 "src/taumir/lower.tr"
     if (has_timeout) {
-        /* pass */
-        TrStr _strtmp_t3247 = ({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(LFunc_fresh_id(lf))))); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__selstart", 10LL)), _cr); _tr_str_release(_cr); _cres; });
+#line 3386 "src/taumir/lower.tr"
+        TrStr _strtmp_t6261 = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(LFunc_fresh_id(lf))))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__selstart", 10LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
         _tr_str_release(tstart);
-        tstart = _strtmp_t3247;
-        /* pass */
+        tstart = _strtmp_t6261;
+#line 3387 "src/taumir/lower.tr"
         LFunc_add_var(lf, tstart);
-        /* pass */
+#line 3388 "src/taumir/lower.tr"
         LFunc_set_var_type(lf, tstart, 0LL);
-        /* pass */
+#line 3389 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_time_ms", 11LL));
-        /* pass */
+#line 3390 "src/taumir/lower.tr"
         long long tm = LFunc_new_vreg(lf);
-        /* pass */
+#line 3391 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(tm, _tr_str_lit_len("_tr_time_ms", 11LL), (void*)List_i64_new()));
-        /* pass */
+#line 3392 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, tm, 0LL);
-        /* pass */
+#line 3393 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IStoreVar(tstart, tm));
     }
-    /* pass */
+#line 3394 "src/taumir/lower.tr"
     long long loopb = LFunc_new_block(lf);
-    /* pass */
+#line 3395 "src/taumir/lower.tr"
     long long endb = LFunc_new_block(lf);
-    /* pass */
+#line 3396 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(loopb));
-    /* pass */
+#line 3397 "src/taumir/lower.tr"
     LFunc_set_cur(lf, loopb);
-    /* pass */
+#line 3398 "src/taumir/lower.tr"
     long long ai = 0LL;
-    /* pass */
+#line 3399 "src/taumir/lower.tr"
     while ((ai < cases->len)) {
-        /* pass */
+#line 3400 "src/taumir/lower.tr"
         HirChanSelectArm* arm = (*((HirChanSelectArm**)List_ptr_get(cases, ai)));
-        /* pass */
+#line 3401 "src/taumir/lower.tr"
         if ((arm->kind == 0LL)) {
-            /* pass */
+#line 3402 "src/taumir/lower.tr"
             if ((!_sel_recv_arm(m, lf, donev, arm))) {
-                /* pass */
+#line 3402 "src/taumir/lower.tr"
                 _tr_str_release(donev);
                 _tr_str_release(tstart);
                 return false;
             }
         } else if ((arm->kind == 1LL)) {
-            /* pass */
+#line 3404 "src/taumir/lower.tr"
             if ((!_sel_send_arm(m, lf, donev, arm))) {
-                /* pass */
+#line 3404 "src/taumir/lower.tr"
                 _tr_str_release(donev);
                 _tr_str_release(tstart);
                 return false;
             }
         }
-        /* pass */
+#line 3405 "src/taumir/lower.tr"
         ai = (ai + 1LL);
     }
-    /* pass */
+#line 3406 "src/taumir/lower.tr"
     long long aj = 0LL;
-    /* pass */
+#line 3407 "src/taumir/lower.tr"
     while ((aj < cases->len)) {
-        /* pass */
+#line 3408 "src/taumir/lower.tr"
         HirChanSelectArm* arm2 = (*((HirChanSelectArm**)List_ptr_get(cases, aj)));
-        /* pass */
+#line 3409 "src/taumir/lower.tr"
         if ((arm2->kind == 3LL)) {
-            /* pass */
+#line 3410 "src/taumir/lower.tr"
             if ((!_sel_uncond_arm(m, lf, donev, arm2->body))) {
-                /* pass */
+#line 3410 "src/taumir/lower.tr"
                 _tr_str_release(donev);
                 _tr_str_release(tstart);
                 return false;
             }
         } else if ((arm2->kind == 2LL)) {
-            /* pass */
+#line 3412 "src/taumir/lower.tr"
             if ((!_sel_timeout_arm(m, lf, donev, tstart, arm2))) {
-                /* pass */
+#line 3412 "src/taumir/lower.tr"
                 _tr_str_release(donev);
                 _tr_str_release(tstart);
                 return false;
             }
         }
-        /* pass */
+#line 3413 "src/taumir/lower.tr"
         aj = (aj + 1LL);
     }
-    /* pass */
+#line 3414 "src/taumir/lower.tr"
     long long dv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3415 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(dv, donev));
-    /* pass */
+#line 3416 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, dv, 0LL);
-    /* pass */
+#line 3417 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(dv, endb, loopb));
-    /* pass */
+#line 3418 "src/taumir/lower.tr"
     LFunc_set_cur(lf, endb);
-    /* pass */
+#line 3419 "src/taumir/lower.tr"
     _tr_str_release(donev);
     _tr_str_release(tstart);
     return true;
 }
 
 __attribute__((hot)) bool _lower_for_chan(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body) {
-    /* pass */
+#line 3424 "src/taumir/lower.tr"
     long long chv = lower_expr(m, lf, iter);
-    /* pass */
+#line 3425 "src/taumir/lower.tr"
     if ((chv < 0LL)) {
-        /* pass */
+#line 3425 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
-    TrStr okname = ({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(LFunc_fresh_id(lf))))); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__chok", 6LL)), _cr); _tr_str_release(_cr); _cres; });
-    /* pass */
+#line 3426 "src/taumir/lower.tr"
+    TrStr okname = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(LFunc_fresh_id(lf))))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__chok", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 3427 "src/taumir/lower.tr"
     LFunc_add_var(lf, okname);
-    /* pass */
+#line 3428 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, okname, 0LL);
-    /* pass */
+#line 3429 "src/taumir/lower.tr"
     long long zc = LFunc_new_vreg(lf);
-    /* pass */
+#line 3430 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(zc, 0LL));
-    /* pass */
+#line 3431 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(okname, zc));
-    /* pass */
+#line 3432 "src/taumir/lower.tr"
     LFunc_add_var(lf, var);
-    /* pass */
+#line 3433 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, var, 0LL);
-    /* pass */
+#line 3434 "src/taumir/lower.tr"
     long long loopb = LFunc_new_block(lf);
-    /* pass */
+#line 3435 "src/taumir/lower.tr"
     long long bodyb = LFunc_new_block(lf);
-    /* pass */
+#line 3436 "src/taumir/lower.tr"
     long long endb = LFunc_new_block(lf);
-    /* pass */
+#line 3437 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(loopb));
-    /* pass */
+#line 3438 "src/taumir/lower.tr"
     LFunc_set_cur(lf, loopb);
-    /* pass */
+#line 3439 "src/taumir/lower.tr"
     long long okaddr = LFunc_new_vreg(lf);
-    /* pass */
+#line 3440 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, okaddr, 12LL);
-    /* pass */
+#line 3441 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IAddrVar(okaddr, okname));
-    /* pass */
+#line 3442 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_chan_recv_ok", 16LL));
-    /* pass */
+#line 3443 "src/taumir/lower.tr"
     List_i64* ra = (void*)List_i64_new();
-    /* pass */
+#line 3444 "src/taumir/lower.tr"
     List_i64_append(ra, chv);
-    /* pass */
+#line 3445 "src/taumir/lower.tr"
     List_i64_append(ra, okaddr);
-    /* pass */
+#line 3446 "src/taumir/lower.tr"
     long long rv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3447 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(rv, _tr_str_lit_len("_tr_chan_recv_ok", 16LL), ra));
-    /* pass */
+#line 3448 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, rv, 0LL);
-    /* pass */
+#line 3449 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(var, rv));
-    /* pass */
+#line 3450 "src/taumir/lower.tr"
     long long okv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3451 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(okv, okname));
-    /* pass */
+#line 3452 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, okv, 0LL);
-    /* pass */
+#line 3453 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(okv, bodyb, endb));
-    /* pass */
+#line 3454 "src/taumir/lower.tr"
     LFunc_set_cur(lf, bodyb);
-    /* pass */
+#line 3455 "src/taumir/lower.tr"
     if ((!lower_block(m, lf, body))) {
-        /* pass */
+#line 3455 "src/taumir/lower.tr"
         _tr_str_release(okname);
         return false;
     }
-    /* pass */
+#line 3456 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(loopb));
-    /* pass */
+#line 3457 "src/taumir/lower.tr"
     LFunc_set_cur(lf, endb);
-    /* pass */
+#line 3458 "src/taumir/lower.tr"
     _tr_str_release(okname);
     return true;
 }
 
 __attribute__((hot)) bool _lower_for_iterproto(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body) {
-    /* pass */
+#line 3463 "src/taumir/lower.tr"
     TrStr icls = _recv_class(m, lf, iter);
-    /* pass */
+#line 3464 "src/taumir/lower.tr"
     if ((_tr_str_eqv((icls), (_tr_str_lit_len("", 0LL))) || (!LModule_is_class(m, icls)))) {
-        /* pass */
+#line 3464 "src/taumir/lower.tr"
         _tr_str_release(icls);
         return false;
     }
-    /* pass */
+#line 3465 "src/taumir/lower.tr"
     TrStr iterm = LModule_resolve_method(m, icls, _tr_str_lit_len("__iter__", 8LL));
-    /* pass */
+#line 3466 "src/taumir/lower.tr"
     if (_tr_str_eqv((iterm), (_tr_str_lit_len("", 0LL)))) {
-        /* pass */
+#line 3466 "src/taumir/lower.tr"
         _tr_str_release(icls);
         _tr_str_release(iterm);
         return false;
     }
-    /* pass */
+#line 3467 "src/taumir/lower.tr"
     TrStr itcls = _tr_str_retain(_hir_method_ret_ty(m, icls, _tr_str_lit_len("__iter__", 8LL))->name);
-    /* pass */
+#line 3468 "src/taumir/lower.tr"
     if ((((_is_null_str(itcls) || _tr_str_eqv((itcls), (_tr_str_lit_len("", 0LL)))) || _tr_str_eqv((itcls), (_tr_str_lit_len("void", 4LL)))) || _tr_str_eqv((itcls), (_tr_str_lit_len("None", 4LL))))) {
-        /* pass */
-        TrStr _strtmp_t3248 = _tr_str_retain(icls);
+#line 3468 "src/taumir/lower.tr"
+        TrStr _strtmp_t6262 = _tr_str_retain(icls);
         _tr_str_release(itcls);
-        itcls = _strtmp_t3248;
+        itcls = _strtmp_t6262;
     }
-    /* pass */
+#line 3469 "src/taumir/lower.tr"
     if ((!LModule_is_class(m, itcls))) {
-        /* pass */
+#line 3469 "src/taumir/lower.tr"
         _tr_str_release(icls);
         _tr_str_release(iterm);
         _tr_str_release(itcls);
         return false;
     }
-    /* pass */
+#line 3470 "src/taumir/lower.tr"
     TrStr nextm = LModule_resolve_method(m, itcls, _tr_str_lit_len("__next__", 8LL));
-    /* pass */
+#line 3471 "src/taumir/lower.tr"
     if (_tr_str_eqv((nextm), (_tr_str_lit_len("", 0LL)))) {
-        /* pass */
+#line 3471 "src/taumir/lower.tr"
         _tr_str_release(icls);
         _tr_str_release(iterm);
         _tr_str_release(itcls);
         _tr_str_release(nextm);
         return false;
     }
-    /* pass */
+#line 3472 "src/taumir/lower.tr"
     AstType* nextret = _hir_method_ret_ty(m, itcls, _tr_str_lit_len("__next__", 8LL));
-    /* pass */
+#line 3473 "src/taumir/lower.tr"
     if ((!_tr_str_eqv((nextret->name), (_tr_str_lit_len("Option", 6LL))))) {
-        /* pass */
+#line 3473 "src/taumir/lower.tr"
         _tr_str_release(icls);
         _tr_str_release(iterm);
         _tr_str_release(itcls);
         _tr_str_release(nextm);
         return false;
     }
-    /* pass */
+#line 3474 "src/taumir/lower.tr"
     long long oidx = LModule_enum_index(m, _tr_str_lit_len("Option", 6LL));
-    /* pass */
+#line 3475 "src/taumir/lower.tr"
     if ((oidx < 0LL)) {
-        /* pass */
+#line 3475 "src/taumir/lower.tr"
         _tr_str_release(icls);
         _tr_str_release(iterm);
         _tr_str_release(itcls);
         _tr_str_release(nextm);
         return false;
     }
-    /* pass */
+#line 3476 "src/taumir/lower.tr"
     VariantLayout* some_vlay = ((VariantLayout*)List_ptr_get(((EnumLayout*)List_ptr_get(m->enums, oidx))->variants, 0LL));
-    /* pass */
+#line 3477 "src/taumir/lower.tr"
     long long none_idx = EnumLayout_variant_index(((EnumLayout*)List_ptr_get(m->enums, oidx)), _tr_str_lit_len("None", 4LL));
-    /* pass */
+#line 3478 "src/taumir/lower.tr"
     if ((none_idx < 0LL)) {
-        /* pass */
+#line 3478 "src/taumir/lower.tr"
         _tr_str_release(icls);
         _tr_str_release(iterm);
         _tr_str_release(itcls);
         _tr_str_release(nextm);
         return false;
     }
-    /* pass */
+#line 3479 "src/taumir/lower.tr"
     long long objv = lower_expr(m, lf, iter);
-    /* pass */
+#line 3480 "src/taumir/lower.tr"
     if ((objv < 0LL)) {
-        /* pass */
+#line 3480 "src/taumir/lower.tr"
         _tr_str_release(icls);
         _tr_str_release(iterm);
         _tr_str_release(itcls);
         _tr_str_release(nextm);
         return false;
     }
-    /* pass */
+#line 3481 "src/taumir/lower.tr"
     long long itv = _lower_obj_call(m, lf, iterm, objv, (void*)List_ptr_new());
-    /* pass */
+#line 3482 "src/taumir/lower.tr"
     if ((itv < 0LL)) {
-        /* pass */
+#line 3482 "src/taumir/lower.tr"
         _tr_str_release(icls);
         _tr_str_release(iterm);
         _tr_str_release(itcls);
         _tr_str_release(nextm);
         return false;
     }
-    /* pass */
+#line 3487 "src/taumir/lower.tr"
     bool fdiscard = _fresh_take_obj(lf, objv);
-    /* pass */
+#line 3488 "src/taumir/lower.tr"
     fdiscard = _fresh_take_obj(lf, itv);
-    /* pass */
+#line 3489 "src/taumir/lower.tr"
     long long uid = LFunc_fresh_id(lf);
-    /* pass */
-    TrStr itname = ({ TrStr _cr = (_lir_itoa(uid)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__iter", 6LL)), _cr); _tr_str_release(_cr); _cres; });
-    /* pass */
-    TrStr nxname = ({ TrStr _cr = (_lir_itoa(uid)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__nx", 4LL)), _cr); _tr_str_release(_cr); _cres; });
-    /* pass */
+#line 3490 "src/taumir/lower.tr"
+    TrStr itname = ({ TrStr _tr_cr = (_lir_itoa(uid)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__iter", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 3491 "src/taumir/lower.tr"
+    TrStr nxname = ({ TrStr _tr_cr = (_lir_itoa(uid)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__nx", 4LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 3492 "src/taumir/lower.tr"
     LFunc_add_var(lf, itname);
-    /* pass */
+#line 3493 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, itname, 10LL);
-    /* pass */
-    ({ TrStr _at_t3249 = (_own(itcls)); LFunc_set_var_cls(lf, itname, _at_t3249); _tr_str_release(_at_t3249); });
-    /* pass */
+#line 3494 "src/taumir/lower.tr"
+    ({ TrStr _at_t6263 = (_own(itcls)); LFunc_set_var_cls(lf, itname, _at_t6263); _tr_str_release(_at_t6263); });
+#line 3495 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(itname, itv));
-    /* pass */
+#line 3496 "src/taumir/lower.tr"
     long long hdr = LFunc_new_block(lf);
-    /* pass */
+#line 3497 "src/taumir/lower.tr"
     long long bdy = LFunc_new_block(lf);
-    /* pass */
+#line 3498 "src/taumir/lower.tr"
     long long ext = LFunc_new_block(lf);
-    /* pass */
+#line 3499 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-    /* pass */
+#line 3500 "src/taumir/lower.tr"
     LFunc_set_cur(lf, hdr);
-    /* pass */
+#line 3501 "src/taumir/lower.tr"
     long long itload = LFunc_new_vreg(lf);
-    /* pass */
+#line 3502 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(itload, itname));
-    /* pass */
+#line 3503 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, itload, 10LL);
-    /* pass */
+#line 3504 "src/taumir/lower.tr"
     long long nx = _lower_obj_call(m, lf, nextm, itload, (void*)List_ptr_new());
-    /* pass */
+#line 3505 "src/taumir/lower.tr"
     if ((nx < 0LL)) {
-        /* pass */
+#line 3505 "src/taumir/lower.tr"
         _tr_str_release(icls);
         _tr_str_release(iterm);
         _tr_str_release(itcls);
@@ -8246,35 +8367,35 @@ __attribute__((hot)) bool _lower_for_iterproto(LModule* m, LFunc* lf, TrStr var,
         _tr_str_release(nxname);
         return false;
     }
-    /* pass */
+#line 3506 "src/taumir/lower.tr"
     LFunc_add_var(lf, nxname);
-    /* pass */
+#line 3507 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, nxname, 11LL);
-    /* pass */
+#line 3508 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(nxname, nx));
-    /* pass */
+#line 3509 "src/taumir/lower.tr"
     long long nxl = LFunc_new_vreg(lf);
-    /* pass */
+#line 3510 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(nxl, nxname));
-    /* pass */
+#line 3511 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, nxl, 11LL);
-    /* pass */
+#line 3512 "src/taumir/lower.tr"
     long long tagv = _emit_field_get(m, lf, nxl, 0LL, 0LL);
-    /* pass */
+#line 3513 "src/taumir/lower.tr"
     long long isnone = _variant_tag_cond(lf, tagv, none_idx);
-    /* pass */
+#line 3514 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(isnone, ext, bdy));
-    /* pass */
+#line 3515 "src/taumir/lower.tr"
     LFunc_set_cur(lf, bdy);
-    /* pass */
+#line 3516 "src/taumir/lower.tr"
     long long nxl2 = LFunc_new_vreg(lf);
-    /* pass */
+#line 3517 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(nxl2, nxname));
-    /* pass */
+#line 3518 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, nxl2, 11LL);
-    /* pass */
+#line 3519 "src/taumir/lower.tr"
     if ((!_bind_payload(m, lf, some_vlay, nxl2, nextret, 0LL, var))) {
-        /* pass */
+#line 3519 "src/taumir/lower.tr"
         _tr_str_release(icls);
         _tr_str_release(iterm);
         _tr_str_release(itcls);
@@ -8283,19 +8404,19 @@ __attribute__((hot)) bool _lower_for_iterproto(LModule* m, LFunc* lf, TrStr var,
         _tr_str_release(nxname);
         return false;
     }
-    /* pass */
+#line 3520 "src/taumir/lower.tr"
     List_i64_append(lf->loop_cont, hdr);
-    /* pass */
+#line 3521 "src/taumir/lower.tr"
     List_i64_append(lf->loop_brk, ext);
-    /* pass */
+#line 3522 "src/taumir/lower.tr"
     bool bok = lower_block(m, lf, body);
-    /* pass */
+#line 3523 "src/taumir/lower.tr"
     List_i64_pop(lf->loop_cont);
-    /* pass */
+#line 3524 "src/taumir/lower.tr"
     List_i64_pop(lf->loop_brk);
-    /* pass */
+#line 3525 "src/taumir/lower.tr"
     if ((!bok)) {
-        /* pass */
+#line 3525 "src/taumir/lower.tr"
         _tr_str_release(icls);
         _tr_str_release(iterm);
         _tr_str_release(itcls);
@@ -8304,13 +8425,13 @@ __attribute__((hot)) bool _lower_for_iterproto(LModule* m, LFunc* lf, TrStr var,
         _tr_str_release(nxname);
         return false;
     }
-    /* pass */
+#line 3526 "src/taumir/lower.tr"
     _flush_fresh_strs(m, lf);
-    /* pass */
+#line 3527 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-    /* pass */
+#line 3528 "src/taumir/lower.tr"
     LFunc_set_cur(lf, ext);
-    /* pass */
+#line 3529 "src/taumir/lower.tr"
     _tr_str_release(icls);
     _tr_str_release(iterm);
     _tr_str_release(itcls);
@@ -8321,743 +8442,744 @@ __attribute__((hot)) bool _lower_for_iterproto(LModule* m, LFunc* lf, TrStr var,
 }
 
 __attribute__((hot)) bool _lower_for_erange(LModule* m, LFunc* lf, TrStr var, HirExpr* start, HirExpr* end, bool inclusive, HirBlock* body) {
-    /* pass */
+#line 3534 "src/taumir/lower.tr"
     long long sv = lower_expr(m, lf, start);
-    /* pass */
+#line 3535 "src/taumir/lower.tr"
     if (((sv < 0LL) || (LFunc_vreg_type(lf, sv) != 0LL))) {
-        /* pass */
+#line 3535 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3536 "src/taumir/lower.tr"
     TrStr cmp = _tr_str_lit_len("<", 1LL);
-    /* pass */
+#line 3537 "src/taumir/lower.tr"
     if (inclusive) {
-        /* pass */
-        TrStr _strtmp_t3250 = _tr_str_lit_len("<=", 2LL);
+#line 3537 "src/taumir/lower.tr"
+        TrStr _strtmp_t6264 = _tr_str_lit_len("<=", 2LL);
         _tr_str_release(cmp);
-        cmp = _strtmp_t3250;
+        cmp = _strtmp_t6264;
     }
-    /* pass */
+#line 3538 "src/taumir/lower.tr"
     LFunc_add_var(lf, var);
-    /* pass */
+#line 3539 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, var, 0LL);
-    /* pass */
+#line 3540 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(var, sv));
-    /* pass */
+#line 3541 "src/taumir/lower.tr"
     long long hdr = LFunc_new_block(lf);
-    /* pass */
+#line 3542 "src/taumir/lower.tr"
     long long bdy = LFunc_new_block(lf);
-    /* pass */
+#line 3543 "src/taumir/lower.tr"
     long long latch = LFunc_new_block(lf);
-    /* pass */
+#line 3544 "src/taumir/lower.tr"
     long long ext = LFunc_new_block(lf);
-    /* pass */
+#line 3545 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-    /* pass */
+#line 3546 "src/taumir/lower.tr"
     LFunc_set_cur(lf, hdr);
-    /* pass */
+#line 3547 "src/taumir/lower.tr"
     long long vv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3548 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(vv, var));
-    /* pass */
+#line 3549 "src/taumir/lower.tr"
     long long ev = lower_expr(m, lf, end);
-    /* pass */
+#line 3550 "src/taumir/lower.tr"
     if (((ev < 0LL) || (LFunc_vreg_type(lf, ev) != 0LL))) {
-        /* pass */
+#line 3550 "src/taumir/lower.tr"
         _tr_str_release(cmp);
         return false;
     }
-    /* pass */
+#line 3551 "src/taumir/lower.tr"
     long long cond = LFunc_new_vreg(lf);
-    /* pass */
+#line 3552 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(cond, cmp, vv, ev));
-    /* pass */
+#line 3553 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(cond, bdy, ext));
-    /* pass */
+#line 3554 "src/taumir/lower.tr"
     LFunc_set_cur(lf, bdy);
-    /* pass */
+#line 3555 "src/taumir/lower.tr"
     List_i64_append(lf->loop_cont, latch);
-    /* pass */
+#line 3556 "src/taumir/lower.tr"
     List_i64_append(lf->loop_brk, ext);
-    /* pass */
+#line 3557 "src/taumir/lower.tr"
     bool rok = lower_block(m, lf, body);
-    /* pass */
+#line 3558 "src/taumir/lower.tr"
     List_i64_pop(lf->loop_cont);
-    /* pass */
+#line 3559 "src/taumir/lower.tr"
     List_i64_pop(lf->loop_brk);
-    /* pass */
+#line 3560 "src/taumir/lower.tr"
     if ((!rok)) {
-        /* pass */
+#line 3560 "src/taumir/lower.tr"
         _tr_str_release(cmp);
         return false;
     }
-    /* pass */
+#line 3561 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(latch));
-    /* pass */
+#line 3562 "src/taumir/lower.tr"
     LFunc_set_cur(lf, latch);
-    /* pass */
+#line 3563 "src/taumir/lower.tr"
     _emit_add_const(lf, var, 1LL);
-    /* pass */
+#line 3564 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-    /* pass */
+#line 3565 "src/taumir/lower.tr"
     LFunc_set_cur(lf, ext);
-    /* pass */
+#line 3566 "src/taumir/lower.tr"
     _tr_str_release(cmp);
     return true;
 }
 
 __attribute__((hot)) bool _lower_for_range(LModule* m, LFunc* lf, TrStr var, List_ptr* args, HirBlock* body) {
-    /* pass */
+#line 3569 "src/taumir/lower.tr"
     if (((args->len < 1LL) || (args->len > 3LL))) {
-        /* pass */
+#line 3569 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3570 "src/taumir/lower.tr"
     long long stepv = 1LL;
-    /* pass */
+#line 3571 "src/taumir/lower.tr"
     TrStr cmp = _tr_str_lit_len("<", 1LL);
-    /* pass */
+#line 3572 "src/taumir/lower.tr"
     if ((args->len == 3LL)) {
-        /* pass */
+#line 3573 "src/taumir/lower.tr"
         if ((!_is_const_int(((HirExpr*)List_ptr_get(args, 2LL))))) {
-            /* pass */
+#line 3573 "src/taumir/lower.tr"
             _tr_str_release(cmp);
             return false;
         }
-        /* pass */
+#line 3574 "src/taumir/lower.tr"
         stepv = _const_int_val(((HirExpr*)List_ptr_get(args, 2LL)));
-        /* pass */
+#line 3575 "src/taumir/lower.tr"
         if ((stepv == 0LL)) {
-            /* pass */
+#line 3575 "src/taumir/lower.tr"
             _tr_str_release(cmp);
             return false;
         }
-        /* pass */
+#line 3576 "src/taumir/lower.tr"
         if ((stepv < 0LL)) {
-            /* pass */
-            TrStr _strtmp_t3251 = _tr_str_lit_len(">", 1LL);
+#line 3576 "src/taumir/lower.tr"
+            TrStr _strtmp_t6265 = _tr_str_lit_len(">", 1LL);
             _tr_str_release(cmp);
-            cmp = _strtmp_t3251;
+            cmp = _strtmp_t6265;
         }
     }
-    /* pass */
+#line 3577 "src/taumir/lower.tr"
     long long sv = (-1LL);
-    /* pass */
+#line 3578 "src/taumir/lower.tr"
     HirExpr* end_expr = ((HirExpr*)List_ptr_get(args, 0LL));
-    /* pass */
+#line 3579 "src/taumir/lower.tr"
     if ((args->len == 1LL)) {
-        /* pass */
+#line 3580 "src/taumir/lower.tr"
         long long z = LFunc_new_vreg(lf);
-        /* pass */
+#line 3581 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(z, 0LL));
-        /* pass */
+#line 3582 "src/taumir/lower.tr"
         sv = z;
     } else {
-        /* pass */
+#line 3584 "src/taumir/lower.tr"
         sv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-        /* pass */
+#line 3585 "src/taumir/lower.tr"
         if ((sv < 0LL)) {
-            /* pass */
+#line 3585 "src/taumir/lower.tr"
             _tr_str_release(cmp);
             return false;
         }
-        /* pass */
+#line 3586 "src/taumir/lower.tr"
         end_expr = ((HirExpr*)List_ptr_get(args, 1LL));
     }
-    /* pass */
+#line 3587 "src/taumir/lower.tr"
     LFunc_add_var(lf, var);
-    /* pass */
+#line 3588 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, var, 0LL);
-    /* pass */
+#line 3589 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(var, sv));
-    /* pass */
+#line 3590 "src/taumir/lower.tr"
     long long hdr = LFunc_new_block(lf);
-    /* pass */
+#line 3591 "src/taumir/lower.tr"
     long long bdy = LFunc_new_block(lf);
-    /* pass */
+#line 3592 "src/taumir/lower.tr"
     long long latch = LFunc_new_block(lf);
-    /* pass */
+#line 3593 "src/taumir/lower.tr"
     long long ext = LFunc_new_block(lf);
-    /* pass */
+#line 3594 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-    /* pass */
+#line 3595 "src/taumir/lower.tr"
     LFunc_set_cur(lf, hdr);
-    /* pass */
+#line 3596 "src/taumir/lower.tr"
     long long vv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3597 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(vv, var));
-    /* pass */
+#line 3598 "src/taumir/lower.tr"
     long long ev = lower_expr(m, lf, end_expr);
-    /* pass */
+#line 3599 "src/taumir/lower.tr"
     if ((ev < 0LL)) {
-        /* pass */
+#line 3599 "src/taumir/lower.tr"
         _tr_str_release(cmp);
         return false;
     }
-    /* pass */
+#line 3600 "src/taumir/lower.tr"
     long long cond = LFunc_new_vreg(lf);
-    /* pass */
+#line 3601 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(cond, cmp, vv, ev));
-    /* pass */
+#line 3602 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(cond, bdy, ext));
-    /* pass */
+#line 3603 "src/taumir/lower.tr"
     LFunc_set_cur(lf, bdy);
-    /* pass */
+#line 3604 "src/taumir/lower.tr"
     List_i64_append(lf->loop_cont, latch);
-    /* pass */
+#line 3605 "src/taumir/lower.tr"
     List_i64_append(lf->loop_brk, ext);
-    /* pass */
+#line 3606 "src/taumir/lower.tr"
     bool rok = lower_block(m, lf, body);
-    /* pass */
+#line 3607 "src/taumir/lower.tr"
     List_i64_pop(lf->loop_cont);
-    /* pass */
+#line 3608 "src/taumir/lower.tr"
     List_i64_pop(lf->loop_brk);
-    /* pass */
+#line 3609 "src/taumir/lower.tr"
     if ((!rok)) {
-        /* pass */
+#line 3609 "src/taumir/lower.tr"
         _tr_str_release(cmp);
         return false;
     }
-    /* pass */
+#line 3610 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(latch));
-    /* pass */
+#line 3611 "src/taumir/lower.tr"
     LFunc_set_cur(lf, latch);
-    /* pass */
+#line 3612 "src/taumir/lower.tr"
     _emit_add_const(lf, var, stepv);
-    /* pass */
+#line 3613 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-    /* pass */
+#line 3614 "src/taumir/lower.tr"
     LFunc_set_cur(lf, ext);
-    /* pass */
+#line 3615 "src/taumir/lower.tr"
     _tr_str_release(cmp);
     return true;
 }
 
 __attribute__((hot)) bool _lower_for_list(LModule* m, LFunc* lf, TrStr var, HirExpr* iter, HirBlock* body) {
-    /* pass */
+#line 3618 "src/taumir/lower.tr"
     long long lv = lower_expr(m, lf, iter);
-    /* pass */
+#line 3619 "src/taumir/lower.tr"
     if ((lv < 0LL)) {
-        /* pass */
+#line 3619 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3620 "src/taumir/lower.tr"
     long long ltag = LFunc_vreg_type(lf, lv);
-    /* pass */
+#line 3621 "src/taumir/lower.tr"
     if ((!_is_list_tag(ltag))) {
-        /* pass */
+#line 3621 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3622 "src/taumir/lower.tr"
     long long elem_t = _list_elem_tag(ltag);
-    /* pass */
+#line 3623 "src/taumir/lower.tr"
     long long uid = LFunc_fresh_id(lf);
-    /* pass */
-    TrStr hname = ({ TrStr _cr = (_lir_itoa(uid)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__forlist", 9LL)), _cr); _tr_str_release(_cr); _cres; });
-    /* pass */
-    TrStr iname = ({ TrStr _cr = (_lir_itoa(uid)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__foridx", 8LL)), _cr); _tr_str_release(_cr); _cres; });
-    /* pass */
+#line 3624 "src/taumir/lower.tr"
+    TrStr hname = ({ TrStr _tr_cr = (_lir_itoa(uid)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__forlist", 9LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 3625 "src/taumir/lower.tr"
+    TrStr iname = ({ TrStr _tr_cr = (_lir_itoa(uid)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__foridx", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 3626 "src/taumir/lower.tr"
     LFunc_add_var(lf, hname);
-    /* pass */
+#line 3627 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, hname, ltag);
-    /* pass */
+#line 3628 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(hname, lv));
-    /* pass */
+#line 3629 "src/taumir/lower.tr"
     long long z = LFunc_new_vreg(lf);
-    /* pass */
+#line 3630 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(z, 0LL));
-    /* pass */
+#line 3631 "src/taumir/lower.tr"
     LFunc_add_var(lf, iname);
-    /* pass */
+#line 3632 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, iname, 0LL);
-    /* pass */
+#line 3633 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(iname, z));
-    /* pass */
+#line 3634 "src/taumir/lower.tr"
     long long hdr = LFunc_new_block(lf);
-    /* pass */
+#line 3635 "src/taumir/lower.tr"
     long long bdy = LFunc_new_block(lf);
-    /* pass */
+#line 3636 "src/taumir/lower.tr"
     long long latch = LFunc_new_block(lf);
-    /* pass */
+#line 3637 "src/taumir/lower.tr"
     long long ext = LFunc_new_block(lf);
-    /* pass */
+#line 3638 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-    /* pass */
+#line 3639 "src/taumir/lower.tr"
     LFunc_set_cur(lf, hdr);
-    /* pass */
+#line 3640 "src/taumir/lower.tr"
     long long hv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3641 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(hv, hname));
-    /* pass */
+#line 3642 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_len", 15LL));
-    /* pass */
+#line 3643 "src/taumir/lower.tr"
     List_i64* la = (void*)List_i64_new();
-    /* pass */
+#line 3644 "src/taumir/lower.tr"
     List_i64_append(la, hv);
-    /* pass */
+#line 3645 "src/taumir/lower.tr"
     long long lenv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3646 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(lenv, _tr_str_lit_len("_tr_rt_list_len", 15LL), la));
-    /* pass */
+#line 3647 "src/taumir/lower.tr"
     long long iv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3648 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(iv, iname));
-    /* pass */
+#line 3649 "src/taumir/lower.tr"
     long long cond = LFunc_new_vreg(lf);
-    /* pass */
+#line 3650 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(cond, _tr_str_lit_len("<", 1LL), iv, lenv));
-    /* pass */
+#line 3651 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(cond, bdy, ext));
-    /* pass */
+#line 3652 "src/taumir/lower.tr"
     LFunc_set_cur(lf, bdy);
-    /* pass */
+#line 3653 "src/taumir/lower.tr"
     long long hv2 = LFunc_new_vreg(lf);
-    /* pass */
+#line 3654 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(hv2, hname));
-    /* pass */
+#line 3655 "src/taumir/lower.tr"
     long long iv2 = LFunc_new_vreg(lf);
-    /* pass */
+#line 3656 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(iv2, iname));
-    /* pass */
+#line 3657 "src/taumir/lower.tr"
     long long xval = _list_get_raw(m, lf, ltag, hv2, iv2);
-    /* pass */
+#line 3658 "src/taumir/lower.tr"
     if ((elem_t == 5LL)) {
-        /* pass */
+#line 3661 "src/taumir/lower.tr"
         long long xfb = LFunc_new_vreg(lf);
-        /* pass */
+#line 3662 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IBitsF(xfb, xval));
-        /* pass */
+#line 3663 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, xfb, 5LL);
-        /* pass */
+#line 3664 "src/taumir/lower.tr"
         xval = xfb;
     } else {
-        /* pass */
+#line 3666 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, xval, elem_t);
     }
-    /* pass */
+#line 3667 "src/taumir/lower.tr"
     if ((elem_t == 1LL)) {
-        /* pass */
+#line 3667 "src/taumir/lower.tr"
         _retain_str(m, lf, xval);
     }
-    /* pass */
+#line 3668 "src/taumir/lower.tr"
     LFunc_add_var(lf, var);
-    /* pass */
+#line 3669 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, var, elem_t);
-    /* pass */
+#line 3670 "src/taumir/lower.tr"
     if ((elem_t == 10LL)) {
-        /* pass */
+#line 3671 "src/taumir/lower.tr"
         AstType* it_ty = hir_expr_type(iter);
-        /* pass */
+#line 3672 "src/taumir/lower.tr"
         if (((it_ty->args->len > 0LL) && (!_is_null_str((*((AstType**)List_ptr_get(it_ty->args, 0LL)))->name)))) {
-            /* pass */
+#line 3673 "src/taumir/lower.tr"
             if (LModule_is_class(m, (*((AstType**)List_ptr_get(it_ty->args, 0LL)))->name)) {
-                /* pass */
-                ({ TrStr _at_t3252 = (_own((*((AstType**)List_ptr_get(it_ty->args, 0LL)))->name)); LFunc_set_var_cls(lf, var, _at_t3252); _tr_str_release(_at_t3252); });
+#line 3674 "src/taumir/lower.tr"
+                ({ TrStr _at_t6266 = (_own((*((AstType**)List_ptr_get(it_ty->args, 0LL)))->name)); LFunc_set_var_cls(lf, var, _at_t6266); _tr_str_release(_at_t6266); });
             }
         }
     }
-    /* pass */
+#line 3675 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(var, xval));
-    /* pass */
+#line 3676 "src/taumir/lower.tr"
     List_i64_append(lf->loop_cont, latch);
-    /* pass */
+#line 3677 "src/taumir/lower.tr"
     List_i64_append(lf->loop_brk, ext);
-    /* pass */
+#line 3678 "src/taumir/lower.tr"
     bool fok = lower_block(m, lf, body);
-    /* pass */
+#line 3679 "src/taumir/lower.tr"
     List_i64_pop(lf->loop_cont);
-    /* pass */
+#line 3680 "src/taumir/lower.tr"
     List_i64_pop(lf->loop_brk);
-    /* pass */
+#line 3681 "src/taumir/lower.tr"
     if ((!fok)) {
-        /* pass */
+#line 3681 "src/taumir/lower.tr"
         _tr_str_release(hname);
         _tr_str_release(iname);
         return false;
     }
-    /* pass */
+#line 3682 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(latch));
-    /* pass */
+#line 3683 "src/taumir/lower.tr"
     LFunc_set_cur(lf, latch);
-    /* pass */
+#line 3684 "src/taumir/lower.tr"
     _emit_incr(lf, iname);
-    /* pass */
+#line 3685 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-    /* pass */
+#line 3686 "src/taumir/lower.tr"
     LFunc_set_cur(lf, ext);
-    /* pass */
+#line 3687 "src/taumir/lower.tr"
     _tr_str_release(hname);
     _tr_str_release(iname);
     return true;
 }
 
 __attribute__((hot)) bool _lower_for_unpack(LModule* m, LFunc* lf, List_TrStr* vars, HirExpr* iter, HirBlock* body) {
-    /* pass */
+#line 3691 "src/taumir/lower.tr"
     if ((vars->len != 2LL)) {
-        /* pass */
+#line 3691 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
-    __auto_type _t3253 = (*iter);
-    if (_t3253.tag == HirExpr_ECall) {
-        __auto_type callee = _t3253.data.ECall.callee;
-__auto_type args = _t3253.data.ECall.args;
-        /* pass */
-        if ((_tr_str_eqv((_ident_name(callee)), (_tr_str_lit_len("enumerate", 9LL))) && (args->len == 1LL))) {
-            /* pass */
-            return ({ TrStr _at_t3254 = (List_TrStr_get(vars, 0LL)); TrStr _at_t3255 = (List_TrStr_get(vars, 1LL)); __auto_type _wr = (_lower_enumerate(m, lf, _at_t3254, _at_t3255, ((HirExpr*)List_ptr_get(args, 0LL)), body)); _tr_str_release(_at_t3254); _tr_str_release(_at_t3255); _wr; });
+#line 3692 "src/taumir/lower.tr"
+    __auto_type _t6267 = (*iter);
+    if (_t6267.tag == HirExpr_ECall) {
+        __auto_type callee = _t6267.data.ECall.callee;
+__auto_type args = _t6267.data.ECall.args;
+#line 3694 "src/taumir/lower.tr"
+        if ((({ TrStr _cmpa_t6268 = (_ident_name(callee)); TrStr _cmpb_t6269 = (_tr_str_lit_len("enumerate", 9LL)); _Bool _cmpr_t6270 = _tr_str_eqv(_cmpa_t6268, _cmpb_t6269); _tr_str_release(_cmpa_t6268); _cmpr_t6270; }) && (args->len == 1LL))) {
+#line 3695 "src/taumir/lower.tr"
+            return ({ TrStr _at_t6271 = (List_TrStr_get(vars, 0LL)); TrStr _at_t6272 = (List_TrStr_get(vars, 1LL)); __auto_type _wr = (_lower_enumerate(m, lf, _at_t6271, _at_t6272, ((HirExpr*)List_ptr_get(args, 0LL)), body)); _tr_str_release(_at_t6271); _tr_str_release(_at_t6272); _wr; });
         }
-        /* pass */
-        if ((_tr_str_eqv((_ident_name(callee)), (_tr_str_lit_len("zip", 3LL))) && (args->len == 2LL))) {
-            /* pass */
-            return ({ TrStr _at_t3256 = (List_TrStr_get(vars, 0LL)); TrStr _at_t3257 = (List_TrStr_get(vars, 1LL)); __auto_type _wr = (_lower_zip(m, lf, _at_t3256, _at_t3257, ((HirExpr*)List_ptr_get(args, 0LL)), ((HirExpr*)List_ptr_get(args, 1LL)), body)); _tr_str_release(_at_t3256); _tr_str_release(_at_t3257); _wr; });
+#line 3696 "src/taumir/lower.tr"
+        if ((({ TrStr _cmpa_t6273 = (_ident_name(callee)); TrStr _cmpb_t6274 = (_tr_str_lit_len("zip", 3LL)); _Bool _cmpr_t6275 = _tr_str_eqv(_cmpa_t6273, _cmpb_t6274); _tr_str_release(_cmpa_t6273); _cmpr_t6275; }) && (args->len == 2LL))) {
+#line 3697 "src/taumir/lower.tr"
+            return ({ TrStr _at_t6276 = (List_TrStr_get(vars, 0LL)); TrStr _at_t6277 = (List_TrStr_get(vars, 1LL)); __auto_type _ord_t6278 = (((HirExpr*)List_ptr_get(args, 0LL))); __auto_type _wr = (_lower_zip(m, lf, _at_t6276, _at_t6277, _ord_t6278, ((HirExpr*)List_ptr_get(args, 1LL)), body)); _tr_str_release(_at_t6276); _tr_str_release(_at_t6277); _wr; });
         }
-    } else if (_t3253.tag == HirExpr_EMethodCall) {
-        __auto_type dobj = _t3253.data.EMethodCall.obj;
-__auto_type dmeth = _t3253.data.EMethodCall.method;
-        /* pass */
+    } else if (_t6267.tag == HirExpr_EMethodCall) {
+        __auto_type dobj = _t6267.data.EMethodCall.obj;
+__auto_type dmeth = _t6267.data.EMethodCall.method;
+#line 3699 "src/taumir/lower.tr"
         if (_tr_str_eqv((dmeth), (_tr_str_lit_len("items", 5LL)))) {
-            /* pass */
-            return ({ TrStr _at_t3258 = (List_TrStr_get(vars, 0LL)); TrStr _at_t3259 = (List_TrStr_get(vars, 1LL)); __auto_type _wr = (_lower_dict_items_unpack(m, lf, _at_t3258, _at_t3259, dobj, body)); _tr_str_release(_at_t3258); _tr_str_release(_at_t3259); _wr; });
+#line 3700 "src/taumir/lower.tr"
+            bool _trret1579 = ({ TrStr _at_t6279 = (List_TrStr_get(vars, 0LL)); TrStr _at_t6280 = (List_TrStr_get(vars, 1LL)); __auto_type _wr = (_lower_dict_items_unpack(m, lf, _at_t6279, _at_t6280, dobj, body)); _tr_str_release(_at_t6279); _tr_str_release(_at_t6280); _wr; });
+            return _trret1579;
         }
     } else if (1) {
-        __auto_type _ = _t3253;
-        /* pass */
+        __auto_type _ = _t6267;
+#line 3702 "src/taumir/lower.tr"
         /* pass */
     }
-    /* pass */
+#line 3703 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) bool _lower_enumerate(LModule* m, LFunc* lf, TrStr ivar, TrStr evar, HirExpr* listexpr, HirBlock* body) {
-    /* pass */
+#line 3707 "src/taumir/lower.tr"
     long long lv = lower_expr(m, lf, listexpr);
-    /* pass */
+#line 3708 "src/taumir/lower.tr"
     if ((lv < 0LL)) {
-        /* pass */
+#line 3708 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3709 "src/taumir/lower.tr"
     long long ltag = LFunc_vreg_type(lf, lv);
-    /* pass */
+#line 3710 "src/taumir/lower.tr"
     if ((!_is_list_tag(ltag))) {
-        /* pass */
+#line 3710 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3711 "src/taumir/lower.tr"
     long long elem_t = _list_elem_tag(ltag);
-    /* pass */
+#line 3712 "src/taumir/lower.tr"
     long long uid = LFunc_fresh_id(lf);
-    /* pass */
-    TrStr hname = ({ TrStr _cr = (_lir_itoa(uid)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__enumlist", 10LL)), _cr); _tr_str_release(_cr); _cres; });
-    /* pass */
+#line 3713 "src/taumir/lower.tr"
+    TrStr hname = ({ TrStr _tr_cr = (_lir_itoa(uid)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__enumlist", 10LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 3714 "src/taumir/lower.tr"
     LFunc_add_var(lf, hname);
-    /* pass */
+#line 3715 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, hname, ltag);
-    /* pass */
+#line 3716 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(hname, lv));
-    /* pass */
+#line 3717 "src/taumir/lower.tr"
     long long z = LFunc_new_vreg(lf);
-    /* pass */
+#line 3718 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(z, 0LL));
-    /* pass */
+#line 3719 "src/taumir/lower.tr"
     LFunc_add_var(lf, ivar);
-    /* pass */
+#line 3720 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, ivar, 0LL);
-    /* pass */
+#line 3721 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(ivar, z));
-    /* pass */
+#line 3722 "src/taumir/lower.tr"
     long long hdr = LFunc_new_block(lf);
-    /* pass */
+#line 3723 "src/taumir/lower.tr"
     long long bdy = LFunc_new_block(lf);
-    /* pass */
+#line 3724 "src/taumir/lower.tr"
     long long latch = LFunc_new_block(lf);
-    /* pass */
+#line 3725 "src/taumir/lower.tr"
     long long ext = LFunc_new_block(lf);
-    /* pass */
+#line 3726 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-    /* pass */
+#line 3727 "src/taumir/lower.tr"
     LFunc_set_cur(lf, hdr);
-    /* pass */
+#line 3728 "src/taumir/lower.tr"
     long long hv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3729 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(hv, hname));
-    /* pass */
+#line 3730 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_len", 15LL));
-    /* pass */
+#line 3731 "src/taumir/lower.tr"
     List_i64* la = (void*)List_i64_new();
-    /* pass */
+#line 3732 "src/taumir/lower.tr"
     List_i64_append(la, hv);
-    /* pass */
+#line 3733 "src/taumir/lower.tr"
     long long lenv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3734 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(lenv, _tr_str_lit_len("_tr_rt_list_len", 15LL), la));
-    /* pass */
+#line 3735 "src/taumir/lower.tr"
     long long iv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3736 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(iv, ivar));
-    /* pass */
+#line 3737 "src/taumir/lower.tr"
     long long cond = LFunc_new_vreg(lf);
-    /* pass */
+#line 3738 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(cond, _tr_str_lit_len("<", 1LL), iv, lenv));
-    /* pass */
+#line 3739 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(cond, bdy, ext));
-    /* pass */
+#line 3740 "src/taumir/lower.tr"
     LFunc_set_cur(lf, bdy);
-    /* pass */
+#line 3741 "src/taumir/lower.tr"
     long long hv2 = LFunc_new_vreg(lf);
-    /* pass */
+#line 3742 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(hv2, hname));
-    /* pass */
+#line 3743 "src/taumir/lower.tr"
     long long iv2 = LFunc_new_vreg(lf);
-    /* pass */
+#line 3744 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(iv2, ivar));
-    /* pass */
+#line 3745 "src/taumir/lower.tr"
     long long xval = _list_get_raw(m, lf, ltag, hv2, iv2);
-    /* pass */
+#line 3746 "src/taumir/lower.tr"
     if ((elem_t == 5LL)) {
-        /* pass */
+#line 3747 "src/taumir/lower.tr"
         long long xfb2 = LFunc_new_vreg(lf);
-        /* pass */
+#line 3748 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IBitsF(xfb2, xval));
-        /* pass */
+#line 3749 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, xfb2, 5LL);
-        /* pass */
+#line 3750 "src/taumir/lower.tr"
         xval = xfb2;
     } else {
-        /* pass */
+#line 3752 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, xval, elem_t);
     }
-    /* pass */
+#line 3753 "src/taumir/lower.tr"
     if ((elem_t == 1LL)) {
-        /* pass */
+#line 3753 "src/taumir/lower.tr"
         _retain_str(m, lf, xval);
     }
-    /* pass */
+#line 3754 "src/taumir/lower.tr"
     LFunc_add_var(lf, evar);
-    /* pass */
+#line 3755 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, evar, elem_t);
-    /* pass */
+#line 3756 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(evar, xval));
-    /* pass */
+#line 3757 "src/taumir/lower.tr"
     List_i64_append(lf->loop_cont, latch);
-    /* pass */
+#line 3758 "src/taumir/lower.tr"
     List_i64_append(lf->loop_brk, ext);
-    /* pass */
+#line 3759 "src/taumir/lower.tr"
     bool ok = lower_block(m, lf, body);
-    /* pass */
+#line 3760 "src/taumir/lower.tr"
     List_i64_pop(lf->loop_cont);
-    /* pass */
+#line 3761 "src/taumir/lower.tr"
     List_i64_pop(lf->loop_brk);
-    /* pass */
+#line 3762 "src/taumir/lower.tr"
     if ((!ok)) {
-        /* pass */
+#line 3762 "src/taumir/lower.tr"
         _tr_str_release(hname);
         return false;
     }
-    /* pass */
+#line 3763 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(latch));
-    /* pass */
+#line 3764 "src/taumir/lower.tr"
     LFunc_set_cur(lf, latch);
-    /* pass */
+#line 3765 "src/taumir/lower.tr"
     _emit_incr(lf, ivar);
-    /* pass */
+#line 3766 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-    /* pass */
+#line 3767 "src/taumir/lower.tr"
     LFunc_set_cur(lf, ext);
-    /* pass */
+#line 3768 "src/taumir/lower.tr"
     _tr_str_release(hname);
     return true;
 }
 
 __attribute__((hot)) bool _lower_zip(LModule* m, LFunc* lf, TrStr v0, TrStr v1, HirExpr* aexpr, HirExpr* bexpr, HirBlock* body) {
-    /* pass */
+#line 3772 "src/taumir/lower.tr"
     long long av = lower_expr(m, lf, aexpr);
-    /* pass */
+#line 3773 "src/taumir/lower.tr"
     if ((av < 0LL)) {
-        /* pass */
+#line 3773 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3774 "src/taumir/lower.tr"
     long long atag = LFunc_vreg_type(lf, av);
-    /* pass */
+#line 3775 "src/taumir/lower.tr"
     if ((!_is_list_tag(atag))) {
-        /* pass */
+#line 3775 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3776 "src/taumir/lower.tr"
     long long bv = lower_expr(m, lf, bexpr);
-    /* pass */
+#line 3777 "src/taumir/lower.tr"
     if ((bv < 0LL)) {
-        /* pass */
+#line 3777 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3778 "src/taumir/lower.tr"
     long long btag = LFunc_vreg_type(lf, bv);
-    /* pass */
+#line 3779 "src/taumir/lower.tr"
     if ((!_is_list_tag(btag))) {
-        /* pass */
+#line 3779 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3780 "src/taumir/lower.tr"
     long long uid = LFunc_fresh_id(lf);
-    /* pass */
-    TrStr aname = ({ TrStr _cr = (_lir_itoa(uid)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__zipa", 6LL)), _cr); _tr_str_release(_cr); _cres; });
-    /* pass */
-    TrStr bname = ({ TrStr _cr = (_lir_itoa(uid)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__zipb", 6LL)), _cr); _tr_str_release(_cr); _cres; });
-    /* pass */
+#line 3781 "src/taumir/lower.tr"
+    TrStr aname = ({ TrStr _tr_cr = (_lir_itoa(uid)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__zipa", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 3782 "src/taumir/lower.tr"
+    TrStr bname = ({ TrStr _tr_cr = (_lir_itoa(uid)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__zipb", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 3783 "src/taumir/lower.tr"
     LFunc_add_var(lf, aname);
-    /* pass */
+#line 3783 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, aname, atag);
-    /* pass */
+#line 3783 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(aname, av));
-    /* pass */
+#line 3784 "src/taumir/lower.tr"
     LFunc_add_var(lf, bname);
-    /* pass */
+#line 3784 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, bname, btag);
-    /* pass */
+#line 3784 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(bname, bv));
-    /* pass */
+#line 3785 "src/taumir/lower.tr"
     long long z = LFunc_new_vreg(lf);
-    /* pass */
+#line 3785 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(z, 0LL));
-    /* pass */
-    ({ TrStr _at_t3260 = (({ TrStr _cr = (_lir_itoa(uid)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__zipi", 6LL)), _cr); _tr_str_release(_cr); _cres; })); LFunc_add_var(lf, _at_t3260); _tr_str_release(_at_t3260); });
-    /* pass */
-    TrStr iname = ({ TrStr _cr = (_lir_itoa(uid)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__zipi", 6LL)), _cr); _tr_str_release(_cr); _cres; });
-    /* pass */
+#line 3786 "src/taumir/lower.tr"
+    ({ TrStr _at_t6281 = (({ TrStr _tr_cr = (_lir_itoa(uid)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__zipi", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); LFunc_add_var(lf, _at_t6281); _tr_str_release(_at_t6281); });
+#line 3786 "src/taumir/lower.tr"
+    TrStr iname = ({ TrStr _tr_cr = (_lir_itoa(uid)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__zipi", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 3787 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, iname, 0LL);
-    /* pass */
+#line 3787 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(iname, z));
-    /* pass */
+#line 3788 "src/taumir/lower.tr"
     long long hdr = LFunc_new_block(lf);
-    /* pass */
+#line 3788 "src/taumir/lower.tr"
     long long bdy = LFunc_new_block(lf);
-    /* pass */
+#line 3788 "src/taumir/lower.tr"
     long long latch = LFunc_new_block(lf);
-    /* pass */
+#line 3788 "src/taumir/lower.tr"
     long long ext = LFunc_new_block(lf);
-    /* pass */
+#line 3789 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-    /* pass */
+#line 3790 "src/taumir/lower.tr"
     LFunc_set_cur(lf, hdr);
-    /* pass */
+#line 3791 "src/taumir/lower.tr"
     long long ahv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3791 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(ahv, aname));
-    /* pass */
+#line 3792 "src/taumir/lower.tr"
     long long bhv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3792 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(bhv, bname));
-    /* pass */
+#line 3793 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_len", 15LL));
-    /* pass */
+#line 3794 "src/taumir/lower.tr"
     List_i64* ala = (void*)List_i64_new();
-    /* pass */
+#line 3794 "src/taumir/lower.tr"
     List_i64_append(ala, ahv);
-    /* pass */
+#line 3795 "src/taumir/lower.tr"
     long long alenv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3795 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(alenv, _tr_str_lit_len("_tr_rt_list_len", 15LL), ala));
-    /* pass */
+#line 3796 "src/taumir/lower.tr"
     List_i64* bla = (void*)List_i64_new();
-    /* pass */
+#line 3796 "src/taumir/lower.tr"
     List_i64_append(bla, bhv);
-    /* pass */
+#line 3797 "src/taumir/lower.tr"
     long long blenv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3797 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(blenv, _tr_str_lit_len("_tr_rt_list_len", 15LL), bla));
-    /* pass */
+#line 3798 "src/taumir/lower.tr"
     long long iv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3798 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(iv, iname));
-    /* pass */
+#line 3799 "src/taumir/lower.tr"
     long long c1 = LFunc_new_vreg(lf);
-    /* pass */
+#line 3799 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(c1, _tr_str_lit_len("<", 1LL), iv, alenv));
-    /* pass */
+#line 3800 "src/taumir/lower.tr"
     long long c2 = LFunc_new_vreg(lf);
-    /* pass */
+#line 3800 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(c2, _tr_str_lit_len("<", 1LL), iv, blenv));
-    /* pass */
+#line 3801 "src/taumir/lower.tr"
     long long cond = LFunc_new_vreg(lf);
-    /* pass */
+#line 3801 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(cond, _tr_str_lit_len("&", 1LL), c1, c2));
-    /* pass */
+#line 3802 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(cond, bdy, ext));
-    /* pass */
+#line 3803 "src/taumir/lower.tr"
     LFunc_set_cur(lf, bdy);
-    /* pass */
+#line 3804 "src/taumir/lower.tr"
     long long ahv2 = LFunc_new_vreg(lf);
-    /* pass */
+#line 3804 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(ahv2, aname));
-    /* pass */
+#line 3805 "src/taumir/lower.tr"
     long long bhv2 = LFunc_new_vreg(lf);
-    /* pass */
+#line 3805 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(bhv2, bname));
-    /* pass */
+#line 3806 "src/taumir/lower.tr"
     long long iv2 = LFunc_new_vreg(lf);
-    /* pass */
+#line 3806 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(iv2, iname));
-    /* pass */
+#line 3807 "src/taumir/lower.tr"
     long long aelem = _list_get_elem(m, lf, atag, ahv2, iv2);
-    /* pass */
+#line 3808 "src/taumir/lower.tr"
     long long belem = _list_get_elem(m, lf, btag, bhv2, iv2);
-    /* pass */
+#line 3809 "src/taumir/lower.tr"
     long long aet = _list_elem_tag(atag);
-    /* pass */
+#line 3809 "src/taumir/lower.tr"
     long long bet = _list_elem_tag(btag);
-    /* pass */
+#line 3810 "src/taumir/lower.tr"
     if ((aet == 1LL)) {
-        /* pass */
+#line 3810 "src/taumir/lower.tr"
         _retain_str(m, lf, aelem);
     }
-    /* pass */
+#line 3811 "src/taumir/lower.tr"
     if ((bet == 1LL)) {
-        /* pass */
+#line 3811 "src/taumir/lower.tr"
         _retain_str(m, lf, belem);
     }
-    /* pass */
+#line 3812 "src/taumir/lower.tr"
     LFunc_add_var(lf, v0);
-    /* pass */
+#line 3812 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, v0, aet);
-    /* pass */
+#line 3812 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(v0, aelem));
-    /* pass */
+#line 3813 "src/taumir/lower.tr"
     LFunc_add_var(lf, v1);
-    /* pass */
+#line 3813 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, v1, bet);
-    /* pass */
+#line 3813 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(v1, belem));
-    /* pass */
+#line 3814 "src/taumir/lower.tr"
     List_i64_append(lf->loop_cont, latch);
-    /* pass */
+#line 3814 "src/taumir/lower.tr"
     List_i64_append(lf->loop_brk, ext);
-    /* pass */
+#line 3815 "src/taumir/lower.tr"
     bool ok = lower_block(m, lf, body);
-    /* pass */
+#line 3816 "src/taumir/lower.tr"
     List_i64_pop(lf->loop_cont);
-    /* pass */
+#line 3816 "src/taumir/lower.tr"
     List_i64_pop(lf->loop_brk);
-    /* pass */
+#line 3817 "src/taumir/lower.tr"
     if ((!ok)) {
-        /* pass */
+#line 3817 "src/taumir/lower.tr"
         _tr_str_release(aname);
         _tr_str_release(bname);
         _tr_str_release(iname);
         return false;
     }
-    /* pass */
+#line 3818 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(latch));
-    /* pass */
+#line 3819 "src/taumir/lower.tr"
     LFunc_set_cur(lf, latch);
-    /* pass */
+#line 3820 "src/taumir/lower.tr"
     _emit_incr(lf, iname);
-    /* pass */
+#line 3821 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-    /* pass */
+#line 3822 "src/taumir/lower.tr"
     LFunc_set_cur(lf, ext);
-    /* pass */
+#line 3823 "src/taumir/lower.tr"
     _tr_str_release(aname);
     _tr_str_release(bname);
     _tr_str_release(iname);
@@ -9065,199 +9187,199 @@ __attribute__((hot)) bool _lower_zip(LModule* m, LFunc* lf, TrStr v0, TrStr v1, 
 }
 
 __attribute__((hot)) bool _lower_dict_items_unpack(LModule* m, LFunc* lf, TrStr kvar, TrStr vvar, HirExpr* dictexpr, HirBlock* body) {
-    /* pass */
+#line 3827 "src/taumir/lower.tr"
     long long dv = lower_expr(m, lf, dictexpr);
-    /* pass */
+#line 3828 "src/taumir/lower.tr"
     if ((dv < 0LL)) {
-        /* pass */
+#line 3828 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3829 "src/taumir/lower.tr"
     long long dtag = LFunc_vreg_type(lf, dv);
-    /* pass */
+#line 3830 "src/taumir/lower.tr"
     if ((!_is_dict_tag(dtag))) {
-        /* pass */
+#line 3830 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 3831 "src/taumir/lower.tr"
     bool kstr = _dict_key_is_str(dtag);
-    /* pass */
+#line 3832 "src/taumir/lower.tr"
     long long vtag = _dict_val_tag(dtag);
-    /* pass */
+#line 3833 "src/taumir/lower.tr"
     long long uid = LFunc_fresh_id(lf);
-    /* pass */
-    TrStr dname = ({ TrStr _cr = (_lir_itoa(uid)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__ditd", 6LL)), _cr); _tr_str_release(_cr); _cres; });
-    /* pass */
+#line 3834 "src/taumir/lower.tr"
+    TrStr dname = ({ TrStr _tr_cr = (_lir_itoa(uid)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__ditd", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 3835 "src/taumir/lower.tr"
     LFunc_add_var(lf, dname);
-    /* pass */
+#line 3835 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, dname, dtag);
-    /* pass */
+#line 3835 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(dname, dv));
-    /* pass */
+#line 3836 "src/taumir/lower.tr"
     TrStr isym = _tr_str_lit_len("_tr_rt_idict_items", 18LL);
-    /* pass */
+#line 3837 "src/taumir/lower.tr"
     if (kstr) {
-        /* pass */
-        TrStr _strtmp_t3261 = _tr_str_lit_len("_tr_rt_dict_items", 17LL);
+#line 3837 "src/taumir/lower.tr"
+        TrStr _strtmp_t6282 = _tr_str_lit_len("_tr_rt_dict_items", 17LL);
         _tr_str_release(isym);
-        isym = _strtmp_t3261;
+        isym = _strtmp_t6282;
     }
-    /* pass */
+#line 3838 "src/taumir/lower.tr"
     LModule_add_extern(m, isym);
-    /* pass */
+#line 3839 "src/taumir/lower.tr"
     List_i64* ia = (void*)List_i64_new();
-    /* pass */
+#line 3839 "src/taumir/lower.tr"
     List_i64_append(ia, dv);
-    /* pass */
+#line 3840 "src/taumir/lower.tr"
     long long items = LFunc_new_vreg(lf);
-    /* pass */
+#line 3840 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(items, isym, ia));
-    /* pass */
+#line 3841 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, items, 3LL);
-    /* pass */
-    TrStr iname = ({ TrStr _cr = (_lir_itoa(uid)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__diti", 6LL)), _cr); _tr_str_release(_cr); _cres; });
-    /* pass */
-    TrStr itemsname = ({ TrStr _cr = (_lir_itoa(uid)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__ditl", 6LL)), _cr); _tr_str_release(_cr); _cres; });
-    /* pass */
+#line 3842 "src/taumir/lower.tr"
+    TrStr iname = ({ TrStr _tr_cr = (_lir_itoa(uid)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__diti", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 3843 "src/taumir/lower.tr"
+    TrStr itemsname = ({ TrStr _tr_cr = (_lir_itoa(uid)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__ditl", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 3844 "src/taumir/lower.tr"
     LFunc_add_var(lf, itemsname);
-    /* pass */
+#line 3844 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, itemsname, 3LL);
-    /* pass */
+#line 3844 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(itemsname, items));
-    /* pass */
+#line 3845 "src/taumir/lower.tr"
     long long z = LFunc_new_vreg(lf);
-    /* pass */
+#line 3845 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(z, 0LL));
-    /* pass */
+#line 3846 "src/taumir/lower.tr"
     LFunc_add_var(lf, iname);
-    /* pass */
+#line 3846 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, iname, 0LL);
-    /* pass */
+#line 3846 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(iname, z));
-    /* pass */
+#line 3847 "src/taumir/lower.tr"
     long long hdr = LFunc_new_block(lf);
-    /* pass */
+#line 3847 "src/taumir/lower.tr"
     long long bdy = LFunc_new_block(lf);
-    /* pass */
+#line 3847 "src/taumir/lower.tr"
     long long latch = LFunc_new_block(lf);
-    /* pass */
+#line 3847 "src/taumir/lower.tr"
     long long ext = LFunc_new_block(lf);
-    /* pass */
+#line 3848 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-    /* pass */
+#line 3849 "src/taumir/lower.tr"
     LFunc_set_cur(lf, hdr);
-    /* pass */
+#line 3850 "src/taumir/lower.tr"
     long long lhv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3850 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(lhv, itemsname));
-    /* pass */
+#line 3851 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_len", 15LL));
-    /* pass */
+#line 3852 "src/taumir/lower.tr"
     List_i64* lla = (void*)List_i64_new();
-    /* pass */
+#line 3852 "src/taumir/lower.tr"
     List_i64_append(lla, lhv);
-    /* pass */
+#line 3853 "src/taumir/lower.tr"
     long long lenv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3853 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(lenv, _tr_str_lit_len("_tr_rt_list_len", 15LL), lla));
-    /* pass */
+#line 3854 "src/taumir/lower.tr"
     long long iv = LFunc_new_vreg(lf);
-    /* pass */
+#line 3854 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(iv, iname));
-    /* pass */
+#line 3855 "src/taumir/lower.tr"
     long long cond = LFunc_new_vreg(lf);
-    /* pass */
+#line 3855 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(cond, _tr_str_lit_len("<", 1LL), iv, lenv));
-    /* pass */
+#line 3856 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(cond, bdy, ext));
-    /* pass */
+#line 3857 "src/taumir/lower.tr"
     LFunc_set_cur(lf, bdy);
-    /* pass */
+#line 3858 "src/taumir/lower.tr"
     long long lhv2 = LFunc_new_vreg(lf);
-    /* pass */
+#line 3858 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(lhv2, itemsname));
-    /* pass */
+#line 3859 "src/taumir/lower.tr"
     long long iv2 = LFunc_new_vreg(lf);
-    /* pass */
+#line 3859 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(iv2, iname));
-    /* pass */
+#line 3860 "src/taumir/lower.tr"
     long long raw = _list_get(m, lf, lhv2, iv2);
-    /* pass */
+#line 3861 "src/taumir/lower.tr"
     long long koff = 0LL;
-    /* pass */
+#line 3861 "src/taumir/lower.tr"
     long long voff = 8LL;
-    /* pass */
+#line 3862 "src/taumir/lower.tr"
     long long keyv = _emit_field_get(m, lf, raw, koff, 0LL);
-    /* pass */
+#line 3863 "src/taumir/lower.tr"
     if (kstr) {
-        /* pass */
+#line 3864 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, keyv, 1LL);
     }
-    /* pass */
+#line 3865 "src/taumir/lower.tr"
     long long valv = _emit_field_get(m, lf, raw, voff, 0LL);
-    /* pass */
+#line 3866 "src/taumir/lower.tr"
     if ((vtag == 5LL)) {
-        /* pass */
+#line 3867 "src/taumir/lower.tr"
         long long vf = LFunc_new_vreg(lf);
-        /* pass */
+#line 3867 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IBitsF(vf, valv));
-        /* pass */
+#line 3867 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, vf, 5LL);
-        /* pass */
+#line 3867 "src/taumir/lower.tr"
         valv = vf;
     } else {
-        /* pass */
+#line 3869 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, valv, vtag);
     }
-    /* pass */
+#line 3870 "src/taumir/lower.tr"
     long long ktag = 0LL;
-    /* pass */
+#line 3871 "src/taumir/lower.tr"
     if (kstr) {
-        /* pass */
+#line 3871 "src/taumir/lower.tr"
         ktag = 1LL;
     }
-    /* pass */
+#line 3872 "src/taumir/lower.tr"
     LFunc_add_var(lf, kvar);
-    /* pass */
+#line 3872 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, kvar, ktag);
-    /* pass */
+#line 3872 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(kvar, keyv));
-    /* pass */
+#line 3873 "src/taumir/lower.tr"
     LFunc_add_var(lf, vvar);
-    /* pass */
+#line 3873 "src/taumir/lower.tr"
     LFunc_set_var_type(lf, vvar, vtag);
-    /* pass */
+#line 3873 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(vvar, valv));
-    /* pass */
+#line 3874 "src/taumir/lower.tr"
     List_i64_append(lf->loop_cont, latch);
-    /* pass */
+#line 3874 "src/taumir/lower.tr"
     List_i64_append(lf->loop_brk, ext);
-    /* pass */
+#line 3875 "src/taumir/lower.tr"
     bool ok = lower_block(m, lf, body);
-    /* pass */
+#line 3876 "src/taumir/lower.tr"
     List_i64_pop(lf->loop_cont);
-    /* pass */
+#line 3876 "src/taumir/lower.tr"
     List_i64_pop(lf->loop_brk);
-    /* pass */
+#line 3877 "src/taumir/lower.tr"
     if ((!ok)) {
-        /* pass */
+#line 3877 "src/taumir/lower.tr"
         _tr_str_release(dname);
         _tr_str_release(isym);
         _tr_str_release(iname);
         _tr_str_release(itemsname);
         return false;
     }
-    /* pass */
+#line 3878 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(latch));
-    /* pass */
+#line 3879 "src/taumir/lower.tr"
     LFunc_set_cur(lf, latch);
-    /* pass */
+#line 3880 "src/taumir/lower.tr"
     _emit_incr(lf, iname);
-    /* pass */
+#line 3881 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(hdr));
-    /* pass */
+#line 3882 "src/taumir/lower.tr"
     LFunc_set_cur(lf, ext);
-    /* pass */
+#line 3883 "src/taumir/lower.tr"
     _tr_str_release(dname);
     _tr_str_release(isym);
     _tr_str_release(iname);
@@ -9266,5577 +9388,5708 @@ __attribute__((hot)) bool _lower_dict_items_unpack(LModule* m, LFunc* lf, TrStr 
 }
 
 __attribute__((hot)) void _emit_incr(LFunc* lf, TrStr name) {
-    /* pass */
+#line 3887 "src/taumir/lower.tr"
     long long cur = LFunc_new_vreg(lf);
-    /* pass */
+#line 3888 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(cur, name));
-    /* pass */
+#line 3889 "src/taumir/lower.tr"
     long long one = LFunc_new_vreg(lf);
-    /* pass */
+#line 3890 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(one, 1LL));
-    /* pass */
+#line 3891 "src/taumir/lower.tr"
     long long inc = LFunc_new_vreg(lf);
-    /* pass */
+#line 3892 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(inc, _tr_str_lit_len("+", 1LL), cur, one));
-    /* pass */
+#line 3893 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(name, inc));
 }
 
 __attribute__((hot)) TrStr _ident_name(HirExpr* e) {
-    /* pass */
-    __auto_type _t3262 = (*e);
-    if (_t3262.tag == HirExpr_EIdent) {
-        __auto_type n = _t3262.data.EIdent.name;
-        return _tr_str_retain(n);
+#line 3896 "src/taumir/lower.tr"
+    __auto_type _t6283 = (*e);
+    if (_t6283.tag == HirExpr_EIdent) {
+        __auto_type n = _t6283.data.EIdent.name;
+        TrStr _trret1580 = _tr_str_retain(n);
+        return _trret1580;
     } else if (1) {
-        __auto_type _ = _t3262;
+        __auto_type _ = _t6283;
         return _tr_str_lit_len("", 0LL);
     }
 }
 
 __attribute__((hot)) bool _lower_field_set(LModule* m, LFunc* lf, HirExpr* obj, TrStr prop, HirExpr* val) {
-    /* pass */
+#line 3904 "src/taumir/lower.tr"
     TrStr cls = _recv_class(m, lf, obj);
-    /* pass */
+#line 3905 "src/taumir/lower.tr"
     if ((_tr_str_eqv((cls), (_tr_str_lit_len("", 0LL))) || (!LModule_is_class(m, cls)))) {
-        /* pass */
+#line 3905 "src/taumir/lower.tr"
         _tr_str_release(cls);
         return false;
     }
-    /* pass */
+#line 3906 "src/taumir/lower.tr"
     long long off = LModule_field_offset(m, cls, prop);
-    /* pass */
+#line 3907 "src/taumir/lower.tr"
     if ((off < 0LL)) {
-        /* pass */
+#line 3907 "src/taumir/lower.tr"
         _tr_str_release(cls);
         return false;
     }
-    /* pass */
+#line 3908 "src/taumir/lower.tr"
     long long ftg = LModule_field_tag(m, cls, prop);
-    /* pass */
+#line 3909 "src/taumir/lower.tr"
     if ((ftg < 0LL)) {
-        /* pass */
+#line 3909 "src/taumir/lower.tr"
         _tr_str_release(cls);
         return false;
     }
-    /* pass */
+#line 3910 "src/taumir/lower.tr"
     long long vv = lower_expr(m, lf, val);
-    /* pass */
+#line 3911 "src/taumir/lower.tr"
     if ((vv < 0LL)) {
-        /* pass */
+#line 3911 "src/taumir/lower.tr"
         _tr_str_release(cls);
         return false;
     }
-    /* pass */
+#line 3912 "src/taumir/lower.tr"
     long long vt = LFunc_vreg_type(lf, vv);
-    /* pass */
+#line 3913 "src/taumir/lower.tr"
     if ((_is_list_tag(ftg) || _is_dict_tag(ftg))) {
-        /* pass */
+#line 3916 "src/taumir/lower.tr"
         if ((_is_list_tag(ftg) && (!_is_list_tag(vt)))) {
-            /* pass */
+#line 3916 "src/taumir/lower.tr"
             _tr_str_release(cls);
             return false;
         }
-        /* pass */
+#line 3917 "src/taumir/lower.tr"
         if ((_is_dict_tag(ftg) && (!_is_dict_tag(vt)))) {
-            /* pass */
+#line 3917 "src/taumir/lower.tr"
             _tr_str_release(cls);
             return false;
         }
-        /* pass */
+#line 3918 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, vv, ftg);
     } else if ((ftg == 5LL)) {
-        /* pass */
+#line 3921 "src/taumir/lower.tr"
         if ((vt == 0LL)) {
-            /* pass */
+#line 3921 "src/taumir/lower.tr"
             vv = _promote_f(lf, vv);
         } else if ((vt != 5LL)) {
-            /* pass */
+#line 3922 "src/taumir/lower.tr"
             _tr_str_release(cls);
             return false;
         }
-        /* pass */
+#line 3923 "src/taumir/lower.tr"
         long long fbits = LFunc_new_vreg(lf);
-        /* pass */
+#line 3924 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IFBits(fbits, vv));
-        /* pass */
+#line 3925 "src/taumir/lower.tr"
         vv = fbits;
     } else if ((ftg == 1LL)) {
-        /* pass */
+#line 3929 "src/taumir/lower.tr"
         if ((vt != 1LL)) {
-            /* pass */
+#line 3929 "src/taumir/lower.tr"
             _tr_str_release(cls);
             return false;
         }
-        /* pass */
+#line 3930 "src/taumir/lower.tr"
         _secure_str(m, lf, vv);
     } else if (((ftg == 10LL) || (ftg == 11LL))) {
-        /* pass */
+#line 3935 "src/taumir/lower.tr"
         if ((!_field_tag_ok(vt, ftg))) {
-            /* pass */
+#line 3935 "src/taumir/lower.tr"
             _tr_str_release(cls);
             return false;
         }
-        /* pass */
+#line 3936 "src/taumir/lower.tr"
         _secure_obj(m, lf, vv);
     } else if ((!_field_tag_ok(vt, ftg))) {
-        /* pass */
+#line 3938 "src/taumir/lower.tr"
         _tr_str_release(cls);
         return false;
     }
-    /* pass */
+#line 3939 "src/taumir/lower.tr"
     long long ov0 = lower_expr(m, lf, obj);
-    /* pass */
+#line 3940 "src/taumir/lower.tr"
     if ((ov0 < 0LL)) {
-        /* pass */
+#line 3940 "src/taumir/lower.tr"
         _tr_str_release(cls);
         return false;
     }
-    /* pass */
+#line 3941 "src/taumir/lower.tr"
     _emit_field_set(m, lf, ov0, off, vv);
-    /* pass */
+#line 3947 "src/taumir/lower.tr"
     _flush_fresh_strs(m, lf);
-    /* pass */
+#line 3948 "src/taumir/lower.tr"
     _tr_str_release(cls);
     return true;
 }
 
 __attribute__((hot)) bool _lower_index_set(LModule* m, LFunc* lf, HirExpr* obj, HirExpr* idx, HirExpr* val) {
-    /* pass */
+#line 3952 "src/taumir/lower.tr"
     TrStr sicls = _recv_class(m, lf, obj);
-    /* pass */
+#line 3953 "src/taumir/lower.tr"
     if (((!_tr_str_eqv((sicls), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, sicls))) {
-        /* pass */
+#line 3954 "src/taumir/lower.tr"
         TrStr sim = LModule_resolve_method(m, sicls, _tr_str_lit_len("__setitem__", 11LL));
-        /* pass */
+#line 3955 "src/taumir/lower.tr"
         if ((!_tr_str_eqv((sim), (_tr_str_lit_len("", 0LL))))) {
-            /* pass */
+#line 3956 "src/taumir/lower.tr"
             long long siself = lower_expr(m, lf, obj);
-            /* pass */
+#line 3957 "src/taumir/lower.tr"
             if ((siself < 0LL)) {
-                /* pass */
+#line 3957 "src/taumir/lower.tr"
                 _tr_str_release(sicls);
                 _tr_str_release(sim);
                 return false;
             }
-            /* pass */
+#line 3958 "src/taumir/lower.tr"
             List_ptr* siargs = (void*)List_ptr_new();
-            /* pass */
+#line 3959 "src/taumir/lower.tr"
             List_ptr_append(siargs, idx);
-            /* pass */
+#line 3960 "src/taumir/lower.tr"
             List_ptr_append(siargs, val);
-            /* pass */
+#line 3961 "src/taumir/lower.tr"
+            bool _trret1581 = (_lower_obj_call(m, lf, sim, siself, siargs) >= 0LL);
             _tr_str_release(sicls);
-            return (_lower_obj_call(m, lf, sim, siself, siargs) >= 0LL);
+            _tr_str_release(sim);
+            return _trret1581;
         }
     }
-    /* pass */
+#line 3964 "src/taumir/lower.tr"
     TrStr awn = _ident_name(obj);
-    /* pass */
+#line 3965 "src/taumir/lower.tr"
     if (((!_tr_str_eqv((awn), (_tr_str_lit_len("", 0LL)))) && (_fixed_arr_len(m, lf, awn) > 0LL))) {
-        /* pass */
+#line 3966 "src/taumir/lower.tr"
         long long aiv = lower_expr(m, lf, idx);
-        /* pass */
+#line 3967 "src/taumir/lower.tr"
         if (((aiv < 0LL) || (LFunc_vreg_type(lf, aiv) != 0LL))) {
-            /* pass */
+#line 3967 "src/taumir/lower.tr"
             _tr_str_release(sicls);
             _tr_str_release(awn);
             return false;
         }
-        /* pass */
+#line 3968 "src/taumir/lower.tr"
         long long avv = lower_expr(m, lf, val);
-        /* pass */
+#line 3969 "src/taumir/lower.tr"
         if ((avv < 0LL)) {
-            /* pass */
+#line 3969 "src/taumir/lower.tr"
             _tr_str_release(sicls);
             _tr_str_release(awn);
             return false;
         }
-        /* pass */
+#line 3970 "src/taumir/lower.tr"
         long long avt = LFunc_vreg_type(lf, avv);
-        /* pass */
+#line 3971 "src/taumir/lower.tr"
         long long aet = _fixed_arr_elem_tag(m, lf, awn);
-        /* pass */
+#line 3972 "src/taumir/lower.tr"
         if ((avt == 4LL)) {
-            /* pass */
+#line 3972 "src/taumir/lower.tr"
             avt = 0LL;
         }
-        /* pass */
+#line 3973 "src/taumir/lower.tr"
         if ((aet == 4LL)) {
-            /* pass */
+#line 3973 "src/taumir/lower.tr"
             aet = 0LL;
         }
-        /* pass */
+#line 3974 "src/taumir/lower.tr"
         if ((avt != aet)) {
-            /* pass */
+#line 3974 "src/taumir/lower.tr"
             _tr_str_release(sicls);
             _tr_str_release(awn);
             return false;
         }
-        /* pass */
+#line 3975 "src/taumir/lower.tr"
         long long aaddr = _array_elem_addr(m, lf, awn, aiv);
-        /* pass */
+#line 3976 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IStore(aaddr, 0LL, avv, 2LL));
-        /* pass */
+#line 3977 "src/taumir/lower.tr"
         _flush_fresh_strs(m, lf);
-        /* pass */
+#line 3978 "src/taumir/lower.tr"
         _tr_str_release(sicls);
         _tr_str_release(awn);
         return true;
     }
-    /* pass */
+#line 3979 "src/taumir/lower.tr"
     long long ov = lower_expr(m, lf, obj);
-    /* pass */
+#line 3980 "src/taumir/lower.tr"
     if ((ov < 0LL)) {
-        /* pass */
+#line 3980 "src/taumir/lower.tr"
         _tr_str_release(sicls);
         _tr_str_release(awn);
         return false;
     }
-    /* pass */
+#line 3981 "src/taumir/lower.tr"
     long long ovt = LFunc_vreg_type(lf, ov);
-    /* pass */
+#line 3982 "src/taumir/lower.tr"
     if (_is_dict_tag(ovt)) {
-        /* pass */
+#line 3983 "src/taumir/lower.tr"
         long long kv = lower_expr(m, lf, idx);
-        /* pass */
+#line 3984 "src/taumir/lower.tr"
         if ((kv < 0LL)) {
-            /* pass */
+#line 3984 "src/taumir/lower.tr"
             _tr_str_release(sicls);
             _tr_str_release(awn);
             return false;
         }
-        /* pass */
+#line 3985 "src/taumir/lower.tr"
         if ((_dict_key_is_str(ovt) && (LFunc_vreg_type(lf, kv) != 1LL))) {
-            /* pass */
+#line 3985 "src/taumir/lower.tr"
             _tr_str_release(sicls);
             _tr_str_release(awn);
             return false;
         }
-        /* pass */
+#line 3986 "src/taumir/lower.tr"
         if (((!_dict_key_is_str(ovt)) && (LFunc_vreg_type(lf, kv) != 0LL))) {
-            /* pass */
+#line 3986 "src/taumir/lower.tr"
             _tr_str_release(sicls);
             _tr_str_release(awn);
             return false;
         }
-        /* pass */
+#line 3987 "src/taumir/lower.tr"
         long long vv = lower_expr(m, lf, val);
-        /* pass */
-        if (((vv < 0LL) || (LFunc_vreg_type(lf, vv) != _dict_val_tag(ovt)))) {
-            /* pass */
+#line 3988 "src/taumir/lower.tr"
+        if (((vv < 0LL) || ({ __auto_type _ord_t6284 = (LFunc_vreg_type(lf, vv)); __auto_type _wr = ((_ord_t6284 != _dict_val_tag(ovt))); _wr; }))) {
+#line 3988 "src/taumir/lower.tr"
             _tr_str_release(sicls);
             _tr_str_release(awn);
             return false;
         }
-        /* pass */
+#line 3989 "src/taumir/lower.tr"
         if ((_dict_val_tag(ovt) == 1LL)) {
-            /* pass */
+#line 3989 "src/taumir/lower.tr"
             _secure_str(m, lf, vv);
         }
-        /* pass */
+#line 3990 "src/taumir/lower.tr"
         if (((_dict_val_tag(ovt) == 10LL) || (_dict_val_tag(ovt) == 11LL))) {
-            /* pass */
+#line 3990 "src/taumir/lower.tr"
             _secure_obj(m, lf, vv);
         }
-        /* pass */
+#line 3991 "src/taumir/lower.tr"
         if ((_dict_val_tag(ovt) == 5LL)) {
-            /* pass */
+#line 3992 "src/taumir/lower.tr"
             long long ivb = LFunc_new_vreg(lf);
-            /* pass */
+#line 3993 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IFBits(ivb, vv));
-            /* pass */
+#line 3994 "src/taumir/lower.tr"
             vv = ivb;
         }
-        /* pass */
+#line 3995 "src/taumir/lower.tr"
         TrStr ssym = _dict_sym(ovt, _tr_str_lit_len("set", 3LL));
-        /* pass */
+#line 3996 "src/taumir/lower.tr"
         LModule_add_extern(m, ssym);
-        /* pass */
+#line 3997 "src/taumir/lower.tr"
         List_i64* sa = (void*)List_i64_new();
-        /* pass */
+#line 3998 "src/taumir/lower.tr"
         List_i64_append(sa, ov);
-        /* pass */
+#line 3999 "src/taumir/lower.tr"
         List_i64_append(sa, kv);
-        /* pass */
+#line 4000 "src/taumir/lower.tr"
         List_i64_append(sa, vv);
-        /* pass */
+#line 4001 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall((-1LL), ssym, sa));
-        /* pass */
+#line 4002 "src/taumir/lower.tr"
         _flush_fresh_strs(m, lf);
-        /* pass */
+#line 4003 "src/taumir/lower.tr"
         _tr_str_release(sicls);
         _tr_str_release(awn);
         _tr_str_release(ssym);
         return true;
     }
-    /* pass */
+#line 4004 "src/taumir/lower.tr"
     if (_is_list_tag(ovt)) {
-        /* pass */
+#line 4005 "src/taumir/lower.tr"
         long long iv = lower_expr(m, lf, idx);
-        /* pass */
+#line 4006 "src/taumir/lower.tr"
         if (((iv < 0LL) || (LFunc_vreg_type(lf, iv) != 0LL))) {
-            /* pass */
+#line 4006 "src/taumir/lower.tr"
             _tr_str_release(sicls);
             _tr_str_release(awn);
             return false;
         }
-        /* pass */
+#line 4007 "src/taumir/lower.tr"
         long long lvv = lower_expr(m, lf, val);
-        /* pass */
+#line 4008 "src/taumir/lower.tr"
         if ((lvv < 0LL)) {
-            /* pass */
+#line 4008 "src/taumir/lower.tr"
             _tr_str_release(sicls);
             _tr_str_release(awn);
             return false;
         }
-        /* pass */
+#line 4009 "src/taumir/lower.tr"
         long long lvt = LFunc_vreg_type(lf, lvv);
-        /* pass */
+#line 4010 "src/taumir/lower.tr"
         if (((_list_elem_tag(ovt) == 0LL) && (lvt == 4LL))) {
-            /* pass */
+#line 4010 "src/taumir/lower.tr"
             lvt = 0LL;
         }
-        /* pass */
+#line 4011 "src/taumir/lower.tr"
         if ((lvt != _list_elem_tag(ovt))) {
-            /* pass */
+#line 4011 "src/taumir/lower.tr"
             _tr_str_release(sicls);
             _tr_str_release(awn);
             return false;
         }
-        /* pass */
+#line 4012 "src/taumir/lower.tr"
         if ((_list_elem_tag(ovt) == 1LL)) {
-            /* pass */
+#line 4012 "src/taumir/lower.tr"
             _secure_str(m, lf, lvv);
         }
-        /* pass */
+#line 4013 "src/taumir/lower.tr"
         if ((_list_elem_tag(ovt) == 10LL)) {
-            /* pass */
+#line 4013 "src/taumir/lower.tr"
             _secure_obj(m, lf, lvv);
         }
-        /* pass */
+#line 4014 "src/taumir/lower.tr"
         if ((_list_elem_tag(ovt) == 5LL)) {
-            /* pass */
+#line 4015 "src/taumir/lower.tr"
             long long lvfb = LFunc_new_vreg(lf);
-            /* pass */
+#line 4016 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IFBits(lvfb, lvv));
-            /* pass */
+#line 4017 "src/taumir/lower.tr"
             lvv = lvfb;
         }
-        /* pass */
+#line 4018 "src/taumir/lower.tr"
         long long la_addr = _inline_list_addr(m, lf, ov, iv, _list_stride(ovt));
-        /* pass */
+#line 4019 "src/taumir/lower.tr"
         if ((ovt == 22LL)) {
-            /* pass */
+#line 4020 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IStoreB(la_addr, 0LL, lvv));
         } else {
-            /* pass */
+#line 4022 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IStore(la_addr, 0LL, lvv, 2LL));
         }
-        /* pass */
+#line 4023 "src/taumir/lower.tr"
         _flush_fresh_strs(m, lf);
-        /* pass */
+#line 4024 "src/taumir/lower.tr"
         _tr_str_release(sicls);
         _tr_str_release(awn);
         return true;
     }
-    /* pass */
+#line 4025 "src/taumir/lower.tr"
     _tr_str_release(sicls);
     _tr_str_release(awn);
     return false;
 }
 
 __attribute__((hot)) TrStr _write_sym(long long t) {
-    /* pass */
+#line 4029 "src/taumir/lower.tr"
     if ((t == 1LL)) {
-        /* pass */
+#line 4029 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_write_cstr", 17LL);
     }
-    /* pass */
+#line 4030 "src/taumir/lower.tr"
     if ((t == 4LL)) {
-        /* pass */
+#line 4030 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_write_bool", 17LL);
     }
-    /* pass */
+#line 4031 "src/taumir/lower.tr"
     return _tr_str_lit_len("_tr_rt_write_i64", 16LL);
 }
 
 __attribute__((hot)) void _emit_call0(LModule* m, LFunc* lf, TrStr sym) {
-    /* pass */
+#line 4034 "src/taumir/lower.tr"
     LModule_add_extern(m, sym);
-    /* pass */
+#line 4035 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall((-1LL), sym, (void*)List_i64_new()));
 }
 
 __attribute__((hot)) bool _lower_print(LModule* m, LFunc* lf, List_ptr* args) {
-    /* pass */
+#line 4040 "src/taumir/lower.tr"
     if ((args->len == 0LL)) {
-        /* pass */
+#line 4041 "src/taumir/lower.tr"
         _emit_call0(m, lf, _tr_str_lit_len("_tr_rt_write_nl", 15LL));
-        /* pass */
+#line 4042 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 4043 "src/taumir/lower.tr"
     if ((args->len == 1LL)) {
-        /* pass */
+#line 4044 "src/taumir/lower.tr"
         long long av = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-        /* pass */
+#line 4045 "src/taumir/lower.tr"
         if ((av < 0LL)) {
-            /* pass */
+#line 4045 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 4046 "src/taumir/lower.tr"
         long long avt = LFunc_vreg_type(lf, av);
-        /* pass */
+#line 4047 "src/taumir/lower.tr"
         if (_is_list_tag(avt)) {
-            /* pass */
+#line 4048 "src/taumir/lower.tr"
             TrStr plsym = _tr_str_lit_len("_tr_rt_print_list_i64", 21LL);
-            /* pass */
+#line 4049 "src/taumir/lower.tr"
             if ((avt == 3LL)) {
-                /* pass */
-                TrStr _strtmp_t3263 = _tr_str_lit_len("_tr_rt_print_list_str", 21LL);
+#line 4049 "src/taumir/lower.tr"
+                TrStr _strtmp_t6285 = _tr_str_lit_len("_tr_rt_print_list_str", 21LL);
                 _tr_str_release(plsym);
-                plsym = _strtmp_t3263;
+                plsym = _strtmp_t6285;
             }
-            /* pass */
+#line 4050 "src/taumir/lower.tr"
             if ((avt == 14LL)) {
-                /* pass */
-                TrStr _strtmp_t3264 = _tr_str_lit_len("_tr_rt_print_list_f64", 21LL);
+#line 4050 "src/taumir/lower.tr"
+                TrStr _strtmp_t6286 = _tr_str_lit_len("_tr_rt_print_list_f64", 21LL);
                 _tr_str_release(plsym);
-                plsym = _strtmp_t3264;
+                plsym = _strtmp_t6286;
             }
-            /* pass */
+#line 4051 "src/taumir/lower.tr"
             if ((avt == 22LL)) {
-                /* pass */
-                TrStr _strtmp_t3265 = _tr_str_lit_len("_tr_rt_print_list_bool", 22LL);
+#line 4051 "src/taumir/lower.tr"
+                TrStr _strtmp_t6287 = _tr_str_lit_len("_tr_rt_print_list_bool", 22LL);
                 _tr_str_release(plsym);
-                plsym = _strtmp_t3265;
+                plsym = _strtmp_t6287;
             }
-            /* pass */
+#line 4052 "src/taumir/lower.tr"
             LModule_add_extern(m, plsym);
-            /* pass */
+#line 4053 "src/taumir/lower.tr"
             List_i64* pla = (void*)List_i64_new();
-            /* pass */
+#line 4054 "src/taumir/lower.tr"
             List_i64_append(pla, av);
-            /* pass */
+#line 4055 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), plsym, pla));
-            /* pass */
+#line 4056 "src/taumir/lower.tr"
             _tr_str_release(plsym);
             return true;
         }
-        /* pass */
+#line 4057 "src/taumir/lower.tr"
         if ((avt == 10LL)) {
-            /* pass */
+#line 4058 "src/taumir/lower.tr"
             long long ostr = _obj_to_str(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)), av);
-            /* pass */
+#line 4059 "src/taumir/lower.tr"
             if ((ostr >= 0LL)) {
-                /* pass */
+#line 4060 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_rt_print_cstr", 17LL));
-                /* pass */
+#line 4061 "src/taumir/lower.tr"
                 List_i64* opa = (void*)List_i64_new();
-                /* pass */
+#line 4062 "src/taumir/lower.tr"
                 List_i64_append(opa, ostr);
-                /* pass */
+#line 4063 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_print_cstr", 17LL), opa));
-                /* pass */
+#line 4064 "src/taumir/lower.tr"
                 return true;
             }
-            /* pass */
+#line 4065 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 4066 "src/taumir/lower.tr"
         if (((avt == 11LL) || _is_set_tag(avt))) {
-            /* pass */
+#line 4066 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 4067 "src/taumir/lower.tr"
         if ((avt == 15LL)) {
-            /* pass */
+#line 4068 "src/taumir/lower.tr"
             long long tstr = _tuple_to_str(m, lf, av, hir_expr_type(((HirExpr*)List_ptr_get(args, 0LL))));
-            /* pass */
+#line 4069 "src/taumir/lower.tr"
             if ((tstr < 0LL)) {
-                /* pass */
+#line 4069 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 4070 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_print_cstr", 17LL));
-            /* pass */
+#line 4071 "src/taumir/lower.tr"
             List_i64* tpa = (void*)List_i64_new();
-            /* pass */
+#line 4072 "src/taumir/lower.tr"
             List_i64_append(tpa, tstr);
-            /* pass */
+#line 4073 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_print_cstr", 17LL), tpa));
-            /* pass */
+#line 4074 "src/taumir/lower.tr"
             return true;
         }
-        /* pass */
+#line 4075 "src/taumir/lower.tr"
         if ((avt == 5LL)) {
-            /* pass */
+#line 4076 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_print_f64", 16LL));
-            /* pass */
+#line 4077 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IFCall1((-1LL), _tr_str_lit_len("_tr_rt_print_f64", 16LL), av));
-            /* pass */
+#line 4078 "src/taumir/lower.tr"
             return true;
         }
-        /* pass */
+#line 4079 "src/taumir/lower.tr"
         TrStr sym = _print_i64_sym();
-        /* pass */
+#line 4080 "src/taumir/lower.tr"
         if ((avt == 1LL)) {
-            /* pass */
-            TrStr _strtmp_t3266 = _tr_str_lit_len("_tr_rt_print_cstr", 17LL);
+#line 4080 "src/taumir/lower.tr"
+            TrStr _strtmp_t6288 = _tr_str_lit_len("_tr_rt_print_cstr", 17LL);
             _tr_str_release(sym);
-            sym = _strtmp_t3266;
+            sym = _strtmp_t6288;
         } else if ((avt == 4LL)) {
-            /* pass */
-            TrStr _strtmp_t3267 = _tr_str_lit_len("_tr_rt_print_bool", 17LL);
+#line 4081 "src/taumir/lower.tr"
+            TrStr _strtmp_t6289 = _tr_str_lit_len("_tr_rt_print_bool", 17LL);
             _tr_str_release(sym);
-            sym = _strtmp_t3267;
+            sym = _strtmp_t6289;
         } else if (((avt == 0LL) && _tr_str_eqv((hir_expr_type(((HirExpr*)List_ptr_get(args, 0LL)))->name), (_tr_str_lit_len("char", 4LL))))) {
-            /* pass */
-            TrStr _strtmp_t3268 = _tr_str_lit_len("_tr_rt_print_char", 17LL);
+#line 4082 "src/taumir/lower.tr"
+            TrStr _strtmp_t6290 = _tr_str_lit_len("_tr_rt_print_char", 17LL);
             _tr_str_release(sym);
-            sym = _strtmp_t3268;
+            sym = _strtmp_t6290;
         }
-        /* pass */
+#line 4083 "src/taumir/lower.tr"
         LModule_add_extern(m, sym);
-        /* pass */
+#line 4084 "src/taumir/lower.tr"
         List_i64* cargs = (void*)List_i64_new();
-        /* pass */
+#line 4085 "src/taumir/lower.tr"
         List_i64_append(cargs, av);
-        /* pass */
+#line 4086 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall((-1LL), sym, cargs));
-        /* pass */
+#line 4087 "src/taumir/lower.tr"
         _tr_str_release(sym);
         return true;
     }
-    /* pass */
+#line 4088 "src/taumir/lower.tr"
     long long pi = 0LL;
-    /* pass */
+#line 4089 "src/taumir/lower.tr"
     while ((pi < args->len)) {
-        /* pass */
+#line 4090 "src/taumir/lower.tr"
         if ((pi > 0LL)) {
-            /* pass */
+#line 4090 "src/taumir/lower.tr"
             _emit_call0(m, lf, _tr_str_lit_len("_tr_rt_write_sp", 15LL));
         }
-        /* pass */
+#line 4091 "src/taumir/lower.tr"
         long long pv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, pi)));
-        /* pass */
+#line 4092 "src/taumir/lower.tr"
         if ((pv < 0LL)) {
-            /* pass */
+#line 4092 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 4093 "src/taumir/lower.tr"
         long long pvt = LFunc_vreg_type(lf, pv);
-        /* pass */
+#line 4094 "src/taumir/lower.tr"
         if (_is_list_tag(pvt)) {
-            /* pass */
+#line 4095 "src/taumir/lower.tr"
             TrStr wlsym = _tr_str_lit_len("_tr_rt_write_list_i64", 21LL);
-            /* pass */
+#line 4096 "src/taumir/lower.tr"
             if ((pvt == 3LL)) {
-                /* pass */
-                TrStr _strtmp_t3269 = _tr_str_lit_len("_tr_rt_write_list_str", 21LL);
+#line 4096 "src/taumir/lower.tr"
+                TrStr _strtmp_t6291 = _tr_str_lit_len("_tr_rt_write_list_str", 21LL);
                 _tr_str_release(wlsym);
-                wlsym = _strtmp_t3269;
+                wlsym = _strtmp_t6291;
             }
-            /* pass */
+#line 4097 "src/taumir/lower.tr"
             if ((pvt == 14LL)) {
-                /* pass */
-                TrStr _strtmp_t3270 = _tr_str_lit_len("_tr_rt_write_list_f64", 21LL);
+#line 4097 "src/taumir/lower.tr"
+                TrStr _strtmp_t6292 = _tr_str_lit_len("_tr_rt_write_list_f64", 21LL);
                 _tr_str_release(wlsym);
-                wlsym = _strtmp_t3270;
+                wlsym = _strtmp_t6292;
             }
-            /* pass */
+#line 4098 "src/taumir/lower.tr"
             LModule_add_extern(m, wlsym);
-            /* pass */
+#line 4099 "src/taumir/lower.tr"
             List_i64* wla = (void*)List_i64_new();
-            /* pass */
+#line 4100 "src/taumir/lower.tr"
             List_i64_append(wla, pv);
-            /* pass */
+#line 4101 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), wlsym, wla));
-            /* pass */
+#line 4102 "src/taumir/lower.tr"
             pi = (pi + 1LL);
-            /* pass */
+#line 4103 "src/taumir/lower.tr"
+            _tr_str_release(wlsym);
             continue;
         }
-        /* pass */
+#line 4104 "src/taumir/lower.tr"
         if ((pvt == 10LL)) {
-            /* pass */
+#line 4105 "src/taumir/lower.tr"
             long long postr = _obj_to_str(m, lf, ((HirExpr*)List_ptr_get(args, pi)), pv);
-            /* pass */
+#line 4106 "src/taumir/lower.tr"
             if ((postr < 0LL)) {
-                /* pass */
+#line 4106 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 4107 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_write_cstr", 17LL));
-            /* pass */
+#line 4108 "src/taumir/lower.tr"
             List_i64* pwa = (void*)List_i64_new();
-            /* pass */
+#line 4109 "src/taumir/lower.tr"
             List_i64_append(pwa, postr);
-            /* pass */
+#line 4110 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_write_cstr", 17LL), pwa));
-            /* pass */
+#line 4111 "src/taumir/lower.tr"
             pi = (pi + 1LL);
-            /* pass */
+#line 4112 "src/taumir/lower.tr"
             continue;
         }
-        /* pass */
+#line 4113 "src/taumir/lower.tr"
         if (((pvt == 11LL) || _is_set_tag(pvt))) {
-            /* pass */
+#line 4113 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 4114 "src/taumir/lower.tr"
         if ((pvt == 15LL)) {
-            /* pass */
+#line 4115 "src/taumir/lower.tr"
             long long ptstr = _tuple_to_str(m, lf, pv, hir_expr_type(((HirExpr*)List_ptr_get(args, pi))));
-            /* pass */
+#line 4116 "src/taumir/lower.tr"
             if ((ptstr < 0LL)) {
-                /* pass */
+#line 4116 "src/taumir/lower.tr"
                 return false;
             }
-            /* pass */
+#line 4117 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_write_cstr", 17LL));
-            /* pass */
+#line 4118 "src/taumir/lower.tr"
             List_i64* ptwa = (void*)List_i64_new();
-            /* pass */
+#line 4119 "src/taumir/lower.tr"
             List_i64_append(ptwa, ptstr);
-            /* pass */
+#line 4120 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_write_cstr", 17LL), ptwa));
-            /* pass */
+#line 4121 "src/taumir/lower.tr"
             pi = (pi + 1LL);
-            /* pass */
+#line 4122 "src/taumir/lower.tr"
             continue;
         }
-        /* pass */
+#line 4123 "src/taumir/lower.tr"
         if ((pvt == 5LL)) {
-            /* pass */
+#line 4124 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_write_f64", 16LL));
-            /* pass */
+#line 4125 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IFCall1((-1LL), _tr_str_lit_len("_tr_rt_write_f64", 16LL), pv));
         } else {
-            /* pass */
+#line 4127 "src/taumir/lower.tr"
             TrStr wsym = _write_sym(pvt);
-            /* pass */
+#line 4128 "src/taumir/lower.tr"
             if (((pvt == 0LL) && _tr_str_eqv((hir_expr_type(((HirExpr*)List_ptr_get(args, pi)))->name), (_tr_str_lit_len("char", 4LL))))) {
-                /* pass */
-                TrStr _strtmp_t3271 = _tr_str_lit_len("_tr_rt_write_char", 17LL);
+#line 4128 "src/taumir/lower.tr"
+                TrStr _strtmp_t6293 = _tr_str_lit_len("_tr_rt_write_char", 17LL);
                 _tr_str_release(wsym);
-                wsym = _strtmp_t3271;
+                wsym = _strtmp_t6293;
             }
-            /* pass */
+#line 4129 "src/taumir/lower.tr"
             LModule_add_extern(m, wsym);
-            /* pass */
+#line 4130 "src/taumir/lower.tr"
             List_i64* wargs = (void*)List_i64_new();
-            /* pass */
+#line 4131 "src/taumir/lower.tr"
             List_i64_append(wargs, pv);
-            /* pass */
+#line 4132 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), wsym, wargs));
             _tr_str_release(wsym);
         }
-        /* pass */
+#line 4133 "src/taumir/lower.tr"
         pi = (pi + 1LL);
     }
-    /* pass */
+#line 4134 "src/taumir/lower.tr"
     _emit_call0(m, lf, _tr_str_lit_len("_tr_rt_write_nl", 15LL));
-    /* pass */
+#line 4135 "src/taumir/lower.tr"
     return true;
 }
 
 __attribute__((hot)) bool _lower_assert_cmp(LModule* m, LFunc* lf, TrStr fname, List_ptr* args) {
-    /* pass */
+#line 4141 "src/taumir/lower.tr"
     if ((args->len < 2LL)) {
-        /* pass */
+#line 4141 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 4142 "src/taumir/lower.tr"
     long long av = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-    /* pass */
+#line 4143 "src/taumir/lower.tr"
     if ((av < 0LL)) {
-        /* pass */
+#line 4143 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 4144 "src/taumir/lower.tr"
     long long bv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 1LL)));
-    /* pass */
+#line 4145 "src/taumir/lower.tr"
     if ((bv < 0LL)) {
-        /* pass */
+#line 4145 "src/taumir/lower.tr"
         return false;
     }
-    /* pass */
+#line 4146 "src/taumir/lower.tr"
     TrStr op = _tr_str_lit_len("==", 2LL);
-    /* pass */
+#line 4147 "src/taumir/lower.tr"
     if (_tr_str_eqv((fname), (_tr_str_lit_len("assert_ne", 9LL)))) {
-        /* pass */
-        TrStr _strtmp_t3272 = _tr_str_lit_len("!=", 2LL);
+#line 4147 "src/taumir/lower.tr"
+        TrStr _strtmp_t6294 = _tr_str_lit_len("!=", 2LL);
         _tr_str_release(op);
-        op = _strtmp_t3272;
+        op = _strtmp_t6294;
     } else if (_tr_str_eqv((fname), (_tr_str_lit_len("assert_lt", 9LL)))) {
-        /* pass */
-        TrStr _strtmp_t3273 = _tr_str_lit_len("<", 1LL);
+#line 4148 "src/taumir/lower.tr"
+        TrStr _strtmp_t6295 = _tr_str_lit_len("<", 1LL);
         _tr_str_release(op);
-        op = _strtmp_t3273;
+        op = _strtmp_t6295;
     } else if (_tr_str_eqv((fname), (_tr_str_lit_len("assert_le", 9LL)))) {
-        /* pass */
-        TrStr _strtmp_t3274 = _tr_str_lit_len("<=", 2LL);
+#line 4149 "src/taumir/lower.tr"
+        TrStr _strtmp_t6296 = _tr_str_lit_len("<=", 2LL);
         _tr_str_release(op);
-        op = _strtmp_t3274;
+        op = _strtmp_t6296;
     } else if (_tr_str_eqv((fname), (_tr_str_lit_len("assert_gt", 9LL)))) {
-        /* pass */
-        TrStr _strtmp_t3275 = _tr_str_lit_len(">", 1LL);
+#line 4150 "src/taumir/lower.tr"
+        TrStr _strtmp_t6297 = _tr_str_lit_len(">", 1LL);
         _tr_str_release(op);
-        op = _strtmp_t3275;
+        op = _strtmp_t6297;
     } else if (_tr_str_eqv((fname), (_tr_str_lit_len("assert_ge", 9LL)))) {
-        /* pass */
-        TrStr _strtmp_t3276 = _tr_str_lit_len(">=", 2LL);
+#line 4151 "src/taumir/lower.tr"
+        TrStr _strtmp_t6298 = _tr_str_lit_len(">=", 2LL);
         _tr_str_release(op);
-        op = _strtmp_t3276;
+        op = _strtmp_t6298;
     }
-    /* pass */
+#line 4152 "src/taumir/lower.tr"
     long long at = LFunc_vreg_type(lf, av);
-    /* pass */
+#line 4153 "src/taumir/lower.tr"
     long long cmpv = (-1LL);
-    /* pass */
+#line 4154 "src/taumir/lower.tr"
     if ((at == 1LL)) {
-        /* pass */
+#line 4155 "src/taumir/lower.tr"
         if ((LFunc_vreg_type(lf, bv) != 1LL)) {
-            /* pass */
+#line 4155 "src/taumir/lower.tr"
             _tr_str_release(op);
             return false;
         }
-        /* pass */
+#line 4156 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_cmp", 14LL));
-        /* pass */
+#line 4157 "src/taumir/lower.tr"
         List_i64* sa = (void*)List_i64_new();
-        /* pass */
+#line 4158 "src/taumir/lower.tr"
         List_i64_append(sa, av);
-        /* pass */
+#line 4159 "src/taumir/lower.tr"
         List_i64_append(sa, bv);
-        /* pass */
+#line 4160 "src/taumir/lower.tr"
         long long cr = LFunc_new_vreg(lf);
-        /* pass */
+#line 4161 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(cr, _tr_str_lit_len("_tr_rt_str_cmp", 14LL), sa));
-        /* pass */
+#line 4162 "src/taumir/lower.tr"
         long long z = LFunc_new_vreg(lf);
-        /* pass */
+#line 4163 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(z, 0LL));
-        /* pass */
+#line 4164 "src/taumir/lower.tr"
         cmpv = LFunc_new_vreg(lf);
-        /* pass */
+#line 4165 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IBinOp(cmpv, op, cr, z));
     } else if ((((at == 0LL) || (at == 4LL)) || (at == 5LL))) {
-        /* pass */
+#line 4167 "src/taumir/lower.tr"
         cmpv = LFunc_new_vreg(lf);
-        /* pass */
+#line 4168 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IBinOp(cmpv, op, av, bv));
     } else {
-        /* pass */
+#line 4170 "src/taumir/lower.tr"
         _tr_str_release(op);
         return false;
     }
-    /* pass */
+#line 4171 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, cmpv, 4LL);
-    /* pass */
+#line 4172 "src/taumir/lower.tr"
     _flush_fresh_strs(m, lf);
-    /* pass */
+#line 4173 "src/taumir/lower.tr"
     long long ok = LFunc_new_block(lf);
-    /* pass */
+#line 4174 "src/taumir/lower.tr"
     long long fail = LFunc_new_block(lf);
-    /* pass */
+#line 4175 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TCondBr(cmpv, ok, fail));
-    /* pass */
+#line 4176 "src/taumir/lower.tr"
     LFunc_set_cur(lf, fail);
-    /* pass */
+#line 4177 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_assert_fail", 18LL));
-    /* pass */
+#line 4178 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_assert_fail", 18LL), (void*)List_i64_new()));
-    /* pass */
+#line 4179 "src/taumir/lower.tr"
     LFunc_set_term(lf, LTerm_ctor_TBr(ok));
-    /* pass */
+#line 4180 "src/taumir/lower.tr"
     LFunc_set_cur(lf, ok);
-    /* pass */
+#line 4181 "src/taumir/lower.tr"
     _tr_str_release(op);
     return true;
 }
 
 __attribute__((hot)) bool lower_expr_stmt(LModule* m, LFunc* lf, HirExpr* e) {
-    /* pass */
-    __auto_type _t3277 = (*e);
-    if (_t3277.tag == HirExpr_ECall) {
-        __auto_type callee = _t3277.data.ECall.callee;
-__auto_type args = _t3277.data.ECall.args;
-        /* pass */
+#line 4184 "src/taumir/lower.tr"
+    __auto_type _t6299 = (*e);
+    if (_t6299.tag == HirExpr_ECall) {
+        __auto_type callee = _t6299.data.ECall.callee;
+__auto_type args = _t6299.data.ECall.args;
+#line 4186 "src/taumir/lower.tr"
         TrStr fname = _ident_name(callee);
-        /* pass */
+#line 4187 "src/taumir/lower.tr"
         if (_tr_str_eqv((fname), (_tr_str_lit_len("print", 5LL)))) {
-            /* pass */
+#line 4188 "src/taumir/lower.tr"
+            bool _trret1582 = _lower_print(m, lf, args);
             _tr_str_release(fname);
-            return _lower_print(m, lf, args);
+            return _trret1582;
         }
-        /* pass */
+#line 4189 "src/taumir/lower.tr"
         if ((((((_tr_str_eqv((fname), (_tr_str_lit_len("assert_eq", 9LL))) || _tr_str_eqv((fname), (_tr_str_lit_len("assert_ne", 9LL)))) || _tr_str_eqv((fname), (_tr_str_lit_len("assert_lt", 9LL)))) || _tr_str_eqv((fname), (_tr_str_lit_len("assert_le", 9LL)))) || _tr_str_eqv((fname), (_tr_str_lit_len("assert_gt", 9LL)))) || _tr_str_eqv((fname), (_tr_str_lit_len("assert_ge", 9LL))))) {
-            /* pass */
-            return _lower_assert_cmp(m, lf, fname, args);
+#line 4190 "src/taumir/lower.tr"
+            bool _trret1583 = _lower_assert_cmp(m, lf, fname, args);
+            _tr_str_release(fname);
+            return _trret1583;
         }
-        /* pass */
+#line 4191 "src/taumir/lower.tr"
         long long r = lower_expr(m, lf, e);
-        /* pass */
+#line 4192 "src/taumir/lower.tr"
+        bool _trret1584 = (r >= 0LL);
         _tr_str_release(fname);
-        return (r >= 0LL);
-    } else if (_t3277.tag == HirExpr_EMethodCall) {
-        /* pass */
+        return _trret1584;
+    } else if (_t6299.tag == HirExpr_EMethodCall) {
+#line 4194 "src/taumir/lower.tr"
         long long rm = lower_expr(m, lf, e);
-        /* pass */
+#line 4195 "src/taumir/lower.tr"
         return (rm >= 0LL);
     } else if (1) {
-        __auto_type _ = _t3277;
-        /* pass */
+        __auto_type _ = _t6299;
+#line 4199 "src/taumir/lower.tr"
         long long rx = lower_expr(m, lf, e);
-        /* pass */
+#line 4200 "src/taumir/lower.tr"
         return (rx >= 0LL);
     }
 }
 
 __attribute__((hot)) bool _int_op(TrStr op) {
-    /* pass */
+#line 4204 "src/taumir/lower.tr"
     if ((((((_tr_str_eqv((op), (_tr_str_lit_len("+", 1LL))) || _tr_str_eqv((op), (_tr_str_lit_len("-", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("*", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("/", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("//", 2LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("%", 1LL))))) {
-        /* pass */
+#line 4204 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 4205 "src/taumir/lower.tr"
     if (((((_tr_str_eqv((op), (_tr_str_lit_len("&", 1LL))) || _tr_str_eqv((op), (_tr_str_lit_len("|", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("^", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("<<", 2LL)))) || _tr_str_eqv((op), (_tr_str_lit_len(">>", 2LL))))) {
-        /* pass */
+#line 4205 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 4206 "src/taumir/lower.tr"
     if ((((((_tr_str_eqv((op), (_tr_str_lit_len("<", 1LL))) || _tr_str_eqv((op), (_tr_str_lit_len(">", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("==", 2LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("!=", 2LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("<=", 2LL)))) || _tr_str_eqv((op), (_tr_str_lit_len(">=", 2LL))))) {
-        /* pass */
+#line 4206 "src/taumir/lower.tr"
         return true;
     }
-    /* pass */
+#line 4207 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) TrStr _lir_digit(long long d) {
-    /* pass */
+#line 4210 "src/taumir/lower.tr"
     if ((d == 0LL)) {
-        /* pass */
+#line 4210 "src/taumir/lower.tr"
         return _tr_str_lit_len("0", 1LL);
     }
-    /* pass */
+#line 4211 "src/taumir/lower.tr"
     if ((d == 1LL)) {
-        /* pass */
+#line 4211 "src/taumir/lower.tr"
         return _tr_str_lit_len("1", 1LL);
     }
-    /* pass */
+#line 4212 "src/taumir/lower.tr"
     if ((d == 2LL)) {
-        /* pass */
+#line 4212 "src/taumir/lower.tr"
         return _tr_str_lit_len("2", 1LL);
     }
-    /* pass */
+#line 4213 "src/taumir/lower.tr"
     if ((d == 3LL)) {
-        /* pass */
+#line 4213 "src/taumir/lower.tr"
         return _tr_str_lit_len("3", 1LL);
     }
-    /* pass */
+#line 4214 "src/taumir/lower.tr"
     if ((d == 4LL)) {
-        /* pass */
+#line 4214 "src/taumir/lower.tr"
         return _tr_str_lit_len("4", 1LL);
     }
-    /* pass */
+#line 4215 "src/taumir/lower.tr"
     if ((d == 5LL)) {
-        /* pass */
+#line 4215 "src/taumir/lower.tr"
         return _tr_str_lit_len("5", 1LL);
     }
-    /* pass */
+#line 4216 "src/taumir/lower.tr"
     if ((d == 6LL)) {
-        /* pass */
+#line 4216 "src/taumir/lower.tr"
         return _tr_str_lit_len("6", 1LL);
     }
-    /* pass */
+#line 4217 "src/taumir/lower.tr"
     if ((d == 7LL)) {
-        /* pass */
+#line 4217 "src/taumir/lower.tr"
         return _tr_str_lit_len("7", 1LL);
     }
-    /* pass */
+#line 4218 "src/taumir/lower.tr"
     if ((d == 8LL)) {
-        /* pass */
+#line 4218 "src/taumir/lower.tr"
         return _tr_str_lit_len("8", 1LL);
     }
-    /* pass */
+#line 4219 "src/taumir/lower.tr"
     return _tr_str_lit_len("9", 1LL);
 }
 
 __attribute__((hot)) TrStr _lir_itoa(long long n) {
-    /* pass */
+#line 4223 "src/taumir/lower.tr"
     if ((n == 0LL)) {
-        /* pass */
+#line 4223 "src/taumir/lower.tr"
         return _tr_str_lit_len("0", 1LL);
     }
-    /* pass */
+#line 4224 "src/taumir/lower.tr"
     TrStr s = _tr_str_lit_len("", 0LL);
-    /* pass */
+#line 4225 "src/taumir/lower.tr"
     long long x = n;
-    /* pass */
+#line 4226 "src/taumir/lower.tr"
     while ((x > 0LL)) {
-        /* pass */
-        TrStr _strtmp_t3278 = ({ TrStr _cl = (_lir_digit((x % 10LL))); TrStr _cres = _tr_strx_concatv(_cl, (s)); _tr_str_release(_cl); _cres; });
+#line 4227 "src/taumir/lower.tr"
+        TrStr _strtmp_t6300 = ({ TrStr _tr_cl = (_lir_digit(_tr_imod((long long)(x), (long long)(10LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (s)); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(s);
-        s = _strtmp_t3278;
-        /* pass */
-        x = (x / 10LL);
+        s = _strtmp_t6300;
+#line 4228 "src/taumir/lower.tr"
+        x = _tr_idiv((long long)(x), (long long)(10LL));
     }
-    /* pass */
-    return s;
+#line 4229 "src/taumir/lower.tr"
+    TrStr _trret1585 = _tr_str_retain(s);
+    _tr_str_release(s);
+    return _trret1585;
 }
 
 __attribute__((hot)) void _fresh_mark(LFunc* lf, long long v) {
-    /* pass */
+#line 4236 "src/taumir/lower.tr"
     List_i64_append(lf->fresh_strs, v);
 }
 
 __attribute__((hot)) bool _fresh_take(LFunc* lf, long long v) {
-    /* pass */
+#line 4239 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 4240 "src/taumir/lower.tr"
     while ((i < lf->fresh_strs->len)) {
-        /* pass */
+#line 4241 "src/taumir/lower.tr"
         if ((List_i64_get(lf->fresh_strs, i) == v)) {
-            /* pass */
+#line 4242 "src/taumir/lower.tr"
             List_i64_remove(lf->fresh_strs, i);
-            /* pass */
+#line 4243 "src/taumir/lower.tr"
             return true;
         }
-        /* pass */
+#line 4244 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 4245 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) void _release_str(LModule* m, LFunc* lf, long long v) {
-    /* pass */
+#line 4248 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_release", 18LL));
-    /* pass */
+#line 4249 "src/taumir/lower.tr"
     List_i64* a = (void*)List_i64_new();
-    /* pass */
+#line 4250 "src/taumir/lower.tr"
     List_i64_append(a, v);
-    /* pass */
+#line 4251 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_str_release", 18LL), a));
 }
 
 __attribute__((hot)) void _retain_str(LModule* m, LFunc* lf, long long v) {
-    /* pass */
+#line 4254 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_retain", 17LL));
-    /* pass */
+#line 4255 "src/taumir/lower.tr"
     List_i64* a = (void*)List_i64_new();
-    /* pass */
+#line 4256 "src/taumir/lower.tr"
     List_i64_append(a, v);
-    /* pass */
+#line 4257 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_str_retain", 17LL), a));
 }
 
 __attribute__((hot)) void _flush_fresh_strs(LModule* m, LFunc* lf) {
-    /* pass */
+#line 4264 "src/taumir/lower.tr"
     while ((lf->fresh_strs->len > 0LL)) {
-        /* pass */
+#line 4265 "src/taumir/lower.tr"
         long long v = List_i64_pop(lf->fresh_strs);
-        /* pass */
+#line 4266 "src/taumir/lower.tr"
         _release_str(m, lf, v);
     }
-    /* pass */
+#line 4267 "src/taumir/lower.tr"
     while ((lf->fresh_objs->len > 0LL)) {
-        /* pass */
+#line 4268 "src/taumir/lower.tr"
         long long ov = List_i64_pop(lf->fresh_objs);
-        /* pass */
+#line 4269 "src/taumir/lower.tr"
         _release_obj(m, lf, ov);
     }
 }
 
 __attribute__((hot)) void _secure_str(LModule* m, LFunc* lf, long long v) {
-    /* pass */
+#line 4274 "src/taumir/lower.tr"
     if ((!_fresh_take(lf, v))) {
-        /* pass */
+#line 4275 "src/taumir/lower.tr"
         _retain_str(m, lf, v);
     }
 }
 
 __attribute__((hot)) void _fresh_mark_obj(LFunc* lf, long long v) {
-    /* pass */
+#line 4284 "src/taumir/lower.tr"
     List_i64_append(lf->fresh_objs, v);
 }
 
 __attribute__((hot)) bool _fresh_take_obj(LFunc* lf, long long v) {
-    /* pass */
+#line 4287 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 4288 "src/taumir/lower.tr"
     while ((i < lf->fresh_objs->len)) {
-        /* pass */
+#line 4289 "src/taumir/lower.tr"
         if ((List_i64_get(lf->fresh_objs, i) == v)) {
-            /* pass */
+#line 4290 "src/taumir/lower.tr"
             List_i64_remove(lf->fresh_objs, i);
-            /* pass */
+#line 4291 "src/taumir/lower.tr"
             return true;
         }
-        /* pass */
+#line 4292 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 4293 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) void _release_obj(LModule* m, LFunc* lf, long long v) {
-    /* pass */
+#line 4296 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_obj_release", 18LL));
-    /* pass */
+#line 4297 "src/taumir/lower.tr"
     List_i64* a = (void*)List_i64_new();
-    /* pass */
+#line 4298 "src/taumir/lower.tr"
     List_i64_append(a, v);
-    /* pass */
+#line 4299 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_obj_release", 18LL), a));
 }
 
 __attribute__((hot)) void _retain_obj(LModule* m, LFunc* lf, long long v) {
-    /* pass */
+#line 4302 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_obj_retain", 17LL));
-    /* pass */
+#line 4303 "src/taumir/lower.tr"
     List_i64* a = (void*)List_i64_new();
-    /* pass */
+#line 4304 "src/taumir/lower.tr"
     List_i64_append(a, v);
-    /* pass */
+#line 4305 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_obj_retain", 17LL), a));
 }
 
 __attribute__((hot)) void _flush_fresh_objs(LModule* m, LFunc* lf) {
-    /* pass */
+#line 4309 "src/taumir/lower.tr"
     while ((lf->fresh_objs->len > 0LL)) {
-        /* pass */
+#line 4310 "src/taumir/lower.tr"
         long long v = List_i64_pop(lf->fresh_objs);
-        /* pass */
+#line 4311 "src/taumir/lower.tr"
         _release_obj(m, lf, v);
     }
 }
 
 __attribute__((hot)) bool _is_owned_local_return(LFunc* lf, HirExpr* val) {
-    /* pass */
-    __auto_type _t3279 = (*val);
-    if (_t3279.tag == HirExpr_EIdent) {
-        __auto_type vn = _t3279.data.EIdent.name;
-        /* pass */
+#line 4320 "src/taumir/lower.tr"
+    __auto_type _t6301 = (*val);
+    if (_t6301.tag == HirExpr_EIdent) {
+        __auto_type vn = _t6301.data.EIdent.name;
+#line 4322 "src/taumir/lower.tr"
         if ((LFunc_var_index(lf, vn) < 0LL)) {
-            /* pass */
+#line 4322 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 4323 "src/taumir/lower.tr"
         if (_is_param(lf, vn)) {
-            /* pass */
+#line 4323 "src/taumir/lower.tr"
             return false;
         }
-        /* pass */
+#line 4324 "src/taumir/lower.tr"
         long long vt = LFunc_var_type(lf, vn);
-        /* pass */
-        return ((vt == 10LL) || (vt == 11LL));
+#line 4325 "src/taumir/lower.tr"
+        bool _trret1586 = ((vt == 10LL) || (vt == 11LL));
+        return _trret1586;
     } else if (1) {
-        __auto_type _ = _t3279;
-        /* pass */
+        __auto_type _ = _t6301;
+#line 4327 "src/taumir/lower.tr"
         return false;
     }
 }
 
 __attribute__((hot)) void _secure_obj(LModule* m, LFunc* lf, long long v) {
-    /* pass */
+#line 4331 "src/taumir/lower.tr"
     if ((!_fresh_take_obj(lf, v))) {
-        /* pass */
+#line 4332 "src/taumir/lower.tr"
         _retain_obj(m, lf, v);
     }
 }
 
 __attribute__((hot)) bool _is_param(LFunc* lf, TrStr name) {
-    /* pass */
+#line 4335 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 4336 "src/taumir/lower.tr"
     while ((i < lf->params->len)) {
-        /* pass */
-        if (_tr_str_eqv((List_TrStr_get(lf->params, i)), (name))) {
-            /* pass */
+#line 4337 "src/taumir/lower.tr"
+        if (({ TrStr _cmpa_t6302 = (List_TrStr_get(lf->params, i)); TrStr _cmpb_t6303 = (name); _Bool _cmpr_t6304 = _tr_str_eqv(_cmpa_t6302, _cmpb_t6303); _tr_str_release(_cmpa_t6302); _cmpr_t6304; })) {
+#line 4337 "src/taumir/lower.tr"
             return true;
         }
-        /* pass */
+#line 4338 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 4339 "src/taumir/lower.tr"
     return false;
 }
 
 __attribute__((hot)) long long _norm_bool(LFunc* lf, long long v) {
-    /* pass */
+#line 4343 "src/taumir/lower.tr"
     long long z = LFunc_new_vreg(lf);
-    /* pass */
+#line 4344 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(z, 0LL));
-    /* pass */
+#line 4345 "src/taumir/lower.tr"
     long long r = LFunc_new_vreg(lf);
-    /* pass */
+#line 4346 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(r, _tr_str_lit_len("!=", 2LL), v, z));
-    /* pass */
+#line 4347 "src/taumir/lower.tr"
     return r;
 }
 
 __attribute__((hot)) long long _str_call0(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long restype) {
-    /* pass */
+#line 4351 "src/taumir/lower.tr"
     LModule_add_extern(m, sym);
-    /* pass */
+#line 4352 "src/taumir/lower.tr"
     List_i64* a = (void*)List_i64_new();
-    /* pass */
+#line 4353 "src/taumir/lower.tr"
     List_i64_append(a, _tr_v_recv);
-    /* pass */
+#line 4354 "src/taumir/lower.tr"
     long long d = LFunc_new_vreg(lf);
-    /* pass */
+#line 4355 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(d, sym, a));
-    /* pass */
+#line 4356 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, d, restype);
-    /* pass */
+#line 4357 "src/taumir/lower.tr"
     if ((restype == 1LL)) {
-        /* pass */
+#line 4357 "src/taumir/lower.tr"
         _fresh_mark(lf, d);
     }
-    /* pass */
+#line 4358 "src/taumir/lower.tr"
     return d;
 }
 
 __attribute__((hot)) long long _heap_lit(LModule* m, LFunc* lf, TrStr s) {
-    /* pass */
+#line 4365 "src/taumir/lower.tr"
     return _heap_lit_len(m, lf, s, _tr_str_lenv((s)));
 }
 
 __attribute__((hot)) long long _heap_lit_len(LModule* m, LFunc* lf, TrStr s, long long blen) {
-    /* pass */
+#line 4371 "src/taumir/lower.tr"
     long long idx = LModule_add_string(m, s, blen);
-    /* pass */
+#line 4372 "src/taumir/lower.tr"
     long long ds = LFunc_new_vreg(lf);
-    /* pass */
+#line 4373 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStr(ds, idx));
-    /* pass */
+#line 4374 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, ds, 1LL);
-    /* pass */
+#line 4375 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_new", 14LL));
-    /* pass */
+#line 4376 "src/taumir/lower.tr"
     List_i64* a = (void*)List_i64_new();
-    /* pass */
+#line 4377 "src/taumir/lower.tr"
     List_i64_append(a, ds);
-    /* pass */
+#line 4378 "src/taumir/lower.tr"
     long long h = LFunc_new_vreg(lf);
-    /* pass */
+#line 4379 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(h, _tr_str_lit_len("_tr_rt_str_new", 14LL), a));
-    /* pass */
+#line 4380 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, h, 1LL);
-    /* pass */
+#line 4381 "src/taumir/lower.tr"
     _fresh_mark(lf, h);
-    /* pass */
+#line 4382 "src/taumir/lower.tr"
     return h;
 }
 
 __attribute__((hot)) long long _obj_to_str(LModule* m, LFunc* lf, HirExpr* objexpr, long long objreg) {
-    /* pass */
+#line 4390 "src/taumir/lower.tr"
     TrStr ocls = _recv_class(m, lf, objexpr);
-    /* pass */
+#line 4391 "src/taumir/lower.tr"
     if ((_tr_str_eqv((ocls), (_tr_str_lit_len("", 0LL))) || (!LModule_is_class(m, ocls)))) {
-        /* pass */
+#line 4391 "src/taumir/lower.tr"
         _tr_str_release(ocls);
         return (-1LL);
     }
-    /* pass */
+#line 4392 "src/taumir/lower.tr"
     TrStr osm = LModule_resolve_method(m, ocls, _tr_str_lit_len("__str__", 7LL));
-    /* pass */
+#line 4393 "src/taumir/lower.tr"
     if (_tr_str_eqv((osm), (_tr_str_lit_len("", 0LL)))) {
-        /* pass */
+#line 4393 "src/taumir/lower.tr"
         _tr_str_release(ocls);
         _tr_str_release(osm);
         return (-1LL);
     }
-    /* pass */
+#line 4394 "src/taumir/lower.tr"
     long long oself = objreg;
-    /* pass */
+#line 4395 "src/taumir/lower.tr"
     if ((oself < 0LL)) {
-        /* pass */
+#line 4396 "src/taumir/lower.tr"
         oself = lower_expr(m, lf, objexpr);
-        /* pass */
+#line 4397 "src/taumir/lower.tr"
         if ((oself < 0LL)) {
-            /* pass */
+#line 4397 "src/taumir/lower.tr"
             _tr_str_release(ocls);
             _tr_str_release(osm);
             return (-1LL);
         }
     }
-    /* pass */
+#line 4398 "src/taumir/lower.tr"
     long long sd = _lower_obj_call(m, lf, osm, oself, (void*)List_ptr_new());
-    /* pass */
+#line 4399 "src/taumir/lower.tr"
+    long long _trret1587 = sd;
     _tr_str_release(ocls);
     _tr_str_release(osm);
-    return sd;
+    return _trret1587;
 }
 
 __attribute__((hot)) long long _obj_repr(LModule* m, LFunc* lf, HirExpr* objexpr, long long objreg) {
-    /* pass */
+#line 4403 "src/taumir/lower.tr"
     TrStr rcls = _recv_class(m, lf, objexpr);
-    /* pass */
+#line 4404 "src/taumir/lower.tr"
     if ((_tr_str_eqv((rcls), (_tr_str_lit_len("", 0LL))) || (!LModule_is_class(m, rcls)))) {
-        /* pass */
+#line 4404 "src/taumir/lower.tr"
         _tr_str_release(rcls);
         return (-1LL);
     }
-    /* pass */
+#line 4405 "src/taumir/lower.tr"
     TrStr rm = LModule_resolve_method(m, rcls, _tr_str_lit_len("__repr__", 8LL));
-    /* pass */
+#line 4406 "src/taumir/lower.tr"
     if (_tr_str_eqv((rm), (_tr_str_lit_len("", 0LL)))) {
-        /* pass */
+#line 4406 "src/taumir/lower.tr"
+        long long _trret1588 = _obj_to_str(m, lf, objexpr, objreg);
         _tr_str_release(rcls);
         _tr_str_release(rm);
-        return _obj_to_str(m, lf, objexpr, objreg);
+        return _trret1588;
     }
-    /* pass */
+#line 4407 "src/taumir/lower.tr"
     long long rself = objreg;
-    /* pass */
+#line 4408 "src/taumir/lower.tr"
     if ((rself < 0LL)) {
-        /* pass */
+#line 4409 "src/taumir/lower.tr"
         rself = lower_expr(m, lf, objexpr);
-        /* pass */
+#line 4410 "src/taumir/lower.tr"
         if ((rself < 0LL)) {
-            /* pass */
+#line 4410 "src/taumir/lower.tr"
             _tr_str_release(rcls);
             _tr_str_release(rm);
             return (-1LL);
         }
     }
-    /* pass */
+#line 4411 "src/taumir/lower.tr"
+    long long _trret1589 = _lower_obj_call(m, lf, rm, rself, (void*)List_ptr_new());
     _tr_str_release(rcls);
-    return _lower_obj_call(m, lf, rm, rself, (void*)List_ptr_new());
+    _tr_str_release(rm);
+    return _trret1589;
 }
 
 __attribute__((hot)) long long _reg_to_str(LModule* m, LFunc* lf, long long reg) {
-    /* pass */
+#line 4414 "src/taumir/lower.tr"
     long long t = LFunc_vreg_type(lf, reg);
-    /* pass */
+#line 4415 "src/taumir/lower.tr"
     if ((t == 1LL)) {
-        /* pass */
+#line 4415 "src/taumir/lower.tr"
         return reg;
     }
-    /* pass */
+#line 4416 "src/taumir/lower.tr"
     if ((t == 5LL)) {
-        /* pass */
+#line 4417 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_f64_to_str", 17LL));
-        /* pass */
+#line 4418 "src/taumir/lower.tr"
         long long fd = LFunc_new_vreg(lf);
-        /* pass */
+#line 4419 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IFCall1(fd, _tr_str_lit_len("_tr_rt_f64_to_str", 17LL), reg));
-        /* pass */
+#line 4420 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, fd, 1LL);
-        /* pass */
+#line 4421 "src/taumir/lower.tr"
         _fresh_mark(lf, fd);
-        /* pass */
+#line 4422 "src/taumir/lower.tr"
         return fd;
     }
-    /* pass */
+#line 4423 "src/taumir/lower.tr"
     TrStr sym = _tr_str_lit_len("_tr_rt_i64_to_str", 17LL);
-    /* pass */
+#line 4424 "src/taumir/lower.tr"
     if ((t == 4LL)) {
-        /* pass */
-        TrStr _strtmp_t3280 = _tr_str_lit_len("_tr_rt_bool_to_str", 18LL);
+#line 4424 "src/taumir/lower.tr"
+        TrStr _strtmp_t6305 = _tr_str_lit_len("_tr_rt_bool_to_str", 18LL);
         _tr_str_release(sym);
-        sym = _strtmp_t3280;
+        sym = _strtmp_t6305;
     } else if ((t != 0LL)) {
-        /* pass */
+#line 4425 "src/taumir/lower.tr"
         _tr_str_release(sym);
         return (-1LL);
     }
-    /* pass */
+#line 4426 "src/taumir/lower.tr"
     LModule_add_extern(m, sym);
-    /* pass */
+#line 4427 "src/taumir/lower.tr"
     List_i64* a = (void*)List_i64_new();
-    /* pass */
+#line 4428 "src/taumir/lower.tr"
     List_i64_append(a, reg);
-    /* pass */
+#line 4429 "src/taumir/lower.tr"
     long long d = LFunc_new_vreg(lf);
-    /* pass */
+#line 4430 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(d, sym, a));
-    /* pass */
+#line 4431 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, d, 1LL);
-    /* pass */
+#line 4432 "src/taumir/lower.tr"
     _fresh_mark(lf, d);
-    /* pass */
+#line 4433 "src/taumir/lower.tr"
+    long long _trret1590 = d;
     _tr_str_release(sym);
-    return d;
+    return _trret1590;
 }
 
 __attribute__((hot)) long long _str_concat2(LModule* m, LFunc* lf, long long a, long long b) {
-    /* pass */
+#line 4437 "src/taumir/lower.tr"
     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_concat", 17LL));
-    /* pass */
+#line 4438 "src/taumir/lower.tr"
     List_i64* ca = (void*)List_i64_new();
-    /* pass */
+#line 4439 "src/taumir/lower.tr"
     List_i64_append(ca, a);
-    /* pass */
+#line 4440 "src/taumir/lower.tr"
     List_i64_append(ca, b);
-    /* pass */
+#line 4441 "src/taumir/lower.tr"
     long long d = LFunc_new_vreg(lf);
-    /* pass */
+#line 4442 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(d, _tr_str_lit_len("_tr_rt_str_concat", 17LL), ca));
-    /* pass */
+#line 4443 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, d, 1LL);
-    /* pass */
+#line 4444 "src/taumir/lower.tr"
     _fresh_mark(lf, d);
-    /* pass */
+#line 4445 "src/taumir/lower.tr"
     return d;
 }
 
 __attribute__((hot)) long long _tuple_to_str(LModule* m, LFunc* lf, long long tup, AstType* ty) {
-    /* pass */
+#line 4449 "src/taumir/lower.tr"
     if ((ty->args->len == 0LL)) {
-        /* pass */
+#line 4450 "src/taumir/lower.tr"
         return _heap_lit(m, lf, _tr_str_lit_len("()", 2LL));
     }
-    /* pass */
+#line 4451 "src/taumir/lower.tr"
     long long acc = _heap_lit(m, lf, _tr_str_lit_len("(", 1LL));
-    /* pass */
+#line 4452 "src/taumir/lower.tr"
     long long i = 0LL;
-    /* pass */
+#line 4453 "src/taumir/lower.tr"
     while ((i < ty->args->len)) {
-        /* pass */
+#line 4454 "src/taumir/lower.tr"
         long long etag = _tag_of(m, (*((AstType**)List_ptr_get(ty->args, i))));
-        /* pass */
+#line 4455 "src/taumir/lower.tr"
         if (((((((etag < 0LL) || _is_list_tag(etag)) || _is_dict_tag(etag)) || _is_set_tag(etag)) || (etag == 12LL)) || (etag == 15LL))) {
-            /* pass */
+#line 4456 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4457 "src/taumir/lower.tr"
         long long ev = _emit_field_get(m, lf, tup, (i * 8LL), 0LL);
-        /* pass */
+#line 4458 "src/taumir/lower.tr"
         if ((etag == 5LL)) {
-            /* pass */
+#line 4459 "src/taumir/lower.tr"
             long long fv = LFunc_new_vreg(lf);
-            /* pass */
+#line 4460 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IBitsF(fv, ev));
-            /* pass */
+#line 4461 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, fv, 5LL);
-            /* pass */
+#line 4462 "src/taumir/lower.tr"
             ev = fv;
         } else {
-            /* pass */
+#line 4464 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, ev, etag);
         }
-        /* pass */
+#line 4465 "src/taumir/lower.tr"
         long long es = _reg_to_str(m, lf, ev);
-        /* pass */
+#line 4466 "src/taumir/lower.tr"
         if ((es < 0LL)) {
-            /* pass */
+#line 4466 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4467 "src/taumir/lower.tr"
         if ((etag == 1LL)) {
-            /* pass */
+#line 4468 "src/taumir/lower.tr"
             es = _str_concat2(m, lf, _heap_lit(m, lf, _tr_str_lit_len("'", 1LL)), es);
-            /* pass */
+#line 4469 "src/taumir/lower.tr"
             es = _str_concat2(m, lf, es, _heap_lit(m, lf, _tr_str_lit_len("'", 1LL)));
         }
-        /* pass */
+#line 4470 "src/taumir/lower.tr"
         if ((i > 0LL)) {
-            /* pass */
+#line 4470 "src/taumir/lower.tr"
             acc = _str_concat2(m, lf, acc, _heap_lit(m, lf, _tr_str_lit_len(", ", 2LL)));
         }
-        /* pass */
+#line 4471 "src/taumir/lower.tr"
         acc = _str_concat2(m, lf, acc, es);
-        /* pass */
+#line 4472 "src/taumir/lower.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 4473 "src/taumir/lower.tr"
     if ((ty->args->len == 1LL)) {
-        /* pass */
+#line 4473 "src/taumir/lower.tr"
         acc = _str_concat2(m, lf, acc, _heap_lit(m, lf, _tr_str_lit_len(",", 1LL)));
     }
-    /* pass */
+#line 4474 "src/taumir/lower.tr"
     return _str_concat2(m, lf, acc, _heap_lit(m, lf, _tr_str_lit_len(")", 1LL)));
 }
 
 __attribute__((hot)) long long _str_call1(LModule* m, LFunc* lf, TrStr sym, long long _tr_v_recv, long long arg, long long restype) {
-    /* pass */
+#line 4478 "src/taumir/lower.tr"
     LModule_add_extern(m, sym);
-    /* pass */
+#line 4479 "src/taumir/lower.tr"
     List_i64* a = (void*)List_i64_new();
-    /* pass */
+#line 4480 "src/taumir/lower.tr"
     List_i64_append(a, _tr_v_recv);
-    /* pass */
+#line 4481 "src/taumir/lower.tr"
     List_i64_append(a, arg);
-    /* pass */
+#line 4482 "src/taumir/lower.tr"
     long long d = LFunc_new_vreg(lf);
-    /* pass */
+#line 4483 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(d, sym, a));
-    /* pass */
+#line 4484 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, d, restype);
-    /* pass */
+#line 4485 "src/taumir/lower.tr"
     if ((restype == 1LL)) {
-        /* pass */
+#line 4485 "src/taumir/lower.tr"
         _fresh_mark(lf, d);
     }
-    /* pass */
+#line 4486 "src/taumir/lower.tr"
     return d;
 }
 
 __attribute__((hot)) long long _lower_str_method(LModule* m, LFunc* lf, long long _tr_v_recv, TrStr method, List_ptr* margs) {
-    /* pass */
+#line 4490 "src/taumir/lower.tr"
     if (((_tr_str_eqv((method), (_tr_str_lit_len("len", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("length", 6LL)))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4491 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_strlen", 13LL));
-        /* pass */
+#line 4492 "src/taumir/lower.tr"
         List_i64* la = (void*)List_i64_new();
-        /* pass */
+#line 4493 "src/taumir/lower.tr"
         List_i64_append(la, _tr_v_recv);
-        /* pass */
+#line 4494 "src/taumir/lower.tr"
         long long ld = LFunc_new_vreg(lf);
-        /* pass */
+#line 4495 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(ld, _tr_str_lit_len("_tr_rt_strlen", 13LL), la));
-        /* pass */
+#line 4496 "src/taumir/lower.tr"
         return ld;
     }
-    /* pass */
+#line 4497 "src/taumir/lower.tr"
     if (((_tr_str_eqv((method), (_tr_str_lit_len("upper", 5LL))) || _tr_str_eqv((method), (_tr_str_lit_len("to_upper", 8LL)))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4498 "src/taumir/lower.tr"
         return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_str_upper", 16LL), _tr_v_recv, 1LL);
     }
-    /* pass */
+#line 4499 "src/taumir/lower.tr"
     if (((_tr_str_eqv((method), (_tr_str_lit_len("lower", 5LL))) || _tr_str_eqv((method), (_tr_str_lit_len("to_lower", 8LL)))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4500 "src/taumir/lower.tr"
         return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_str_lower", 16LL), _tr_v_recv, 1LL);
     }
-    /* pass */
+#line 4501 "src/taumir/lower.tr"
     if (((_tr_str_eqv((method), (_tr_str_lit_len("strip", 5LL))) || _tr_str_eqv((method), (_tr_str_lit_len("trim", 4LL)))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4502 "src/taumir/lower.tr"
         return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_str_strip", 16LL), _tr_v_recv, 1LL);
     }
-    /* pass */
+#line 4503 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("to_int", 6LL))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4504 "src/taumir/lower.tr"
         return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_str_to_i64", 17LL), _tr_v_recv, 0LL);
     }
-    /* pass */
+#line 4505 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("split_once", 10LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4507 "src/taumir/lower.tr"
         long long soa = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4508 "src/taumir/lower.tr"
         if (((soa < 0LL) || (LFunc_vreg_type(lf, soa) != 1LL))) {
-            /* pass */
+#line 4508 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4509 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_split_once_left", 22LL));
-        /* pass */
+#line 4510 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_split_once_right", 23LL));
-        /* pass */
+#line 4511 "src/taumir/lower.tr"
         List_i64* sola = (void*)List_i64_new();
-        /* pass */
+#line 4512 "src/taumir/lower.tr"
         List_i64_append(sola, _tr_v_recv);
-        /* pass */
+#line 4513 "src/taumir/lower.tr"
         List_i64_append(sola, soa);
-        /* pass */
+#line 4514 "src/taumir/lower.tr"
         long long sol = LFunc_new_vreg(lf);
-        /* pass */
+#line 4515 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(sol, _tr_str_lit_len("_tr_rt_split_once_left", 22LL), sola));
-        /* pass */
+#line 4516 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, sol, 1LL);
-        /* pass */
+#line 4517 "src/taumir/lower.tr"
         _fresh_mark(lf, sol);
-        /* pass */
+#line 4518 "src/taumir/lower.tr"
         _secure_str(m, lf, sol);
-        /* pass */
+#line 4519 "src/taumir/lower.tr"
         List_i64* sora = (void*)List_i64_new();
-        /* pass */
+#line 4520 "src/taumir/lower.tr"
         List_i64_append(sora, _tr_v_recv);
-        /* pass */
+#line 4521 "src/taumir/lower.tr"
         List_i64_append(sora, soa);
-        /* pass */
+#line 4522 "src/taumir/lower.tr"
         long long sor = LFunc_new_vreg(lf);
-        /* pass */
+#line 4523 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(sor, _tr_str_lit_len("_tr_rt_split_once_right", 23LL), sora));
-        /* pass */
+#line 4524 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, sor, 1LL);
-        /* pass */
+#line 4525 "src/taumir/lower.tr"
         _fresh_mark(lf, sor);
-        /* pass */
+#line 4526 "src/taumir/lower.tr"
         _secure_str(m, lf, sor);
-        /* pass */
+#line 4527 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_new", 15LL));
-        /* pass */
+#line 4528 "src/taumir/lower.tr"
         long long sols = LFunc_new_vreg(lf);
-        /* pass */
+#line 4529 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(sols, _tr_str_lit_len("_tr_rt_list_new", 15LL), (void*)List_i64_new()));
-        /* pass */
+#line 4530 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, sols, 3LL);
-        /* pass */
+#line 4531 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_push_i64", 20LL));
-        /* pass */
+#line 4532 "src/taumir/lower.tr"
         List_i64* sop1 = (void*)List_i64_new();
-        /* pass */
+#line 4533 "src/taumir/lower.tr"
         List_i64_append(sop1, sols);
-        /* pass */
+#line 4534 "src/taumir/lower.tr"
         List_i64_append(sop1, sol);
-        /* pass */
+#line 4535 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_list_push_i64", 20LL), sop1));
-        /* pass */
+#line 4536 "src/taumir/lower.tr"
         List_i64* sop2 = (void*)List_i64_new();
-        /* pass */
+#line 4537 "src/taumir/lower.tr"
         List_i64_append(sop2, sols);
-        /* pass */
+#line 4538 "src/taumir/lower.tr"
         List_i64_append(sop2, sor);
-        /* pass */
+#line 4539 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_list_push_i64", 20LL), sop2));
-        /* pass */
+#line 4540 "src/taumir/lower.tr"
         return sols;
     }
-    /* pass */
+#line 4541 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("to_float", 8LL))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4543 "src/taumir/lower.tr"
         long long tf0 = _str_call0(m, lf, _tr_str_lit_len("_tr_rt_str_to_f64", 17LL), _tr_v_recv, 0LL);
-        /* pass */
+#line 4544 "src/taumir/lower.tr"
         long long tff = LFunc_new_vreg(lf);
-        /* pass */
+#line 4545 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IBitsF(tff, tf0));
-        /* pass */
+#line 4546 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, tff, 5LL);
-        /* pass */
+#line 4547 "src/taumir/lower.tr"
         return tff;
     }
-    /* pass */
+#line 4548 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("replace", 7LL))) && (margs->len == 2LL))) {
-        /* pass */
+#line 4549 "src/taumir/lower.tr"
         long long a0 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4550 "src/taumir/lower.tr"
         if (((a0 < 0LL) || (LFunc_vreg_type(lf, a0) != 1LL))) {
-            /* pass */
+#line 4550 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4551 "src/taumir/lower.tr"
         long long a1 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
-        /* pass */
+#line 4552 "src/taumir/lower.tr"
         if (((a1 < 0LL) || (LFunc_vreg_type(lf, a1) != 1LL))) {
-            /* pass */
+#line 4552 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4553 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_replace", 18LL));
-        /* pass */
+#line 4554 "src/taumir/lower.tr"
         List_i64* ra = (void*)List_i64_new();
-        /* pass */
+#line 4555 "src/taumir/lower.tr"
         List_i64_append(ra, _tr_v_recv);
-        /* pass */
+#line 4556 "src/taumir/lower.tr"
         List_i64_append(ra, a0);
-        /* pass */
+#line 4557 "src/taumir/lower.tr"
         List_i64_append(ra, a1);
-        /* pass */
+#line 4558 "src/taumir/lower.tr"
         long long rd = LFunc_new_vreg(lf);
-        /* pass */
+#line 4559 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(rd, _tr_str_lit_len("_tr_rt_str_replace", 18LL), ra));
-        /* pass */
+#line 4560 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, rd, 1LL);
-        /* pass */
+#line 4561 "src/taumir/lower.tr"
         _fresh_mark(lf, rd);
-        /* pass */
+#line 4562 "src/taumir/lower.tr"
         return rd;
     }
-    /* pass */
+#line 4563 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("find", 4LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4564 "src/taumir/lower.tr"
         long long fa = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4565 "src/taumir/lower.tr"
         if (((fa < 0LL) || (LFunc_vreg_type(lf, fa) != 1LL))) {
-            /* pass */
+#line 4565 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4566 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_find", 15LL), _tr_v_recv, fa, 0LL);
     }
-    /* pass */
+#line 4567 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("starts_with", 11LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4568 "src/taumir/lower.tr"
         long long sa = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4569 "src/taumir/lower.tr"
         if (((sa < 0LL) || (LFunc_vreg_type(lf, sa) != 1LL))) {
-            /* pass */
+#line 4569 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4570 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_starts_with", 22LL), _tr_v_recv, sa, 4LL);
     }
-    /* pass */
+#line 4571 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("ends_with", 9LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4572 "src/taumir/lower.tr"
         long long ea = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4573 "src/taumir/lower.tr"
         if (((ea < 0LL) || (LFunc_vreg_type(lf, ea) != 1LL))) {
-            /* pass */
+#line 4573 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4574 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_ends_with", 20LL), _tr_v_recv, ea, 4LL);
     }
-    /* pass */
+#line 4575 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("count", 5LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4576 "src/taumir/lower.tr"
         long long ka = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4577 "src/taumir/lower.tr"
         if (((ka < 0LL) || (LFunc_vreg_type(lf, ka) != 1LL))) {
-            /* pass */
+#line 4577 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4578 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_count", 16LL), _tr_v_recv, ka, 0LL);
     }
-    /* pass */
+#line 4579 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("contains", 8LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4580 "src/taumir/lower.tr"
         long long na = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4581 "src/taumir/lower.tr"
         if (((na < 0LL) || (LFunc_vreg_type(lf, na) != 1LL))) {
-            /* pass */
+#line 4581 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4582 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_contains", 19LL), _tr_v_recv, na, 4LL);
     }
-    /* pass */
+#line 4583 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("char_at", 7LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4584 "src/taumir/lower.tr"
         long long ia = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4585 "src/taumir/lower.tr"
         if (((ia < 0LL) || (LFunc_vreg_type(lf, ia) != 0LL))) {
-            /* pass */
+#line 4585 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4586 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_char_at", 18LL), _tr_v_recv, ia, 0LL);
     }
-    /* pass */
+#line 4587 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("repeat", 6LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4588 "src/taumir/lower.tr"
         long long pa = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4589 "src/taumir/lower.tr"
         if (((pa < 0LL) || (LFunc_vreg_type(lf, pa) != 0LL))) {
-            /* pass */
+#line 4589 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4590 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_repeat", 17LL), _tr_v_recv, pa, 1LL);
     }
-    /* pass */
+#line 4591 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("slice", 5LL))) && (margs->len == 2LL))) {
-        /* pass */
+#line 4592 "src/taumir/lower.tr"
         long long s0 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4593 "src/taumir/lower.tr"
         if (((s0 < 0LL) || (LFunc_vreg_type(lf, s0) != 0LL))) {
-            /* pass */
+#line 4593 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4594 "src/taumir/lower.tr"
         long long s1 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
-        /* pass */
+#line 4595 "src/taumir/lower.tr"
         if (((s1 < 0LL) || (LFunc_vreg_type(lf, s1) != 0LL))) {
-            /* pass */
+#line 4595 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4596 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_slice", 16LL));
-        /* pass */
+#line 4597 "src/taumir/lower.tr"
         List_i64* sla = (void*)List_i64_new();
-        /* pass */
+#line 4598 "src/taumir/lower.tr"
         List_i64_append(sla, _tr_v_recv);
-        /* pass */
+#line 4599 "src/taumir/lower.tr"
         List_i64_append(sla, s0);
-        /* pass */
+#line 4600 "src/taumir/lower.tr"
         List_i64_append(sla, s1);
-        /* pass */
+#line 4601 "src/taumir/lower.tr"
         long long sld = LFunc_new_vreg(lf);
-        /* pass */
+#line 4602 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(sld, _tr_str_lit_len("_tr_rt_str_slice", 16LL), sla));
-        /* pass */
+#line 4603 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, sld, 1LL);
-        /* pass */
+#line 4604 "src/taumir/lower.tr"
         _fresh_mark(lf, sld);
-        /* pass */
+#line 4605 "src/taumir/lower.tr"
         return sld;
     }
-    /* pass */
+#line 4607 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("capitalize", 10LL))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4608 "src/taumir/lower.tr"
         return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_str_capitalize", 21LL), _tr_v_recv, 1LL);
     }
-    /* pass */
+#line 4609 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("title", 5LL))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4610 "src/taumir/lower.tr"
         return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_str_title", 16LL), _tr_v_recv, 1LL);
     }
-    /* pass */
+#line 4611 "src/taumir/lower.tr"
     if (((_tr_str_eqv((method), (_tr_str_lit_len("trim_left", 9LL))) || _tr_str_eqv((method), (_tr_str_lit_len("lstrip", 6LL)))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4612 "src/taumir/lower.tr"
         return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_str_trim_left", 20LL), _tr_v_recv, 1LL);
     }
-    /* pass */
+#line 4613 "src/taumir/lower.tr"
     if (((_tr_str_eqv((method), (_tr_str_lit_len("trim_right", 10LL))) || _tr_str_eqv((method), (_tr_str_lit_len("rstrip", 6LL)))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4614 "src/taumir/lower.tr"
         return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_str_trim_right", 21LL), _tr_v_recv, 1LL);
     }
-    /* pass */
+#line 4615 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("zfill", 5LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4616 "src/taumir/lower.tr"
         long long zfa = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4617 "src/taumir/lower.tr"
         if (((zfa < 0LL) || (LFunc_vreg_type(lf, zfa) != 0LL))) {
-            /* pass */
+#line 4617 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4618 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_zfill", 16LL), _tr_v_recv, zfa, 1LL);
     }
-    /* pass */
+#line 4619 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("pad_left", 8LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4620 "src/taumir/lower.tr"
         long long pla = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4621 "src/taumir/lower.tr"
         if (((pla < 0LL) || (LFunc_vreg_type(lf, pla) != 0LL))) {
-            /* pass */
+#line 4621 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4622 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_pad_left", 19LL), _tr_v_recv, pla, 1LL);
     }
-    /* pass */
+#line 4623 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("pad_right", 9LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4624 "src/taumir/lower.tr"
         long long pra = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4625 "src/taumir/lower.tr"
         if (((pra < 0LL) || (LFunc_vreg_type(lf, pra) != 0LL))) {
-            /* pass */
+#line 4625 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4626 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_pad_right", 20LL), _tr_v_recv, pra, 1LL);
     }
-    /* pass */
+#line 4627 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("contains_char", 13LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4628 "src/taumir/lower.tr"
         long long cca = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4629 "src/taumir/lower.tr"
         if (((cca < 0LL) || (LFunc_vreg_type(lf, cca) != 0LL))) {
-            /* pass */
+#line 4629 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4630 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_contains_char", 24LL), _tr_v_recv, cca, 4LL);
     }
-    /* pass */
+#line 4631 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("center", 6LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4632 "src/taumir/lower.tr"
         long long cea = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4633 "src/taumir/lower.tr"
         if (((cea < 0LL) || (LFunc_vreg_type(lf, cea) != 0LL))) {
-            /* pass */
+#line 4633 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4634 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_center", 17LL), _tr_v_recv, cea, 1LL);
     }
-    /* pass */
+#line 4635 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("chars", 5LL))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4636 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_chars", 16LL));
-        /* pass */
+#line 4637 "src/taumir/lower.tr"
         List_i64* cha = (void*)List_i64_new();
-        /* pass */
+#line 4638 "src/taumir/lower.tr"
         List_i64_append(cha, _tr_v_recv);
-        /* pass */
+#line 4639 "src/taumir/lower.tr"
         long long chd = LFunc_new_vreg(lf);
-        /* pass */
+#line 4640 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(chd, _tr_str_lit_len("_tr_rt_str_chars", 16LL), cha));
-        /* pass */
+#line 4641 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, chd, 3LL);
-        /* pass */
+#line 4642 "src/taumir/lower.tr"
         return chd;
     }
-    /* pass */
+#line 4643 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("split", 5LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4644 "src/taumir/lower.tr"
         long long spa = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4645 "src/taumir/lower.tr"
         if (((spa < 0LL) || (LFunc_vreg_type(lf, spa) != 1LL))) {
-            /* pass */
+#line 4645 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4646 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_split", 16LL));
-        /* pass */
+#line 4647 "src/taumir/lower.tr"
         List_i64* spargs = (void*)List_i64_new();
-        /* pass */
+#line 4648 "src/taumir/lower.tr"
         List_i64_append(spargs, _tr_v_recv);
-        /* pass */
+#line 4649 "src/taumir/lower.tr"
         List_i64_append(spargs, spa);
-        /* pass */
+#line 4650 "src/taumir/lower.tr"
         long long spd = LFunc_new_vreg(lf);
-        /* pass */
+#line 4651 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(spd, _tr_str_lit_len("_tr_rt_str_split", 16LL), spargs));
-        /* pass */
+#line 4652 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, spd, 3LL);
-        /* pass */
+#line 4653 "src/taumir/lower.tr"
         return spd;
     }
-    /* pass */
+#line 4654 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("reverse", 7LL))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4655 "src/taumir/lower.tr"
         return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_str_reverse", 18LL), _tr_v_recv, 1LL);
     }
-    /* pass */
+#line 4656 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("is_empty", 8LL))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4657 "src/taumir/lower.tr"
         return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_str_is_empty", 19LL), _tr_v_recv, 4LL);
     }
-    /* pass */
+#line 4658 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("parse_bool", 10LL))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4659 "src/taumir/lower.tr"
         return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_str_parse_bool", 21LL), _tr_v_recv, 4LL);
     }
-    /* pass */
+#line 4660 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("parse_int", 9LL))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4661 "src/taumir/lower.tr"
         return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_str_to_i64", 17LL), _tr_v_recv, 0LL);
     }
-    /* pass */
+#line 4663 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("index_of", 8LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4664 "src/taumir/lower.tr"
         long long ida = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4665 "src/taumir/lower.tr"
         if (((ida < 0LL) || (LFunc_vreg_type(lf, ida) != 1LL))) {
-            /* pass */
+#line 4665 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4666 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_find", 15LL), _tr_v_recv, ida, 0LL);
     }
-    /* pass */
+#line 4667 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("last_index_of", 13LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4668 "src/taumir/lower.tr"
         long long lia = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4669 "src/taumir/lower.tr"
         if (((lia < 0LL) || (LFunc_vreg_type(lf, lia) != 1LL))) {
-            /* pass */
+#line 4669 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4670 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_last_index_of", 24LL), _tr_v_recv, lia, 0LL);
     }
-    /* pass */
+#line 4671 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("strip_prefix", 12LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4672 "src/taumir/lower.tr"
         long long ppa = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4673 "src/taumir/lower.tr"
         if (((ppa < 0LL) || (LFunc_vreg_type(lf, ppa) != 1LL))) {
-            /* pass */
+#line 4673 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4674 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_strip_prefix", 23LL), _tr_v_recv, ppa, 1LL);
     }
-    /* pass */
+#line 4675 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("strip_suffix", 12LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4676 "src/taumir/lower.tr"
         long long ssa = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4677 "src/taumir/lower.tr"
         if (((ssa < 0LL) || (LFunc_vreg_type(lf, ssa) != 1LL))) {
-            /* pass */
+#line 4677 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4678 "src/taumir/lower.tr"
         return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_strip_suffix", 23LL), _tr_v_recv, ssa, 1LL);
     }
-    /* pass */
+#line 4679 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("replace_first", 13LL))) && (margs->len == 2LL))) {
-        /* pass */
+#line 4680 "src/taumir/lower.tr"
         long long rf0 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4681 "src/taumir/lower.tr"
         if (((rf0 < 0LL) || (LFunc_vreg_type(lf, rf0) != 1LL))) {
-            /* pass */
+#line 4681 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4682 "src/taumir/lower.tr"
         long long rf1 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
-        /* pass */
+#line 4683 "src/taumir/lower.tr"
         if (((rf1 < 0LL) || (LFunc_vreg_type(lf, rf1) != 1LL))) {
-            /* pass */
+#line 4683 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4684 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_replace_first", 24LL));
-        /* pass */
+#line 4685 "src/taumir/lower.tr"
         List_i64* rfa = (void*)List_i64_new();
-        /* pass */
+#line 4686 "src/taumir/lower.tr"
         List_i64_append(rfa, _tr_v_recv);
-        /* pass */
+#line 4687 "src/taumir/lower.tr"
         List_i64_append(rfa, rf0);
-        /* pass */
+#line 4688 "src/taumir/lower.tr"
         List_i64_append(rfa, rf1);
-        /* pass */
+#line 4689 "src/taumir/lower.tr"
         long long rfd = LFunc_new_vreg(lf);
-        /* pass */
+#line 4690 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(rfd, _tr_str_lit_len("_tr_rt_str_replace_first", 24LL), rfa));
-        /* pass */
+#line 4691 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, rfd, 1LL);
-        /* pass */
+#line 4692 "src/taumir/lower.tr"
         _fresh_mark(lf, rfd);
-        /* pass */
+#line 4693 "src/taumir/lower.tr"
         return rfd;
     }
-    /* pass */
+#line 4694 "src/taumir/lower.tr"
     return (-1LL);
 }
 
 __attribute__((hot)) TrStr _float_unary_sym(TrStr method) {
-    /* pass */
+#line 4698 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("sqrt", 4LL)))) {
-        /* pass */
+#line 4698 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_sqrt", 11LL);
     }
-    /* pass */
+#line 4699 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("floor", 5LL)))) {
-        /* pass */
+#line 4699 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_floor", 12LL);
     }
-    /* pass */
+#line 4700 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("ceil", 4LL)))) {
-        /* pass */
+#line 4700 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_ceil", 11LL);
     }
-    /* pass */
+#line 4701 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("round", 5LL)))) {
-        /* pass */
+#line 4701 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_round", 12LL);
     }
-    /* pass */
+#line 4702 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("abs", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("fabs", 4LL))))) {
-        /* pass */
+#line 4702 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_fabs", 11LL);
     }
-    /* pass */
+#line 4703 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("log", 3LL)))) {
-        /* pass */
+#line 4703 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_log", 10LL);
     }
-    /* pass */
+#line 4704 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("log2", 4LL)))) {
-        /* pass */
+#line 4704 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_log2", 11LL);
     }
-    /* pass */
+#line 4705 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("log10", 5LL)))) {
-        /* pass */
+#line 4705 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_log10", 12LL);
     }
-    /* pass */
+#line 4706 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("exp", 3LL)))) {
-        /* pass */
+#line 4706 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_exp", 10LL);
     }
-    /* pass */
+#line 4707 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("sin", 3LL)))) {
-        /* pass */
+#line 4707 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_sin", 10LL);
     }
-    /* pass */
+#line 4708 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("cos", 3LL)))) {
-        /* pass */
+#line 4708 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_cos", 10LL);
     }
-    /* pass */
+#line 4709 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("tan", 3LL)))) {
-        /* pass */
+#line 4709 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_tan", 10LL);
     }
-    /* pass */
+#line 4710 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("asin", 4LL)))) {
-        /* pass */
+#line 4710 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_asin", 11LL);
     }
-    /* pass */
+#line 4711 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("acos", 4LL)))) {
-        /* pass */
+#line 4711 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_acos", 11LL);
     }
-    /* pass */
+#line 4712 "src/taumir/lower.tr"
     if (_tr_str_eqv((method), (_tr_str_lit_len("atan", 4LL)))) {
-        /* pass */
+#line 4712 "src/taumir/lower.tr"
         return _tr_str_lit_len("_tr_rt_atan", 11LL);
     }
-    /* pass */
+#line 4713 "src/taumir/lower.tr"
     return _tr_str_lit_len("", 0LL);
 }
 
 __attribute__((hot)) long long _lower_int_method(LModule* m, LFunc* lf, long long _tr_v_recv, TrStr method, List_ptr* margs) {
-    /* pass */
+#line 4717 "src/taumir/lower.tr"
     if ((margs->len == 0LL)) {
-        /* pass */
+#line 4718 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("to_float", 8LL))) || _tr_str_eqv((method), (_tr_str_lit_len("to_f64", 6LL))))) {
-            /* pass */
+#line 4718 "src/taumir/lower.tr"
             return _promote_f(lf, _tr_v_recv);
         }
-        /* pass */
+#line 4719 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("to_hex", 6LL)))) {
-            /* pass */
+#line 4719 "src/taumir/lower.tr"
             return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_i64_to_hex", 17LL), _tr_v_recv, 1LL);
         }
-        /* pass */
+#line 4720 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("to_hex_upper", 12LL))) || _tr_str_eqv((method), (_tr_str_lit_len("to_HEX", 6LL))))) {
-            /* pass */
+#line 4720 "src/taumir/lower.tr"
             return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_i64_to_hex_upper", 23LL), _tr_v_recv, 1LL);
         }
-        /* pass */
+#line 4721 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("to_oct", 6LL))) || _tr_str_eqv((method), (_tr_str_lit_len("to_octal", 8LL))))) {
-            /* pass */
+#line 4721 "src/taumir/lower.tr"
             return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_i64_to_oct", 17LL), _tr_v_recv, 1LL);
         }
-        /* pass */
+#line 4722 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("to_bin", 6LL))) || _tr_str_eqv((method), (_tr_str_lit_len("to_binary", 9LL))))) {
-            /* pass */
+#line 4722 "src/taumir/lower.tr"
             return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_i64_to_bin", 17LL), _tr_v_recv, 1LL);
         }
-        /* pass */
+#line 4723 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("to_str", 6LL))) || _tr_str_eqv((method), (_tr_str_lit_len("to_string", 9LL))))) {
-            /* pass */
+#line 4723 "src/taumir/lower.tr"
             return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_i64_to_str", 17LL), _tr_v_recv, 1LL);
         }
-        /* pass */
+#line 4724 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("sign", 4LL)))) {
-            /* pass */
+#line 4725 "src/taumir/lower.tr"
             long long z = LFunc_new_vreg(lf);
-            /* pass */
+#line 4726 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IConst(z, 0LL));
-            /* pass */
+#line 4727 "src/taumir/lower.tr"
             long long gt = LFunc_new_vreg(lf);
-            /* pass */
+#line 4728 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IBinOp(gt, _tr_str_lit_len(">", 1LL), _tr_v_recv, z));
-            /* pass */
+#line 4729 "src/taumir/lower.tr"
             long long lt = LFunc_new_vreg(lf);
-            /* pass */
+#line 4730 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IBinOp(lt, _tr_str_lit_len("<", 1LL), _tr_v_recv, z));
-            /* pass */
+#line 4731 "src/taumir/lower.tr"
             long long sd = LFunc_new_vreg(lf);
-            /* pass */
+#line 4732 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IBinOp(sd, _tr_str_lit_len("-", 1LL), gt, lt));
-            /* pass */
+#line 4733 "src/taumir/lower.tr"
             return sd;
         }
-        /* pass */
+#line 4734 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 4735 "src/taumir/lower.tr"
     if (((margs->len == 1LL) && _tr_str_eqv((method), (_tr_str_lit_len("pow", 3LL))))) {
-        /* pass */
+#line 4736 "src/taumir/lower.tr"
         long long pe = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4737 "src/taumir/lower.tr"
         if (((pe < 0LL) || (LFunc_vreg_type(lf, pe) != 0LL))) {
-            /* pass */
+#line 4737 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4738 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_int_pow", 14LL));
-        /* pass */
+#line 4739 "src/taumir/lower.tr"
         List_i64* ppa = (void*)List_i64_new();
-        /* pass */
+#line 4740 "src/taumir/lower.tr"
         List_i64_append(ppa, _tr_v_recv);
-        /* pass */
+#line 4741 "src/taumir/lower.tr"
         List_i64_append(ppa, pe);
-        /* pass */
+#line 4742 "src/taumir/lower.tr"
         long long ppd = LFunc_new_vreg(lf);
-        /* pass */
+#line 4743 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(ppd, _tr_str_lit_len("_tr_rt_int_pow", 14LL), ppa));
-        /* pass */
+#line 4744 "src/taumir/lower.tr"
         return ppd;
     }
-    /* pass */
+#line 4745 "src/taumir/lower.tr"
     if (((margs->len == 1LL) && (_tr_str_eqv((method), (_tr_str_lit_len("gcd", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("lcm", 3LL)))))) {
-        /* pass */
+#line 4746 "src/taumir/lower.tr"
         long long y = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4747 "src/taumir/lower.tr"
         if (((y < 0LL) || (LFunc_vreg_type(lf, y) != 0LL))) {
-            /* pass */
+#line 4747 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4748 "src/taumir/lower.tr"
         TrStr gsym = _tr_str_lit_len("_tr_rt_gcd_i64", 14LL);
-        /* pass */
+#line 4749 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("lcm", 3LL)))) {
-            /* pass */
-            TrStr _strtmp_t3281 = _tr_str_lit_len("_tr_rt_lcm_i64", 14LL);
+#line 4749 "src/taumir/lower.tr"
+            TrStr _strtmp_t6306 = _tr_str_lit_len("_tr_rt_lcm_i64", 14LL);
             _tr_str_release(gsym);
-            gsym = _strtmp_t3281;
+            gsym = _strtmp_t6306;
         }
-        /* pass */
+#line 4750 "src/taumir/lower.tr"
         LModule_add_extern(m, gsym);
-        /* pass */
+#line 4751 "src/taumir/lower.tr"
         List_i64* glargs = (void*)List_i64_new();
-        /* pass */
+#line 4752 "src/taumir/lower.tr"
         List_i64_append(glargs, _tr_v_recv);
-        /* pass */
+#line 4753 "src/taumir/lower.tr"
         List_i64_append(glargs, y);
-        /* pass */
+#line 4754 "src/taumir/lower.tr"
         long long gd = LFunc_new_vreg(lf);
-        /* pass */
+#line 4755 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(gd, gsym, glargs));
-        /* pass */
+#line 4756 "src/taumir/lower.tr"
+        long long _trret1591 = gd;
         _tr_str_release(gsym);
-        return gd;
+        return _trret1591;
     }
-    /* pass */
+#line 4757 "src/taumir/lower.tr"
     if (((margs->len == 2LL) && _tr_str_eqv((method), (_tr_str_lit_len("clamp", 5LL))))) {
-        /* pass */
+#line 4758 "src/taumir/lower.tr"
         long long lo = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4759 "src/taumir/lower.tr"
         if (((lo < 0LL) || (LFunc_vreg_type(lf, lo) != 0LL))) {
-            /* pass */
+#line 4759 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4760 "src/taumir/lower.tr"
         long long hi = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
-        /* pass */
+#line 4761 "src/taumir/lower.tr"
         if (((hi < 0LL) || (LFunc_vreg_type(lf, hi) != 0LL))) {
-            /* pass */
+#line 4761 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4762 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_clamp_i64", 16LL));
-        /* pass */
+#line 4763 "src/taumir/lower.tr"
         List_i64* ca = (void*)List_i64_new();
-        /* pass */
+#line 4764 "src/taumir/lower.tr"
         List_i64_append(ca, _tr_v_recv);
-        /* pass */
+#line 4765 "src/taumir/lower.tr"
         List_i64_append(ca, lo);
-        /* pass */
+#line 4766 "src/taumir/lower.tr"
         List_i64_append(ca, hi);
-        /* pass */
+#line 4767 "src/taumir/lower.tr"
         long long cd = LFunc_new_vreg(lf);
-        /* pass */
+#line 4768 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(cd, _tr_str_lit_len("_tr_rt_clamp_i64", 16LL), ca));
-        /* pass */
+#line 4769 "src/taumir/lower.tr"
         return cd;
     }
-    /* pass */
+#line 4770 "src/taumir/lower.tr"
     return (-1LL);
 }
 
 __attribute__((hot)) long long _lower_dict_method(LModule* m, LFunc* lf, long long _tr_v_recv, long long dtag, TrStr method, List_ptr* margs) {
-    /* pass */
+#line 4774 "src/taumir/lower.tr"
     if (((_tr_str_eqv((method), (_tr_str_lit_len("len", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("length", 6LL)))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4775 "src/taumir/lower.tr"
         TrStr lsym = _dict_sym(dtag, _tr_str_lit_len("len", 3LL));
-        /* pass */
+#line 4776 "src/taumir/lower.tr"
         LModule_add_extern(m, lsym);
-        /* pass */
+#line 4777 "src/taumir/lower.tr"
         List_i64* la = (void*)List_i64_new();
-        /* pass */
+#line 4778 "src/taumir/lower.tr"
         List_i64_append(la, _tr_v_recv);
-        /* pass */
+#line 4779 "src/taumir/lower.tr"
         long long ld = LFunc_new_vreg(lf);
-        /* pass */
+#line 4780 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(ld, lsym, la));
-        /* pass */
+#line 4781 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, ld, 0LL);
-        /* pass */
+#line 4782 "src/taumir/lower.tr"
+        long long _trret1592 = ld;
         _tr_str_release(lsym);
-        return ld;
+        return _trret1592;
     }
-    /* pass */
+#line 4783 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("remove", 6LL))) && (margs->len == 1LL))) {
-        /* pass */
+#line 4784 "src/taumir/lower.tr"
         long long rk = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4785 "src/taumir/lower.tr"
         if ((rk < 0LL)) {
-            /* pass */
+#line 4785 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4786 "src/taumir/lower.tr"
         if ((_dict_key_is_str(dtag) && (LFunc_vreg_type(lf, rk) != 1LL))) {
-            /* pass */
+#line 4786 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4787 "src/taumir/lower.tr"
         if (((!_dict_key_is_str(dtag)) && (LFunc_vreg_type(lf, rk) != 0LL))) {
-            /* pass */
+#line 4787 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4788 "src/taumir/lower.tr"
         TrStr rsym = _dict_sym(dtag, _tr_str_lit_len("remove", 6LL));
-        /* pass */
+#line 4789 "src/taumir/lower.tr"
         LModule_add_extern(m, rsym);
-        /* pass */
+#line 4790 "src/taumir/lower.tr"
         List_i64* ra = (void*)List_i64_new();
-        /* pass */
+#line 4791 "src/taumir/lower.tr"
         List_i64_append(ra, _tr_v_recv);
-        /* pass */
+#line 4792 "src/taumir/lower.tr"
         List_i64_append(ra, rk);
-        /* pass */
+#line 4793 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall((-1LL), rsym, ra));
-        /* pass */
+#line 4794 "src/taumir/lower.tr"
+        long long _trret1593 = _tr_v_recv;
         _tr_str_release(rsym);
-        return _tr_v_recv;
+        return _trret1593;
     }
-    /* pass */
+#line 4795 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("keys", 4LL))) && (margs->len == 0LL))) {
-        /* pass */
+#line 4796 "src/taumir/lower.tr"
         TrStr ksym = _tr_str_lit_len("_tr_rt_idict_keys", 17LL);
-        /* pass */
+#line 4797 "src/taumir/lower.tr"
         long long ktag = 2LL;
-        /* pass */
+#line 4798 "src/taumir/lower.tr"
         if (_dict_key_is_str(dtag)) {
-            /* pass */
-            TrStr _strtmp_t3282 = _tr_str_lit_len("_tr_rt_sdict_keys", 17LL);
+#line 4799 "src/taumir/lower.tr"
+            TrStr _strtmp_t6307 = _tr_str_lit_len("_tr_rt_sdict_keys", 17LL);
             _tr_str_release(ksym);
-            ksym = _strtmp_t3282;
-            /* pass */
+            ksym = _strtmp_t6307;
+#line 4800 "src/taumir/lower.tr"
             ktag = 3LL;
         }
-        /* pass */
+#line 4801 "src/taumir/lower.tr"
         LModule_add_extern(m, ksym);
-        /* pass */
+#line 4802 "src/taumir/lower.tr"
         List_i64* ka = (void*)List_i64_new();
-        /* pass */
+#line 4803 "src/taumir/lower.tr"
         List_i64_append(ka, _tr_v_recv);
-        /* pass */
+#line 4804 "src/taumir/lower.tr"
         long long kd = LFunc_new_vreg(lf);
-        /* pass */
+#line 4805 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(kd, ksym, ka));
-        /* pass */
+#line 4806 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, kd, ktag);
-        /* pass */
+#line 4807 "src/taumir/lower.tr"
+        long long _trret1594 = kd;
         _tr_str_release(ksym);
-        return kd;
+        return _trret1594;
     }
-    /* pass */
+#line 4808 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("get_or", 6LL))) && (margs->len == 2LL))) {
-        /* pass */
+#line 4809 "src/taumir/lower.tr"
         if ((_dict_val_tag(dtag) != 0LL)) {
-            /* pass */
+#line 4809 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4810 "src/taumir/lower.tr"
         long long gk = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4811 "src/taumir/lower.tr"
         if ((gk < 0LL)) {
-            /* pass */
+#line 4811 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4812 "src/taumir/lower.tr"
         if ((_dict_key_is_str(dtag) && (LFunc_vreg_type(lf, gk) != 1LL))) {
-            /* pass */
+#line 4812 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4813 "src/taumir/lower.tr"
         if (((!_dict_key_is_str(dtag)) && (LFunc_vreg_type(lf, gk) != 0LL))) {
-            /* pass */
+#line 4813 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4814 "src/taumir/lower.tr"
         long long gdef = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
-        /* pass */
+#line 4815 "src/taumir/lower.tr"
         if (((gdef < 0LL) || (LFunc_vreg_type(lf, gdef) != 0LL))) {
-            /* pass */
+#line 4815 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4816 "src/taumir/lower.tr"
         TrStr gosym = _dict_sym(dtag, _tr_str_lit_len("get_or", 6LL));
-        /* pass */
+#line 4817 "src/taumir/lower.tr"
         LModule_add_extern(m, gosym);
-        /* pass */
+#line 4818 "src/taumir/lower.tr"
         List_i64* goa = (void*)List_i64_new();
-        /* pass */
+#line 4819 "src/taumir/lower.tr"
         List_i64_append(goa, _tr_v_recv);
-        /* pass */
+#line 4820 "src/taumir/lower.tr"
         List_i64_append(goa, gk);
-        /* pass */
+#line 4821 "src/taumir/lower.tr"
         List_i64_append(goa, gdef);
-        /* pass */
+#line 4822 "src/taumir/lower.tr"
         long long godd = LFunc_new_vreg(lf);
-        /* pass */
+#line 4823 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(godd, gosym, goa));
-        /* pass */
+#line 4824 "src/taumir/lower.tr"
+        long long _trret1595 = godd;
         _tr_str_release(gosym);
-        return godd;
+        return _trret1595;
     }
-    /* pass */
+#line 4825 "src/taumir/lower.tr"
     if (((_tr_str_eqv((method), (_tr_str_lit_len("set", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("insert", 6LL)))) && (margs->len == 2LL))) {
-        /* pass */
+#line 4826 "src/taumir/lower.tr"
         long long sk = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4827 "src/taumir/lower.tr"
         if ((sk < 0LL)) {
-            /* pass */
+#line 4827 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4828 "src/taumir/lower.tr"
         if ((_dict_key_is_str(dtag) && (LFunc_vreg_type(lf, sk) != 1LL))) {
-            /* pass */
+#line 4828 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4829 "src/taumir/lower.tr"
         if (((!_dict_key_is_str(dtag)) && (LFunc_vreg_type(lf, sk) != 0LL))) {
-            /* pass */
+#line 4829 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4830 "src/taumir/lower.tr"
         long long sv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
-        /* pass */
+#line 4831 "src/taumir/lower.tr"
         if ((sv < 0LL)) {
-            /* pass */
+#line 4831 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4832 "src/taumir/lower.tr"
         long long vtag = _dict_val_tag(dtag);
-        /* pass */
+#line 4833 "src/taumir/lower.tr"
         if ((LFunc_vreg_type(lf, sv) != vtag)) {
-            /* pass */
+#line 4833 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4834 "src/taumir/lower.tr"
         if ((vtag == 1LL)) {
-            /* pass */
+#line 4834 "src/taumir/lower.tr"
             _secure_str(m, lf, sv);
         }
-        /* pass */
+#line 4835 "src/taumir/lower.tr"
         if (((vtag == 10LL) || (vtag == 11LL))) {
-            /* pass */
+#line 4835 "src/taumir/lower.tr"
             _secure_obj(m, lf, sv);
         }
-        /* pass */
+#line 4836 "src/taumir/lower.tr"
         if ((vtag == 5LL)) {
-            /* pass */
+#line 4837 "src/taumir/lower.tr"
             long long svfb = LFunc_new_vreg(lf);
-            /* pass */
+#line 4838 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IFBits(svfb, sv));
-            /* pass */
+#line 4839 "src/taumir/lower.tr"
             sv = svfb;
         }
-        /* pass */
-        ({ TrStr _at_t3283 = (_dict_sym(dtag, _tr_str_lit_len("set", 3LL))); LModule_add_extern(m, _at_t3283); _tr_str_release(_at_t3283); });
-        /* pass */
+#line 4840 "src/taumir/lower.tr"
+        ({ TrStr _at_t6308 = (_dict_sym(dtag, _tr_str_lit_len("set", 3LL))); LModule_add_extern(m, _at_t6308); _tr_str_release(_at_t6308); });
+#line 4841 "src/taumir/lower.tr"
         List_i64* ssa = (void*)List_i64_new();
-        /* pass */
+#line 4842 "src/taumir/lower.tr"
         List_i64_append(ssa, _tr_v_recv);
-        /* pass */
+#line 4843 "src/taumir/lower.tr"
         List_i64_append(ssa, sk);
-        /* pass */
+#line 4844 "src/taumir/lower.tr"
         List_i64_append(ssa, sv);
-        /* pass */
-        ({ TrStr _at_t3284 = (_dict_sym(dtag, _tr_str_lit_len("set", 3LL))); LFunc_emit(lf, LInst_ctor_ICall((-1LL), _at_t3284, ssa)); _tr_str_release(_at_t3284); });
-        /* pass */
+#line 4845 "src/taumir/lower.tr"
+        ({ TrStr _at_t6309 = (_dict_sym(dtag, _tr_str_lit_len("set", 3LL))); LFunc_emit(lf, LInst_ctor_ICall((-1LL), _at_t6309, ssa)); _tr_str_release(_at_t6309); });
+#line 4846 "src/taumir/lower.tr"
         return _tr_v_recv;
     }
-    /* pass */
+#line 4847 "src/taumir/lower.tr"
     if ((margs->len != 1LL)) {
-        /* pass */
+#line 4847 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 4848 "src/taumir/lower.tr"
     long long kv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-    /* pass */
+#line 4849 "src/taumir/lower.tr"
     if ((kv < 0LL)) {
-        /* pass */
+#line 4849 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 4850 "src/taumir/lower.tr"
     if ((_dict_key_is_str(dtag) && (LFunc_vreg_type(lf, kv) != 1LL))) {
-        /* pass */
+#line 4850 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 4851 "src/taumir/lower.tr"
     if (((!_dict_key_is_str(dtag)) && (LFunc_vreg_type(lf, kv) != 0LL))) {
-        /* pass */
+#line 4851 "src/taumir/lower.tr"
         return (-1LL);
     }
-    /* pass */
+#line 4852 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("get", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("get_index", 9LL))))) {
-        /* pass */
+#line 4853 "src/taumir/lower.tr"
         TrStr gsym = _dict_sym(dtag, _tr_str_lit_len("get", 3LL));
-        /* pass */
+#line 4854 "src/taumir/lower.tr"
         LModule_add_extern(m, gsym);
-        /* pass */
+#line 4855 "src/taumir/lower.tr"
         List_i64* getargs = (void*)List_i64_new();
-        /* pass */
+#line 4856 "src/taumir/lower.tr"
         List_i64_append(getargs, _tr_v_recv);
-        /* pass */
+#line 4857 "src/taumir/lower.tr"
         List_i64_append(getargs, kv);
-        /* pass */
+#line 4858 "src/taumir/lower.tr"
         long long gd = LFunc_new_vreg(lf);
-        /* pass */
+#line 4859 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(gd, gsym, getargs));
-        /* pass */
+#line 4860 "src/taumir/lower.tr"
         if ((_dict_val_tag(dtag) == 5LL)) {
-            /* pass */
+#line 4861 "src/taumir/lower.tr"
             long long gdf = LFunc_new_vreg(lf);
-            /* pass */
+#line 4862 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IBitsF(gdf, gd));
-            /* pass */
+#line 4863 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, gdf, 5LL);
-            /* pass */
+#line 4864 "src/taumir/lower.tr"
+            long long _trret1596 = gdf;
             _tr_str_release(gsym);
-            return gdf;
+            return _trret1596;
         }
-        /* pass */
+#line 4865 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, gd, _dict_val_tag(dtag));
-        /* pass */
+#line 4866 "src/taumir/lower.tr"
         if (((_dict_val_tag(dtag) == 10LL) || (_dict_val_tag(dtag) == 11LL))) {
-            /* pass */
+#line 4871 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_obj_retain", 17LL));
-            /* pass */
+#line 4872 "src/taumir/lower.tr"
             List_i64* _gra = (void*)List_i64_new();
-            /* pass */
+#line 4873 "src/taumir/lower.tr"
             List_i64_append(_gra, gd);
-            /* pass */
+#line 4874 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_obj_retain", 17LL), _gra));
-            /* pass */
+#line 4875 "src/taumir/lower.tr"
             _fresh_mark_obj(lf, gd);
         }
-        /* pass */
+#line 4876 "src/taumir/lower.tr"
+        long long _trret1597 = gd;
         _tr_str_release(gsym);
-        return gd;
+        return _trret1597;
     }
-    /* pass */
+#line 4877 "src/taumir/lower.tr"
     if ((_tr_str_eqv((method), (_tr_str_lit_len("contains", 8LL))) || _tr_str_eqv((method), (_tr_str_lit_len("has", 3LL))))) {
-        /* pass */
+#line 4878 "src/taumir/lower.tr"
         TrStr hsym = _dict_sym(dtag, _tr_str_lit_len("has", 3LL));
-        /* pass */
+#line 4879 "src/taumir/lower.tr"
         LModule_add_extern(m, hsym);
-        /* pass */
+#line 4880 "src/taumir/lower.tr"
         List_i64* ha = (void*)List_i64_new();
-        /* pass */
+#line 4881 "src/taumir/lower.tr"
         List_i64_append(ha, _tr_v_recv);
-        /* pass */
+#line 4882 "src/taumir/lower.tr"
         List_i64_append(ha, kv);
-        /* pass */
+#line 4883 "src/taumir/lower.tr"
         long long hd = LFunc_new_vreg(lf);
-        /* pass */
+#line 4884 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(hd, hsym, ha));
-        /* pass */
+#line 4885 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, hd, 4LL);
-        /* pass */
+#line 4886 "src/taumir/lower.tr"
+        long long _trret1598 = hd;
         _tr_str_release(hsym);
-        return hd;
+        return _trret1598;
     }
-    /* pass */
+#line 4887 "src/taumir/lower.tr"
     return (-1LL);
 }
 
 __attribute__((hot)) long long _lower_float_method(LModule* m, LFunc* lf, long long _tr_v_recv, TrStr method, List_ptr* margs) {
-    /* pass */
+#line 4892 "src/taumir/lower.tr"
     if ((margs->len == 0LL)) {
-        /* pass */
+#line 4893 "src/taumir/lower.tr"
         TrStr usym = _float_unary_sym(method);
-        /* pass */
+#line 4894 "src/taumir/lower.tr"
         if ((!_tr_str_eqv((usym), (_tr_str_lit_len("", 0LL))))) {
-            /* pass */
+#line 4895 "src/taumir/lower.tr"
             LModule_add_extern(m, usym);
-            /* pass */
+#line 4896 "src/taumir/lower.tr"
             long long d = LFunc_new_vreg(lf);
-            /* pass */
+#line 4897 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IFCallF(d, usym, _tr_v_recv));
-            /* pass */
+#line 4898 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, d, 5LL);
-            /* pass */
+#line 4899 "src/taumir/lower.tr"
+            long long _trret1599 = d;
             _tr_str_release(usym);
-            return d;
+            return _trret1599;
         }
-        /* pass */
+#line 4900 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("is_nan", 6LL))) || _tr_str_eqv((method), (_tr_str_lit_len("is_inf", 6LL))))) {
-            /* pass */
+#line 4901 "src/taumir/lower.tr"
             TrStr nsym = _tr_str_lit_len("_tr_rt_f64_is_nan", 17LL);
-            /* pass */
+#line 4902 "src/taumir/lower.tr"
             if (_tr_str_eqv((method), (_tr_str_lit_len("is_inf", 6LL)))) {
-                /* pass */
-                TrStr _strtmp_t3285 = _tr_str_lit_len("_tr_rt_f64_is_inf", 17LL);
+#line 4902 "src/taumir/lower.tr"
+                TrStr _strtmp_t6310 = _tr_str_lit_len("_tr_rt_f64_is_inf", 17LL);
                 _tr_str_release(nsym);
-                nsym = _strtmp_t3285;
+                nsym = _strtmp_t6310;
             }
-            /* pass */
+#line 4903 "src/taumir/lower.tr"
             LModule_add_extern(m, nsym);
-            /* pass */
+#line 4904 "src/taumir/lower.tr"
             long long nd = LFunc_new_vreg(lf);
-            /* pass */
+#line 4905 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IFCall1(nd, nsym, _tr_v_recv));
-            /* pass */
+#line 4906 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, nd, 4LL);
-            /* pass */
+#line 4907 "src/taumir/lower.tr"
+            long long _trret1600 = nd;
             _tr_str_release(usym);
             _tr_str_release(nsym);
-            return nd;
+            return _trret1600;
         }
-        /* pass */
+#line 4908 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("to_str", 6LL))) || _tr_str_eqv((method), (_tr_str_lit_len("to_string", 9LL))))) {
-            /* pass */
+#line 4909 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_f64_to_str", 17LL));
-            /* pass */
+#line 4910 "src/taumir/lower.tr"
             long long fsd = LFunc_new_vreg(lf);
-            /* pass */
+#line 4911 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IFCall1(fsd, _tr_str_lit_len("_tr_rt_f64_to_str", 17LL), _tr_v_recv));
-            /* pass */
+#line 4912 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, fsd, 1LL);
-            /* pass */
+#line 4913 "src/taumir/lower.tr"
             _fresh_mark(lf, fsd);
-            /* pass */
+#line 4914 "src/taumir/lower.tr"
+            long long _trret1601 = fsd;
             _tr_str_release(usym);
-            return fsd;
+            return _trret1601;
         }
-        /* pass */
+#line 4915 "src/taumir/lower.tr"
         _tr_str_release(usym);
         return (-1LL);
     }
-    /* pass */
+#line 4916 "src/taumir/lower.tr"
     if (((margs->len == 1LL) && (_tr_str_eqv((method), (_tr_str_lit_len("pow", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("atan2", 5LL)))))) {
-        /* pass */
+#line 4917 "src/taumir/lower.tr"
         long long arg = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-        /* pass */
+#line 4918 "src/taumir/lower.tr"
         if ((arg < 0LL)) {
-            /* pass */
+#line 4918 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4919 "src/taumir/lower.tr"
         long long argt = LFunc_vreg_type(lf, arg);
-        /* pass */
+#line 4920 "src/taumir/lower.tr"
         if ((argt == 0LL)) {
-            /* pass */
+#line 4920 "src/taumir/lower.tr"
             arg = _promote_f(lf, arg);
         } else if ((argt != 5LL)) {
-            /* pass */
+#line 4921 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 4922 "src/taumir/lower.tr"
         TrStr psym = _tr_str_lit_len("_tr_rt_pow", 10LL);
-        /* pass */
+#line 4923 "src/taumir/lower.tr"
         if (_tr_str_eqv((method), (_tr_str_lit_len("atan2", 5LL)))) {
-            /* pass */
-            TrStr _strtmp_t3286 = _tr_str_lit_len("_tr_rt_atan2", 12LL);
+#line 4923 "src/taumir/lower.tr"
+            TrStr _strtmp_t6311 = _tr_str_lit_len("_tr_rt_atan2", 12LL);
             _tr_str_release(psym);
-            psym = _strtmp_t3286;
+            psym = _strtmp_t6311;
         }
-        /* pass */
+#line 4924 "src/taumir/lower.tr"
         LModule_add_extern(m, psym);
-        /* pass */
+#line 4925 "src/taumir/lower.tr"
         long long pd = LFunc_new_vreg(lf);
-        /* pass */
+#line 4926 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IFCall2F(pd, psym, _tr_v_recv, arg));
-        /* pass */
+#line 4927 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, pd, 5LL);
-        /* pass */
+#line 4928 "src/taumir/lower.tr"
+        long long _trret1602 = pd;
         _tr_str_release(psym);
-        return pd;
+        return _trret1602;
     }
-    /* pass */
+#line 4929 "src/taumir/lower.tr"
     return (-1LL);
 }
 
 __attribute__((hot)) bool _is_const_int(HirExpr* e) {
-    /* pass */
-    __auto_type _t3287 = (*e);
-    if (_t3287.tag == HirExpr_ELitInt) {
+#line 4933 "src/taumir/lower.tr"
+    __auto_type _t6312 = (*e);
+    if (_t6312.tag == HirExpr_ELitInt) {
         return true;
-    } else if (_t3287.tag == HirExpr_EUnaryOp) {
-        __auto_type op = _t3287.data.EUnaryOp.op;
-__auto_type sub = _t3287.data.EUnaryOp.expr;
-        /* pass */
+    } else if (_t6312.tag == HirExpr_EUnaryOp) {
+        __auto_type op = _t6312.data.EUnaryOp.op;
+__auto_type sub = _t6312.data.EUnaryOp.expr;
+#line 4936 "src/taumir/lower.tr"
         if (_tr_str_eqv((op), (_tr_str_lit_len("-", 1LL)))) {
-            /* pass */
-            __auto_type _t3288 = (*sub);
-            if (_t3288.tag == HirExpr_ELitInt) {
+#line 4937 "src/taumir/lower.tr"
+            __auto_type _t6313 = (*sub);
+            if (_t6313.tag == HirExpr_ELitInt) {
                 return true;
             } else if (1) {
-                __auto_type _ = _t3288;
+                __auto_type _ = _t6313;
                 return false;
             }
         }
-        /* pass */
+#line 4940 "src/taumir/lower.tr"
         return false;
     } else if (1) {
-        __auto_type _ = _t3287;
+        __auto_type _ = _t6312;
         return false;
     }
 }
 
 __attribute__((hot)) long long _const_int_val(HirExpr* e) {
-    /* pass */
-    __auto_type _t3289 = (*e);
-    if (_t3289.tag == HirExpr_ELitInt) {
-        __auto_type v = _t3289.data.ELitInt.val;
+#line 4944 "src/taumir/lower.tr"
+    __auto_type _t6314 = (*e);
+    if (_t6314.tag == HirExpr_ELitInt) {
+        __auto_type v = _t6314.data.ELitInt.val;
         return v;
-    } else if (_t3289.tag == HirExpr_EUnaryOp) {
-        __auto_type op = _t3289.data.EUnaryOp.op;
-__auto_type sub = _t3289.data.EUnaryOp.expr;
-        /* pass */
-        __auto_type _t3290 = (*sub);
-        if (_t3290.tag == HirExpr_ELitInt) {
-            __auto_type v2 = _t3290.data.ELitInt.val;
-            return (0LL - v2);
+    } else if (_t6314.tag == HirExpr_EUnaryOp) {
+        __auto_type op = _t6314.data.EUnaryOp.op;
+__auto_type sub = _t6314.data.EUnaryOp.expr;
+#line 4947 "src/taumir/lower.tr"
+        __auto_type _t6315 = (*sub);
+        if (_t6315.tag == HirExpr_ELitInt) {
+            __auto_type v2 = _t6315.data.ELitInt.val;
+            long long _trret1603 = (0LL - v2);
+            return _trret1603;
         } else if (1) {
-            __auto_type _ = _t3290;
+            __auto_type _ = _t6315;
             return 0LL;
         }
     } else if (1) {
-        __auto_type _ = _t3289;
+        __auto_type _ = _t6314;
         return 0LL;
     }
 }
 
 __attribute__((hot)) void _emit_add_const(LFunc* lf, TrStr name, long long delta) {
-    /* pass */
+#line 4954 "src/taumir/lower.tr"
     long long cur = LFunc_new_vreg(lf);
-    /* pass */
+#line 4955 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoadVar(cur, name));
-    /* pass */
+#line 4956 "src/taumir/lower.tr"
     long long d = LFunc_new_vreg(lf);
-    /* pass */
+#line 4957 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(d, delta));
-    /* pass */
+#line 4958 "src/taumir/lower.tr"
     long long inc = LFunc_new_vreg(lf);
-    /* pass */
+#line 4959 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(inc, _tr_str_lit_len("+", 1LL), cur, d));
-    /* pass */
+#line 4960 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IStoreVar(name, inc));
 }
 
 __attribute__((hot)) long long _list_call1(LModule* m, LFunc* lf, TrStr sym, long long handle, long long restype) {
-    /* pass */
+#line 4964 "src/taumir/lower.tr"
     LModule_add_extern(m, sym);
-    /* pass */
+#line 4965 "src/taumir/lower.tr"
     List_i64* a = (void*)List_i64_new();
-    /* pass */
+#line 4966 "src/taumir/lower.tr"
     List_i64_append(a, handle);
-    /* pass */
+#line 4967 "src/taumir/lower.tr"
     long long d = LFunc_new_vreg(lf);
-    /* pass */
+#line 4968 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ICall(d, sym, a));
-    /* pass */
+#line 4969 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, d, restype);
-    /* pass */
+#line 4970 "src/taumir/lower.tr"
     return d;
 }
 
 __attribute__((hot)) long long _inline_list_addr(LModule* m, LFunc* lf, long long handle, long long idx, long long stride) {
-    /* pass */
+#line 4978 "src/taumir/lower.tr"
     long long data = LFunc_new_vreg(lf);
-    /* pass */
+#line 4979 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, data, 10LL);
-    /* pass */
+#line 4980 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoad(data, handle, 0LL, 1LL));
-    /* pass */
+#line 4985 "src/taumir/lower.tr"
     long long off = idx;
-    /* pass */
+#line 4986 "src/taumir/lower.tr"
     if ((stride != 1LL)) {
-        /* pass */
+#line 4987 "src/taumir/lower.tr"
         long long c8 = LFunc_new_vreg(lf);
-        /* pass */
+#line 4988 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(c8, stride));
-        /* pass */
+#line 4989 "src/taumir/lower.tr"
         off = LFunc_new_vreg(lf);
-        /* pass */
+#line 4990 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IBinOp(off, _tr_str_lit_len("*", 1LL), idx, c8));
     }
-    /* pass */
+#line 4991 "src/taumir/lower.tr"
     long long addr = LFunc_new_vreg(lf);
-    /* pass */
+#line 4992 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, addr, 10LL);
-    /* pass */
+#line 4998 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(addr, _tr_str_lit_len("+", 1LL), data, off));
-    /* pass */
+#line 4999 "src/taumir/lower.tr"
     return addr;
 }
 
 __attribute__((hot)) long long _fixed_arr_len(LModule* m, LFunc* lf, TrStr name) {
-    /* pass */
+#line 5009 "src/taumir/lower.tr"
     if ((LFunc_var_index(lf, name) >= 0LL)) {
-        /* pass */
+#line 5009 "src/taumir/lower.tr"
         return LFunc_var_arr_of(lf, name);
     }
-    /* pass */
+#line 5010 "src/taumir/lower.tr"
     return LModule_global_arr_of(m, name);
 }
 
 __attribute__((hot)) long long _fixed_arr_elem_tag(LModule* m, LFunc* lf, TrStr name) {
-    /* pass */
+#line 5014 "src/taumir/lower.tr"
     if ((LFunc_var_index(lf, name) >= 0LL)) {
-        /* pass */
+#line 5014 "src/taumir/lower.tr"
         return LFunc_var_type(lf, name);
     }
-    /* pass */
+#line 5015 "src/taumir/lower.tr"
     return LModule_global_type(m, name);
 }
 
 __attribute__((hot)) long long _array_elem_addr(LModule* m, LFunc* lf, TrStr name, long long idx) {
-    /* pass */
+#line 5018 "src/taumir/lower.tr"
     long long base = LFunc_new_vreg(lf);
-    /* pass */
+#line 5019 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, base, 10LL);
-    /* pass */
+#line 5020 "src/taumir/lower.tr"
     if ((LFunc_var_index(lf, name) >= 0LL)) {
-        /* pass */
+#line 5021 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IAddrVar(base, name));
     } else {
-        /* pass */
+#line 5023 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IAddrGlobal(base, LModule_global_index(m, name)));
     }
-    /* pass */
+#line 5024 "src/taumir/lower.tr"
     long long c8 = LFunc_new_vreg(lf);
-    /* pass */
+#line 5025 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IConst(c8, 8LL));
-    /* pass */
+#line 5026 "src/taumir/lower.tr"
     long long off = LFunc_new_vreg(lf);
-    /* pass */
+#line 5027 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(off, _tr_str_lit_len("*", 1LL), idx, c8));
-    /* pass */
+#line 5028 "src/taumir/lower.tr"
     long long addr = LFunc_new_vreg(lf);
-    /* pass */
+#line 5029 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, addr, 10LL);
-    /* pass */
+#line 5030 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_IBinOp(addr, _tr_str_lit_len("+", 1LL), base, off));
-    /* pass */
+#line 5031 "src/taumir/lower.tr"
     return addr;
 }
 
 __attribute__((hot)) long long _list_get(LModule* m, LFunc* lf, long long handle, long long idx) {
-    /* pass */
+#line 5035 "src/taumir/lower.tr"
     long long addr = _inline_list_addr(m, lf, handle, idx, 8LL);
-    /* pass */
+#line 5036 "src/taumir/lower.tr"
     long long gd = LFunc_new_vreg(lf);
-    /* pass */
+#line 5037 "src/taumir/lower.tr"
     LFunc_emit(lf, LInst_ctor_ILoad(gd, addr, 0LL, 2LL));
-    /* pass */
+#line 5038 "src/taumir/lower.tr"
     return gd;
 }
 
 __attribute__((hot)) long long _list_get_raw(LModule* m, LFunc* lf, long long ltag, long long handle, long long idx) {
-    /* pass */
+#line 5043 "src/taumir/lower.tr"
     if ((ltag == 22LL)) {
-        /* pass */
+#line 5044 "src/taumir/lower.tr"
         long long baddr = _inline_list_addr(m, lf, handle, idx, 1LL);
-        /* pass */
+#line 5045 "src/taumir/lower.tr"
         long long bd = LFunc_new_vreg(lf);
-        /* pass */
+#line 5046 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ILoadB(bd, baddr, 0LL));
-        /* pass */
+#line 5047 "src/taumir/lower.tr"
         return bd;
     }
-    /* pass */
+#line 5048 "src/taumir/lower.tr"
     return _list_get(m, lf, handle, idx);
 }
 
 __attribute__((hot)) long long _list_get_elem(LModule* m, LFunc* lf, long long ltag, long long handle, long long idx) {
-    /* pass */
+#line 5053 "src/taumir/lower.tr"
     long long raw = _list_get_raw(m, lf, ltag, handle, idx);
-    /* pass */
+#line 5054 "src/taumir/lower.tr"
     if ((ltag == 14LL)) {
-        /* pass */
+#line 5055 "src/taumir/lower.tr"
         long long fv = LFunc_new_vreg(lf);
-        /* pass */
+#line 5056 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IBitsF(fv, raw));
-        /* pass */
+#line 5057 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, fv, 5LL);
-        /* pass */
+#line 5058 "src/taumir/lower.tr"
         return fv;
     }
-    /* pass */
+#line 5059 "src/taumir/lower.tr"
     LFunc_set_vreg_type(lf, raw, _list_elem_tag(ltag));
-    /* pass */
+#line 5060 "src/taumir/lower.tr"
     return raw;
 }
 
 __attribute__((hot)) long long _lower_expr_impl(LModule* m, LFunc* lf, HirExpr* e) {
-    /* pass */
-    __auto_type _t3291 = (*e);
-    if (_t3291.tag == HirExpr_ELitInt) {
-        __auto_type v = _t3291.data.ELitInt.val;
-        /* pass */
+#line 5063 "src/taumir/lower.tr"
+    __auto_type _t6316 = (*e);
+    if (_t6316.tag == HirExpr_ELitInt) {
+        __auto_type v = _t6316.data.ELitInt.val;
+#line 5065 "src/taumir/lower.tr"
         long long d = LFunc_new_vreg(lf);
-        /* pass */
+#line 5066 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(d, v));
-        /* pass */
+#line 5067 "src/taumir/lower.tr"
         return d;
-    } else if (_t3291.tag == HirExpr_ELitStr) {
-        __auto_type sv = _t3291.data.ELitStr.val;
-__auto_type sv_blen = _t3291.data.ELitStr.blen;
-        /* pass */
+    } else if (_t6316.tag == HirExpr_ELitStr) {
+        __auto_type sv = _t6316.data.ELitStr.val;
+__auto_type sv_blen = _t6316.data.ELitStr.blen;
+#line 5069 "src/taumir/lower.tr"
         long long idx = LModule_add_string(m, sv, sv_blen);
-        /* pass */
+#line 5070 "src/taumir/lower.tr"
         long long ds = LFunc_new_vreg(lf);
-        /* pass */
+#line 5071 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IStr(ds, idx));
-        /* pass */
+#line 5072 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, ds, 1LL);
-        /* pass */
+#line 5073 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_new", 14LL));
-        /* pass */
+#line 5074 "src/taumir/lower.tr"
         List_i64* lna = (void*)List_i64_new();
-        /* pass */
+#line 5075 "src/taumir/lower.tr"
         List_i64_append(lna, ds);
-        /* pass */
+#line 5076 "src/taumir/lower.tr"
         long long lheap = LFunc_new_vreg(lf);
-        /* pass */
+#line 5077 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(lheap, _tr_str_lit_len("_tr_rt_str_new", 14LL), lna));
-        /* pass */
+#line 5078 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, lheap, 1LL);
-        /* pass */
+#line 5079 "src/taumir/lower.tr"
         _fresh_mark(lf, lheap);
-        /* pass */
-        return lheap;
-    } else if (_t3291.tag == HirExpr_ELitBool) {
-        __auto_type bval = _t3291.data.ELitBool.val;
-        /* pass */
+#line 5080 "src/taumir/lower.tr"
+        long long _trret1604 = lheap;
+        return _trret1604;
+    } else if (_t6316.tag == HirExpr_ELitBool) {
+        __auto_type bval = _t6316.data.ELitBool.val;
+#line 5082 "src/taumir/lower.tr"
         long long db = LFunc_new_vreg(lf);
-        /* pass */
+#line 5083 "src/taumir/lower.tr"
         long long bconst = 0LL;
-        /* pass */
+#line 5084 "src/taumir/lower.tr"
         if (bval) {
-            /* pass */
+#line 5084 "src/taumir/lower.tr"
             bconst = 1LL;
         }
-        /* pass */
+#line 5085 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(db, bconst));
-        /* pass */
+#line 5086 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, db, 4LL);
-        /* pass */
+#line 5087 "src/taumir/lower.tr"
         return db;
-    } else if (_t3291.tag == HirExpr_ELitChar) {
-        __auto_type cval = _t3291.data.ELitChar.val;
-        /* pass */
+    } else if (_t6316.tag == HirExpr_ELitChar) {
+        __auto_type cval = _t6316.data.ELitChar.val;
+#line 5089 "src/taumir/lower.tr"
         long long cd = LFunc_new_vreg(lf);
-        /* pass */
+#line 5090 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(cd, cval));
-        /* pass */
+#line 5091 "src/taumir/lower.tr"
         return cd;
-    } else if (_t3291.tag == HirExpr_ESizeOf) {
-        __auto_type sz_ty = _t3291.data.ESizeOf.target_ty;
-        /* pass */
+    } else if (_t6316.tag == HirExpr_ESizeOf) {
+        __auto_type sz_ty = _t6316.data.ESizeOf.target_ty;
+#line 5096 "src/taumir/lower.tr"
         TrStr _szn = _tr_str_retain(_subst_ty(m, sz_ty)->name);
-        /* pass */
+#line 5097 "src/taumir/lower.tr"
         long long _szval = _sizeof_tyname(_szn);
-        /* pass */
+#line 5098 "src/taumir/lower.tr"
         if (LModule_is_value_class(m, _szn)) {
-            /* pass */
+#line 5098 "src/taumir/lower.tr"
             _szval = LModule_class_size(m, _szn);
         } else {
-            /* pass */
+#line 5100 "src/taumir/lower.tr"
             long long _szg = _value_struct_generic_size(m, sz_ty);
-            /* pass */
+#line 5101 "src/taumir/lower.tr"
             if ((_szg > 0LL)) {
-                /* pass */
+#line 5101 "src/taumir/lower.tr"
                 _szval = _szg;
             }
         }
-        /* pass */
+#line 5102 "src/taumir/lower.tr"
         long long szd = LFunc_new_vreg(lf);
-        /* pass */
+#line 5103 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(szd, _szval));
-        /* pass */
+#line 5104 "src/taumir/lower.tr"
+        long long _trret1605 = szd;
         _tr_str_release(_szn);
-        return szd;
-    } else if (_t3291.tag == HirExpr_ETryExpr) {
-        __auto_type texpr = _t3291.data.ETryExpr.expr;
-__auto_type tokty = _t3291.data.ETryExpr.ty;
-        /* pass */
+        return _trret1605;
+    } else if (_t6316.tag == HirExpr_ETryExpr) {
+        __auto_type texpr = _t6316.data.ETryExpr.expr;
+__auto_type tokty = _t6316.data.ETryExpr.ty;
+#line 5108 "src/taumir/lower.tr"
         if ((!lf->is_throws)) {
-            /* pass */
+#line 5108 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 5109 "src/taumir/lower.tr"
         long long trv = lower_expr(m, lf, texpr);
-        /* pass */
+#line 5110 "src/taumir/lower.tr"
         if (((trv < 0LL) || (LFunc_vreg_type(lf, trv) != 11LL))) {
-            /* pass */
+#line 5110 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 5111 "src/taumir/lower.tr"
         long long tuid = LFunc_fresh_id(lf);
-        /* pass */
-        TrStr tnm = ({ TrStr _cr = (_lir_itoa(tuid)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__try", 5LL)), _cr); _tr_str_release(_cr); _cres; });
-        /* pass */
+#line 5112 "src/taumir/lower.tr"
+        TrStr tnm = ({ TrStr _tr_cr = (_lir_itoa(tuid)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__try", 5LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 5113 "src/taumir/lower.tr"
         LFunc_add_var(lf, tnm);
-        /* pass */
+#line 5114 "src/taumir/lower.tr"
         LFunc_set_var_type(lf, tnm, 11LL);
-        /* pass */
+#line 5115 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IStoreVar(tnm, trv));
-        /* pass */
+#line 5116 "src/taumir/lower.tr"
         long long trl = LFunc_new_vreg(lf);
-        /* pass */
+#line 5117 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ILoadVar(trl, tnm));
-        /* pass */
+#line 5118 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, trl, 11LL);
-        /* pass */
+#line 5119 "src/taumir/lower.tr"
         long long ttag = _emit_field_get(m, lf, trl, 0LL, 0LL);
-        /* pass */
+#line 5120 "src/taumir/lower.tr"
         long long terrc = _variant_tag_cond(lf, ttag, 1LL);
-        /* pass */
+#line 5121 "src/taumir/lower.tr"
         long long terrb = LFunc_new_block(lf);
-        /* pass */
+#line 5122 "src/taumir/lower.tr"
         long long tcont = LFunc_new_block(lf);
-        /* pass */
+#line 5123 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TCondBr(terrc, terrb, tcont));
-        /* pass */
+#line 5124 "src/taumir/lower.tr"
         LFunc_set_cur(lf, terrb);
-        /* pass */
+#line 5125 "src/taumir/lower.tr"
         long long trl2 = LFunc_new_vreg(lf);
-        /* pass */
+#line 5126 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ILoadVar(trl2, tnm));
-        /* pass */
+#line 5127 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, trl2, 11LL);
-        /* pass */
+#line 5128 "src/taumir/lower.tr"
         if ((!_run_defers(m, lf))) {
-            /* pass */
+#line 5128 "src/taumir/lower.tr"
             _tr_str_release(tnm);
             return (-1LL);
         }
-        /* pass */
+#line 5129 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TRetVal(trl2));
-        /* pass */
+#line 5130 "src/taumir/lower.tr"
         LFunc_set_cur(lf, tcont);
-        /* pass */
+#line 5131 "src/taumir/lower.tr"
         long long toktag = _tag_of(m, tokty);
-        /* pass */
+#line 5132 "src/taumir/lower.tr"
         long long trl3 = LFunc_new_vreg(lf);
-        /* pass */
+#line 5133 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ILoadVar(trl3, tnm));
-        /* pass */
+#line 5134 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, trl3, 11LL);
-        /* pass */
+#line 5135 "src/taumir/lower.tr"
         if ((toktag == 5LL)) {
-            /* pass */
+#line 5136 "src/taumir/lower.tr"
             long long tpraw = _emit_field_get(m, lf, trl3, 8LL, 0LL);
-            /* pass */
+#line 5137 "src/taumir/lower.tr"
             long long tpfv = LFunc_new_vreg(lf);
-            /* pass */
+#line 5138 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IBitsF(tpfv, tpraw));
-            /* pass */
+#line 5139 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, tpfv, 5LL);
-            /* pass */
+#line 5140 "src/taumir/lower.tr"
+            long long _trret1606 = tpfv;
             _tr_str_release(tnm);
-            return tpfv;
+            return _trret1606;
         }
-        /* pass */
+#line 5141 "src/taumir/lower.tr"
+        long long _trret1607 = _emit_field_get(m, lf, trl3, 8LL, toktag);
         _tr_str_release(tnm);
-        return _emit_field_get(m, lf, trl3, 8LL, toktag);
-    } else if (_t3291.tag == HirExpr_EAwait) {
-        __auto_type awexpr = _t3291.data.EAwait.expr;
-        /* pass */
+        return _trret1607;
+    } else if (_t6316.tag == HirExpr_EAwait) {
+        __auto_type awexpr = _t6316.data.EAwait.expr;
+#line 5145 "src/taumir/lower.tr"
         return _lower_await(m, lf, awexpr);
-    } else if (_t3291.tag == HirExpr_EAwaitTimeout) {
-        __auto_type awtexpr = _t3291.data.EAwaitTimeout.expr;
-        /* pass */
+    } else if (_t6316.tag == HirExpr_EAwaitTimeout) {
+        __auto_type awtexpr = _t6316.data.EAwaitTimeout.expr;
+#line 5147 "src/taumir/lower.tr"
         return _lower_await(m, lf, awtexpr);
-    } else if (_t3291.tag == HirExpr_EListComp) {
-        __auto_type lcelem = _t3291.data.EListComp.element;
-__auto_type lcgens = _t3291.data.EListComp.generators;
-__auto_type lcty = _t3291.data.EListComp.ty;
-        /* pass */
-        return _lower_list_comp(m, lf, lcelem, lcgens, lcty);
-    } else if (_t3291.tag == HirExpr_EGeneratorExpr) {
-        __auto_type geelem = _t3291.data.EGeneratorExpr.element;
-__auto_type geegens = _t3291.data.EGeneratorExpr.generators;
-__auto_type geety = _t3291.data.EGeneratorExpr.ty;
-        /* pass */
-        return _lower_list_comp(m, lf, geelem, geegens, geety);
-    } else if (_t3291.tag == HirExpr_ELitNone) {
-        __auto_type nty = _t3291.data.ELitNone.ty;
-        /* pass */
+    } else if (_t6316.tag == HirExpr_EListComp) {
+        __auto_type lcelem = _t6316.data.EListComp.element;
+__auto_type lcgens = _t6316.data.EListComp.generators;
+__auto_type lcty = _t6316.data.EListComp.ty;
+#line 5149 "src/taumir/lower.tr"
+        long long _trret1608 = _lower_list_comp(m, lf, lcelem, lcgens, lcty);
+        return _trret1608;
+    } else if (_t6316.tag == HirExpr_EGeneratorExpr) {
+        __auto_type geelem = _t6316.data.EGeneratorExpr.element;
+__auto_type geegens = _t6316.data.EGeneratorExpr.generators;
+__auto_type geety = _t6316.data.EGeneratorExpr.ty;
+#line 5151 "src/taumir/lower.tr"
+        long long _trret1609 = _lower_list_comp(m, lf, geelem, geegens, geety);
+        return _trret1609;
+    } else if (_t6316.tag == HirExpr_ELitNone) {
+        __auto_type nty = _t6316.data.ELitNone.ty;
+#line 5156 "src/taumir/lower.tr"
         if ((((_tr_str_eqv((nty->name), (_tr_str_lit_len("Option", 6LL))) || _tr_str_eqv((nty->name), (_tr_str_lit_len("None", 4LL)))) || _tr_str_eqv((nty->name), (_tr_str_lit_len("NoneType", 8LL)))) || _is_null_str(nty->name))) {
-            /* pass */
-            return _lower_enum_ctor(m, lf, _tr_str_lit_len("Option", 6LL), _tr_str_lit_len("None", 4LL), (void*)List_ptr_new());
+#line 5157 "src/taumir/lower.tr"
+            long long _trret1610 = _lower_enum_ctor(m, lf, _tr_str_lit_len("Option", 6LL), _tr_str_lit_len("None", 4LL), (void*)List_ptr_new());
+            return _trret1610;
         }
-        /* pass */
+#line 5158 "src/taumir/lower.tr"
         long long nnull = LFunc_new_vreg(lf);
-        /* pass */
+#line 5159 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(nnull, 0LL));
-        /* pass */
+#line 5160 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, nnull, 10LL);
-        /* pass */
-        return nnull;
-    } else if (_t3291.tag == HirExpr_ERawStr) {
-        __auto_type rsv = _t3291.data.ERawStr.val;
-__auto_type rsv_blen = _t3291.data.ERawStr.blen;
-        /* pass */
+#line 5161 "src/taumir/lower.tr"
+        long long _trret1611 = nnull;
+        return _trret1611;
+    } else if (_t6316.tag == HirExpr_ERawStr) {
+        __auto_type rsv = _t6316.data.ERawStr.val;
+__auto_type rsv_blen = _t6316.data.ERawStr.blen;
+#line 5163 "src/taumir/lower.tr"
         long long ridx = LModule_add_string(m, rsv, rsv_blen);
-        /* pass */
+#line 5164 "src/taumir/lower.tr"
         long long rds = LFunc_new_vreg(lf);
-        /* pass */
+#line 5165 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IStr(rds, ridx));
-        /* pass */
+#line 5166 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, rds, 1LL);
-        /* pass */
+#line 5167 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_new", 14LL));
-        /* pass */
+#line 5168 "src/taumir/lower.tr"
         List_i64* rna = (void*)List_i64_new();
-        /* pass */
+#line 5169 "src/taumir/lower.tr"
         List_i64_append(rna, rds);
-        /* pass */
+#line 5170 "src/taumir/lower.tr"
         long long rheap = LFunc_new_vreg(lf);
-        /* pass */
+#line 5171 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(rheap, _tr_str_lit_len("_tr_rt_str_new", 14LL), rna));
-        /* pass */
+#line 5172 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, rheap, 1LL);
-        /* pass */
+#line 5173 "src/taumir/lower.tr"
         _fresh_mark(lf, rheap);
-        /* pass */
-        return rheap;
-    } else if (_t3291.tag == HirExpr_ELitFloat) {
-        __auto_type fval = _t3291.data.ELitFloat.val;
-        /* pass */
+#line 5174 "src/taumir/lower.tr"
+        long long _trret1612 = rheap;
+        return _trret1612;
+    } else if (_t6316.tag == HirExpr_ELitFloat) {
+        __auto_type fval = _t6316.data.ELitFloat.val;
+#line 5176 "src/taumir/lower.tr"
         long long fd = LFunc_new_vreg(lf);
-        /* pass */
+#line 5177 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(fd, _f64_bits(fval)));
-        /* pass */
+#line 5178 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, fd, 5LL);
-        /* pass */
+#line 5179 "src/taumir/lower.tr"
         return fd;
-    } else if (_t3291.tag == HirExpr_ESuperMethodCall) {
-        __auto_type sbase = _t3291.data.ESuperMethodCall.base_class;
-__auto_type smeth = _t3291.data.ESuperMethodCall.method;
-__auto_type sargs = _t3291.data.ESuperMethodCall.args;
-        /* pass */
+    } else if (_t6316.tag == HirExpr_ESuperMethodCall) {
+        __auto_type sbase = _t6316.data.ESuperMethodCall.base_class;
+__auto_type smeth = _t6316.data.ESuperMethodCall.method;
+__auto_type sargs = _t6316.data.ESuperMethodCall.args;
+#line 5182 "src/taumir/lower.tr"
         TrStr smang = LModule_resolve_method(m, sbase, smeth);
-        /* pass */
+#line 5183 "src/taumir/lower.tr"
         if (_tr_str_eqv((smang), (_tr_str_lit_len("", 0LL)))) {
-            /* pass */
+#line 5183 "src/taumir/lower.tr"
             _tr_str_release(smang);
             return (-1LL);
         }
-        /* pass */
+#line 5184 "src/taumir/lower.tr"
         long long sselfv = LFunc_new_vreg(lf);
-        /* pass */
+#line 5185 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ILoadVar(sselfv, _tr_str_lit_len("self", 4LL)));
-        /* pass */
+#line 5186 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, sselfv, LFunc_var_type(lf, _tr_str_lit_len("self", 4LL)));
-        /* pass */
-        return _lower_obj_call(m, lf, smang, sselfv, sargs);
-    } else if (_t3291.tag == HirExpr_ESuperPropAccess) {
-        __auto_type sbase2 = _t3291.data.ESuperPropAccess.base_class;
-__auto_type sprop = _t3291.data.ESuperPropAccess.prop;
-        /* pass */
+#line 5187 "src/taumir/lower.tr"
+        long long _trret1613 = _lower_obj_call(m, lf, smang, sselfv, sargs);
+        _tr_str_release(smang);
+        return _trret1613;
+    } else if (_t6316.tag == HirExpr_ESuperPropAccess) {
+        __auto_type sbase2 = _t6316.data.ESuperPropAccess.base_class;
+__auto_type sprop = _t6316.data.ESuperPropAccess.prop;
+#line 5190 "src/taumir/lower.tr"
         TrStr scur = LFunc_var_cls_of(lf, _tr_str_lit_len("self", 4LL));
-        /* pass */
+#line 5191 "src/taumir/lower.tr"
         if ((_tr_str_eqv((scur), (_tr_str_lit_len("", 0LL))) || (!LModule_is_class(m, scur)))) {
-            /* pass */
+#line 5191 "src/taumir/lower.tr"
             _tr_str_release(scur);
             return (-1LL);
         }
-        /* pass */
+#line 5192 "src/taumir/lower.tr"
         long long sfoff = LModule_field_offset(m, scur, sprop);
-        /* pass */
+#line 5193 "src/taumir/lower.tr"
         if ((sfoff < 0LL)) {
-            /* pass */
+#line 5193 "src/taumir/lower.tr"
             _tr_str_release(scur);
             return (-1LL);
         }
-        /* pass */
+#line 5194 "src/taumir/lower.tr"
         long long sftg = LModule_field_tag(m, scur, sprop);
-        /* pass */
+#line 5195 "src/taumir/lower.tr"
         if ((((sftg < 0LL) || _is_list_tag(sftg)) || _is_dict_tag(sftg))) {
-            /* pass */
+#line 5195 "src/taumir/lower.tr"
             _tr_str_release(scur);
             return (-1LL);
         }
-        /* pass */
+#line 5196 "src/taumir/lower.tr"
         long long sselfp = LFunc_new_vreg(lf);
-        /* pass */
+#line 5197 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ILoadVar(sselfp, _tr_str_lit_len("self", 4LL)));
-        /* pass */
+#line 5198 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, sselfp, LFunc_var_type(lf, _tr_str_lit_len("self", 4LL)));
-        /* pass */
+#line 5199 "src/taumir/lower.tr"
         if ((sftg == 5LL)) {
-            /* pass */
+#line 5200 "src/taumir/lower.tr"
             long long sfraw = _emit_field_get(m, lf, sselfp, sfoff, 0LL);
-            /* pass */
+#line 5201 "src/taumir/lower.tr"
             long long sffv = LFunc_new_vreg(lf);
-            /* pass */
+#line 5202 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IBitsF(sffv, sfraw));
-            /* pass */
+#line 5203 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, sffv, 5LL);
-            /* pass */
+#line 5204 "src/taumir/lower.tr"
+            long long _trret1614 = sffv;
             _tr_str_release(scur);
-            return sffv;
+            return _trret1614;
         }
-        /* pass */
+#line 5205 "src/taumir/lower.tr"
+        long long _trret1615 = _emit_field_get(m, lf, sselfp, sfoff, sftg);
         _tr_str_release(scur);
-        return _emit_field_get(m, lf, sselfp, sfoff, sftg);
-    } else if (_t3291.tag == HirExpr_ECast) {
-        __auto_type cinner = _t3291.data.ECast.expr;
-__auto_type ctty = _t3291.data.ECast.target_ty;
-        /* pass */
+        return _trret1615;
+    } else if (_t6316.tag == HirExpr_ECast) {
+        __auto_type cinner = _t6316.data.ECast.expr;
+__auto_type ctty = _t6316.data.ECast.target_ty;
+#line 5207 "src/taumir/lower.tr"
         long long cv = lower_expr(m, lf, cinner);
-        /* pass */
+#line 5208 "src/taumir/lower.tr"
         if ((cv < 0LL)) {
-            /* pass */
+#line 5208 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 5209 "src/taumir/lower.tr"
         long long cvt = LFunc_vreg_type(lf, cv);
-        /* pass */
+#line 5210 "src/taumir/lower.tr"
         TrStr ctn = _tr_str_retain(ctty->name);
-        /* pass */
+#line 5211 "src/taumir/lower.tr"
         if (_is_null_str(ctn)) {
-            /* pass */
+#line 5211 "src/taumir/lower.tr"
             _tr_str_release(ctn);
             return (-1LL);
         }
-        /* pass */
+#line 5213 "src/taumir/lower.tr"
         if (((_tr_str_eqv((ctn), (_tr_str_lit_len("float", 5LL))) || _tr_str_eqv((ctn), (_tr_str_lit_len("f64", 3LL)))) || _tr_str_eqv((ctn), (_tr_str_lit_len("f32", 3LL))))) {
-            /* pass */
+#line 5214 "src/taumir/lower.tr"
             if ((cvt == 5LL)) {
-                /* pass */
+#line 5214 "src/taumir/lower.tr"
+                long long _trret1616 = cv;
                 _tr_str_release(ctn);
-                return cv;
+                return _trret1616;
             }
-            /* pass */
+#line 5215 "src/taumir/lower.tr"
             if (((cvt == 0LL) || (cvt == 4LL))) {
-                /* pass */
+#line 5215 "src/taumir/lower.tr"
+                long long _trret1617 = _promote_f(lf, cv);
                 _tr_str_release(ctn);
-                return _promote_f(lf, cv);
+                return _trret1617;
             }
-            /* pass */
+#line 5216 "src/taumir/lower.tr"
             _tr_str_release(ctn);
             return (-1LL);
         }
-        /* pass */
+#line 5218 "src/taumir/lower.tr"
         if (_is_int_cast_target(ctn)) {
-            /* pass */
+#line 5219 "src/taumir/lower.tr"
             long long r = cv;
-            /* pass */
+#line 5220 "src/taumir/lower.tr"
             if ((cvt == 5LL)) {
-                /* pass */
+#line 5221 "src/taumir/lower.tr"
                 r = LFunc_new_vreg(lf);
-                /* pass */
+#line 5222 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFToI(r, cv));
-                /* pass */
+#line 5223 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, r, 0LL);
             } else if (((cvt != 0LL) && (cvt != 4LL))) {
-                /* pass */
+#line 5227 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_rt_ptr_addr", 15LL));
-                /* pass */
+#line 5228 "src/taumir/lower.tr"
                 List_i64* cpa = (void*)List_i64_new();
-                /* pass */
+#line 5229 "src/taumir/lower.tr"
                 List_i64_append(cpa, cv);
-                /* pass */
+#line 5230 "src/taumir/lower.tr"
                 r = LFunc_new_vreg(lf);
-                /* pass */
+#line 5231 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(r, _tr_str_lit_len("_tr_rt_ptr_addr", 15LL), cpa));
-                /* pass */
+#line 5232 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, r, 0LL);
             }
-            /* pass */
+#line 5233 "src/taumir/lower.tr"
             r = _narrow_int(lf, r, ctn);
-            /* pass */
+#line 5234 "src/taumir/lower.tr"
             if (_tr_str_eqv((ctn), (_tr_str_lit_len("bool", 4LL)))) {
-                /* pass */
+#line 5235 "src/taumir/lower.tr"
                 long long rb = _norm_bool(lf, r);
-                /* pass */
+#line 5236 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, rb, 4LL);
-                /* pass */
+#line 5237 "src/taumir/lower.tr"
+                long long _trret1618 = rb;
                 _tr_str_release(ctn);
-                return rb;
+                return _trret1618;
             }
-            /* pass */
+#line 5238 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, r, 0LL);
-            /* pass */
+#line 5239 "src/taumir/lower.tr"
+            long long _trret1619 = r;
             _tr_str_release(ctn);
-            return r;
+            return _trret1619;
         }
-        /* pass */
+#line 5241 "src/taumir/lower.tr"
         if (((_tr_str_eqv((ctn), (_tr_str_lit_len("str", 3LL))) || _tr_str_eqv((ctn), (_tr_str_lit_len("String", 6LL)))) && (cvt == 1LL))) {
-            /* pass */
+#line 5241 "src/taumir/lower.tr"
+            long long _trret1620 = cv;
             _tr_str_release(ctn);
-            return cv;
+            return _trret1620;
         }
-        /* pass */
+#line 5245 "src/taumir/lower.tr"
         if (((_tr_str_eqv((ctn), (_tr_str_lit_len("str", 3LL))) || _tr_str_eqv((ctn), (_tr_str_lit_len("String", 6LL)))) && (cvt == 0LL))) {
-            /* pass */
+#line 5246 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_new", 14LL));
-            /* pass */
+#line 5247 "src/taumir/lower.tr"
             List_i64* sna = (void*)List_i64_new();
-            /* pass */
+#line 5248 "src/taumir/lower.tr"
             List_i64_append(sna, cv);
-            /* pass */
+#line 5249 "src/taumir/lower.tr"
             long long snd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5250 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(snd, _tr_str_lit_len("_tr_rt_str_new", 14LL), sna));
-            /* pass */
+#line 5251 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, snd, 1LL);
-            /* pass */
+#line 5252 "src/taumir/lower.tr"
             _fresh_mark(lf, snd);
-            /* pass */
+#line 5253 "src/taumir/lower.tr"
+            long long _trret1621 = snd;
             _tr_str_release(ctn);
-            return snd;
+            return _trret1621;
         }
-        /* pass */
+#line 5255 "src/taumir/lower.tr"
         if ((_tr_str_eqv((ctn), (_tr_str_lit_len("char", 4LL))) && ((cvt == 0LL) || (cvt == 4LL)))) {
-            /* pass */
+#line 5256 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, cv, 0LL);
-            /* pass */
+#line 5257 "src/taumir/lower.tr"
+            long long _trret1622 = cv;
             _tr_str_release(ctn);
-            return cv;
+            return _trret1622;
         }
-        /* pass */
+#line 5261 "src/taumir/lower.tr"
         if (_tr_str_eqv((ctn), (_tr_str_lit_len("Pointer", 7LL)))) {
-            /* pass */
+#line 5262 "src/taumir/lower.tr"
             if ((cvt == 0LL)) {
-                /* pass */
+#line 5262 "src/taumir/lower.tr"
+                long long _trret1623 = cv;
                 _tr_str_release(ctn);
-                return cv;
+                return _trret1623;
             }
-            /* pass */
+#line 5263 "src/taumir/lower.tr"
             if (((((cvt == 1LL) || (cvt == 10LL)) || (cvt == 11LL)) || (cvt == 12LL))) {
-                /* pass */
+#line 5264 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_rt_ptr_addr", 15LL));
-                /* pass */
+#line 5265 "src/taumir/lower.tr"
                 List_i64* paa = (void*)List_i64_new();
-                /* pass */
+#line 5266 "src/taumir/lower.tr"
                 List_i64_append(paa, cv);
-                /* pass */
+#line 5267 "src/taumir/lower.tr"
                 long long pad = LFunc_new_vreg(lf);
-                /* pass */
+#line 5268 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(pad, _tr_str_lit_len("_tr_rt_ptr_addr", 15LL), paa));
-                /* pass */
+#line 5269 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, pad, 0LL);
-                /* pass */
+#line 5270 "src/taumir/lower.tr"
+                long long _trret1624 = pad;
                 _tr_str_release(ctn);
-                return pad;
+                return _trret1624;
             }
-            /* pass */
+#line 5271 "src/taumir/lower.tr"
             _tr_str_release(ctn);
             return (-1LL);
         }
-        /* pass */
+#line 5272 "src/taumir/lower.tr"
         _tr_str_release(ctn);
         return (-1LL);
-    } else if (_t3291.tag == HirExpr_EIdent) {
-        __auto_type name = _t3291.data.EIdent.name;
-        /* pass */
+    } else if (_t6316.tag == HirExpr_EIdent) {
+        __auto_type name = _t6316.data.EIdent.name;
+#line 5276 "src/taumir/lower.tr"
         if (((LFunc_var_index(lf, name) < 0LL) && (LFunc_capture_index(lf, name) >= 0LL))) {
-            /* pass */
+#line 5277 "src/taumir/lower.tr"
             long long cix = LFunc_capture_index(lf, name);
-            /* pass */
+#line 5278 "src/taumir/lower.tr"
             long long cenv = LFunc_new_vreg(lf);
-            /* pass */
+#line 5279 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ILoadVar(cenv, _tr_str_lit_len("__env", 5LL)));
-            /* pass */
+#line 5280 "src/taumir/lower.tr"
             long long caddr = _emit_field_get(m, lf, cenv, ((1LL + cix) * 8LL), 0LL);
-            /* pass */
+#line 5281 "src/taumir/lower.tr"
             long long ctag = List_i64_get(lf->cap_tags, cix);
-            /* pass */
+#line 5282 "src/taumir/lower.tr"
             if ((ctag == 5LL)) {
-                /* pass */
+#line 5283 "src/taumir/lower.tr"
                 long long craw = _emit_field_get(m, lf, caddr, 0LL, 0LL);
-                /* pass */
+#line 5284 "src/taumir/lower.tr"
                 long long cfv = LFunc_new_vreg(lf);
-                /* pass */
+#line 5285 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IBitsF(cfv, craw));
-                /* pass */
+#line 5286 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, cfv, 5LL);
-                /* pass */
-                return cfv;
+#line 5287 "src/taumir/lower.tr"
+                long long _trret1625 = cfv;
+                return _trret1625;
             }
-            /* pass */
-            return _emit_field_get(m, lf, caddr, 0LL, ctag);
+#line 5288 "src/taumir/lower.tr"
+            long long _trret1626 = _emit_field_get(m, lf, caddr, 0LL, ctag);
+            return _trret1626;
         }
-        /* pass */
+#line 5289 "src/taumir/lower.tr"
         if (((LFunc_var_index(lf, name) < 0LL) && LModule_is_global(m, name))) {
-            /* pass */
+#line 5290 "src/taumir/lower.tr"
             long long gd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5291 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ILoadGlobal(gd, LModule_global_index(m, name)));
-            /* pass */
+#line 5292 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, gd, LModule_global_type(m, name));
-            /* pass */
-            return gd;
+#line 5293 "src/taumir/lower.tr"
+            long long _trret1627 = gd;
+            return _trret1627;
         }
-        /* pass */
+#line 5294 "src/taumir/lower.tr"
         if (((LFunc_var_index(lf, name) < 0LL) && LModule_is_user_fn(m, name))) {
-            /* pass */
+#line 5295 "src/taumir/lower.tr"
             long long fav = LFunc_new_vreg(lf);
-            /* pass */
-            ({ TrStr _at_t3292 = (_own(name)); LFunc_emit(lf, LInst_ctor_IFuncAddr(fav, _at_t3292)); _tr_str_release(_at_t3292); });
-            /* pass */
-            return fav;
+#line 5296 "src/taumir/lower.tr"
+            ({ TrStr _at_t6317 = (_own(name)); LFunc_emit(lf, LInst_ctor_IFuncAddr(fav, _at_t6317)); _tr_str_release(_at_t6317); });
+#line 5297 "src/taumir/lower.tr"
+            long long _trret1628 = fav;
+            return _trret1628;
         }
-        /* pass */
+#line 5298 "src/taumir/lower.tr"
         LFunc_add_var(lf, name);
-        /* pass */
+#line 5299 "src/taumir/lower.tr"
         long long d2 = LFunc_new_vreg(lf);
-        /* pass */
+#line 5300 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ILoadVar(d2, name));
-        /* pass */
+#line 5301 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, d2, LFunc_var_type(lf, name));
-        /* pass */
-        return d2;
-    } else if (_t3291.tag == HirExpr_EIfElse) {
-        __auto_type cond = _t3291.data.EIfElse.cond;
-__auto_type then_e = _t3291.data.EIfElse.then_e;
-__auto_type else_e = _t3291.data.EIfElse.else_e;
-        /* pass */
+#line 5302 "src/taumir/lower.tr"
+        long long _trret1629 = d2;
+        return _trret1629;
+    } else if (_t6316.tag == HirExpr_EIfElse) {
+        __auto_type cond = _t6316.data.EIfElse.cond;
+__auto_type then_e = _t6316.data.EIfElse.then_e;
+__auto_type else_e = _t6316.data.EIfElse.else_e;
+#line 5305 "src/taumir/lower.tr"
         long long tcv = lower_expr(m, lf, cond);
-        /* pass */
+#line 5306 "src/taumir/lower.tr"
         if ((tcv < 0LL)) {
-            /* pass */
+#line 5306 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 5307 "src/taumir/lower.tr"
         long long tuid = LFunc_fresh_id(lf);
-        /* pass */
-        TrStr rname = ({ TrStr _cr = (_lir_itoa(tuid)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__tern", 6LL)), _cr); _tr_str_release(_cr); _cres; });
-        /* pass */
+#line 5308 "src/taumir/lower.tr"
+        TrStr rname = ({ TrStr _tr_cr = (_lir_itoa(tuid)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__tern", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 5309 "src/taumir/lower.tr"
         LFunc_add_var(lf, rname);
-        /* pass */
+#line 5310 "src/taumir/lower.tr"
         long long then_b = LFunc_new_block(lf);
-        /* pass */
+#line 5311 "src/taumir/lower.tr"
         long long else_b = LFunc_new_block(lf);
-        /* pass */
+#line 5312 "src/taumir/lower.tr"
         long long end_b = LFunc_new_block(lf);
-        /* pass */
+#line 5313 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TCondBr(tcv, then_b, else_b));
-        /* pass */
+#line 5314 "src/taumir/lower.tr"
         LFunc_set_cur(lf, then_b);
-        /* pass */
+#line 5315 "src/taumir/lower.tr"
         long long tv = lower_expr(m, lf, then_e);
-        /* pass */
+#line 5316 "src/taumir/lower.tr"
         if ((tv < 0LL)) {
-            /* pass */
+#line 5316 "src/taumir/lower.tr"
             _tr_str_release(rname);
             return (-1LL);
         }
-        /* pass */
+#line 5317 "src/taumir/lower.tr"
         long long rtype = LFunc_vreg_type(lf, tv);
-        /* pass */
+#line 5320 "src/taumir/lower.tr"
         if ((rtype == 1LL)) {
-            /* pass */
+#line 5320 "src/taumir/lower.tr"
             _secure_str(m, lf, tv);
         }
-        /* pass */
+#line 5321 "src/taumir/lower.tr"
         LFunc_set_var_type(lf, rname, rtype);
-        /* pass */
+#line 5322 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IStoreVar(rname, tv));
-        /* pass */
+#line 5323 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TBr(end_b));
-        /* pass */
+#line 5324 "src/taumir/lower.tr"
         LFunc_set_cur(lf, else_b);
-        /* pass */
+#line 5325 "src/taumir/lower.tr"
         long long ev2 = lower_expr(m, lf, else_e);
-        /* pass */
+#line 5326 "src/taumir/lower.tr"
         if ((ev2 < 0LL)) {
-            /* pass */
+#line 5326 "src/taumir/lower.tr"
             _tr_str_release(rname);
             return (-1LL);
         }
-        /* pass */
+#line 5327 "src/taumir/lower.tr"
         if ((rtype == 1LL)) {
-            /* pass */
+#line 5327 "src/taumir/lower.tr"
             _secure_str(m, lf, ev2);
         }
-        /* pass */
+#line 5328 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IStoreVar(rname, ev2));
-        /* pass */
+#line 5329 "src/taumir/lower.tr"
         LFunc_set_term(lf, LTerm_ctor_TBr(end_b));
-        /* pass */
+#line 5330 "src/taumir/lower.tr"
         LFunc_set_cur(lf, end_b);
-        /* pass */
+#line 5331 "src/taumir/lower.tr"
         long long trd = LFunc_new_vreg(lf);
-        /* pass */
+#line 5332 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ILoadVar(trd, rname));
-        /* pass */
+#line 5333 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, trd, rtype);
-        /* pass */
+#line 5334 "src/taumir/lower.tr"
         if ((rtype == 1LL)) {
-            /* pass */
+#line 5334 "src/taumir/lower.tr"
             _fresh_mark(lf, trd);
         }
-        /* pass */
+#line 5335 "src/taumir/lower.tr"
+        long long _trret1630 = trd;
         _tr_str_release(rname);
-        return trd;
-    } else if (_t3291.tag == HirExpr_EUnaryOp) {
-        __auto_type op = _t3291.data.EUnaryOp.op;
-__auto_type sub = _t3291.data.EUnaryOp.expr;
-        /* pass */
+        return _trret1630;
+    } else if (_t6316.tag == HirExpr_EUnaryOp) {
+        __auto_type op = _t6316.data.EUnaryOp.op;
+__auto_type sub = _t6316.data.EUnaryOp.expr;
+#line 5338 "src/taumir/lower.tr"
         if (_tr_str_eqv((op), (_tr_str_lit_len("-", 1LL)))) {
-            /* pass */
+#line 5339 "src/taumir/lower.tr"
             TrStr ncls = _recv_class(m, lf, sub);
-            /* pass */
+#line 5340 "src/taumir/lower.tr"
             if (((!_tr_str_eqv((ncls), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, ncls))) {
-                /* pass */
+#line 5341 "src/taumir/lower.tr"
                 TrStr nm2 = LModule_resolve_method(m, ncls, _tr_str_lit_len("__neg__", 7LL));
-                /* pass */
+#line 5342 "src/taumir/lower.tr"
                 if ((!_tr_str_eqv((nm2), (_tr_str_lit_len("", 0LL))))) {
-                    /* pass */
+#line 5343 "src/taumir/lower.tr"
                     long long nself = lower_expr(m, lf, sub);
-                    /* pass */
+#line 5344 "src/taumir/lower.tr"
                     if ((nself < 0LL)) {
-                        /* pass */
+#line 5344 "src/taumir/lower.tr"
                         _tr_str_release(ncls);
                         _tr_str_release(nm2);
                         return (-1LL);
                     }
-                    /* pass */
+#line 5345 "src/taumir/lower.tr"
+                    long long _trret1631 = _lower_obj_call(m, lf, nm2, nself, (void*)List_ptr_new());
                     _tr_str_release(ncls);
-                    return _lower_obj_call(m, lf, nm2, nself, (void*)List_ptr_new());
+                    _tr_str_release(nm2);
+                    return _trret1631;
                 }
             }
         }
-        /* pass */
+#line 5346 "src/taumir/lower.tr"
         long long sv = lower_expr(m, lf, sub);
-        /* pass */
+#line 5347 "src/taumir/lower.tr"
         if ((sv < 0LL)) {
-            /* pass */
+#line 5347 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 5348 "src/taumir/lower.tr"
         long long svt = LFunc_vreg_type(lf, sv);
-        /* pass */
+#line 5349 "src/taumir/lower.tr"
         if (_tr_str_eqv((op), (_tr_str_lit_len("-", 1LL)))) {
-            /* pass */
+#line 5350 "src/taumir/lower.tr"
             if ((svt == 5LL)) {
-                /* pass */
+#line 5351 "src/taumir/lower.tr"
                 long long zf = LFunc_new_vreg(lf);
-                /* pass */
+#line 5352 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IConst(zf, _f64_bits(0.0)));
-                /* pass */
+#line 5353 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, zf, 5LL);
-                /* pass */
+#line 5354 "src/taumir/lower.tr"
                 long long dnf = LFunc_new_vreg(lf);
-                /* pass */
+#line 5355 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFBinOp(dnf, _tr_str_lit_len("-", 1LL), zf, sv));
-                /* pass */
+#line 5356 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, dnf, 5LL);
-                /* pass */
-                return dnf;
+#line 5357 "src/taumir/lower.tr"
+                long long _trret1632 = dnf;
+                return _trret1632;
             }
-            /* pass */
+#line 5358 "src/taumir/lower.tr"
             if ((svt != 0LL)) {
-                /* pass */
+#line 5358 "src/taumir/lower.tr"
                 return (-1LL);
             }
-            /* pass */
+#line 5359 "src/taumir/lower.tr"
             long long zn = LFunc_new_vreg(lf);
-            /* pass */
+#line 5360 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IConst(zn, 0LL));
-            /* pass */
+#line 5361 "src/taumir/lower.tr"
             long long dneg = LFunc_new_vreg(lf);
-            /* pass */
+#line 5362 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IBinOp(dneg, _tr_str_lit_len("-", 1LL), zn, sv));
-            /* pass */
-            return dneg;
+#line 5363 "src/taumir/lower.tr"
+            long long _trret1633 = dneg;
+            return _trret1633;
         }
-        /* pass */
+#line 5364 "src/taumir/lower.tr"
         if (_tr_str_eqv((op), (_tr_str_lit_len("not", 3LL)))) {
-            /* pass */
+#line 5365 "src/taumir/lower.tr"
             if (((svt != 0LL) && (svt != 4LL))) {
-                /* pass */
+#line 5365 "src/taumir/lower.tr"
                 return (-1LL);
             }
-            /* pass */
+#line 5366 "src/taumir/lower.tr"
             long long zt = LFunc_new_vreg(lf);
-            /* pass */
+#line 5367 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IConst(zt, 0LL));
-            /* pass */
+#line 5368 "src/taumir/lower.tr"
             long long dnot = LFunc_new_vreg(lf);
-            /* pass */
+#line 5369 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IBinOp(dnot, _tr_str_lit_len("==", 2LL), sv, zt));
-            /* pass */
+#line 5370 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, dnot, 4LL);
-            /* pass */
-            return dnot;
+#line 5371 "src/taumir/lower.tr"
+            long long _trret1634 = dnot;
+            return _trret1634;
         }
-        /* pass */
+#line 5372 "src/taumir/lower.tr"
         if (_tr_str_eqv((op), (_tr_str_lit_len("~", 1LL)))) {
-            /* pass */
+#line 5373 "src/taumir/lower.tr"
             if ((svt != 0LL)) {
-                /* pass */
+#line 5373 "src/taumir/lower.tr"
                 return (-1LL);
             }
-            /* pass */
+#line 5374 "src/taumir/lower.tr"
             long long ones = LFunc_new_vreg(lf);
-            /* pass */
+#line 5375 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IConst(ones, (0LL - 1LL)));
-            /* pass */
+#line 5376 "src/taumir/lower.tr"
             long long dcpl = LFunc_new_vreg(lf);
-            /* pass */
+#line 5377 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IBinOp(dcpl, _tr_str_lit_len("^", 1LL), sv, ones));
-            /* pass */
-            return dcpl;
+#line 5378 "src/taumir/lower.tr"
+            long long _trret1635 = dcpl;
+            return _trret1635;
         }
-        /* pass */
+#line 5379 "src/taumir/lower.tr"
         if (_tr_str_eqv((op), (_tr_str_lit_len("&", 1LL)))) {
-            /* pass */
-            __auto_type _t3293 = (*sub);
-            if (_t3293.tag == HirExpr_EIdent) {
-                __auto_type aname = _t3293.data.EIdent.name;
-                /* pass */
+#line 5380 "src/taumir/lower.tr"
+            __auto_type _t6318 = (*sub);
+            if (_t6318.tag == HirExpr_EIdent) {
+                __auto_type aname = _t6318.data.EIdent.name;
+#line 5382 "src/taumir/lower.tr"
                 long long ad = LFunc_new_vreg(lf);
-                /* pass */
+#line 5383 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IAddrVar(ad, aname));
-                /* pass */
+#line 5384 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, ad, 0LL);
-                /* pass */
-                return ad;
+#line 5385 "src/taumir/lower.tr"
+                long long _trret1636 = ad;
+                return _trret1636;
             } else if (1) {
-                __auto_type _ = _t3293;
-                /* pass */
+                __auto_type _ = _t6318;
+#line 5387 "src/taumir/lower.tr"
                 return (-1LL);
             }
         }
-        /* pass */
+#line 5388 "src/taumir/lower.tr"
         return (-1LL);
-    } else if (_t3291.tag == HirExpr_EBinOp) {
-        __auto_type op = _t3291.data.EBinOp.op;
-__auto_type l = _t3291.data.EBinOp.left;
-__auto_type r = _t3291.data.EBinOp.right;
-        /* pass */
+    } else if (_t6316.tag == HirExpr_EBinOp) {
+        __auto_type op = _t6316.data.EBinOp.op;
+__auto_type l = _t6316.data.EBinOp.left;
+__auto_type r = _t6316.data.EBinOp.right;
+#line 5394 "src/taumir/lower.tr"
         if ((_tr_str_eqv((op), (_tr_str_lit_len("and", 3LL))) || _tr_str_eqv((op), (_tr_str_lit_len("or", 2LL))))) {
-            /* pass */
+#line 5395 "src/taumir/lower.tr"
             long long scl = lower_expr(m, lf, l);
-            /* pass */
+#line 5396 "src/taumir/lower.tr"
             if ((scl < 0LL)) {
-                /* pass */
+#line 5396 "src/taumir/lower.tr"
                 return (-1LL);
             }
-            /* pass */
+#line 5397 "src/taumir/lower.tr"
             long long scla = _norm_bool(lf, scl);
-            /* pass */
+#line 5398 "src/taumir/lower.tr"
             _flush_fresh_strs(m, lf);
-            /* pass */
-            TrStr scvar = ({ TrStr _cr = (_lir_itoa(LFunc_fresh_id(lf))); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("__sc", 4LL)), _cr); _tr_str_release(_cr); _cres; });
-            /* pass */
+#line 5399 "src/taumir/lower.tr"
+            TrStr scvar = ({ TrStr _tr_cr = (_lir_itoa(LFunc_fresh_id(lf))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("__sc", 4LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+#line 5400 "src/taumir/lower.tr"
             LFunc_add_var(lf, scvar);
-            /* pass */
+#line 5401 "src/taumir/lower.tr"
             LFunc_set_var_type(lf, scvar, 4LL);
-            /* pass */
+#line 5402 "src/taumir/lower.tr"
             long long sc_rhs = LFunc_new_block(lf);
-            /* pass */
+#line 5403 "src/taumir/lower.tr"
             long long sc_sc = LFunc_new_block(lf);
-            /* pass */
+#line 5404 "src/taumir/lower.tr"
             long long sc_end = LFunc_new_block(lf);
-            /* pass */
+#line 5405 "src/taumir/lower.tr"
             if (_tr_str_eqv((op), (_tr_str_lit_len("and", 3LL)))) {
-                /* pass */
+#line 5406 "src/taumir/lower.tr"
                 LFunc_set_term(lf, LTerm_ctor_TCondBr(scla, sc_rhs, sc_sc));
             } else {
-                /* pass */
+#line 5408 "src/taumir/lower.tr"
                 LFunc_set_term(lf, LTerm_ctor_TCondBr(scla, sc_sc, sc_rhs));
             }
-            /* pass */
+#line 5410 "src/taumir/lower.tr"
             LFunc_set_cur(lf, sc_rhs);
-            /* pass */
+#line 5411 "src/taumir/lower.tr"
             long long scr = lower_expr(m, lf, r);
-            /* pass */
+#line 5412 "src/taumir/lower.tr"
             if ((scr < 0LL)) {
-                /* pass */
+#line 5412 "src/taumir/lower.tr"
                 _tr_str_release(scvar);
                 return (-1LL);
             }
-            /* pass */
+#line 5413 "src/taumir/lower.tr"
             long long scrb = _norm_bool(lf, scr);
-            /* pass */
+#line 5414 "src/taumir/lower.tr"
             _flush_fresh_strs(m, lf);
-            /* pass */
+#line 5415 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IStoreVar(scvar, scrb));
-            /* pass */
+#line 5416 "src/taumir/lower.tr"
             LFunc_set_term(lf, LTerm_ctor_TBr(sc_end));
-            /* pass */
+#line 5418 "src/taumir/lower.tr"
             LFunc_set_cur(lf, sc_sc);
-            /* pass */
+#line 5419 "src/taumir/lower.tr"
             long long sccv = LFunc_new_vreg(lf);
-            /* pass */
+#line 5420 "src/taumir/lower.tr"
             long long scconst = 0LL;
-            /* pass */
+#line 5421 "src/taumir/lower.tr"
             if (_tr_str_eqv((op), (_tr_str_lit_len("or", 2LL)))) {
-                /* pass */
+#line 5421 "src/taumir/lower.tr"
                 scconst = 1LL;
             }
-            /* pass */
+#line 5422 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IConst(sccv, scconst));
-            /* pass */
+#line 5423 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IStoreVar(scvar, sccv));
-            /* pass */
+#line 5424 "src/taumir/lower.tr"
             LFunc_set_term(lf, LTerm_ctor_TBr(sc_end));
-            /* pass */
+#line 5426 "src/taumir/lower.tr"
             LFunc_set_cur(lf, sc_end);
-            /* pass */
+#line 5427 "src/taumir/lower.tr"
             long long scd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5428 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ILoadVar(scd, scvar));
-            /* pass */
+#line 5429 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, scd, 4LL);
-            /* pass */
+#line 5430 "src/taumir/lower.tr"
+            long long _trret1637 = scd;
             _tr_str_release(scvar);
-            return scd;
+            return _trret1637;
         }
-        /* pass */
+#line 5433 "src/taumir/lower.tr"
         TrStr ddn = _dunder_for_op(op);
-        /* pass */
+#line 5434 "src/taumir/lower.tr"
         if ((!_tr_str_eqv((ddn), (_tr_str_lit_len("", 0LL))))) {
-            /* pass */
+#line 5435 "src/taumir/lower.tr"
             TrStr lcls_d = _recv_class(m, lf, l);
-            /* pass */
+#line 5436 "src/taumir/lower.tr"
             if (((!_tr_str_eqv((lcls_d), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, lcls_d))) {
-                /* pass */
+#line 5437 "src/taumir/lower.tr"
                 TrStr ddm = LModule_resolve_method(m, lcls_d, ddn);
-                /* pass */
+#line 5438 "src/taumir/lower.tr"
                 if ((!_tr_str_eqv((ddm), (_tr_str_lit_len("", 0LL))))) {
-                    /* pass */
+#line 5439 "src/taumir/lower.tr"
                     long long da = lower_expr(m, lf, l);
-                    /* pass */
+#line 5440 "src/taumir/lower.tr"
                     if ((da < 0LL)) {
-                        /* pass */
+#line 5440 "src/taumir/lower.tr"
                         _tr_str_release(ddn);
                         _tr_str_release(lcls_d);
                         _tr_str_release(ddm);
                         return (-1LL);
                     }
-                    /* pass */
+#line 5441 "src/taumir/lower.tr"
                     List_ptr* dargs = (void*)List_ptr_new();
-                    /* pass */
+#line 5442 "src/taumir/lower.tr"
                     List_ptr_append(dargs, r);
-                    /* pass */
+#line 5443 "src/taumir/lower.tr"
+                    long long _trret1638 = _lower_obj_call(m, lf, ddm, da, dargs);
                     _tr_str_release(ddn);
                     _tr_str_release(lcls_d);
-                    return _lower_obj_call(m, lf, ddm, da, dargs);
+                    _tr_str_release(ddm);
+                    return _trret1638;
                 }
             }
         }
-        /* pass */
+#line 5444 "src/taumir/lower.tr"
         long long a = lower_expr(m, lf, l);
-        /* pass */
+#line 5445 "src/taumir/lower.tr"
         if ((a < 0LL)) {
-            /* pass */
+#line 5445 "src/taumir/lower.tr"
             _tr_str_release(ddn);
             return (-1LL);
         }
-        /* pass */
+#line 5446 "src/taumir/lower.tr"
         long long b = lower_expr(m, lf, r);
-        /* pass */
+#line 5447 "src/taumir/lower.tr"
         if ((b < 0LL)) {
-            /* pass */
+#line 5447 "src/taumir/lower.tr"
             _tr_str_release(ddn);
             return (-1LL);
         }
-        /* pass */
+#line 5448 "src/taumir/lower.tr"
         long long at = LFunc_vreg_type(lf, a);
-        /* pass */
+#line 5449 "src/taumir/lower.tr"
         long long bt = LFunc_vreg_type(lf, b);
-        /* pass */
+#line 5451 "src/taumir/lower.tr"
         if (((at == 5LL) || (bt == 5LL))) {
-            /* pass */
+#line 5452 "src/taumir/lower.tr"
             if (((at != 5LL) && (at != 0LL))) {
-                /* pass */
+#line 5452 "src/taumir/lower.tr"
                 _tr_str_release(ddn);
                 return (-1LL);
             }
-            /* pass */
+#line 5453 "src/taumir/lower.tr"
             if (((bt != 5LL) && (bt != 0LL))) {
-                /* pass */
+#line 5453 "src/taumir/lower.tr"
                 _tr_str_release(ddn);
                 return (-1LL);
             }
-            /* pass */
+#line 5454 "src/taumir/lower.tr"
             long long fa = a;
-            /* pass */
+#line 5455 "src/taumir/lower.tr"
             long long fb = b;
-            /* pass */
+#line 5456 "src/taumir/lower.tr"
             if ((at == 0LL)) {
-                /* pass */
+#line 5456 "src/taumir/lower.tr"
                 fa = _promote_f(lf, a);
             }
-            /* pass */
+#line 5457 "src/taumir/lower.tr"
             if ((bt == 0LL)) {
-                /* pass */
+#line 5457 "src/taumir/lower.tr"
                 fb = _promote_f(lf, b);
             }
-            /* pass */
+#line 5458 "src/taumir/lower.tr"
             if ((((_tr_str_eqv((op), (_tr_str_lit_len("+", 1LL))) || _tr_str_eqv((op), (_tr_str_lit_len("-", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("*", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("/", 1LL))))) {
-                /* pass */
+#line 5459 "src/taumir/lower.tr"
                 long long fdd = LFunc_new_vreg(lf);
-                /* pass */
+#line 5460 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFBinOp(fdd, op, fa, fb));
-                /* pass */
+#line 5461 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, fdd, 5LL);
-                /* pass */
+#line 5462 "src/taumir/lower.tr"
+                long long _trret1639 = fdd;
                 _tr_str_release(ddn);
-                return fdd;
+                return _trret1639;
             }
-            /* pass */
+#line 5463 "src/taumir/lower.tr"
             if (_tr_str_eqv((op), (_tr_str_lit_len("**", 2LL)))) {
-                /* pass */
+#line 5464 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_rt_pow", 10LL));
-                /* pass */
+#line 5465 "src/taumir/lower.tr"
                 long long fpw = LFunc_new_vreg(lf);
-                /* pass */
+#line 5466 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFCall2F(fpw, _tr_str_lit_len("_tr_rt_pow", 10LL), fa, fb));
-                /* pass */
+#line 5467 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, fpw, 5LL);
-                /* pass */
+#line 5468 "src/taumir/lower.tr"
+                long long _trret1640 = fpw;
                 _tr_str_release(ddn);
-                return fpw;
+                return _trret1640;
             }
-            /* pass */
+#line 5469 "src/taumir/lower.tr"
             if (_is_cmp_op(op)) {
-                /* pass */
+#line 5470 "src/taumir/lower.tr"
                 long long fcd = LFunc_new_vreg(lf);
-                /* pass */
+#line 5471 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFBinOp(fcd, op, fa, fb));
-                /* pass */
+#line 5472 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, fcd, 4LL);
-                /* pass */
+#line 5473 "src/taumir/lower.tr"
+                long long _trret1641 = fcd;
                 _tr_str_release(ddn);
-                return fcd;
+                return _trret1641;
             }
-            /* pass */
+#line 5474 "src/taumir/lower.tr"
             _tr_str_release(ddn);
             return (-1LL);
         }
-        /* pass */
+#line 5476 "src/taumir/lower.tr"
         if ((_tr_str_eqv((op), (_tr_str_lit_len("in", 2LL))) && (bt == 10LL))) {
-            /* pass */
+#line 5477 "src/taumir/lower.tr"
             TrStr ccls = _recv_class(m, lf, r);
-            /* pass */
+#line 5478 "src/taumir/lower.tr"
             if (((!_tr_str_eqv((ccls), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, ccls))) {
-                /* pass */
+#line 5479 "src/taumir/lower.tr"
                 TrStr ccm = LModule_resolve_method(m, ccls, _tr_str_lit_len("__contains__", 12LL));
-                /* pass */
+#line 5480 "src/taumir/lower.tr"
                 if ((!_tr_str_eqv((ccm), (_tr_str_lit_len("", 0LL))))) {
-                    /* pass */
+#line 5481 "src/taumir/lower.tr"
                     List_ptr* cca = (void*)List_ptr_new();
-                    /* pass */
+#line 5482 "src/taumir/lower.tr"
                     List_ptr_append(cca, l);
-                    /* pass */
+#line 5483 "src/taumir/lower.tr"
+                    long long _trret1642 = _lower_obj_call(m, lf, ccm, b, cca);
                     _tr_str_release(ddn);
                     _tr_str_release(ccls);
-                    return _lower_obj_call(m, lf, ccm, b, cca);
+                    _tr_str_release(ccm);
+                    return _trret1642;
                 }
             }
-            /* pass */
+#line 5484 "src/taumir/lower.tr"
             _tr_str_release(ddn);
             _tr_str_release(ccls);
             return (-1LL);
         }
-        /* pass */
+#line 5486 "src/taumir/lower.tr"
         if ((_tr_str_eqv((op), (_tr_str_lit_len("in", 2LL))) && _is_dict_tag(bt))) {
-            /* pass */
+#line 5487 "src/taumir/lower.tr"
             if ((_dict_key_is_str(bt) && (at != 1LL))) {
-                /* pass */
+#line 5487 "src/taumir/lower.tr"
                 _tr_str_release(ddn);
                 return (-1LL);
             }
-            /* pass */
+#line 5488 "src/taumir/lower.tr"
             if (((!_dict_key_is_str(bt)) && (at != 0LL))) {
-                /* pass */
+#line 5488 "src/taumir/lower.tr"
                 _tr_str_release(ddn);
                 return (-1LL);
             }
-            /* pass */
+#line 5489 "src/taumir/lower.tr"
             TrStr dhsym = _dict_sym(bt, _tr_str_lit_len("has", 3LL));
-            /* pass */
+#line 5490 "src/taumir/lower.tr"
             LModule_add_extern(m, dhsym);
-            /* pass */
+#line 5491 "src/taumir/lower.tr"
             List_i64* dha = (void*)List_i64_new();
-            /* pass */
+#line 5492 "src/taumir/lower.tr"
             List_i64_append(dha, b);
-            /* pass */
+#line 5493 "src/taumir/lower.tr"
             List_i64_append(dha, a);
-            /* pass */
+#line 5494 "src/taumir/lower.tr"
             long long dhd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5495 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(dhd, dhsym, dha));
-            /* pass */
+#line 5496 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, dhd, 4LL);
-            /* pass */
+#line 5497 "src/taumir/lower.tr"
+            long long _trret1643 = dhd;
             _tr_str_release(ddn);
             _tr_str_release(dhsym);
-            return dhd;
+            return _trret1643;
         }
-        /* pass */
+#line 5499 "src/taumir/lower.tr"
         if ((_tr_str_eqv((op), (_tr_str_lit_len("in", 2LL))) && _is_set_tag(bt))) {
-            /* pass */
+#line 5500 "src/taumir/lower.tr"
             if (((bt == 16LL) && (at != 1LL))) {
-                /* pass */
+#line 5500 "src/taumir/lower.tr"
                 _tr_str_release(ddn);
                 return (-1LL);
             }
-            /* pass */
+#line 5501 "src/taumir/lower.tr"
             if (((bt == 13LL) && (at != 0LL))) {
-                /* pass */
+#line 5501 "src/taumir/lower.tr"
                 _tr_str_release(ddn);
                 return (-1LL);
             }
-            /* pass */
+#line 5502 "src/taumir/lower.tr"
             TrStr shas = _set_sym(bt, _tr_str_lit_len("has", 3LL));
-            /* pass */
+#line 5503 "src/taumir/lower.tr"
             LModule_add_extern(m, shas);
-            /* pass */
+#line 5504 "src/taumir/lower.tr"
             List_i64* sha = (void*)List_i64_new();
-            /* pass */
+#line 5505 "src/taumir/lower.tr"
             List_i64_append(sha, b);
-            /* pass */
+#line 5506 "src/taumir/lower.tr"
             List_i64_append(sha, a);
-            /* pass */
+#line 5507 "src/taumir/lower.tr"
             long long shd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5508 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(shd, shas, sha));
-            /* pass */
+#line 5509 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, shd, 4LL);
-            /* pass */
+#line 5510 "src/taumir/lower.tr"
+            long long _trret1644 = shd;
             _tr_str_release(ddn);
             _tr_str_release(shas);
-            return shd;
+            return _trret1644;
         }
-        /* pass */
+#line 5512 "src/taumir/lower.tr"
         if ((_tr_str_eqv((op), (_tr_str_lit_len("in", 2LL))) && (bt == 1LL))) {
-            /* pass */
+#line 5513 "src/taumir/lower.tr"
             TrStr ssym = _tr_str_lit_len("_tr_rt_str_contains", 19LL);
-            /* pass */
+#line 5514 "src/taumir/lower.tr"
             if (((at == 0LL) || (at == 4LL))) {
-                /* pass */
-                TrStr _strtmp_t3294 = _tr_str_lit_len("_tr_rt_str_contains_char", 24LL);
+#line 5515 "src/taumir/lower.tr"
+                TrStr _strtmp_t6319 = _tr_str_lit_len("_tr_rt_str_contains_char", 24LL);
                 _tr_str_release(ssym);
-                ssym = _strtmp_t3294;
+                ssym = _strtmp_t6319;
             } else if ((at != 1LL)) {
-                /* pass */
+#line 5516 "src/taumir/lower.tr"
                 _tr_str_release(ddn);
                 _tr_str_release(ssym);
                 return (-1LL);
             }
-            /* pass */
+#line 5517 "src/taumir/lower.tr"
             LModule_add_extern(m, ssym);
-            /* pass */
+#line 5518 "src/taumir/lower.tr"
             List_i64* ssa2 = (void*)List_i64_new();
-            /* pass */
+#line 5519 "src/taumir/lower.tr"
             List_i64_append(ssa2, b);
-            /* pass */
+#line 5520 "src/taumir/lower.tr"
             List_i64_append(ssa2, a);
-            /* pass */
+#line 5521 "src/taumir/lower.tr"
             long long ssd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5522 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(ssd, ssym, ssa2));
-            /* pass */
+#line 5523 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, ssd, 4LL);
-            /* pass */
+#line 5524 "src/taumir/lower.tr"
+            long long _trret1645 = ssd;
             _tr_str_release(ddn);
             _tr_str_release(ssym);
-            return ssd;
+            return _trret1645;
         }
-        /* pass */
+#line 5526 "src/taumir/lower.tr"
         if (_tr_str_eqv((op), (_tr_str_lit_len("in", 2LL)))) {
-            /* pass */
+#line 5527 "src/taumir/lower.tr"
             if ((!_is_list_tag(bt))) {
-                /* pass */
+#line 5527 "src/taumir/lower.tr"
                 _tr_str_release(ddn);
                 return (-1LL);
             }
-            /* pass */
+#line 5528 "src/taumir/lower.tr"
             if ((bt == 14LL)) {
-                /* pass */
+#line 5528 "src/taumir/lower.tr"
                 _tr_str_release(ddn);
                 return (-1LL);
             }
-            /* pass */
+#line 5529 "src/taumir/lower.tr"
             long long want_e = _list_elem_tag(bt);
-            /* pass */
+#line 5530 "src/taumir/lower.tr"
             if ((at != want_e)) {
-                /* pass */
+#line 5530 "src/taumir/lower.tr"
                 _tr_str_release(ddn);
                 return (-1LL);
             }
-            /* pass */
+#line 5531 "src/taumir/lower.tr"
             TrStr csym = _tr_str_lit_len("_tr_rt_list_contains_i64", 24LL);
-            /* pass */
+#line 5532 "src/taumir/lower.tr"
             if ((want_e == 1LL)) {
-                /* pass */
-                TrStr _strtmp_t3295 = _tr_str_lit_len("_tr_rt_list_contains_str", 24LL);
+#line 5532 "src/taumir/lower.tr"
+                TrStr _strtmp_t6320 = _tr_str_lit_len("_tr_rt_list_contains_str", 24LL);
                 _tr_str_release(csym);
-                csym = _strtmp_t3295;
+                csym = _strtmp_t6320;
             }
-            /* pass */
+#line 5533 "src/taumir/lower.tr"
             LModule_add_extern(m, csym);
-            /* pass */
+#line 5534 "src/taumir/lower.tr"
             List_i64* cca = (void*)List_i64_new();
-            /* pass */
+#line 5535 "src/taumir/lower.tr"
             List_i64_append(cca, b);
-            /* pass */
+#line 5536 "src/taumir/lower.tr"
             List_i64_append(cca, a);
-            /* pass */
+#line 5537 "src/taumir/lower.tr"
             long long cd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5538 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(cd, csym, cca));
-            /* pass */
+#line 5539 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, cd, 4LL);
-            /* pass */
+#line 5540 "src/taumir/lower.tr"
+            long long _trret1646 = cd;
             _tr_str_release(ddn);
             _tr_str_release(csym);
-            return cd;
+            return _trret1646;
         }
-        /* pass */
+#line 5542 "src/taumir/lower.tr"
         if (((_tr_str_eqv((op), (_tr_str_lit_len("*", 1LL))) && ((at == 1LL) || (bt == 1LL))) && ((at == 0LL) || (bt == 0LL)))) {
-            /* pass */
+#line 5543 "src/taumir/lower.tr"
             long long sreg = a;
-            /* pass */
+#line 5544 "src/taumir/lower.tr"
             long long nreg = b;
-            /* pass */
+#line 5545 "src/taumir/lower.tr"
             if ((at == 0LL)) {
-                /* pass */
+#line 5546 "src/taumir/lower.tr"
                 sreg = b;
-                /* pass */
+#line 5547 "src/taumir/lower.tr"
                 nreg = a;
             }
-            /* pass */
+#line 5548 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_repeat", 17LL));
-            /* pass */
+#line 5549 "src/taumir/lower.tr"
             List_i64* ra = (void*)List_i64_new();
-            /* pass */
+#line 5550 "src/taumir/lower.tr"
             List_i64_append(ra, sreg);
-            /* pass */
+#line 5551 "src/taumir/lower.tr"
             List_i64_append(ra, nreg);
-            /* pass */
+#line 5552 "src/taumir/lower.tr"
             long long rd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5553 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(rd, _tr_str_lit_len("_tr_rt_str_repeat", 17LL), ra));
-            /* pass */
+#line 5554 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, rd, 1LL);
-            /* pass */
+#line 5555 "src/taumir/lower.tr"
             _fresh_mark(lf, rd);
-            /* pass */
+#line 5556 "src/taumir/lower.tr"
+            long long _trret1647 = rd;
             _tr_str_release(ddn);
-            return rd;
+            return _trret1647;
         }
-        /* pass */
+#line 5557 "src/taumir/lower.tr"
         if (((_tr_str_eqv((op), (_tr_str_lit_len("+", 1LL))) && (at == 1LL)) && (bt == 1LL))) {
-            /* pass */
+#line 5558 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_concat", 17LL));
-            /* pass */
+#line 5559 "src/taumir/lower.tr"
             List_i64* ca = (void*)List_i64_new();
-            /* pass */
+#line 5560 "src/taumir/lower.tr"
             List_i64_append(ca, a);
-            /* pass */
+#line 5561 "src/taumir/lower.tr"
             List_i64_append(ca, b);
-            /* pass */
+#line 5562 "src/taumir/lower.tr"
             long long dc = LFunc_new_vreg(lf);
-            /* pass */
+#line 5563 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(dc, _tr_str_lit_len("_tr_rt_str_concat", 17LL), ca));
-            /* pass */
+#line 5564 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, dc, 1LL);
-            /* pass */
+#line 5565 "src/taumir/lower.tr"
             _fresh_mark(lf, dc);
-            /* pass */
+#line 5566 "src/taumir/lower.tr"
+            long long _trret1648 = dc;
             _tr_str_release(ddn);
-            return dc;
+            return _trret1648;
         }
-        /* pass */
+#line 5568 "src/taumir/lower.tr"
         if (((_is_cmp_op(op) && (at == 1LL)) && (bt == 1LL))) {
-            /* pass */
+#line 5569 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_cmp", 14LL));
-            /* pass */
+#line 5570 "src/taumir/lower.tr"
             List_i64* sca = (void*)List_i64_new();
-            /* pass */
+#line 5571 "src/taumir/lower.tr"
             List_i64_append(sca, a);
-            /* pass */
+#line 5572 "src/taumir/lower.tr"
             List_i64_append(sca, b);
-            /* pass */
+#line 5573 "src/taumir/lower.tr"
             long long cmpv = LFunc_new_vreg(lf);
-            /* pass */
+#line 5574 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(cmpv, _tr_str_lit_len("_tr_rt_str_cmp", 14LL), sca));
-            /* pass */
+#line 5575 "src/taumir/lower.tr"
             long long zc = LFunc_new_vreg(lf);
-            /* pass */
+#line 5576 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IConst(zc, 0LL));
-            /* pass */
+#line 5577 "src/taumir/lower.tr"
             long long rc = LFunc_new_vreg(lf);
-            /* pass */
+#line 5578 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IBinOp(rc, op, cmpv, zc));
-            /* pass */
+#line 5579 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, rc, 4LL);
-            /* pass */
+#line 5580 "src/taumir/lower.tr"
+            long long _trret1649 = rc;
             _tr_str_release(ddn);
-            return rc;
+            return _trret1649;
         }
-        /* pass */
+#line 5581 "src/taumir/lower.tr"
         if (((at == 1LL) || (bt == 1LL))) {
-            /* pass */
+#line 5581 "src/taumir/lower.tr"
             _tr_str_release(ddn);
             return (-1LL);
         }
-        /* pass */
+#line 5582 "src/taumir/lower.tr"
         if ((_is_list_tag(at) || _is_list_tag(bt))) {
-            /* pass */
+#line 5582 "src/taumir/lower.tr"
             _tr_str_release(ddn);
             return (-1LL);
         }
-        /* pass */
+#line 5583 "src/taumir/lower.tr"
         if (((at == 11LL) || (bt == 11LL))) {
-            /* pass */
+#line 5586 "src/taumir/lower.tr"
             if (((at != 11LL) || (bt != 11LL))) {
-                /* pass */
+#line 5586 "src/taumir/lower.tr"
                 _tr_str_release(ddn);
                 return (-1LL);
             }
-            /* pass */
+#line 5587 "src/taumir/lower.tr"
             if (((!_tr_str_eqv((op), (_tr_str_lit_len("==", 2LL)))) && (!_tr_str_eqv((op), (_tr_str_lit_len("!=", 2LL)))))) {
-                /* pass */
+#line 5587 "src/taumir/lower.tr"
                 _tr_str_release(ddn);
                 return (-1LL);
             }
-            /* pass */
+#line 5588 "src/taumir/lower.tr"
             long long eatag = _emit_field_get(m, lf, a, 0LL, 0LL);
-            /* pass */
+#line 5589 "src/taumir/lower.tr"
             long long ebtag = _emit_field_get(m, lf, b, 0LL, 0LL);
-            /* pass */
+#line 5590 "src/taumir/lower.tr"
             long long ecd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5591 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IBinOp(ecd, op, eatag, ebtag));
-            /* pass */
+#line 5592 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, ecd, 4LL);
-            /* pass */
+#line 5593 "src/taumir/lower.tr"
+            long long _trret1650 = ecd;
             _tr_str_release(ddn);
-            return ecd;
+            return _trret1650;
         }
-        /* pass */
+#line 5594 "src/taumir/lower.tr"
         if (((at == 10LL) || (bt == 10LL))) {
-            /* pass */
+#line 5597 "src/taumir/lower.tr"
             if (((at != 10LL) || (bt != 10LL))) {
-                /* pass */
+#line 5597 "src/taumir/lower.tr"
                 _tr_str_release(ddn);
                 return (-1LL);
             }
-            /* pass */
+#line 5598 "src/taumir/lower.tr"
             if (((!_tr_str_eqv((op), (_tr_str_lit_len("==", 2LL)))) && (!_tr_str_eqv((op), (_tr_str_lit_len("!=", 2LL)))))) {
-                /* pass */
+#line 5598 "src/taumir/lower.tr"
                 _tr_str_release(ddn);
                 return (-1LL);
             }
         }
-        /* pass */
+#line 5602 "src/taumir/lower.tr"
         if ((_tr_str_eqv((op), (_tr_str_lit_len("and", 3LL))) || _tr_str_eqv((op), (_tr_str_lit_len("or", 2LL))))) {
-            /* pass */
+#line 5603 "src/taumir/lower.tr"
             long long na = _norm_bool(lf, a);
-            /* pass */
+#line 5604 "src/taumir/lower.tr"
             long long nb = _norm_bool(lf, b);
-            /* pass */
+#line 5605 "src/taumir/lower.tr"
             if (_tr_str_eqv((op), (_tr_str_lit_len("and", 3LL)))) {
-                /* pass */
+#line 5606 "src/taumir/lower.tr"
                 long long dand = LFunc_new_vreg(lf);
-                /* pass */
+#line 5607 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IBinOp(dand, _tr_str_lit_len("*", 1LL), na, nb));
-                /* pass */
+#line 5608 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, dand, 4LL);
-                /* pass */
+#line 5609 "src/taumir/lower.tr"
+                long long _trret1651 = dand;
                 _tr_str_release(ddn);
-                return dand;
+                return _trret1651;
             }
-            /* pass */
+#line 5610 "src/taumir/lower.tr"
             long long ssum = LFunc_new_vreg(lf);
-            /* pass */
+#line 5611 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IBinOp(ssum, _tr_str_lit_len("+", 1LL), na, nb));
-            /* pass */
+#line 5612 "src/taumir/lower.tr"
             long long oro = _norm_bool(lf, ssum);
-            /* pass */
+#line 5613 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, oro, 4LL);
-            /* pass */
+#line 5614 "src/taumir/lower.tr"
+            long long _trret1652 = oro;
             _tr_str_release(ddn);
-            return oro;
+            return _trret1652;
         }
-        /* pass */
+#line 5615 "src/taumir/lower.tr"
         if (((_tr_str_eqv((op), (_tr_str_lit_len("**", 2LL))) && ((at == 0LL) || (at == 4LL))) && ((bt == 0LL) || (bt == 4LL)))) {
-            /* pass */
+#line 5616 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_int_pow", 14LL));
-            /* pass */
+#line 5617 "src/taumir/lower.tr"
             List_i64* ipa = (void*)List_i64_new();
-            /* pass */
+#line 5618 "src/taumir/lower.tr"
             List_i64_append(ipa, a);
-            /* pass */
+#line 5619 "src/taumir/lower.tr"
             List_i64_append(ipa, b);
-            /* pass */
+#line 5620 "src/taumir/lower.tr"
             long long ipd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5621 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(ipd, _tr_str_lit_len("_tr_rt_int_pow", 14LL), ipa));
-            /* pass */
+#line 5622 "src/taumir/lower.tr"
+            long long _trret1653 = ipd;
             _tr_str_release(ddn);
-            return ipd;
+            return _trret1653;
         }
-        /* pass */
+#line 5623 "src/taumir/lower.tr"
         if ((!_int_op(op))) {
-            /* pass */
+#line 5623 "src/taumir/lower.tr"
             _tr_str_release(ddn);
             return (-1LL);
         }
-        /* pass */
+#line 5624 "src/taumir/lower.tr"
         long long d3 = LFunc_new_vreg(lf);
-        /* pass */
+#line 5625 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IBinOp(d3, op, a, b));
-        /* pass */
+#line 5626 "src/taumir/lower.tr"
         if (_is_cmp_op(op)) {
-            /* pass */
+#line 5626 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, d3, 4LL);
         }
-        /* pass */
+#line 5627 "src/taumir/lower.tr"
+        long long _trret1654 = d3;
         _tr_str_release(ddn);
-        return d3;
-    } else if (_t3291.tag == HirExpr_ECall) {
-        __auto_type callee = _t3291.data.ECall.callee;
-__auto_type args = _t3291.data.ECall.args;
-        /* pass */
+        return _trret1654;
+    } else if (_t6316.tag == HirExpr_ECall) {
+        __auto_type callee = _t6316.data.ECall.callee;
+__auto_type args = _t6316.data.ECall.args;
+#line 5631 "src/taumir/lower.tr"
         TrStr alloc_nm = _tr_str_lit_len("", 0LL);
-        /* pass */
-        __auto_type _t3296 = (*callee);
-        if (_t3296.tag == HirExpr_EIdent) {
-            __auto_type anm = _t3296.data.EIdent.name;
-            TrStr _strtmp_t3297 = _tr_str_retain(anm);
+#line 5632 "src/taumir/lower.tr"
+        __auto_type _t6321 = (*callee);
+        if (_t6321.tag == HirExpr_EIdent) {
+            __auto_type anm = _t6321.data.EIdent.name;
+            TrStr _strtmp_t6322 = _tr_str_retain(anm);
             _tr_str_release(alloc_nm);
-            alloc_nm = _strtmp_t3297;
-        } else if (_t3296.tag == HirExpr_EIndex) {
-            __auto_type abase = _t3296.data.EIndex.obj;
-            /* pass */
-            __auto_type _t3298 = (*abase);
-            if (_t3298.tag == HirExpr_EIdent) {
-                __auto_type anm2 = _t3298.data.EIdent.name;
-                TrStr _strtmp_t3299 = _tr_str_retain(anm2);
+            alloc_nm = _strtmp_t6322;
+        } else if (_t6321.tag == HirExpr_EIndex) {
+            __auto_type abase = _t6321.data.EIndex.obj;
+#line 5635 "src/taumir/lower.tr"
+            __auto_type _t6323 = (*abase);
+            if (_t6323.tag == HirExpr_EIdent) {
+                __auto_type anm2 = _t6323.data.EIdent.name;
+                TrStr _strtmp_t6324 = _tr_str_retain(anm2);
                 _tr_str_release(alloc_nm);
-                alloc_nm = _strtmp_t3299;
+                alloc_nm = _strtmp_t6324;
             } else if (1) {
-                __auto_type _ = _t3298;
+                __auto_type _ = _t6323;
                 /* pass */
             }
         } else if (1) {
-            __auto_type _ = _t3296;
+            __auto_type _ = _t6321;
             /* pass */
         }
-        /* pass */
+#line 5639 "src/taumir/lower.tr"
         if (((_tr_str_eqv((alloc_nm), (_tr_str_lit_len("alloc", 5LL))) || _tr_str_eqv((alloc_nm), (_tr_str_lit_len("core_alloc_alloc", 16LL)))) && (args->len == 1LL))) {
-            /* pass */
+#line 5641 "src/taumir/lower.tr"
             AstType* aptr_ty = hir_expr_type(e);
-            /* pass */
+#line 5642 "src/taumir/lower.tr"
             long long astride = _ptr_stride(m, aptr_ty);
-            /* pass */
+#line 5643 "src/taumir/lower.tr"
             if ((astride == 0LL)) {
-                /* pass */
+#line 5643 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 return (-1LL);
             }
-            /* pass */
+#line 5644 "src/taumir/lower.tr"
             long long acnt = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 5645 "src/taumir/lower.tr"
             if (((acnt < 0LL) || (LFunc_vreg_type(lf, acnt) != 0LL))) {
-                /* pass */
+#line 5645 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 return (-1LL);
             }
-            /* pass */
+#line 5646 "src/taumir/lower.tr"
             long long astr_c = LFunc_new_vreg(lf);
-            /* pass */
+#line 5647 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IConst(astr_c, astride));
-            /* pass */
+#line 5648 "src/taumir/lower.tr"
             long long anb = LFunc_new_vreg(lf);
-            /* pass */
+#line 5649 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IBinOp(anb, _tr_str_lit_len("*", 1LL), acnt, astr_c));
-            /* pass */
+#line 5650 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_raw_alloc", 16LL));
-            /* pass */
+#line 5651 "src/taumir/lower.tr"
             List_i64* aargs = (void*)List_i64_new();
-            /* pass */
+#line 5652 "src/taumir/lower.tr"
             List_i64_append(aargs, anb);
-            /* pass */
+#line 5653 "src/taumir/lower.tr"
             long long ad = LFunc_new_vreg(lf);
-            /* pass */
+#line 5654 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(ad, _tr_str_lit_len("_tr_rt_raw_alloc", 16LL), aargs));
-            /* pass */
+#line 5655 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, ad, 0LL);
-            /* pass */
+#line 5656 "src/taumir/lower.tr"
+            long long _trret1655 = ad;
             _tr_str_release(alloc_nm);
-            return ad;
+            return _trret1655;
         }
-        /* pass */
+#line 5657 "src/taumir/lower.tr"
         if (((_tr_str_eqv((alloc_nm), (_tr_str_lit_len("dealloc", 7LL))) || _tr_str_eqv((alloc_nm), (_tr_str_lit_len("core_alloc_dealloc", 18LL)))) && (args->len == 1LL))) {
-            /* pass */
+#line 5658 "src/taumir/lower.tr"
             long long dpv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 5659 "src/taumir/lower.tr"
             if ((dpv < 0LL)) {
-                /* pass */
+#line 5659 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 return (-1LL);
             }
-            /* pass */
+#line 5660 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_raw_free", 15LL));
-            /* pass */
+#line 5661 "src/taumir/lower.tr"
             List_i64* dfa = (void*)List_i64_new();
-            /* pass */
+#line 5662 "src/taumir/lower.tr"
             List_i64_append(dfa, dpv);
-            /* pass */
+#line 5663 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_raw_free", 15LL), dfa));
-            /* pass */
+#line 5664 "src/taumir/lower.tr"
+            long long _trret1656 = dpv;
             _tr_str_release(alloc_nm);
-            return dpv;
+            return _trret1656;
         }
-        /* pass */
-        __auto_type _t3300 = (*callee);
-        if (_t3300.tag == HirExpr_EPropAccess) {
-            __auto_type pfo = _t3300.data.EPropAccess.obj;
-__auto_type pfp = _t3300.data.EPropAccess.prop;
-            /* pass */
+#line 5667 "src/taumir/lower.tr"
+        __auto_type _t6325 = (*callee);
+        if (_t6325.tag == HirExpr_EPropAccess) {
+            __auto_type pfo = _t6325.data.EPropAccess.obj;
+__auto_type pfp = _t6325.data.EPropAccess.prop;
+#line 5669 "src/taumir/lower.tr"
             TrStr pfcls = _recv_class(m, lf, pfo);
-            /* pass */
+#line 5670 "src/taumir/lower.tr"
             if (((!_tr_str_eqv((pfcls), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, pfcls))) {
-                /* pass */
+#line 5671 "src/taumir/lower.tr"
                 long long pfoff = LModule_field_offset(m, pfcls, pfp);
-                /* pass */
+#line 5672 "src/taumir/lower.tr"
                 if (((pfoff >= 0LL) && (LModule_field_tag(m, pfcls, pfp) == 0LL))) {
-                    /* pass */
+#line 5673 "src/taumir/lower.tr"
                     long long pfobj = lower_expr(m, lf, pfo);
-                    /* pass */
+#line 5674 "src/taumir/lower.tr"
                     if ((pfobj < 0LL)) {
-                        /* pass */
+#line 5674 "src/taumir/lower.tr"
                         _tr_str_release(pfcls);
                         _tr_str_release(alloc_nm);
                         return (-1LL);
                     }
-                    /* pass */
+#line 5675 "src/taumir/lower.tr"
                     long long pfrt = _tag_of(m, hir_expr_type(e));
-                    /* pass */
+#line 5676 "src/taumir/lower.tr"
                     if ((pfrt < 0LL)) {
-                        /* pass */
+#line 5676 "src/taumir/lower.tr"
                         _tr_str_release(pfcls);
                         _tr_str_release(alloc_nm);
                         return (-1LL);
                     }
-                    /* pass */
+#line 5677 "src/taumir/lower.tr"
                     List_i64* pfargs = (void*)List_i64_new();
-                    /* pass */
+#line 5678 "src/taumir/lower.tr"
                     long long pfai = 0LL;
-                    /* pass */
+#line 5679 "src/taumir/lower.tr"
                     while ((pfai < args->len)) {
-                        /* pass */
+#line 5680 "src/taumir/lower.tr"
                         long long pfav = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, pfai)));
-                        /* pass */
+#line 5681 "src/taumir/lower.tr"
                         if ((pfav < 0LL)) {
-                            /* pass */
+#line 5681 "src/taumir/lower.tr"
                             _tr_str_release(pfcls);
                             List_i64_free(pfargs);
                             _tr_str_release(alloc_nm);
                             return (-1LL);
                         }
-                        /* pass */
+#line 5682 "src/taumir/lower.tr"
                         List_i64_append(pfargs, pfav);
-                        /* pass */
+#line 5683 "src/taumir/lower.tr"
                         pfai = (pfai + 1LL);
                     }
-                    /* pass */
+#line 5684 "src/taumir/lower.tr"
                     long long pffn = _emit_field_get(m, lf, pfobj, pfoff, 0LL);
-                    /* pass */
+#line 5685 "src/taumir/lower.tr"
                     long long pfd = LFunc_new_vreg(lf);
-                    /* pass */
+#line 5686 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_ICallInd(pfd, pffn, pfargs));
-                    /* pass */
+#line 5687 "src/taumir/lower.tr"
                     LFunc_set_vreg_type(lf, pfd, pfrt);
-                    /* pass */
+#line 5688 "src/taumir/lower.tr"
                     if ((pfrt == 1LL)) {
-                        /* pass */
+#line 5688 "src/taumir/lower.tr"
                         _fresh_mark(lf, pfd);
                     }
-                    /* pass */
+#line 5689 "src/taumir/lower.tr"
+                    long long _trret1657 = pfd;
                     _tr_str_release(pfcls);
                     _tr_str_release(alloc_nm);
-                    return pfd;
+                    return _trret1657;
                 }
             }
             _tr_str_release(pfcls);
         } else if (1) {
-            __auto_type _ = _t3300;
-            /* pass */
+            __auto_type _ = _t6325;
+#line 5691 "src/taumir/lower.tr"
             /* pass */
         }
-        /* pass */
+#line 5692 "src/taumir/lower.tr"
         TrStr fn = _ident_name(callee);
-        /* pass */
+#line 5693 "src/taumir/lower.tr"
         if (_tr_str_eqv((fn), (_tr_str_lit_len("", 0LL)))) {
-            /* pass */
+#line 5693 "src/taumir/lower.tr"
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
             return (-1LL);
         }
-        /* pass */
+#line 5696 "src/taumir/lower.tr"
         if ((_tr_str_eqv((fn), (_tr_str_lit_len("Pointer", 7LL))) && (args->len == 1LL))) {
-            /* pass */
+#line 5697 "src/taumir/lower.tr"
             long long ptv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 5698 "src/taumir/lower.tr"
             if ((ptv < 0LL)) {
-                /* pass */
+#line 5698 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5699 "src/taumir/lower.tr"
             if ((LFunc_vreg_type(lf, ptv) != 0LL)) {
-                /* pass */
+#line 5699 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5700 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, ptv, 0LL);
-            /* pass */
+#line 5701 "src/taumir/lower.tr"
+            long long _trret1658 = ptv;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
-            return ptv;
+            return _trret1658;
         }
-        /* pass */
+#line 5704 "src/taumir/lower.tr"
         if ((_tr_str_eqv((fn), (_tr_str_lit_len("await_all", 9LL))) && (args->len > 0LL))) {
-            /* pass */
+#line 5705 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_tg_begin", 12LL));
-            /* pass */
+#line 5706 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_tg_begin", 12LL), (void*)List_i64_new()));
-            /* pass */
+#line 5707 "src/taumir/lower.tr"
             lf->in_taskgroup = (lf->in_taskgroup + 1LL);
-            /* pass */
+#line 5708 "src/taumir/lower.tr"
             long long awi = 0LL;
-            /* pass */
+#line 5709 "src/taumir/lower.tr"
             while ((awi < args->len)) {
-                /* pass */
+#line 5710 "src/taumir/lower.tr"
                 if ((!_lower_spawn(m, lf, ((HirExpr*)List_ptr_get(args, awi))))) {
-                    /* pass */
+#line 5711 "src/taumir/lower.tr"
                     lf->in_taskgroup = (lf->in_taskgroup - 1LL);
-                    /* pass */
+#line 5712 "src/taumir/lower.tr"
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     return (-1LL);
                 }
-                /* pass */
+#line 5713 "src/taumir/lower.tr"
                 awi = (awi + 1LL);
             }
-            /* pass */
+#line 5714 "src/taumir/lower.tr"
             lf->in_taskgroup = (lf->in_taskgroup - 1LL);
-            /* pass */
+#line 5715 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_taskgroup_wait", 18LL));
-            /* pass */
+#line 5716 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_taskgroup_wait", 18LL), (void*)List_i64_new()));
-            /* pass */
+#line 5717 "src/taumir/lower.tr"
             long long awz = LFunc_new_vreg(lf);
-            /* pass */
+#line 5718 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IConst(awz, 0LL));
-            /* pass */
+#line 5719 "src/taumir/lower.tr"
+            long long _trret1659 = awz;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
-            return awz;
+            return _trret1659;
         }
-        /* pass */
+#line 5723 "src/taumir/lower.tr"
         AstType* ecty = hir_expr_type(e);
-        /* pass */
+#line 5724 "src/taumir/lower.tr"
         if (LModule_is_enum(m, ecty->name)) {
-            /* pass */
+#line 5725 "src/taumir/lower.tr"
             TrStr evn = _norm_variant(ecty->name, fn);
-            /* pass */
+#line 5726 "src/taumir/lower.tr"
             if ((LModule_enum_variant_index(m, ecty->name, evn) >= 0LL)) {
-                /* pass */
+#line 5727 "src/taumir/lower.tr"
+                long long _trret1660 = _lower_enum_ctor(m, lf, ecty->name, evn, args);
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
-                return _lower_enum_ctor(m, lf, ecty->name, evn, args);
+                _tr_str_release(evn);
+                return _trret1660;
             }
         }
-        /* pass */
+#line 5730 "src/taumir/lower.tr"
         if (((LFunc_var_index(lf, fn) >= 0LL) && (LFunc_var_type(lf, fn) == 12LL))) {
-            /* pass */
+#line 5731 "src/taumir/lower.tr"
             long long kret = LFunc_var_xret_of(lf, fn);
-            /* pass */
+#line 5732 "src/taumir/lower.tr"
             if ((kret < 0LL)) {
-                /* pass */
+#line 5732 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5733 "src/taumir/lower.tr"
             if (((args->len + 1LL) > 6LL)) {
-                /* pass */
+#line 5733 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5734 "src/taumir/lower.tr"
             long long kblk = LFunc_new_vreg(lf);
-            /* pass */
+#line 5735 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ILoadVar(kblk, fn));
-            /* pass */
+#line 5736 "src/taumir/lower.tr"
             List_i64* kargs = (void*)List_i64_new();
-            /* pass */
+#line 5737 "src/taumir/lower.tr"
             List_i64_append(kargs, kblk);
-            /* pass */
+#line 5738 "src/taumir/lower.tr"
             long long ki = 0LL;
-            /* pass */
+#line 5739 "src/taumir/lower.tr"
             while ((ki < args->len)) {
-                /* pass */
+#line 5740 "src/taumir/lower.tr"
                 long long kav = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, ki)));
-                /* pass */
+#line 5741 "src/taumir/lower.tr"
                 if ((kav < 0LL)) {
-                    /* pass */
+#line 5741 "src/taumir/lower.tr"
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     List_i64_free(kargs);
                     return (-1LL);
                 }
-                /* pass */
+#line 5742 "src/taumir/lower.tr"
                 List_i64_append(kargs, kav);
-                /* pass */
+#line 5743 "src/taumir/lower.tr"
                 ki = (ki + 1LL);
             }
-            /* pass */
+#line 5744 "src/taumir/lower.tr"
             long long kfp = _emit_field_get(m, lf, kblk, 0LL, 0LL);
-            /* pass */
+#line 5745 "src/taumir/lower.tr"
             long long kd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5746 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICallInd(kd, kfp, kargs));
-            /* pass */
+#line 5747 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, kd, kret);
-            /* pass */
+#line 5748 "src/taumir/lower.tr"
             if ((kret == 1LL)) {
-                /* pass */
+#line 5748 "src/taumir/lower.tr"
                 _fresh_mark(lf, kd);
             }
-            /* pass */
+#line 5749 "src/taumir/lower.tr"
+            long long _trret1661 = kd;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
-            return kd;
+            return _trret1661;
         }
-        /* pass */
+#line 5752 "src/taumir/lower.tr"
         if ((((LFunc_var_index(lf, fn) >= 0LL) && (LFunc_var_type(lf, fn) == 0LL)) && (!LModule_is_user_fn(m, fn)))) {
-            /* pass */
+#line 5753 "src/taumir/lower.tr"
             long long frt = _tag_of(m, hir_expr_type(e));
-            /* pass */
+#line 5754 "src/taumir/lower.tr"
             if ((frt < 0LL)) {
-                /* pass */
+#line 5754 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5755 "src/taumir/lower.tr"
             List_i64* fargs = (void*)List_i64_new();
-            /* pass */
+#line 5756 "src/taumir/lower.tr"
             long long fai = 0LL;
-            /* pass */
+#line 5757 "src/taumir/lower.tr"
             while ((fai < args->len)) {
-                /* pass */
+#line 5758 "src/taumir/lower.tr"
                 long long fav = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, fai)));
-                /* pass */
+#line 5759 "src/taumir/lower.tr"
                 if ((fav < 0LL)) {
-                    /* pass */
+#line 5759 "src/taumir/lower.tr"
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     List_i64_free(fargs);
                     return (-1LL);
                 }
-                /* pass */
+#line 5760 "src/taumir/lower.tr"
                 List_i64_append(fargs, fav);
-                /* pass */
+#line 5761 "src/taumir/lower.tr"
                 fai = (fai + 1LL);
             }
-            /* pass */
+#line 5762 "src/taumir/lower.tr"
             long long ffp = LFunc_new_vreg(lf);
-            /* pass */
+#line 5763 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ILoadVar(ffp, fn));
-            /* pass */
+#line 5764 "src/taumir/lower.tr"
             long long ffd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5765 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICallInd(ffd, ffp, fargs));
-            /* pass */
+#line 5766 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, ffd, frt);
-            /* pass */
+#line 5767 "src/taumir/lower.tr"
             if ((frt == 1LL)) {
-                /* pass */
+#line 5767 "src/taumir/lower.tr"
                 _fresh_mark(lf, ffd);
             }
-            /* pass */
+#line 5768 "src/taumir/lower.tr"
+            long long _trret1662 = ffd;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
-            return ffd;
+            return _trret1662;
         }
-        /* pass */
+#line 5771 "src/taumir/lower.tr"
         if ((LFunc_var_index(lf, fn) >= 0LL)) {
-            /* pass */
+#line 5772 "src/taumir/lower.tr"
             TrStr callcls = _recv_class(m, lf, callee);
-            /* pass */
+#line 5773 "src/taumir/lower.tr"
             if (((!_tr_str_eqv((callcls), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, callcls))) {
-                /* pass */
+#line 5774 "src/taumir/lower.tr"
                 TrStr callm = LModule_resolve_method(m, callcls, _tr_str_lit_len("__call__", 8LL));
-                /* pass */
+#line 5775 "src/taumir/lower.tr"
                 if ((!_tr_str_eqv((callm), (_tr_str_lit_len("", 0LL))))) {
-                    /* pass */
+#line 5776 "src/taumir/lower.tr"
                     long long callself = lower_expr(m, lf, callee);
-                    /* pass */
+#line 5777 "src/taumir/lower.tr"
                     if ((callself < 0LL)) {
-                        /* pass */
+#line 5777 "src/taumir/lower.tr"
                         _tr_str_release(alloc_nm);
                         _tr_str_release(fn);
                         _tr_str_release(callcls);
                         _tr_str_release(callm);
                         return (-1LL);
                     }
-                    /* pass */
+#line 5778 "src/taumir/lower.tr"
+                    long long _trret1663 = _lower_obj_call(m, lf, callm, callself, args);
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     _tr_str_release(callcls);
-                    return _lower_obj_call(m, lf, callm, callself, args);
+                    _tr_str_release(callm);
+                    return _trret1663;
                 }
             }
         }
-        /* pass */
+#line 5781 "src/taumir/lower.tr"
         if (((args->len == 0LL) && (_prog_generic_class_index(m, fn) >= 0LL))) {
-            /* pass */
+#line 5786 "src/taumir/lower.tr"
             AstType* gct0 = hir_expr_type(e);
-            /* pass */
-            AstType* gct = ({ TrStr _at_t3301 = (_own(fn)); __auto_type _wr = (AstType_init(_at_t3301)); _tr_str_release(_at_t3301); _wr; });
-            /* pass */
+#line 5787 "src/taumir/lower.tr"
+            AstType* gct = ({ TrStr _at_t6326 = (_own(fn)); __auto_type _wr = (AstType_init(_at_t6326)); _tr_str_release(_at_t6326); _wr; });
+#line 5788 "src/taumir/lower.tr"
             if ((gct0->args->len > 0LL)) {
-                /* pass */
+#line 5789 "src/taumir/lower.tr"
                 long long gaa = 0LL;
-                /* pass */
+#line 5790 "src/taumir/lower.tr"
                 while ((gaa < gct0->args->len)) {
-                    /* pass */
-                    List_ptr_append(gct->args, box_asttype_lir(_subst_ty(m, (*((AstType**)List_ptr_get(gct0->args, gaa))))));
-                    /* pass */
+#line 5791 "src/taumir/lower.tr"
+                    ({ __auto_type _ord_t6327 = (box_asttype_lir(_subst_ty(m, (*((AstType**)List_ptr_get(gct0->args, gaa)))))); List_ptr_append(gct->args, _ord_t6327); });
+#line 5792 "src/taumir/lower.tr"
                     gaa = (gaa + 1LL);
                 }
             } else {
-                /* pass */
-                HirClass* gcc2 = ((HirClass*)List_ptr_get(m->hir_prog->classes, _prog_generic_class_index(m, fn)));
-                /* pass */
+#line 5794 "src/taumir/lower.tr"
+                HirClass* gcc2 = ({ __auto_type _ord_t6328 = (_prog_generic_class_index(m, fn)); __auto_type _wr = (((HirClass*)List_ptr_get(m->hir_prog->classes, _ord_t6328))); _wr; });
+#line 5795 "src/taumir/lower.tr"
                 if (((gcc2->generics->len == 0LL) || (m->subst_names->len == 0LL))) {
-                    /* pass */
+#line 5795 "src/taumir/lower.tr"
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     return (-1LL);
                 }
-                /* pass */
+#line 5796 "src/taumir/lower.tr"
                 long long gpi = 0LL;
-                /* pass */
+#line 5797 "src/taumir/lower.tr"
                 while ((gpi < gcc2->generics->len)) {
-                    /* pass */
-                    ({ TrStr _at_t3302 = (List_TrStr_get(gcc2->generics, gpi)); TrStr _at_t3303 = (_own(_at_t3302)); List_ptr_append(gct->args, box_asttype_lir(_subst_ty(m, AstType_init(_at_t3303)))); _tr_str_release(_at_t3302); _tr_str_release(_at_t3303); });
-                    /* pass */
+#line 5798 "src/taumir/lower.tr"
+                    ({ TrStr _at_t6329 = (List_TrStr_get(gcc2->generics, gpi)); TrStr _at_t6330 = (_own(_at_t6329)); __auto_type _ord_t6331 = (box_asttype_lir(_subst_ty(m, AstType_init(_at_t6330)))); List_ptr_append(gct->args, _ord_t6331); _tr_str_release(_at_t6329); _tr_str_release(_at_t6330); });
+#line 5799 "src/taumir/lower.tr"
                     gpi = (gpi + 1LL);
                 }
             }
-            /* pass */
+#line 5800 "src/taumir/lower.tr"
             if ((gct->args->len == 0LL)) {
-                /* pass */
+#line 5800 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5801 "src/taumir/lower.tr"
             TrStr gcm = _ensure_generic_class(m, gct);
-            /* pass */
+#line 5802 "src/taumir/lower.tr"
             if (_tr_str_eqv((gcm), (_tr_str_lit_len("", 0LL)))) {
-                /* pass */
+#line 5803 "src/taumir/lower.tr"
                 if (_tr_str_eqv((m->fail_note), (_tr_str_lit_len("", 0LL)))) {
-                    /* pass */
-                    m->fail_note = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_own(fn)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("generic ctor ", 13LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("[", 1LL))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_own((*((AstType**)List_ptr_get(gct->args, 0LL)))->name)); TrStr _cres = _tr_strx_concatv(_cl, _cr); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("] not instantiable", 18LL))); _tr_str_release(_cl); _cres; });
+#line 5803 "src/taumir/lower.tr"
+                    m->fail_note = ({ __auto_type _ord_t6332 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_own(fn)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("generic ctor ", 13LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t6332); TrStr _tr_cr = (_own((*((AstType**)List_ptr_get(gct->args, 0LL)))->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("] not instantiable", 18LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
                 }
-                /* pass */
+#line 5804 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 _tr_str_release(gcm);
                 return (-1LL);
             }
-            /* pass */
+#line 5805 "src/taumir/lower.tr"
             long long gsz = LFunc_new_vreg(lf);
-            /* pass */
+#line 5806 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IConst(gsz, LModule_class_size(m, gcm)));
-            /* pass */
+#line 5807 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL));
-            /* pass */
+#line 5808 "src/taumir/lower.tr"
             List_i64* goa = (void*)List_i64_new();
-            /* pass */
+#line 5809 "src/taumir/lower.tr"
             List_i64_append(goa, gsz);
-            /* pass */
+#line 5810 "src/taumir/lower.tr"
             long long god = LFunc_new_vreg(lf);
-            /* pass */
+#line 5811 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(god, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL), goa));
-            /* pass */
+#line 5812 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, god, 10LL);
-            /* pass */
+#line 5813 "src/taumir/lower.tr"
             _attach_class_drop(m, lf, god, gcm);
-            /* pass */
+#line 5814 "src/taumir/lower.tr"
             _fresh_mark_obj(lf, god);
-            /* pass */
+#line 5815 "src/taumir/lower.tr"
+            long long _trret1664 = god;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
             _tr_str_release(gcm);
-            return god;
+            return _trret1664;
         }
-        /* pass */
+#line 5817 "src/taumir/lower.tr"
         if ((LModule_is_class(m, fn) && (args->len == 0LL))) {
-            /* pass */
+#line 5818 "src/taumir/lower.tr"
             long long szc = LFunc_new_vreg(lf);
-            /* pass */
+#line 5819 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IConst(szc, LModule_class_size(m, fn)));
-            /* pass */
+#line 5820 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL));
-            /* pass */
+#line 5821 "src/taumir/lower.tr"
             List_i64* oaa = (void*)List_i64_new();
-            /* pass */
+#line 5822 "src/taumir/lower.tr"
             List_i64_append(oaa, szc);
-            /* pass */
+#line 5823 "src/taumir/lower.tr"
             long long od = LFunc_new_vreg(lf);
-            /* pass */
+#line 5824 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(od, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL), oaa));
-            /* pass */
+#line 5825 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, od, 10LL);
-            /* pass */
+#line 5826 "src/taumir/lower.tr"
             _attach_class_drop(m, lf, od, fn);
-            /* pass */
+#line 5827 "src/taumir/lower.tr"
             _fresh_mark_obj(lf, od);
-            /* pass */
+#line 5828 "src/taumir/lower.tr"
+            long long _trret1665 = od;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
-            return od;
+            return _trret1665;
         }
-        /* pass */
-        if (((_tr_str_eqv((fn), (_tr_str_lit_len("len", 3LL))) && (args->len == 1LL)) && (!_tr_str_eqv((_recv_class(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)))), (_tr_str_lit_len("", 0LL)))))) {
-            /* pass */
+#line 5829 "src/taumir/lower.tr"
+        if (((_tr_str_eqv((fn), (_tr_str_lit_len("len", 3LL))) && (args->len == 1LL)) && ({ TrStr _cmpa_t6333 = (_recv_class(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)))); TrStr _cmpb_t6334 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t6335 = !_tr_str_eqv(_cmpa_t6333, _cmpb_t6334); _tr_str_release(_cmpa_t6333); _cmpr_t6335; }))) {
+#line 5831 "src/taumir/lower.tr"
             TrStr lncls = _recv_class(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 5832 "src/taumir/lower.tr"
             if (LModule_is_class(m, lncls)) {
-                /* pass */
+#line 5833 "src/taumir/lower.tr"
                 TrStr lnm = LModule_resolve_method(m, lncls, _tr_str_lit_len("__len__", 7LL));
-                /* pass */
+#line 5834 "src/taumir/lower.tr"
                 if ((!_tr_str_eqv((lnm), (_tr_str_lit_len("", 0LL))))) {
-                    /* pass */
+#line 5835 "src/taumir/lower.tr"
                     long long lnself = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-                    /* pass */
+#line 5836 "src/taumir/lower.tr"
                     if ((lnself < 0LL)) {
-                        /* pass */
+#line 5836 "src/taumir/lower.tr"
                         _tr_str_release(alloc_nm);
                         _tr_str_release(fn);
                         _tr_str_release(lncls);
                         _tr_str_release(lnm);
                         return (-1LL);
                     }
-                    /* pass */
+#line 5837 "src/taumir/lower.tr"
+                    long long _trret1666 = _lower_obj_call(m, lf, lnm, lnself, (void*)List_ptr_new());
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     _tr_str_release(lncls);
-                    return _lower_obj_call(m, lf, lnm, lnself, (void*)List_ptr_new());
+                    _tr_str_release(lnm);
+                    return _trret1666;
                 }
             }
         }
-        /* pass */
+#line 5838 "src/taumir/lower.tr"
         if ((_tr_str_eqv((fn), (_tr_str_lit_len("len", 3LL))) && (args->len == 1LL))) {
-            /* pass */
+#line 5839 "src/taumir/lower.tr"
             long long xv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 5840 "src/taumir/lower.tr"
             if ((xv < 0LL)) {
-                /* pass */
+#line 5840 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5841 "src/taumir/lower.tr"
             long long xt = LFunc_vreg_type(lf, xv);
-            /* pass */
+#line 5842 "src/taumir/lower.tr"
             if (_is_list_tag(xt)) {
-                /* pass */
+#line 5843 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_len", 15LL));
-                /* pass */
+#line 5844 "src/taumir/lower.tr"
                 List_i64* lla = (void*)List_i64_new();
-                /* pass */
+#line 5845 "src/taumir/lower.tr"
                 List_i64_append(lla, xv);
-                /* pass */
+#line 5846 "src/taumir/lower.tr"
                 long long lld = LFunc_new_vreg(lf);
-                /* pass */
+#line 5847 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(lld, _tr_str_lit_len("_tr_rt_list_len", 15LL), lla));
-                /* pass */
+#line 5848 "src/taumir/lower.tr"
+                long long _trret1667 = lld;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
-                return lld;
+                return _trret1667;
             }
-            /* pass */
+#line 5849 "src/taumir/lower.tr"
             if ((xt == 1LL)) {
-                /* pass */
+#line 5850 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_rt_strlen", 13LL));
-                /* pass */
+#line 5851 "src/taumir/lower.tr"
                 List_i64* sla = (void*)List_i64_new();
-                /* pass */
+#line 5852 "src/taumir/lower.tr"
                 List_i64_append(sla, xv);
-                /* pass */
+#line 5853 "src/taumir/lower.tr"
                 long long sld = LFunc_new_vreg(lf);
-                /* pass */
+#line 5854 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(sld, _tr_str_lit_len("_tr_rt_strlen", 13LL), sla));
-                /* pass */
+#line 5855 "src/taumir/lower.tr"
+                long long _trret1668 = sld;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
-                return sld;
+                return _trret1668;
             }
-            /* pass */
+#line 5856 "src/taumir/lower.tr"
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
             return (-1LL);
         }
-        /* pass */
+#line 5857 "src/taumir/lower.tr"
         if ((((_tr_str_eqv((fn), (_tr_str_lit_len("hex", 3LL))) || _tr_str_eqv((fn), (_tr_str_lit_len("oct", 3LL)))) || _tr_str_eqv((fn), (_tr_str_lit_len("bin", 3LL)))) && (args->len == 1LL))) {
-            /* pass */
+#line 5858 "src/taumir/lower.tr"
             long long hxv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 5859 "src/taumir/lower.tr"
             if (((hxv < 0LL) || (LFunc_vreg_type(lf, hxv) != 0LL))) {
-                /* pass */
+#line 5859 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5860 "src/taumir/lower.tr"
             TrStr hxsym = _tr_str_lit_len("_tr_rt_hex_str", 14LL);
-            /* pass */
+#line 5861 "src/taumir/lower.tr"
             if (_tr_str_eqv((fn), (_tr_str_lit_len("oct", 3LL)))) {
-                /* pass */
-                TrStr _strtmp_t3304 = _tr_str_lit_len("_tr_rt_oct_str", 14LL);
+#line 5861 "src/taumir/lower.tr"
+                TrStr _strtmp_t6336 = _tr_str_lit_len("_tr_rt_oct_str", 14LL);
                 _tr_str_release(hxsym);
-                hxsym = _strtmp_t3304;
+                hxsym = _strtmp_t6336;
             } else if (_tr_str_eqv((fn), (_tr_str_lit_len("bin", 3LL)))) {
-                /* pass */
-                TrStr _strtmp_t3305 = _tr_str_lit_len("_tr_rt_bin_str", 14LL);
+#line 5862 "src/taumir/lower.tr"
+                TrStr _strtmp_t6337 = _tr_str_lit_len("_tr_rt_bin_str", 14LL);
                 _tr_str_release(hxsym);
-                hxsym = _strtmp_t3305;
+                hxsym = _strtmp_t6337;
             }
-            /* pass */
+#line 5863 "src/taumir/lower.tr"
             LModule_add_extern(m, hxsym);
-            /* pass */
+#line 5864 "src/taumir/lower.tr"
             List_i64* hxa = (void*)List_i64_new();
-            /* pass */
+#line 5865 "src/taumir/lower.tr"
             List_i64_append(hxa, hxv);
-            /* pass */
+#line 5866 "src/taumir/lower.tr"
             long long hxd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5867 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(hxd, hxsym, hxa));
-            /* pass */
+#line 5868 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, hxd, 1LL);
-            /* pass */
+#line 5869 "src/taumir/lower.tr"
             _fresh_mark(lf, hxd);
-            /* pass */
+#line 5870 "src/taumir/lower.tr"
+            long long _trret1669 = hxd;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
             _tr_str_release(hxsym);
-            return hxd;
+            return _trret1669;
         }
-        /* pass */
+#line 5871 "src/taumir/lower.tr"
         if ((_tr_str_eqv((fn), (_tr_str_lit_len("round", 5LL))) && (args->len == 1LL))) {
-            /* pass */
+#line 5872 "src/taumir/lower.tr"
             long long rv0 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 5873 "src/taumir/lower.tr"
             if ((rv0 < 0LL)) {
-                /* pass */
+#line 5873 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5874 "src/taumir/lower.tr"
             long long rvt = LFunc_vreg_type(lf, rv0);
-            /* pass */
+#line 5875 "src/taumir/lower.tr"
             if ((rvt == 0LL)) {
-                /* pass */
+#line 5875 "src/taumir/lower.tr"
                 rv0 = _promote_f(lf, rv0);
             } else if ((rvt != 5LL)) {
-                /* pass */
+#line 5876 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5877 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_round", 12LL));
-            /* pass */
+#line 5878 "src/taumir/lower.tr"
             long long rrd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5879 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IFCallF(rrd, _tr_str_lit_len("_tr_rt_round", 12LL), rv0));
-            /* pass */
+#line 5880 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, rrd, 5LL);
-            /* pass */
+#line 5881 "src/taumir/lower.tr"
+            long long _trret1670 = rrd;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
-            return rrd;
+            return _trret1670;
         }
-        /* pass */
+#line 5882 "src/taumir/lower.tr"
         if ((_tr_str_eqv((fn), (_tr_str_lit_len("abs", 3LL))) && (args->len == 1LL))) {
-            /* pass */
+#line 5883 "src/taumir/lower.tr"
             long long xv2 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 5884 "src/taumir/lower.tr"
             if ((xv2 < 0LL)) {
-                /* pass */
+#line 5884 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5885 "src/taumir/lower.tr"
             long long xvt = LFunc_vreg_type(lf, xv2);
-            /* pass */
+#line 5886 "src/taumir/lower.tr"
             if ((xvt == 5LL)) {
-                /* pass */
+#line 5887 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_rt_fabs", 11LL));
-                /* pass */
+#line 5888 "src/taumir/lower.tr"
                 long long fabd = LFunc_new_vreg(lf);
-                /* pass */
+#line 5889 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFCallF(fabd, _tr_str_lit_len("_tr_rt_fabs", 11LL), xv2));
-                /* pass */
+#line 5890 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, fabd, 5LL);
-                /* pass */
+#line 5891 "src/taumir/lower.tr"
+                long long _trret1671 = fabd;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
-                return fabd;
+                return _trret1671;
             }
-            /* pass */
+#line 5892 "src/taumir/lower.tr"
             if ((xvt != 0LL)) {
-                /* pass */
+#line 5892 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5893 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_abs_i64", 14LL));
-            /* pass */
+#line 5894 "src/taumir/lower.tr"
             List_i64* aba = (void*)List_i64_new();
-            /* pass */
+#line 5895 "src/taumir/lower.tr"
             List_i64_append(aba, xv2);
-            /* pass */
+#line 5896 "src/taumir/lower.tr"
             long long abd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5897 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(abd, _tr_str_lit_len("_tr_rt_abs_i64", 14LL), aba));
-            /* pass */
+#line 5898 "src/taumir/lower.tr"
+            long long _trret1672 = abd;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
-            return abd;
+            return _trret1672;
         }
-        /* pass */
+#line 5899 "src/taumir/lower.tr"
         if (((_tr_str_eqv((fn), (_tr_str_lit_len("min", 3LL))) || _tr_str_eqv((fn), (_tr_str_lit_len("max", 3LL)))) && (args->len == 2LL))) {
-            /* pass */
+#line 5900 "src/taumir/lower.tr"
             long long mm1 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 5901 "src/taumir/lower.tr"
             if ((mm1 < 0LL)) {
-                /* pass */
+#line 5901 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5902 "src/taumir/lower.tr"
             long long mm2 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 1LL)));
-            /* pass */
+#line 5903 "src/taumir/lower.tr"
             if ((mm2 < 0LL)) {
-                /* pass */
+#line 5903 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5904 "src/taumir/lower.tr"
             long long mt1 = LFunc_vreg_type(lf, mm1);
-            /* pass */
+#line 5905 "src/taumir/lower.tr"
             long long mt2 = LFunc_vreg_type(lf, mm2);
-            /* pass */
+#line 5906 "src/taumir/lower.tr"
             if (((mt1 == 5LL) || (mt2 == 5LL))) {
-                /* pass */
+#line 5907 "src/taumir/lower.tr"
                 if ((mt1 == 0LL)) {
-                    /* pass */
+#line 5907 "src/taumir/lower.tr"
                     mm1 = _promote_f(lf, mm1);
                 } else if ((mt1 != 5LL)) {
-                    /* pass */
+#line 5908 "src/taumir/lower.tr"
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     return (-1LL);
                 }
-                /* pass */
+#line 5909 "src/taumir/lower.tr"
                 if ((mt2 == 0LL)) {
-                    /* pass */
+#line 5909 "src/taumir/lower.tr"
                     mm2 = _promote_f(lf, mm2);
                 } else if ((mt2 != 5LL)) {
-                    /* pass */
+#line 5910 "src/taumir/lower.tr"
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     return (-1LL);
                 }
-                /* pass */
+#line 5911 "src/taumir/lower.tr"
                 TrStr fmsym = _tr_str_lit_len("_tr_rt_min_f64", 14LL);
-                /* pass */
+#line 5912 "src/taumir/lower.tr"
                 if (_tr_str_eqv((fn), (_tr_str_lit_len("max", 3LL)))) {
-                    /* pass */
-                    TrStr _strtmp_t3306 = _tr_str_lit_len("_tr_rt_max_f64", 14LL);
+#line 5912 "src/taumir/lower.tr"
+                    TrStr _strtmp_t6338 = _tr_str_lit_len("_tr_rt_max_f64", 14LL);
                     _tr_str_release(fmsym);
-                    fmsym = _strtmp_t3306;
+                    fmsym = _strtmp_t6338;
                 }
-                /* pass */
+#line 5913 "src/taumir/lower.tr"
                 LModule_add_extern(m, fmsym);
-                /* pass */
+#line 5914 "src/taumir/lower.tr"
                 long long fmd = LFunc_new_vreg(lf);
-                /* pass */
+#line 5915 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFCall2F(fmd, fmsym, mm1, mm2));
-                /* pass */
+#line 5916 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, fmd, 5LL);
-                /* pass */
+#line 5917 "src/taumir/lower.tr"
+                long long _trret1673 = fmd;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 _tr_str_release(fmsym);
-                return fmd;
+                return _trret1673;
             }
-            /* pass */
+#line 5918 "src/taumir/lower.tr"
             if (((mt1 != 0LL) || (mt2 != 0LL))) {
-                /* pass */
+#line 5918 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5919 "src/taumir/lower.tr"
             TrStr msym = _tr_str_lit_len("_tr_rt_min_i64", 14LL);
-            /* pass */
+#line 5920 "src/taumir/lower.tr"
             if (_tr_str_eqv((fn), (_tr_str_lit_len("max", 3LL)))) {
-                /* pass */
-                TrStr _strtmp_t3307 = _tr_str_lit_len("_tr_rt_max_i64", 14LL);
+#line 5920 "src/taumir/lower.tr"
+                TrStr _strtmp_t6339 = _tr_str_lit_len("_tr_rt_max_i64", 14LL);
                 _tr_str_release(msym);
-                msym = _strtmp_t3307;
+                msym = _strtmp_t6339;
             }
-            /* pass */
+#line 5921 "src/taumir/lower.tr"
             LModule_add_extern(m, msym);
-            /* pass */
+#line 5922 "src/taumir/lower.tr"
             List_i64* mma = (void*)List_i64_new();
-            /* pass */
+#line 5923 "src/taumir/lower.tr"
             List_i64_append(mma, mm1);
-            /* pass */
+#line 5924 "src/taumir/lower.tr"
             List_i64_append(mma, mm2);
-            /* pass */
+#line 5925 "src/taumir/lower.tr"
             long long mmd = LFunc_new_vreg(lf);
-            /* pass */
+#line 5926 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(mmd, msym, mma));
-            /* pass */
+#line 5927 "src/taumir/lower.tr"
+            long long _trret1674 = mmd;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
             _tr_str_release(msym);
-            return mmd;
+            return _trret1674;
         }
-        /* pass */
+#line 5928 "src/taumir/lower.tr"
         if ((_tr_str_eqv((fn), (_tr_str_lit_len("repr", 4LL))) && (args->len == 1LL))) {
-            /* pass */
+#line 5929 "src/taumir/lower.tr"
             TrStr rprc = _recv_class(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 5930 "src/taumir/lower.tr"
             if (((!_tr_str_eqv((rprc), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, rprc))) {
-                /* pass */
+#line 5931 "src/taumir/lower.tr"
                 long long rprr = _obj_repr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)), (-1LL));
-                /* pass */
+#line 5932 "src/taumir/lower.tr"
                 if ((rprr >= 0LL)) {
-                    /* pass */
+#line 5932 "src/taumir/lower.tr"
+                    long long _trret1675 = rprr;
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     _tr_str_release(rprc);
-                    return rprr;
+                    return _trret1675;
                 }
-                /* pass */
+#line 5933 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 _tr_str_release(rprc);
                 return (-1LL);
             }
-            /* pass */
+#line 5934 "src/taumir/lower.tr"
             long long rpv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 5935 "src/taumir/lower.tr"
             if ((rpv < 0LL)) {
-                /* pass */
+#line 5935 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 _tr_str_release(rprc);
                 return (-1LL);
             }
-            /* pass */
+#line 5936 "src/taumir/lower.tr"
             if ((LFunc_vreg_type(lf, rpv) == 1LL)) {
-                /* pass */
+#line 5936 "src/taumir/lower.tr"
+                long long _trret1676 = rpv;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 _tr_str_release(rprc);
-                return rpv;
+                return _trret1676;
             }
-            /* pass */
+#line 5937 "src/taumir/lower.tr"
+            long long _trret1677 = _reg_to_str(m, lf, rpv);
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
             _tr_str_release(rprc);
-            return _reg_to_str(m, lf, rpv);
+            return _trret1677;
         }
-        /* pass */
+#line 5938 "src/taumir/lower.tr"
         if ((_tr_str_eqv((fn), (_tr_str_lit_len("str", 3LL))) && (args->len == 1LL))) {
-            /* pass */
+#line 5939 "src/taumir/lower.tr"
             TrStr sobjc = _recv_class(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
-            if ((((!_tr_str_eqv((sobjc), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, sobjc)) && (!_tr_str_eqv((LModule_resolve_method(m, sobjc, _tr_str_lit_len("__str__", 7LL))), (_tr_str_lit_len("", 0LL)))))) {
-                /* pass */
+#line 5940 "src/taumir/lower.tr"
+            if ((((!_tr_str_eqv((sobjc), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, sobjc)) && ({ TrStr _cmpa_t6340 = (LModule_resolve_method(m, sobjc, _tr_str_lit_len("__str__", 7LL))); TrStr _cmpb_t6341 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t6342 = !_tr_str_eqv(_cmpa_t6340, _cmpb_t6341); _tr_str_release(_cmpa_t6340); _cmpr_t6342; }))) {
+#line 5941 "src/taumir/lower.tr"
                 long long sobjr = _obj_to_str(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)), (-1LL));
-                /* pass */
+#line 5942 "src/taumir/lower.tr"
                 if ((sobjr >= 0LL)) {
-                    /* pass */
+#line 5942 "src/taumir/lower.tr"
+                    long long _trret1678 = sobjr;
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     _tr_str_release(sobjc);
-                    return sobjr;
+                    return _trret1678;
                 }
-                /* pass */
+#line 5943 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 _tr_str_release(sobjc);
                 return (-1LL);
             }
-            /* pass */
+#line 5944 "src/taumir/lower.tr"
             long long cv0 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 5945 "src/taumir/lower.tr"
             if ((cv0 < 0LL)) {
-                /* pass */
+#line 5945 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 _tr_str_release(sobjc);
                 return (-1LL);
             }
-            /* pass */
+#line 5946 "src/taumir/lower.tr"
             long long cvt = LFunc_vreg_type(lf, cv0);
-            /* pass */
+#line 5947 "src/taumir/lower.tr"
             if ((cvt == 1LL)) {
-                /* pass */
+#line 5947 "src/taumir/lower.tr"
+                long long _trret1679 = cv0;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 _tr_str_release(sobjc);
-                return cv0;
+                return _trret1679;
             }
-            /* pass */
+#line 5948 "src/taumir/lower.tr"
             if ((cvt == 5LL)) {
-                /* pass */
+#line 5949 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_rt_f64_to_str", 17LL));
-                /* pass */
+#line 5950 "src/taumir/lower.tr"
                 long long fsd = LFunc_new_vreg(lf);
-                /* pass */
+#line 5951 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFCall1(fsd, _tr_str_lit_len("_tr_rt_f64_to_str", 17LL), cv0));
-                /* pass */
+#line 5952 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, fsd, 1LL);
-                /* pass */
+#line 5953 "src/taumir/lower.tr"
                 _fresh_mark(lf, fsd);
-                /* pass */
+#line 5954 "src/taumir/lower.tr"
+                long long _trret1680 = fsd;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 _tr_str_release(sobjc);
-                return fsd;
+                return _trret1680;
             }
-            /* pass */
+#line 5955 "src/taumir/lower.tr"
             TrStr ssym = _tr_str_lit_len("_tr_rt_i64_to_str", 17LL);
-            /* pass */
+#line 5956 "src/taumir/lower.tr"
             if ((cvt == 4LL)) {
-                /* pass */
-                TrStr _strtmp_t3308 = _tr_str_lit_len("_tr_rt_bool_to_str", 18LL);
+#line 5956 "src/taumir/lower.tr"
+                TrStr _strtmp_t6343 = _tr_str_lit_len("_tr_rt_bool_to_str", 18LL);
                 _tr_str_release(ssym);
-                ssym = _strtmp_t3308;
+                ssym = _strtmp_t6343;
             } else if ((cvt != 0LL)) {
-                /* pass */
+#line 5957 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 _tr_str_release(sobjc);
                 _tr_str_release(ssym);
                 return (-1LL);
             }
-            /* pass */
+#line 5958 "src/taumir/lower.tr"
             LModule_add_extern(m, ssym);
-            /* pass */
+#line 5959 "src/taumir/lower.tr"
             List_i64* s2a = (void*)List_i64_new();
-            /* pass */
+#line 5960 "src/taumir/lower.tr"
             List_i64_append(s2a, cv0);
-            /* pass */
+#line 5961 "src/taumir/lower.tr"
             long long s2d = LFunc_new_vreg(lf);
-            /* pass */
+#line 5962 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(s2d, ssym, s2a));
-            /* pass */
+#line 5963 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, s2d, 1LL);
-            /* pass */
+#line 5964 "src/taumir/lower.tr"
             _fresh_mark(lf, s2d);
-            /* pass */
+#line 5965 "src/taumir/lower.tr"
+            long long _trret1681 = s2d;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
             _tr_str_release(sobjc);
             _tr_str_release(ssym);
-            return s2d;
+            return _trret1681;
         }
-        /* pass */
+#line 5966 "src/taumir/lower.tr"
         if ((_tr_str_eqv((fn), (_tr_str_lit_len("float", 5LL))) && (args->len == 1LL))) {
-            /* pass */
+#line 5967 "src/taumir/lower.tr"
             long long fv0 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 5968 "src/taumir/lower.tr"
             if ((fv0 < 0LL)) {
-                /* pass */
+#line 5968 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5969 "src/taumir/lower.tr"
             long long fvt = LFunc_vreg_type(lf, fv0);
-            /* pass */
+#line 5970 "src/taumir/lower.tr"
             if ((fvt == 5LL)) {
-                /* pass */
+#line 5970 "src/taumir/lower.tr"
+                long long _trret1682 = fv0;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
-                return fv0;
+                return _trret1682;
             }
-            /* pass */
+#line 5971 "src/taumir/lower.tr"
             if ((fvt == 0LL)) {
-                /* pass */
+#line 5971 "src/taumir/lower.tr"
+                long long _trret1683 = _promote_f(lf, fv0);
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
-                return _promote_f(lf, fv0);
+                return _trret1683;
             }
-            /* pass */
+#line 5972 "src/taumir/lower.tr"
             if ((fvt == 1LL)) {
-                /* pass */
+#line 5973 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_to_f64", 17LL));
-                /* pass */
+#line 5974 "src/taumir/lower.tr"
                 List_i64* fsa = (void*)List_i64_new();
-                /* pass */
+#line 5975 "src/taumir/lower.tr"
                 List_i64_append(fsa, fv0);
-                /* pass */
+#line 5976 "src/taumir/lower.tr"
                 long long fsr = LFunc_new_vreg(lf);
-                /* pass */
+#line 5977 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(fsr, _tr_str_lit_len("_tr_rt_str_to_f64", 17LL), fsa));
-                /* pass */
+#line 5978 "src/taumir/lower.tr"
                 long long fsf = LFunc_new_vreg(lf);
-                /* pass */
+#line 5979 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IBitsF(fsf, fsr));
-                /* pass */
+#line 5980 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, fsf, 5LL);
-                /* pass */
+#line 5981 "src/taumir/lower.tr"
+                long long _trret1684 = fsf;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
-                return fsf;
+                return _trret1684;
             }
-            /* pass */
+#line 5982 "src/taumir/lower.tr"
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
             return (-1LL);
         }
-        /* pass */
+#line 5983 "src/taumir/lower.tr"
         if (((_tr_str_eqv((fn), (_tr_str_lit_len("int", 3LL))) || _tr_str_eqv((fn), (_tr_str_lit_len("_tr_fn_int", 10LL)))) && (args->len == 1LL))) {
-            /* pass */
+#line 5984 "src/taumir/lower.tr"
             long long iv0 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 5985 "src/taumir/lower.tr"
             if ((iv0 < 0LL)) {
-                /* pass */
+#line 5985 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5986 "src/taumir/lower.tr"
             long long ivt = LFunc_vreg_type(lf, iv0);
-            /* pass */
+#line 5987 "src/taumir/lower.tr"
             if ((ivt == 0LL)) {
-                /* pass */
+#line 5987 "src/taumir/lower.tr"
+                long long _trret1685 = iv0;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
-                return iv0;
+                return _trret1685;
             }
-            /* pass */
+#line 5988 "src/taumir/lower.tr"
             if ((ivt == 4LL)) {
-                /* pass */
+#line 5989 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, iv0, 0LL);
-                /* pass */
+#line 5990 "src/taumir/lower.tr"
+                long long _trret1686 = iv0;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
-                return iv0;
+                return _trret1686;
             }
-            /* pass */
+#line 5991 "src/taumir/lower.tr"
             if ((ivt == 5LL)) {
-                /* pass */
+#line 5992 "src/taumir/lower.tr"
                 long long itd = LFunc_new_vreg(lf);
-                /* pass */
+#line 5993 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFToI(itd, iv0));
-                /* pass */
+#line 5994 "src/taumir/lower.tr"
+                long long _trret1687 = itd;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
-                return itd;
+                return _trret1687;
             }
-            /* pass */
+#line 5995 "src/taumir/lower.tr"
             if ((ivt != 1LL)) {
-                /* pass */
+#line 5995 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 5996 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_to_i64", 17LL));
-            /* pass */
+#line 5997 "src/taumir/lower.tr"
             List_i64* i2a = (void*)List_i64_new();
-            /* pass */
+#line 5998 "src/taumir/lower.tr"
             List_i64_append(i2a, iv0);
-            /* pass */
+#line 5999 "src/taumir/lower.tr"
             long long i2d = LFunc_new_vreg(lf);
-            /* pass */
+#line 6000 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(i2d, _tr_str_lit_len("_tr_rt_str_to_i64", 17LL), i2a));
-            /* pass */
+#line 6001 "src/taumir/lower.tr"
+            long long _trret1688 = i2d;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
-            return i2d;
+            return _trret1688;
         }
-        /* pass */
+#line 6002 "src/taumir/lower.tr"
         if ((_tr_str_eqv((fn), (_tr_str_lit_len("sum", 3LL))) && (args->len == 1LL))) {
-            /* pass */
+#line 6003 "src/taumir/lower.tr"
             long long suv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 6004 "src/taumir/lower.tr"
             if ((suv < 0LL)) {
-                /* pass */
+#line 6004 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 6005 "src/taumir/lower.tr"
             if ((LFunc_vreg_type(lf, suv) != 2LL)) {
-                /* pass */
+#line 6005 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 6006 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_sum_i64", 19LL));
-            /* pass */
+#line 6007 "src/taumir/lower.tr"
             List_i64* sua = (void*)List_i64_new();
-            /* pass */
+#line 6008 "src/taumir/lower.tr"
             List_i64_append(sua, suv);
-            /* pass */
+#line 6009 "src/taumir/lower.tr"
             long long sud = LFunc_new_vreg(lf);
-            /* pass */
+#line 6010 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(sud, _tr_str_lit_len("_tr_rt_list_sum_i64", 19LL), sua));
-            /* pass */
+#line 6011 "src/taumir/lower.tr"
+            long long _trret1689 = sud;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
-            return sud;
+            return _trret1689;
         }
-        /* pass */
+#line 6012 "src/taumir/lower.tr"
         if (((_tr_str_eqv((fn), (_tr_str_lit_len("any", 3LL))) || _tr_str_eqv((fn), (_tr_str_lit_len("all", 3LL)))) && (args->len == 1LL))) {
-            /* pass */
+#line 6013 "src/taumir/lower.tr"
             long long anv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 6014 "src/taumir/lower.tr"
             if ((anv < 0LL)) {
-                /* pass */
+#line 6014 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 6015 "src/taumir/lower.tr"
             if ((LFunc_vreg_type(lf, anv) != 2LL)) {
-                /* pass */
+#line 6015 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 6016 "src/taumir/lower.tr"
             TrStr ansym = _tr_str_lit_len("_tr_rt_list_any_i64", 19LL);
-            /* pass */
+#line 6017 "src/taumir/lower.tr"
             if (_tr_str_eqv((fn), (_tr_str_lit_len("all", 3LL)))) {
-                /* pass */
-                TrStr _strtmp_t3309 = _tr_str_lit_len("_tr_rt_list_all_i64", 19LL);
+#line 6017 "src/taumir/lower.tr"
+                TrStr _strtmp_t6344 = _tr_str_lit_len("_tr_rt_list_all_i64", 19LL);
                 _tr_str_release(ansym);
-                ansym = _strtmp_t3309;
+                ansym = _strtmp_t6344;
             }
-            /* pass */
+#line 6018 "src/taumir/lower.tr"
             LModule_add_extern(m, ansym);
-            /* pass */
+#line 6019 "src/taumir/lower.tr"
             List_i64* ana = (void*)List_i64_new();
-            /* pass */
+#line 6020 "src/taumir/lower.tr"
             List_i64_append(ana, anv);
-            /* pass */
+#line 6021 "src/taumir/lower.tr"
             long long and2 = LFunc_new_vreg(lf);
-            /* pass */
+#line 6022 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(and2, ansym, ana));
-            /* pass */
+#line 6023 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, and2, 4LL);
-            /* pass */
+#line 6024 "src/taumir/lower.tr"
+            long long _trret1690 = and2;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
             _tr_str_release(ansym);
-            return and2;
+            return _trret1690;
         }
-        /* pass */
+#line 6025 "src/taumir/lower.tr"
         if ((_tr_str_eqv((fn), (_tr_str_lit_len("chr", 3LL))) && (args->len == 1LL))) {
-            /* pass */
+#line 6026 "src/taumir/lower.tr"
             long long chv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 6027 "src/taumir/lower.tr"
             if ((chv < 0LL)) {
-                /* pass */
+#line 6027 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 6028 "src/taumir/lower.tr"
             long long cht = LFunc_vreg_type(lf, chv);
-            /* pass */
+#line 6029 "src/taumir/lower.tr"
             if (((cht != 0LL) && (cht != 4LL))) {
-                /* pass */
+#line 6029 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 6030 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_chr", 10LL));
-            /* pass */
+#line 6031 "src/taumir/lower.tr"
             List_i64* cha = (void*)List_i64_new();
-            /* pass */
+#line 6032 "src/taumir/lower.tr"
             List_i64_append(cha, chv);
-            /* pass */
+#line 6033 "src/taumir/lower.tr"
             long long chd = LFunc_new_vreg(lf);
-            /* pass */
+#line 6034 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(chd, _tr_str_lit_len("_tr_rt_chr", 10LL), cha));
-            /* pass */
+#line 6035 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, chd, 1LL);
-            /* pass */
+#line 6036 "src/taumir/lower.tr"
             _fresh_mark(lf, chd);
-            /* pass */
+#line 6037 "src/taumir/lower.tr"
+            long long _trret1691 = chd;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
-            return chd;
+            return _trret1691;
         }
-        /* pass */
+#line 6038 "src/taumir/lower.tr"
         if ((_tr_str_eqv((fn), (_tr_str_lit_len("ord", 3LL))) && (args->len == 1LL))) {
-            /* pass */
+#line 6039 "src/taumir/lower.tr"
             long long ordv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 6040 "src/taumir/lower.tr"
             if ((ordv < 0LL)) {
-                /* pass */
+#line 6040 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 6041 "src/taumir/lower.tr"
             long long ordt = LFunc_vreg_type(lf, ordv);
-            /* pass */
+#line 6042 "src/taumir/lower.tr"
             if (((ordt == 0LL) || (ordt == 4LL))) {
-                /* pass */
+#line 6042 "src/taumir/lower.tr"
+                long long _trret1692 = ordv;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
-                return ordv;
+                return _trret1692;
             }
-            /* pass */
+#line 6043 "src/taumir/lower.tr"
             if ((ordt != 1LL)) {
-                /* pass */
+#line 6043 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 6044 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_ord", 14LL));
-            /* pass */
+#line 6045 "src/taumir/lower.tr"
             List_i64* orda = (void*)List_i64_new();
-            /* pass */
+#line 6046 "src/taumir/lower.tr"
             List_i64_append(orda, ordv);
-            /* pass */
+#line 6047 "src/taumir/lower.tr"
             long long ordd = LFunc_new_vreg(lf);
-            /* pass */
+#line 6048 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(ordd, _tr_str_lit_len("_tr_rt_str_ord", 14LL), orda));
-            /* pass */
+#line 6049 "src/taumir/lower.tr"
+            long long _trret1693 = ordd;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
-            return ordd;
+            return _trret1693;
         }
-        /* pass */
+#line 6050 "src/taumir/lower.tr"
         if ((_tr_str_eqv((fn), (_tr_str_lit_len("bool", 4LL))) && (args->len == 1LL))) {
-            /* pass */
+#line 6051 "src/taumir/lower.tr"
             long long bv0 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, 0LL)));
-            /* pass */
+#line 6052 "src/taumir/lower.tr"
             if ((bv0 < 0LL)) {
-                /* pass */
+#line 6052 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 6053 "src/taumir/lower.tr"
             if (_is_list_tag(LFunc_vreg_type(lf, bv0))) {
-                /* pass */
+#line 6053 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 6054 "src/taumir/lower.tr"
             long long bnorm = _norm_bool(lf, bv0);
-            /* pass */
+#line 6055 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, bnorm, 4LL);
-            /* pass */
+#line 6056 "src/taumir/lower.tr"
+            long long _trret1694 = bnorm;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
-            return bnorm;
+            return _trret1694;
         }
-        /* pass */
+#line 6065 "src/taumir/lower.tr"
         if ((_tr_str_eqv((fn), (_tr_str_lit_len("_tr_str_lit", 11LL))) || _tr_str_eqv((fn), (_tr_str_lit_len("_tr_strx_join_trstr", 19LL))))) {
-            /* pass */
+#line 6065 "src/taumir/lower.tr"
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
             return (-1LL);
         }
-        /* pass */
+#line 6068 "src/taumir/lower.tr"
         if (_tr_str_eqv((fn), (_tr_str_lit_len("_tr_str_wrap", 12LL)))) {
-            /* pass */
-            TrStr _strtmp_t3310 = _tr_str_lit_len("_tr_rt_str_new", 14LL);
+#line 6068 "src/taumir/lower.tr"
+            TrStr _strtmp_t6345 = _tr_str_lit_len("_tr_rt_str_new", 14LL);
             _tr_str_release(fn);
-            fn = _strtmp_t3310;
+            fn = _strtmp_t6345;
         }
-        /* pass */
+#line 6071 "src/taumir/lower.tr"
         if (_tr_str_eqv((fn), (_tr_str_lit_len("_tr_getenv", 10LL)))) {
-            /* pass */
-            TrStr _strtmp_t3311 = _tr_str_lit_len("_tr_rt_getenv", 13LL);
+#line 6071 "src/taumir/lower.tr"
+            TrStr _strtmp_t6346 = _tr_str_lit_len("_tr_rt_getenv", 13LL);
             _tr_str_release(fn);
-            fn = _strtmp_t3311;
+            fn = _strtmp_t6346;
         }
-        /* pass */
+#line 6072 "src/taumir/lower.tr"
         if (LModule_is_extern_fn(m, fn)) {
-            /* pass */
-            if ((args->len > _arg_limit(m))) {
-                /* pass */
+#line 6074 "src/taumir/lower.tr"
+            if (({ __auto_type _ord_t6347 = (args->len); __auto_type _wr = ((_ord_t6347 > _arg_limit(m))); _wr; })) {
+#line 6074 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 6075 "src/taumir/lower.tr"
             List_i64* exargs = (void*)List_i64_new();
-            /* pass */
+#line 6076 "src/taumir/lower.tr"
             long long exi = 0LL;
-            /* pass */
+#line 6077 "src/taumir/lower.tr"
             while ((exi < args->len)) {
-                /* pass */
+#line 6078 "src/taumir/lower.tr"
                 long long exv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, exi)));
-                /* pass */
+#line 6079 "src/taumir/lower.tr"
                 if ((exv < 0LL)) {
-                    /* pass */
+#line 6079 "src/taumir/lower.tr"
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     List_i64_free(exargs);
                     return (-1LL);
                 }
-                /* pass */
+#line 6080 "src/taumir/lower.tr"
                 long long ext = LFunc_vreg_type(lf, exv);
-                /* pass */
+#line 6081 "src/taumir/lower.tr"
                 if (((((ext != 0LL) && (ext != 1LL)) && (ext != 4LL)) && (ext != 5LL))) {
-                    /* pass */
+#line 6081 "src/taumir/lower.tr"
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     List_i64_free(exargs);
                     return (-1LL);
                 }
-                /* pass */
+#line 6082 "src/taumir/lower.tr"
                 List_i64_append(exargs, exv);
-                /* pass */
+#line 6083 "src/taumir/lower.tr"
                 exi = (exi + 1LL);
             }
-            /* pass */
+#line 6084 "src/taumir/lower.tr"
             LModule_add_extern(m, fn);
-            /* pass */
+#line 6085 "src/taumir/lower.tr"
             long long extret = LModule_extern_ret_tag(m, fn);
-            /* pass */
+#line 6086 "src/taumir/lower.tr"
             long long exd = LFunc_new_vreg(lf);
-            /* pass */
+#line 6087 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(exd, fn, exargs));
-            /* pass */
+#line 6088 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, exd, extret);
-            /* pass */
+#line 6089 "src/taumir/lower.tr"
             if ((extret == 1LL)) {
-                /* pass */
+#line 6095 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_new", 14LL));
-                /* pass */
+#line 6096 "src/taumir/lower.tr"
                 List_i64* exwr = (void*)List_i64_new();
-                /* pass */
+#line 6097 "src/taumir/lower.tr"
                 List_i64_append(exwr, exd);
-                /* pass */
+#line 6098 "src/taumir/lower.tr"
                 long long exwd = LFunc_new_vreg(lf);
-                /* pass */
+#line 6099 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(exwd, _tr_str_lit_len("_tr_rt_str_new", 14LL), exwr));
-                /* pass */
+#line 6100 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, exwd, 1LL);
-                /* pass */
+#line 6101 "src/taumir/lower.tr"
+                long long _trret1695 = exwd;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
-                return exwd;
+                return _trret1695;
             }
-            /* pass */
+#line 6102 "src/taumir/lower.tr"
+            long long _trret1696 = exd;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
-            return exd;
+            return _trret1696;
         }
-        /* pass */
+#line 6107 "src/taumir/lower.tr"
         if ((_is_runtime_fn(fn) && (!LModule_is_user_fn(m, fn)))) {
-            /* pass */
-            if ((args->len > _arg_limit(m))) {
-                /* pass */
+#line 6108 "src/taumir/lower.tr"
+            if (({ __auto_type _ord_t6348 = (args->len); __auto_type _wr = ((_ord_t6348 > _arg_limit(m))); _wr; })) {
+#line 6108 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 6109 "src/taumir/lower.tr"
             List_i64* rtargs = (void*)List_i64_new();
-            /* pass */
+#line 6110 "src/taumir/lower.tr"
             long long rti = 0LL;
-            /* pass */
+#line 6111 "src/taumir/lower.tr"
             while ((rti < args->len)) {
-                /* pass */
+#line 6112 "src/taumir/lower.tr"
                 long long rtv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, rti)));
-                /* pass */
+#line 6113 "src/taumir/lower.tr"
                 if ((rtv < 0LL)) {
-                    /* pass */
+#line 6113 "src/taumir/lower.tr"
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     List_i64_free(rtargs);
                     return (-1LL);
                 }
-                /* pass */
+#line 6114 "src/taumir/lower.tr"
                 if ((LFunc_vreg_type(lf, rtv) == 5LL)) {
-                    /* pass */
+#line 6114 "src/taumir/lower.tr"
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     List_i64_free(rtargs);
                     return (-1LL);
                 }
-                /* pass */
+#line 6115 "src/taumir/lower.tr"
                 List_i64_append(rtargs, rtv);
-                /* pass */
+#line 6116 "src/taumir/lower.tr"
                 rti = (rti + 1LL);
             }
-            /* pass */
+#line 6117 "src/taumir/lower.tr"
             LModule_add_extern(m, fn);
-            /* pass */
+#line 6118 "src/taumir/lower.tr"
             long long rtret = _tag_of(m, hir_expr_type(e));
-            /* pass */
+#line 6119 "src/taumir/lower.tr"
             if ((rtret < 0LL)) {
-                /* pass */
+#line 6119 "src/taumir/lower.tr"
                 rtret = 0LL;
             }
-            /* pass */
+#line 6120 "src/taumir/lower.tr"
             long long rtd = LFunc_new_vreg(lf);
-            /* pass */
+#line 6121 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(rtd, fn, rtargs));
-            /* pass */
+#line 6122 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, rtd, rtret);
-            /* pass */
+#line 6123 "src/taumir/lower.tr"
             if (((rtret == 1LL) && (!_is_rc_str_runtime_fn(fn)))) {
-                /* pass */
+#line 6130 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_new", 14LL));
-                /* pass */
+#line 6131 "src/taumir/lower.tr"
                 List_i64* rtwr = (void*)List_i64_new();
-                /* pass */
+#line 6132 "src/taumir/lower.tr"
                 List_i64_append(rtwr, rtd);
-                /* pass */
+#line 6133 "src/taumir/lower.tr"
                 long long rtwd = LFunc_new_vreg(lf);
-                /* pass */
+#line 6134 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(rtwd, _tr_str_lit_len("_tr_rt_str_new", 14LL), rtwr));
-                /* pass */
+#line 6135 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, rtwd, 1LL);
-                /* pass */
+#line 6136 "src/taumir/lower.tr"
+                long long _trret1697 = rtwd;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
-                return rtwd;
+                return _trret1697;
             }
-            /* pass */
+#line 6137 "src/taumir/lower.tr"
+            long long _trret1698 = rtd;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
-            return rtd;
+            return _trret1698;
         }
-        /* pass */
+#line 6140 "src/taumir/lower.tr"
         if ((!LModule_is_user_fn(m, fn))) {
-            /* pass */
+#line 6141 "src/taumir/lower.tr"
             TrStr mbase = _mono_base(fn);
-            /* pass */
+#line 6142 "src/taumir/lower.tr"
             if ((!_tr_str_eqv((mbase), (_tr_str_lit_len("", 0LL))))) {
-                /* pass */
+#line 6143 "src/taumir/lower.tr"
                 long long mgfi = _find_generic_fn(m, mbase);
-                /* pass */
+#line 6144 "src/taumir/lower.tr"
                 if ((mgfi >= 0LL)) {
-                    /* pass */
-                    AstType* mct = ({ TrStr _at_t3312 = (_mono_concrete(fn)); __auto_type _wr = (AstType_init(_at_t3312)); _tr_str_release(_at_t3312); _wr; });
-                    /* pass */
+#line 6145 "src/taumir/lower.tr"
+                    AstType* mct = ({ TrStr _at_t6349 = (_mono_concrete(fn)); __auto_type _wr = (AstType_init(_at_t6349)); _tr_str_release(_at_t6349); _wr; });
+#line 6146 "src/taumir/lower.tr"
                     if ((!_lir_lower_mono_fn(m, ((HirFunction*)List_ptr_get(m->hir_prog->functions, mgfi)), fn, mct))) {
-                        /* pass */
+#line 6147 "src/taumir/lower.tr"
                         _tr_str_release(alloc_nm);
                         _tr_str_release(fn);
                         _tr_str_release(mbase);
@@ -14845,41 +15098,41 @@ __auto_type pfp = _t3300.data.EPropAccess.prop;
                 }
             }
         }
-        /* pass */
+#line 6148 "src/taumir/lower.tr"
         if ((!LModule_is_user_fn(m, fn))) {
-            /* pass */
+#line 6149 "src/taumir/lower.tr"
             long long gfi = _find_generic_fn(m, fn);
-            /* pass */
+#line 6150 "src/taumir/lower.tr"
             if ((gfi < 0LL)) {
-                /* pass */
+#line 6150 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
-            if ((args->len > _arg_limit(m))) {
-                /* pass */
+#line 6151 "src/taumir/lower.tr"
+            if (({ __auto_type _ord_t6350 = (args->len); __auto_type _wr = ((_ord_t6350 > _arg_limit(m))); _wr; })) {
+#line 6151 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 return (-1LL);
             }
-            /* pass */
+#line 6152 "src/taumir/lower.tr"
             List_i64* gvregs = (void*)List_i64_new();
-            /* pass */
+#line 6153 "src/taumir/lower.tr"
             List_i64* gtags = (void*)List_i64_new();
-            /* pass */
+#line 6154 "src/taumir/lower.tr"
             List_TrStr* gcls = (void*)List_TrStr_new();
-            /* pass */
+#line 6155 "src/taumir/lower.tr"
             TrStr gmangled = _tr_strx_concatv((fn), (_tr_str_lit_len("__m", 3LL)));
-            /* pass */
+#line 6156 "src/taumir/lower.tr"
             long long gi = 0LL;
-            /* pass */
+#line 6157 "src/taumir/lower.tr"
             while ((gi < args->len)) {
-                /* pass */
+#line 6158 "src/taumir/lower.tr"
                 long long gav = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, gi)));
-                /* pass */
+#line 6159 "src/taumir/lower.tr"
                 if ((gav < 0LL)) {
-                    /* pass */
+#line 6159 "src/taumir/lower.tr"
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     List_i64_free(gvregs);
@@ -14888,23 +15141,23 @@ __auto_type pfp = _t3300.data.EPropAccess.prop;
                     _tr_str_release(gmangled);
                     return (-1LL);
                 }
-                /* pass */
+#line 6160 "src/taumir/lower.tr"
                 long long gat = LFunc_vreg_type(lf, gav);
-                /* pass */
+#line 6161 "src/taumir/lower.tr"
                 List_i64_append(gvregs, gav);
-                /* pass */
+#line 6162 "src/taumir/lower.tr"
                 List_i64_append(gtags, gat);
-                /* pass */
+#line 6163 "src/taumir/lower.tr"
                 TrStr gcn = _tr_str_lit_len("", 0LL);
-                /* pass */
+#line 6164 "src/taumir/lower.tr"
                 if (((gat == 10LL) || (gat == 11LL))) {
-                    /* pass */
-                    TrStr _strtmp_t3313 = _recv_class(m, lf, ((HirExpr*)List_ptr_get(args, gi)));
+#line 6165 "src/taumir/lower.tr"
+                    TrStr _strtmp_t6351 = _recv_class(m, lf, ((HirExpr*)List_ptr_get(args, gi)));
                     _tr_str_release(gcn);
-                    gcn = _strtmp_t3313;
-                    /* pass */
+                    gcn = _strtmp_t6351;
+#line 6170 "src/taumir/lower.tr"
                     if (_tr_str_eqv((gcn), (_tr_str_lit_len("", 0LL)))) {
-                        /* pass */
+#line 6170 "src/taumir/lower.tr"
                         _tr_str_release(alloc_nm);
                         _tr_str_release(fn);
                         List_i64_free(gvregs);
@@ -14915,35 +15168,29 @@ __auto_type pfp = _t3300.data.EPropAccess.prop;
                         return (-1LL);
                     }
                 }
-                /* pass */
+#line 6171 "src/taumir/lower.tr"
                 List_TrStr_append(gcls, gcn);
-                /* pass */
+#line 6172 "src/taumir/lower.tr"
                 if ((gi > 0LL)) {
-                    /* pass */
-                    TrStr _strtmp_t3314 = _tr_strx_concatv((gmangled), (_tr_str_lit_len("_", 1LL)));
-                    _tr_str_release(gmangled);
-                    gmangled = _strtmp_t3314;
+#line 6172 "src/taumir/lower.tr"
+                    ({ TrStr _ap_t6352 = (_tr_str_lit_len("_", 1LL)); _tr_str_append(&gmangled, _ap_t6352); });
                 }
-                /* pass */
-                TrStr _strtmp_t3315 = ({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(gat)))); TrStr _cres = _tr_strx_concatv((gmangled), _cr); _tr_str_release(_cr); _cres; });
-                _tr_str_release(gmangled);
-                gmangled = _strtmp_t3315;
-                /* pass */
+#line 6173 "src/taumir/lower.tr"
+                ({ TrStr _ap_t6353 = (_tr_str_wrap(_tr_int_to_str((long long)(gat)))); _tr_str_append(&gmangled, _ap_t6353); _tr_str_release(_ap_t6353); });
+#line 6174 "src/taumir/lower.tr"
                 if ((!_tr_str_eqv((gcn), (_tr_str_lit_len("", 0LL))))) {
-                    /* pass */
-                    TrStr _strtmp_t3316 = _tr_strx_concatv((gmangled), (gcn));
-                    _tr_str_release(gmangled);
-                    gmangled = _strtmp_t3316;
+#line 6174 "src/taumir/lower.tr"
+                    ({ TrStr _ap_t6354 = (gcn); _tr_str_append(&gmangled, _ap_t6354); });
                 }
-                /* pass */
+#line 6175 "src/taumir/lower.tr"
                 gi = (gi + 1LL);
                 _tr_str_release(gcn);
             }
-            /* pass */
+#line 6176 "src/taumir/lower.tr"
             if ((!LModule_is_user_fn(m, gmangled))) {
-                /* pass */
+#line 6177 "src/taumir/lower.tr"
                 if ((!_lir_lower_generic(m, ((HirFunction*)List_ptr_get(m->hir_prog->functions, gfi)), gtags, gcls, gmangled))) {
-                    /* pass */
+#line 6178 "src/taumir/lower.tr"
                     _tr_str_release(alloc_nm);
                     _tr_str_release(fn);
                     List_i64_free(gvregs);
@@ -14953,2206 +15200,2273 @@ __auto_type pfp = _t3300.data.EPropAccess.prop;
                     return (-1LL);
                 }
             }
-            /* pass */
+#line 6179 "src/taumir/lower.tr"
             long long grtag = LModule_fn_ret_tag(m, gmangled);
-            /* pass */
+#line 6180 "src/taumir/lower.tr"
             long long gd = LFunc_new_vreg(lf);
-            /* pass */
+#line 6181 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(gd, gmangled, gvregs));
-            /* pass */
+#line 6182 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, gd, grtag);
-            /* pass */
+#line 6183 "src/taumir/lower.tr"
             if ((grtag == 1LL)) {
-                /* pass */
+#line 6183 "src/taumir/lower.tr"
                 _fresh_mark(lf, gd);
             }
-            /* pass */
+#line 6184 "src/taumir/lower.tr"
+            long long _trret1699 = gd;
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
             _tr_str_release(gmangled);
-            return gd;
+            return _trret1699;
         }
-        /* pass */
-        if ((args->len > _arg_limit(m))) {
-            /* pass */
+#line 6185 "src/taumir/lower.tr"
+        if (({ __auto_type _ord_t6355 = (args->len); __auto_type _wr = ((_ord_t6355 > _arg_limit(m))); _wr; })) {
+#line 6185 "src/taumir/lower.tr"
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
             return (-1LL);
         }
-        /* pass */
+#line 6186 "src/taumir/lower.tr"
         long long rtag = LModule_fn_ret_tag(m, fn);
-        /* pass */
+#line 6187 "src/taumir/lower.tr"
         if ((rtag < 0LL)) {
-            /* pass */
+#line 6187 "src/taumir/lower.tr"
             _tr_str_release(alloc_nm);
             _tr_str_release(fn);
             return (-1LL);
         }
-        /* pass */
+#line 6188 "src/taumir/lower.tr"
         List_i64* argvregs = (void*)List_i64_new();
-        /* pass */
+#line 6189 "src/taumir/lower.tr"
         long long ai = 0LL;
-        /* pass */
+#line 6190 "src/taumir/lower.tr"
         while ((ai < args->len)) {
-            /* pass */
+#line 6191 "src/taumir/lower.tr"
             long long avr = lower_expr(m, lf, ((HirExpr*)List_ptr_get(args, ai)));
-            /* pass */
+#line 6192 "src/taumir/lower.tr"
             if ((avr < 0LL)) {
-                /* pass */
+#line 6192 "src/taumir/lower.tr"
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
                 List_i64_free(argvregs);
                 return (-1LL);
             }
-            /* pass */
+#line 6193 "src/taumir/lower.tr"
             List_i64_append(argvregs, avr);
-            /* pass */
+#line 6194 "src/taumir/lower.tr"
             ai = (ai + 1LL);
         }
-        /* pass */
+#line 6195 "src/taumir/lower.tr"
         long long d4 = LFunc_new_vreg(lf);
-        /* pass */
+#line 6196 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(d4, fn, argvregs));
-        /* pass */
+#line 6197 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, d4, rtag);
-        /* pass */
+#line 6198 "src/taumir/lower.tr"
         if ((rtag == 1LL)) {
-            /* pass */
+#line 6203 "src/taumir/lower.tr"
             if ((_is_runtime_fn(fn) && (!_is_rc_str_runtime_fn(fn)))) {
-                /* pass */
+#line 6204 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_new", 14LL));
-                /* pass */
+#line 6205 "src/taumir/lower.tr"
                 List_i64* d4wr = (void*)List_i64_new();
-                /* pass */
+#line 6206 "src/taumir/lower.tr"
                 List_i64_append(d4wr, d4);
-                /* pass */
+#line 6207 "src/taumir/lower.tr"
                 long long d4wd = LFunc_new_vreg(lf);
-                /* pass */
+#line 6208 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(d4wd, _tr_str_lit_len("_tr_rt_str_new", 14LL), d4wr));
-                /* pass */
+#line 6209 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, d4wd, 1LL);
-                /* pass */
+#line 6210 "src/taumir/lower.tr"
                 _fresh_mark(lf, d4wd);
-                /* pass */
+#line 6211 "src/taumir/lower.tr"
+                long long _trret1700 = d4wd;
                 _tr_str_release(alloc_nm);
                 _tr_str_release(fn);
-                return d4wd;
+                return _trret1700;
             }
-            /* pass */
+#line 6212 "src/taumir/lower.tr"
             _fresh_mark(lf, d4);
         }
-        /* pass */
+#line 6213 "src/taumir/lower.tr"
+        long long _trret1701 = d4;
         _tr_str_release(alloc_nm);
         _tr_str_release(fn);
-        return d4;
-    } else if (_t3291.tag == HirExpr_ETuple) {
-        __auto_type titems = _t3291.data.ETuple.items;
-        /* pass */
+        return _trret1701;
+    } else if (_t6316.tag == HirExpr_ETuple) {
+        __auto_type titems = _t6316.data.ETuple.items;
+#line 6217 "src/taumir/lower.tr"
         if ((titems->len == 0LL)) {
-            /* pass */
+#line 6219 "src/taumir/lower.tr"
             long long zsz = LFunc_new_vreg(lf);
-            /* pass */
+#line 6220 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IConst(zsz, 8LL));
-            /* pass */
+#line 6221 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL));
-            /* pass */
+#line 6222 "src/taumir/lower.tr"
             List_i64* zba = (void*)List_i64_new();
-            /* pass */
+#line 6223 "src/taumir/lower.tr"
             List_i64_append(zba, zsz);
-            /* pass */
+#line 6224 "src/taumir/lower.tr"
             long long zblk = LFunc_new_vreg(lf);
-            /* pass */
+#line 6225 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(zblk, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL), zba));
-            /* pass */
+#line 6226 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, zblk, 15LL);
-            /* pass */
+#line 6227 "src/taumir/lower.tr"
             _fresh_mark_obj(lf, zblk);
-            /* pass */
+#line 6228 "src/taumir/lower.tr"
             return zblk;
         }
-        /* pass */
+#line 6229 "src/taumir/lower.tr"
         List_i64* tvals = (void*)List_i64_new();
-        /* pass */
+#line 6230 "src/taumir/lower.tr"
         long long tj = 0LL;
-        /* pass */
+#line 6231 "src/taumir/lower.tr"
         while ((tj < titems->len)) {
-            /* pass */
+#line 6232 "src/taumir/lower.tr"
             long long tev = lower_expr(m, lf, ((HirExpr*)List_ptr_get(titems, tj)));
-            /* pass */
+#line 6233 "src/taumir/lower.tr"
             if ((tev < 0LL)) {
-                /* pass */
+#line 6233 "src/taumir/lower.tr"
                 List_i64_free(tvals);
                 return (-1LL);
             }
-            /* pass */
+#line 6234 "src/taumir/lower.tr"
             long long tevt = LFunc_vreg_type(lf, tev);
-            /* pass */
+#line 6235 "src/taumir/lower.tr"
             if (((((_is_list_tag(tevt) || _is_dict_tag(tevt)) || _is_set_tag(tevt)) || (tevt == 12LL)) || (tevt == 15LL))) {
-                /* pass */
+#line 6235 "src/taumir/lower.tr"
                 List_i64_free(tvals);
                 return (-1LL);
             }
-            /* pass */
+#line 6236 "src/taumir/lower.tr"
             if ((tevt == 5LL)) {
-                /* pass */
+#line 6237 "src/taumir/lower.tr"
                 long long tfb = LFunc_new_vreg(lf);
-                /* pass */
+#line 6238 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFBits(tfb, tev));
-                /* pass */
+#line 6239 "src/taumir/lower.tr"
                 tev = tfb;
             } else if ((tevt == 1LL)) {
-                /* pass */
+#line 6241 "src/taumir/lower.tr"
                 _secure_str(m, lf, tev);
             } else if (((tevt == 10LL) || (tevt == 11LL))) {
-                /* pass */
+#line 6243 "src/taumir/lower.tr"
                 _secure_obj(m, lf, tev);
             }
-            /* pass */
+#line 6244 "src/taumir/lower.tr"
             List_i64_append(tvals, tev);
-            /* pass */
+#line 6245 "src/taumir/lower.tr"
             tj = (tj + 1LL);
         }
-        /* pass */
+#line 6246 "src/taumir/lower.tr"
         long long tsz = LFunc_new_vreg(lf);
-        /* pass */
+#line 6247 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(tsz, (titems->len * 8LL)));
-        /* pass */
+#line 6248 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL));
-        /* pass */
+#line 6249 "src/taumir/lower.tr"
         List_i64* tba = (void*)List_i64_new();
-        /* pass */
+#line 6250 "src/taumir/lower.tr"
         List_i64_append(tba, tsz);
-        /* pass */
+#line 6251 "src/taumir/lower.tr"
         long long tblk = LFunc_new_vreg(lf);
-        /* pass */
+#line 6252 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(tblk, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL), tba));
-        /* pass */
+#line 6253 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, tblk, 15LL);
-        /* pass */
+#line 6254 "src/taumir/lower.tr"
         long long tk = 0LL;
-        /* pass */
+#line 6255 "src/taumir/lower.tr"
         while ((tk < tvals->len)) {
-            /* pass */
+#line 6256 "src/taumir/lower.tr"
             _emit_field_set(m, lf, tblk, (tk * 8LL), List_i64_get(tvals, tk));
-            /* pass */
+#line 6257 "src/taumir/lower.tr"
             tk = (tk + 1LL);
         }
-        /* pass */
+#line 6258 "src/taumir/lower.tr"
+        long long _trret1702 = tblk;
         List_i64_free(tvals);
-        return tblk;
-    } else if (_t3291.tag == HirExpr_ESet) {
-        __auto_type sitems = _t3291.data.ESet.items;
-        /* pass */
+        return _trret1702;
+    } else if (_t6316.tag == HirExpr_ESet) {
+        __auto_type sitems = _t6316.data.ESet.items;
+#line 6262 "src/taumir/lower.tr"
         if ((sitems->len == 0LL)) {
-            /* pass */
+#line 6262 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 6263 "src/taumir/lower.tr"
         long long sev0 = lower_expr(m, lf, ((HirExpr*)List_ptr_get(sitems, 0LL)));
-        /* pass */
+#line 6264 "src/taumir/lower.tr"
         if ((sev0 < 0LL)) {
-            /* pass */
+#line 6264 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 6265 "src/taumir/lower.tr"
         long long setag = 13LL;
-        /* pass */
+#line 6266 "src/taumir/lower.tr"
         if ((LFunc_vreg_type(lf, sev0) == 1LL)) {
-            /* pass */
+#line 6266 "src/taumir/lower.tr"
             setag = 16LL;
         } else if ((LFunc_vreg_type(lf, sev0) != 0LL)) {
-            /* pass */
+#line 6267 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 6268 "src/taumir/lower.tr"
         TrStr snew = _set_sym(setag, _tr_str_lit_len("new", 3LL));
-        /* pass */
+#line 6269 "src/taumir/lower.tr"
         LModule_add_extern(m, snew);
-        /* pass */
+#line 6270 "src/taumir/lower.tr"
         long long shv = LFunc_new_vreg(lf);
-        /* pass */
+#line 6271 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(shv, snew, (void*)List_i64_new()));
-        /* pass */
+#line 6272 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, shv, setag);
-        /* pass */
+#line 6273 "src/taumir/lower.tr"
         TrStr sadd = _set_sym(setag, _tr_str_lit_len("set", 3LL));
-        /* pass */
+#line 6274 "src/taumir/lower.tr"
         LModule_add_extern(m, sadd);
-        /* pass */
+#line 6275 "src/taumir/lower.tr"
         long long sone = LFunc_new_vreg(lf);
-        /* pass */
+#line 6276 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(sone, 1LL));
-        /* pass */
+#line 6277 "src/taumir/lower.tr"
         List_i64* sfirst = (void*)List_i64_new();
-        /* pass */
+#line 6278 "src/taumir/lower.tr"
         List_i64_append(sfirst, shv);
-        /* pass */
+#line 6279 "src/taumir/lower.tr"
         List_i64_append(sfirst, sev0);
-        /* pass */
+#line 6280 "src/taumir/lower.tr"
         List_i64_append(sfirst, sone);
-        /* pass */
+#line 6283 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall((-1LL), sadd, sfirst));
-        /* pass */
+#line 6284 "src/taumir/lower.tr"
         long long sli = 1LL;
-        /* pass */
+#line 6285 "src/taumir/lower.tr"
         while ((sli < sitems->len)) {
-            /* pass */
+#line 6286 "src/taumir/lower.tr"
             long long sev = lower_expr(m, lf, ((HirExpr*)List_ptr_get(sitems, sli)));
-            /* pass */
+#line 6287 "src/taumir/lower.tr"
             if ((sev < 0LL)) {
-                /* pass */
+#line 6287 "src/taumir/lower.tr"
                 _tr_str_release(snew);
                 _tr_str_release(sadd);
                 return (-1LL);
             }
-            /* pass */
-            if ((LFunc_vreg_type(lf, sev) != LFunc_vreg_type(lf, sev0))) {
-                /* pass */
+#line 6288 "src/taumir/lower.tr"
+            if (({ __auto_type _ord_t6356 = (LFunc_vreg_type(lf, sev)); __auto_type _wr = ((_ord_t6356 != LFunc_vreg_type(lf, sev0))); _wr; })) {
+#line 6288 "src/taumir/lower.tr"
                 _tr_str_release(snew);
                 _tr_str_release(sadd);
                 return (-1LL);
             }
-            /* pass */
+#line 6289 "src/taumir/lower.tr"
             List_i64* sargs = (void*)List_i64_new();
-            /* pass */
+#line 6290 "src/taumir/lower.tr"
             List_i64_append(sargs, shv);
-            /* pass */
+#line 6291 "src/taumir/lower.tr"
             List_i64_append(sargs, sev);
-            /* pass */
+#line 6292 "src/taumir/lower.tr"
             List_i64_append(sargs, sone);
-            /* pass */
+#line 6293 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), sadd, sargs));
-            /* pass */
+#line 6294 "src/taumir/lower.tr"
             sli = (sli + 1LL);
         }
-        /* pass */
+#line 6295 "src/taumir/lower.tr"
+        long long _trret1703 = shv;
         _tr_str_release(snew);
         _tr_str_release(sadd);
-        return shv;
-    } else if (_t3291.tag == HirExpr_EList) {
-        __auto_type items = _t3291.data.EList.items;
-__auto_type lty = _t3291.data.EList.ty;
-        /* pass */
+        return _trret1703;
+    } else if (_t6316.tag == HirExpr_EList) {
+        __auto_type items = _t6316.data.EList.items;
+__auto_type lty = _t6316.data.EList.ty;
+#line 6301 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_new", 15LL));
-        /* pass */
+#line 6302 "src/taumir/lower.tr"
         long long hv = LFunc_new_vreg(lf);
-        /* pass */
+#line 6303 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(hv, _tr_str_lit_len("_tr_rt_list_new", 15LL), (void*)List_i64_new()));
-        /* pass */
+#line 6304 "src/taumir/lower.tr"
         long long elem_t = 0LL;
-        /* pass */
+#line 6305 "src/taumir/lower.tr"
         long long list_tag = 2LL;
-        /* pass */
+#line 6306 "src/taumir/lower.tr"
         if ((items->len == 0LL)) {
-            /* pass */
+#line 6307 "src/taumir/lower.tr"
             long long ann_tag = _tag_of(m, lty);
-            /* pass */
+#line 6308 "src/taumir/lower.tr"
             if ((((((ann_tag == 2LL) || (ann_tag == 3LL)) || (ann_tag == 14LL)) || (ann_tag == 19LL)) || (ann_tag == 22LL))) {
-                /* pass */
+#line 6309 "src/taumir/lower.tr"
                 list_tag = ann_tag;
-                /* pass */
+#line 6310 "src/taumir/lower.tr"
                 elem_t = _list_elem_tag(ann_tag);
             } else if ((_tr_str_eqv((lty->name), (_tr_str_lit_len("List", 4LL))) || _tr_str_eqv((lty->name), (_tr_str_lit_len("Vec", 3LL))))) {
-                /* pass */
+#line 6312 "src/taumir/lower.tr"
                 if (((lty->args->len > 0LL) && _tr_str_eqv(((*((AstType**)List_ptr_get(lty->args, 0LL)))->name), (_tr_str_lit_len("bool", 4LL))))) {
-                    /* pass */
+#line 6313 "src/taumir/lower.tr"
                     list_tag = 22LL;
-                    /* pass */
+#line 6314 "src/taumir/lower.tr"
                     elem_t = 4LL;
                 }
             }
         }
-        /* pass */
+#line 6315 "src/taumir/lower.tr"
         long long li = 0LL;
-        /* pass */
+#line 6316 "src/taumir/lower.tr"
         while ((li < items->len)) {
-            /* pass */
+#line 6317 "src/taumir/lower.tr"
             long long ev = lower_expr(m, lf, ((HirExpr*)List_ptr_get(items, li)));
-            /* pass */
+#line 6318 "src/taumir/lower.tr"
             if ((ev < 0LL)) {
-                /* pass */
+#line 6318 "src/taumir/lower.tr"
                 return (-1LL);
             }
-            /* pass */
+#line 6319 "src/taumir/lower.tr"
             long long evt = LFunc_vreg_type(lf, ev);
-            /* pass */
+#line 6320 "src/taumir/lower.tr"
             if ((((((evt != 0LL) && (evt != 1LL)) && (evt != 4LL)) && (evt != 5LL)) && (evt != 10LL))) {
-                /* pass */
+#line 6320 "src/taumir/lower.tr"
                 return (-1LL);
             }
-            /* pass */
+#line 6321 "src/taumir/lower.tr"
             long long eff_t = evt;
-            /* pass */
+#line 6322 "src/taumir/lower.tr"
             if ((li == 0LL)) {
-                /* pass */
+#line 6323 "src/taumir/lower.tr"
                 elem_t = eff_t;
-                /* pass */
+#line 6324 "src/taumir/lower.tr"
                 list_tag = _list_tag_for_elem(elem_t);
             } else if ((eff_t != elem_t)) {
-                /* pass */
+#line 6326 "src/taumir/lower.tr"
                 return (-1LL);
             }
-            /* pass */
+#line 6327 "src/taumir/lower.tr"
             if ((evt == 1LL)) {
-                /* pass */
+#line 6327 "src/taumir/lower.tr"
                 _secure_str(m, lf, ev);
             }
-            /* pass */
+#line 6328 "src/taumir/lower.tr"
             if ((((evt == 10LL) || (evt == 11LL)) || (evt == 15LL))) {
-                /* pass */
+#line 6328 "src/taumir/lower.tr"
                 _secure_obj(m, lf, ev);
             }
-            /* pass */
+#line 6329 "src/taumir/lower.tr"
             if ((evt == 5LL)) {
-                /* pass */
+#line 6330 "src/taumir/lower.tr"
                 long long evb = LFunc_new_vreg(lf);
-                /* pass */
+#line 6331 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFBits(evb, ev));
-                /* pass */
+#line 6332 "src/taumir/lower.tr"
                 ev = evb;
             }
-            /* pass */
+#line 6333 "src/taumir/lower.tr"
             TrStr push_sym = _tr_str_lit_len("_tr_rt_list_push_i64", 20LL);
-            /* pass */
+#line 6334 "src/taumir/lower.tr"
             if ((list_tag == 22LL)) {
-                /* pass */
-                TrStr _strtmp_t3317 = _tr_str_lit_len("_tr_rt_blist_push", 17LL);
+#line 6334 "src/taumir/lower.tr"
+                TrStr _strtmp_t6357 = _tr_str_lit_len("_tr_rt_blist_push", 17LL);
                 _tr_str_release(push_sym);
-                push_sym = _strtmp_t3317;
+                push_sym = _strtmp_t6357;
             }
-            /* pass */
+#line 6335 "src/taumir/lower.tr"
             LModule_add_extern(m, push_sym);
-            /* pass */
+#line 6336 "src/taumir/lower.tr"
             List_i64* pa = (void*)List_i64_new();
-            /* pass */
+#line 6337 "src/taumir/lower.tr"
             List_i64_append(pa, hv);
-            /* pass */
+#line 6338 "src/taumir/lower.tr"
             List_i64_append(pa, ev);
-            /* pass */
+#line 6339 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), push_sym, pa));
-            /* pass */
+#line 6340 "src/taumir/lower.tr"
             li = (li + 1LL);
             _tr_str_release(push_sym);
         }
-        /* pass */
+#line 6341 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, hv, list_tag);
-        /* pass */
-        return hv;
-    } else if (_t3291.tag == HirExpr_EDict) {
-        __auto_type keys = _t3291.data.EDict.keys;
-__auto_type vals = _t3291.data.EDict.vals;
-__auto_type dty = _t3291.data.EDict.ty;
-        /* pass */
+#line 6342 "src/taumir/lower.tr"
+        long long _trret1704 = hv;
+        return _trret1704;
+    } else if (_t6316.tag == HirExpr_EDict) {
+        __auto_type keys = _t6316.data.EDict.keys;
+__auto_type vals = _t6316.data.EDict.vals;
+__auto_type dty = _t6316.data.EDict.ty;
+#line 6344 "src/taumir/lower.tr"
         long long dtag = _ast_type_tag(dty);
-        /* pass */
+#line 6345 "src/taumir/lower.tr"
         if ((keys->len > 0LL)) {
-            /* pass */
+#line 6346 "src/taumir/lower.tr"
             long long k0 = _ast_type_tag(hir_expr_type(((HirExpr*)List_ptr_get(keys, 0LL))));
-            /* pass */
+#line 6347 "src/taumir/lower.tr"
             long long v0 = _ast_type_tag(hir_expr_type(((HirExpr*)List_ptr_get(vals, 0LL))));
-            /* pass */
+#line 6348 "src/taumir/lower.tr"
             if (((k0 == 1LL) && (v0 == 0LL))) {
-                /* pass */
+#line 6348 "src/taumir/lower.tr"
                 dtag = 6LL;
             } else if (((k0 == 0LL) && (v0 == 0LL))) {
-                /* pass */
+#line 6349 "src/taumir/lower.tr"
                 dtag = 7LL;
             } else if (((k0 == 1LL) && (v0 == 1LL))) {
-                /* pass */
+#line 6350 "src/taumir/lower.tr"
                 dtag = 8LL;
             } else if (((k0 == 0LL) && (v0 == 1LL))) {
-                /* pass */
+#line 6351 "src/taumir/lower.tr"
                 dtag = 9LL;
             } else if (((k0 == 1LL) && (v0 == 5LL))) {
-                /* pass */
+#line 6352 "src/taumir/lower.tr"
                 dtag = 17LL;
             } else if (((k0 == 0LL) && (v0 == 5LL))) {
-                /* pass */
+#line 6353 "src/taumir/lower.tr"
                 dtag = 18LL;
             } else {
-                /* pass */
+#line 6354 "src/taumir/lower.tr"
                 return (-1LL);
             }
         } else if (((_tr_str_eqv((dty->name), (_tr_str_lit_len("Dict", 4LL))) || _tr_str_eqv((dty->name), (_tr_str_lit_len("Map", 3LL)))) && (dty->args->len == 0LL))) {
-            /* pass */
+#line 6357 "src/taumir/lower.tr"
             dtag = 8LL;
         }
-        /* pass */
+#line 6358 "src/taumir/lower.tr"
         if ((!_is_dict_tag(dtag))) {
-            /* pass */
+#line 6359 "src/taumir/lower.tr"
             TrStr kn = _tr_str_lit_len("?", 1LL);
-            /* pass */
+#line 6359 "src/taumir/lower.tr"
             TrStr vn = _tr_str_lit_len("?", 1LL);
-            /* pass */
+#line 6360 "src/taumir/lower.tr"
             if ((dty->args->len > 0LL)) {
-                /* pass */
-                TrStr _strtmp_t3318 = _tr_str_retain((*((AstType**)List_ptr_get(dty->args, 0LL)))->name);
+#line 6360 "src/taumir/lower.tr"
+                TrStr _strtmp_t6358 = _tr_str_retain((*((AstType**)List_ptr_get(dty->args, 0LL)))->name);
                 _tr_str_release(kn);
-                kn = _strtmp_t3318;
+                kn = _strtmp_t6358;
             }
-            /* pass */
+#line 6361 "src/taumir/lower.tr"
             if ((dty->args->len > 1LL)) {
-                /* pass */
-                TrStr _strtmp_t3319 = _tr_str_retain((*((AstType**)List_ptr_get(dty->args, 1LL)))->name);
+#line 6361 "src/taumir/lower.tr"
+                TrStr _strtmp_t6359 = _tr_str_retain((*((AstType**)List_ptr_get(dty->args, 1LL)))->name);
                 _tr_str_release(vn);
-                vn = _strtmp_t3319;
+                vn = _strtmp_t6359;
             }
-            /* pass */
-            m->fail_note = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(dtag)))); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("bad dict tag dtag=", 18LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len(" ty=", 4LL))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (dty->name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len(" k=", 3LL))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (kn)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len(" v=", 3LL))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (vn)); _tr_str_release(_cl); _cres; });
-            /* pass */
+#line 6362 "src/taumir/lower.tr"
+            m->fail_note = ({ __auto_type _ord_t6360 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(dtag)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("bad dict tag dtag=", 18LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ty=", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t6360); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (dty->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" k=", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (kn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" v=", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vn)); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+#line 6363 "src/taumir/lower.tr"
             _tr_str_release(kn);
             _tr_str_release(vn);
             return (-1LL);
         }
-        /* pass */
+#line 6364 "src/taumir/lower.tr"
         TrStr dnew = _dict_new_sym(dtag);
-        /* pass */
+#line 6365 "src/taumir/lower.tr"
         LModule_add_extern(m, dnew);
-        /* pass */
+#line 6366 "src/taumir/lower.tr"
         long long dhv = LFunc_new_vreg(lf);
-        /* pass */
+#line 6367 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(dhv, dnew, (void*)List_i64_new()));
-        /* pass */
+#line 6368 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, dhv, dtag);
-        /* pass */
+#line 6369 "src/taumir/lower.tr"
         bool kstr = _dict_key_is_str(dtag);
-        /* pass */
+#line 6370 "src/taumir/lower.tr"
         long long vtag = _dict_val_tag(dtag);
-        /* pass */
+#line 6371 "src/taumir/lower.tr"
         long long di = 0LL;
-        /* pass */
+#line 6372 "src/taumir/lower.tr"
         while ((di < keys->len)) {
-            /* pass */
+#line 6373 "src/taumir/lower.tr"
             long long kv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(keys, di)));
-            /* pass */
+#line 6374 "src/taumir/lower.tr"
             if ((kv < 0LL)) {
-                /* pass */
+#line 6374 "src/taumir/lower.tr"
                 _tr_str_release(dnew);
                 return (-1LL);
             }
-            /* pass */
+#line 6375 "src/taumir/lower.tr"
             if ((kstr && (LFunc_vreg_type(lf, kv) != 1LL))) {
-                /* pass */
+#line 6375 "src/taumir/lower.tr"
                 _tr_str_release(dnew);
                 return (-1LL);
             }
-            /* pass */
+#line 6376 "src/taumir/lower.tr"
             if (((!kstr) && (LFunc_vreg_type(lf, kv) != 0LL))) {
-                /* pass */
+#line 6376 "src/taumir/lower.tr"
                 _tr_str_release(dnew);
                 return (-1LL);
             }
-            /* pass */
+#line 6377 "src/taumir/lower.tr"
             long long vv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(vals, di)));
-            /* pass */
+#line 6378 "src/taumir/lower.tr"
             if ((vv < 0LL)) {
-                /* pass */
+#line 6378 "src/taumir/lower.tr"
                 _tr_str_release(dnew);
                 return (-1LL);
             }
-            /* pass */
+#line 6379 "src/taumir/lower.tr"
             if ((LFunc_vreg_type(lf, vv) != vtag)) {
-                /* pass */
+#line 6379 "src/taumir/lower.tr"
                 _tr_str_release(dnew);
                 return (-1LL);
             }
-            /* pass */
+#line 6380 "src/taumir/lower.tr"
             if ((vtag == 1LL)) {
-                /* pass */
+#line 6380 "src/taumir/lower.tr"
                 _secure_str(m, lf, vv);
             }
-            /* pass */
+#line 6381 "src/taumir/lower.tr"
             if ((vtag == 5LL)) {
-                /* pass */
+#line 6382 "src/taumir/lower.tr"
                 long long dvb = LFunc_new_vreg(lf);
-                /* pass */
+#line 6383 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFBits(dvb, vv));
-                /* pass */
+#line 6384 "src/taumir/lower.tr"
                 vv = dvb;
             }
-            /* pass */
+#line 6385 "src/taumir/lower.tr"
             TrStr dset = _dict_sym(dtag, _tr_str_lit_len("set", 3LL));
-            /* pass */
+#line 6386 "src/taumir/lower.tr"
             LModule_add_extern(m, dset);
-            /* pass */
+#line 6387 "src/taumir/lower.tr"
             List_i64* dsa = (void*)List_i64_new();
-            /* pass */
+#line 6388 "src/taumir/lower.tr"
             List_i64_append(dsa, dhv);
-            /* pass */
+#line 6389 "src/taumir/lower.tr"
             List_i64_append(dsa, kv);
-            /* pass */
+#line 6390 "src/taumir/lower.tr"
             List_i64_append(dsa, vv);
-            /* pass */
+#line 6391 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), dset, dsa));
-            /* pass */
+#line 6392 "src/taumir/lower.tr"
             di = (di + 1LL);
             _tr_str_release(dset);
         }
-        /* pass */
+#line 6393 "src/taumir/lower.tr"
+        long long _trret1705 = dhv;
         _tr_str_release(dnew);
-        return dhv;
-    } else if (_t3291.tag == HirExpr_EFString) {
-        __auto_type parts = _t3291.data.EFString.parts;
-        /* pass */
+        return _trret1705;
+    } else if (_t6316.tag == HirExpr_EFString) {
+        __auto_type parts = _t6316.data.EFString.parts;
+#line 6397 "src/taumir/lower.tr"
         long long acc = _heap_lit(m, lf, _tr_str_lit_len("", 0LL));
-        /* pass */
+#line 6398 "src/taumir/lower.tr"
         long long fi = 0LL;
-        /* pass */
+#line 6399 "src/taumir/lower.tr"
         while ((fi < parts->len)) {
-            /* pass */
+#line 6400 "src/taumir/lower.tr"
             HirFStringPart* fp = ((HirFStringPart*)List_ptr_get(parts, fi));
-            /* pass */
+#line 6401 "src/taumir/lower.tr"
             long long pr = (-1LL);
-            /* pass */
+#line 6402 "src/taumir/lower.tr"
             if (fp->is_expr) {
-                /* pass */
+#line 6403 "src/taumir/lower.tr"
                 if ((!_tr_str_eqv((fp->fmt_spec), (_tr_str_lit_len("", 0LL))))) {
-                    /* pass */
+#line 6406 "src/taumir/lower.tr"
                     long long spev = lower_expr(m, lf, fp->expr);
-                    /* pass */
+#line 6407 "src/taumir/lower.tr"
                     if ((spev < 0LL)) {
-                        /* pass */
+#line 6407 "src/taumir/lower.tr"
                         return (-1LL);
                     }
-                    /* pass */
-                    long long spidx = LModule_add_string(m, fp->fmt_spec, _tr_str_lenv((fp->fmt_spec)));
-                    /* pass */
+#line 6408 "src/taumir/lower.tr"
+                    long long spidx = ({ __auto_type _ord_t6361 = (fp->fmt_spec); __auto_type _ord_t6362 = (_tr_str_lenv((fp->fmt_spec))); __auto_type _wr = (LModule_add_string(m, _ord_t6361, _ord_t6362)); _wr; });
+#line 6409 "src/taumir/lower.tr"
                     long long specv = LFunc_new_vreg(lf);
-                    /* pass */
+#line 6410 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_IStr(specv, spidx));
-                    /* pass */
+#line 6411 "src/taumir/lower.tr"
                     long long spvt = LFunc_vreg_type(lf, spev);
-                    /* pass */
+#line 6412 "src/taumir/lower.tr"
                     if ((spvt == 5LL)) {
-                        /* pass */
+#line 6413 "src/taumir/lower.tr"
                         long long spbits = LFunc_new_vreg(lf);
-                        /* pass */
+#line 6414 "src/taumir/lower.tr"
                         LFunc_emit(lf, LInst_ctor_IFBits(spbits, spev));
-                        /* pass */
+#line 6415 "src/taumir/lower.tr"
                         pr = _str_call1(m, lf, _tr_str_lit_len("_tr_rt_fmt_spec_f64", 19LL), spbits, specv, 1LL);
                     } else if ((spvt == 1LL)) {
-                        /* pass */
+#line 6417 "src/taumir/lower.tr"
                         pr = _str_call1(m, lf, _tr_str_lit_len("_tr_rt_fmt_spec_str", 19LL), spev, specv, 1LL);
                     } else if (((spvt == 0LL) || (spvt == 4LL))) {
-                        /* pass */
+#line 6419 "src/taumir/lower.tr"
                         pr = _str_call1(m, lf, _tr_str_lit_len("_tr_rt_fmt_spec_i64", 19LL), spev, specv, 1LL);
                     } else {
-                        /* pass */
+#line 6421 "src/taumir/lower.tr"
                         return (-1LL);
                     }
                 } else {
-                    /* pass */
+#line 6424 "src/taumir/lower.tr"
                     TrStr fcls = _recv_class(m, lf, fp->expr);
-                    /* pass */
-                    if ((((!_tr_str_eqv((fcls), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, fcls)) && (!_tr_str_eqv((LModule_resolve_method(m, fcls, _tr_str_lit_len("__str__", 7LL))), (_tr_str_lit_len("", 0LL)))))) {
-                        /* pass */
+#line 6425 "src/taumir/lower.tr"
+                    if ((((!_tr_str_eqv((fcls), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, fcls)) && ({ TrStr _cmpa_t6363 = (LModule_resolve_method(m, fcls, _tr_str_lit_len("__str__", 7LL))); TrStr _cmpb_t6364 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t6365 = !_tr_str_eqv(_cmpa_t6363, _cmpb_t6364); _tr_str_release(_cmpa_t6363); _cmpr_t6365; }))) {
+#line 6426 "src/taumir/lower.tr"
                         pr = _obj_to_str(m, lf, fp->expr, (-1LL));
-                        /* pass */
+#line 6427 "src/taumir/lower.tr"
                         if ((pr < 0LL)) {
-                            /* pass */
+#line 6427 "src/taumir/lower.tr"
                             _tr_str_release(fcls);
                             return (-1LL);
                         }
                     } else {
-                        /* pass */
+#line 6429 "src/taumir/lower.tr"
                         long long fev = lower_expr(m, lf, fp->expr);
-                        /* pass */
+#line 6430 "src/taumir/lower.tr"
                         if ((fev < 0LL)) {
-                            /* pass */
+#line 6430 "src/taumir/lower.tr"
                             _tr_str_release(fcls);
                             return (-1LL);
                         }
-                        /* pass */
+#line 6431 "src/taumir/lower.tr"
                         if ((_tr_str_eqv((hir_expr_type(fp->expr)->name), (_tr_str_lit_len("char", 4LL))) && (LFunc_vreg_type(lf, fev) == 0LL))) {
-                            /* pass */
+#line 6432 "src/taumir/lower.tr"
                             pr = _str_call0(m, lf, _tr_str_lit_len("_tr_rt_char_to_str", 18LL), fev, 1LL);
                         } else {
-                            /* pass */
+#line 6434 "src/taumir/lower.tr"
                             pr = _reg_to_str(m, lf, fev);
                         }
-                        /* pass */
+#line 6435 "src/taumir/lower.tr"
                         if ((pr < 0LL)) {
-                            /* pass */
+#line 6435 "src/taumir/lower.tr"
                             _tr_str_release(fcls);
                             return (-1LL);
                         }
                     }
                 }
             } else {
-                /* pass */
+#line 6437 "src/taumir/lower.tr"
                 pr = _heap_lit_len(m, lf, fp->text, fp->text_len);
             }
-            /* pass */
+#line 6438 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_concat", 17LL));
-            /* pass */
+#line 6439 "src/taumir/lower.tr"
             List_i64* fca = (void*)List_i64_new();
-            /* pass */
+#line 6440 "src/taumir/lower.tr"
             List_i64_append(fca, acc);
-            /* pass */
+#line 6441 "src/taumir/lower.tr"
             List_i64_append(fca, pr);
-            /* pass */
+#line 6442 "src/taumir/lower.tr"
             long long fdc = LFunc_new_vreg(lf);
-            /* pass */
+#line 6443 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(fdc, _tr_str_lit_len("_tr_rt_str_concat", 17LL), fca));
-            /* pass */
+#line 6444 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, fdc, 1LL);
-            /* pass */
+#line 6445 "src/taumir/lower.tr"
             _fresh_mark(lf, fdc);
-            /* pass */
+#line 6446 "src/taumir/lower.tr"
             acc = fdc;
-            /* pass */
+#line 6447 "src/taumir/lower.tr"
             fi = (fi + 1LL);
         }
-        /* pass */
-        return acc;
-    } else if (_t3291.tag == HirExpr_EClosure) {
-        __auto_type cparams = _t3291.data.EClosure.params;
-__auto_type cret = _t3291.data.EClosure.ret_ty;
-__auto_type cbody = _t3291.data.EClosure.body;
-__auto_type cis_async = _t3291.data.EClosure.is_async;
-__auto_type ccaps = _t3291.data.EClosure.captures;
-        /* pass */
+#line 6448 "src/taumir/lower.tr"
+        long long _trret1706 = acc;
+        return _trret1706;
+    } else if (_t6316.tag == HirExpr_EClosure) {
+        __auto_type cparams = _t6316.data.EClosure.params;
+__auto_type cret = _t6316.data.EClosure.ret_ty;
+__auto_type cbody = _t6316.data.EClosure.body;
+__auto_type cis_async = _t6316.data.EClosure.is_async;
+__auto_type ccaps = _t6316.data.EClosure.captures;
+#line 6454 "src/taumir/lower.tr"
         if (cis_async) {
-            /* pass */
+#line 6454 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 6455 "src/taumir/lower.tr"
         long long crtag = _tag_of(m, cret);
-        /* pass */
+#line 6456 "src/taumir/lower.tr"
         if ((crtag < 0LL)) {
-            /* pass */
+#line 6456 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 6457 "src/taumir/lower.tr"
         if (((cparams->len + 1LL) > 6LL)) {
-            /* pass */
+#line 6457 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
-        TrStr cname = ({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(m->funcs->len)))); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("_tr_clo_", 8LL)), _cr); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (lf->name)); _tr_str_release(_cl); _cres; });
-        /* pass */
-        LFunc* clf = ({ TrStr _at_t3320 = (_own(cname)); __auto_type _wr = (LFunc_init(_at_t3320)); _tr_str_release(_at_t3320); _wr; });
-        /* pass */
+#line 6458 "src/taumir/lower.tr"
+        TrStr cname = ({ __auto_type _ord_t6366 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(m->funcs->len)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("_tr_clo_", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (_ord_t6366); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (lf->name)); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+#line 6459 "src/taumir/lower.tr"
+        LFunc* clf = ({ TrStr _at_t6367 = (_own(cname)); __auto_type _wr = (LFunc_init(_at_t6367)); _tr_str_release(_at_t6367); _wr; });
+#line 6460 "src/taumir/lower.tr"
         List_TrStr_append(clf->params, _tr_str_lit_len("__env", 5LL));
-        /* pass */
+#line 6461 "src/taumir/lower.tr"
         LFunc_add_var(clf, _tr_str_lit_len("__env", 5LL));
-        /* pass */
+#line 6462 "src/taumir/lower.tr"
         long long cpj = 0LL;
-        /* pass */
+#line 6463 "src/taumir/lower.tr"
         while ((cpj < cparams->len)) {
-            /* pass */
+#line 6464 "src/taumir/lower.tr"
             HirParam* cp = ((HirParam*)List_ptr_get(cparams, cpj));
-            /* pass */
+#line 6465 "src/taumir/lower.tr"
             long long cptag = _tag_of(m, cp->ty);
-            /* pass */
+#line 6466 "src/taumir/lower.tr"
             if ((cptag < 0LL)) {
-                /* pass */
+#line 6466 "src/taumir/lower.tr"
                 _tr_str_release(cname);
                 _tr_obj_release(clf, _trdrop_LFunc);
                 return (-1LL);
             }
-            /* pass */
+#line 6467 "src/taumir/lower.tr"
             List_TrStr_append(clf->params, cp->name);
-            /* pass */
+#line 6468 "src/taumir/lower.tr"
             LFunc_add_var(clf, cp->name);
-            /* pass */
+#line 6469 "src/taumir/lower.tr"
             LFunc_set_var_type(clf, cp->name, cptag);
-            /* pass */
+#line 6470 "src/taumir/lower.tr"
             if ((((cptag == 10LL) || (cptag == 11LL)) && (!_is_null_str(cp->ty->name)))) {
-                /* pass */
-                ({ TrStr _at_t3321 = (_own(cp->ty->name)); LFunc_set_var_cls(clf, cp->name, _at_t3321); _tr_str_release(_at_t3321); });
+#line 6471 "src/taumir/lower.tr"
+                ({ __auto_type _ord_t6368 = (cp->name); TrStr _ord_t6369 = (_own(cp->ty->name)); LFunc_set_var_cls(clf, _ord_t6368, _ord_t6369); _tr_str_release(_ord_t6369); });
             }
-            /* pass */
+#line 6472 "src/taumir/lower.tr"
             cpj = (cpj + 1LL);
         }
-        /* pass */
+#line 6474 "src/taumir/lower.tr"
         long long ccj = 0LL;
-        /* pass */
+#line 6475 "src/taumir/lower.tr"
         while ((ccj < ccaps->len)) {
-            /* pass */
+#line 6476 "src/taumir/lower.tr"
             HirParam* cc = ((HirParam*)List_ptr_get(ccaps, ccj));
-            /* pass */
+#line 6477 "src/taumir/lower.tr"
             if ((LFunc_var_index(lf, cc->name) < 0LL)) {
-                /* pass */
+#line 6477 "src/taumir/lower.tr"
                 _tr_str_release(cname);
                 _tr_obj_release(clf, _trdrop_LFunc);
                 return (-1LL);
             }
-            /* pass */
+#line 6478 "src/taumir/lower.tr"
             long long cctag = LFunc_var_type(lf, cc->name);
-            /* pass */
+#line 6479 "src/taumir/lower.tr"
             if (((((cctag != 0LL) && (cctag != 1LL)) && (cctag != 4LL)) && (cctag != 5LL))) {
-                /* pass */
+#line 6479 "src/taumir/lower.tr"
                 _tr_str_release(cname);
                 _tr_obj_release(clf, _trdrop_LFunc);
                 return (-1LL);
             }
-            /* pass */
-            ({ TrStr _at_t3322 = (_own(cc->name)); List_TrStr_append(clf->captures, _at_t3322); _tr_str_release(_at_t3322); });
-            /* pass */
+#line 6480 "src/taumir/lower.tr"
+            ({ TrStr _ord_t6370 = (_own(cc->name)); List_TrStr_append(clf->captures, _ord_t6370); _tr_str_release(_ord_t6370); });
+#line 6481 "src/taumir/lower.tr"
             List_i64_append(clf->cap_tags, cctag);
-            /* pass */
+#line 6482 "src/taumir/lower.tr"
             ccj = (ccj + 1LL);
         }
-        /* pass */
-        ({ TrStr _at_t3323 = (_own(cname)); List_TrStr_append(m->fn_names, _at_t3323); _tr_str_release(_at_t3323); });
-        /* pass */
+#line 6483 "src/taumir/lower.tr"
+        ({ TrStr _ord_t6371 = (_own(cname)); List_TrStr_append(m->fn_names, _ord_t6371); _tr_str_release(_ord_t6371); });
+#line 6484 "src/taumir/lower.tr"
         List_i64_append(m->fn_ret, crtag);
-        /* pass */
+#line 6485 "src/taumir/lower.tr"
         LFunc_set_cur(clf, LFunc_new_block(clf));
-        /* pass */
+#line 6486 "src/taumir/lower.tr"
         if ((!lower_block(m, clf, cbody))) {
-            /* pass */
+#line 6486 "src/taumir/lower.tr"
             _tr_str_release(cname);
             _tr_obj_release(clf, _trdrop_LFunc);
             return (-1LL);
         }
-        /* pass */
+#line 6487 "src/taumir/lower.tr"
         LFunc_set_term(clf, LTerm_ctor_TRetInt(0LL));
-        /* pass */
+#line 6488 "src/taumir/lower.tr"
         List_ptr_append(m->funcs, _tr_obj_retain(clf));
-        /* pass */
+#line 6490 "src/taumir/lower.tr"
         long long cblk_sz = LFunc_new_vreg(lf);
-        /* pass */
+#line 6491 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_IConst(cblk_sz, ((1LL + ccaps->len) * 8LL)));
-        /* pass */
+#line 6492 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL));
-        /* pass */
+#line 6493 "src/taumir/lower.tr"
         List_i64* cba = (void*)List_i64_new();
-        /* pass */
+#line 6494 "src/taumir/lower.tr"
         List_i64_append(cba, cblk_sz);
-        /* pass */
+#line 6495 "src/taumir/lower.tr"
         long long cblk = LFunc_new_vreg(lf);
-        /* pass */
+#line 6496 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(cblk, _tr_str_lit_len("_tr_rt_obj_alloc", 16LL), cba));
-        /* pass */
+#line 6497 "src/taumir/lower.tr"
         LFunc_set_vreg_type(lf, cblk, 12LL);
-        /* pass */
+#line 6498 "src/taumir/lower.tr"
         long long cfa = LFunc_new_vreg(lf);
-        /* pass */
-        ({ TrStr _at_t3324 = (_own(cname)); LFunc_emit(lf, LInst_ctor_IFuncAddr(cfa, _at_t3324)); _tr_str_release(_at_t3324); });
-        /* pass */
+#line 6499 "src/taumir/lower.tr"
+        ({ TrStr _at_t6372 = (_own(cname)); LFunc_emit(lf, LInst_ctor_IFuncAddr(cfa, _at_t6372)); _tr_str_release(_at_t6372); });
+#line 6500 "src/taumir/lower.tr"
         _emit_field_set(m, lf, cblk, 0LL, cfa);
-        /* pass */
+#line 6501 "src/taumir/lower.tr"
         long long cbi = 0LL;
-        /* pass */
+#line 6502 "src/taumir/lower.tr"
         while ((cbi < ccaps->len)) {
-            /* pass */
+#line 6503 "src/taumir/lower.tr"
             long long cav = LFunc_new_vreg(lf);
-            /* pass */
+#line 6504 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IAddrVar(cav, ((HirParam*)List_ptr_get(ccaps, cbi))->name));
-            /* pass */
+#line 6505 "src/taumir/lower.tr"
             _emit_field_set(m, lf, cblk, ((1LL + cbi) * 8LL), cav);
-            /* pass */
+#line 6506 "src/taumir/lower.tr"
             cbi = (cbi + 1LL);
         }
-        /* pass */
+#line 6507 "src/taumir/lower.tr"
         LFunc_set_vreg_xret(lf, cblk, crtag);
-        /* pass */
+#line 6508 "src/taumir/lower.tr"
+        long long _trret1707 = cblk;
         _tr_str_release(cname);
         _tr_obj_release(clf, _trdrop_LFunc);
-        return cblk;
-    } else if (_t3291.tag == HirExpr_EIndex) {
-        __auto_type obj = _t3291.data.EIndex.obj;
-__auto_type idx = _t3291.data.EIndex._tr_v_index;
-        /* pass */
+        return _trret1707;
+    } else if (_t6316.tag == HirExpr_EIndex) {
+        __auto_type obj = _t6316.data.EIndex.obj;
+__auto_type idx = _t6316.data.EIndex._tr_v_index;
+#line 6511 "src/taumir/lower.tr"
         TrStr gicls = _recv_class(m, lf, obj);
-        /* pass */
+#line 6512 "src/taumir/lower.tr"
         if (((!_tr_str_eqv((gicls), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, gicls))) {
-            /* pass */
+#line 6513 "src/taumir/lower.tr"
             TrStr gim = LModule_resolve_method(m, gicls, _tr_str_lit_len("__getitem__", 11LL));
-            /* pass */
+#line 6514 "src/taumir/lower.tr"
             if ((!_tr_str_eqv((gim), (_tr_str_lit_len("", 0LL))))) {
-                /* pass */
+#line 6515 "src/taumir/lower.tr"
                 long long giself = lower_expr(m, lf, obj);
-                /* pass */
+#line 6516 "src/taumir/lower.tr"
                 if ((giself < 0LL)) {
-                    /* pass */
+#line 6516 "src/taumir/lower.tr"
                     _tr_str_release(gicls);
                     _tr_str_release(gim);
                     return (-1LL);
                 }
-                /* pass */
+#line 6517 "src/taumir/lower.tr"
                 List_ptr* giargs = (void*)List_ptr_new();
-                /* pass */
+#line 6518 "src/taumir/lower.tr"
                 List_ptr_append(giargs, idx);
-                /* pass */
+#line 6519 "src/taumir/lower.tr"
+                long long _trret1708 = _lower_obj_call(m, lf, gim, giself, giargs);
                 _tr_str_release(gicls);
-                return _lower_obj_call(m, lf, gim, giself, giargs);
+                _tr_str_release(gim);
+                return _trret1708;
             }
         }
-        /* pass */
+#line 6522 "src/taumir/lower.tr"
         TrStr arn = _ident_name(obj);
-        /* pass */
+#line 6523 "src/taumir/lower.tr"
         if (((!_tr_str_eqv((arn), (_tr_str_lit_len("", 0LL)))) && (_fixed_arr_len(m, lf, arn) > 0LL))) {
-            /* pass */
+#line 6524 "src/taumir/lower.tr"
             long long ariv = lower_expr(m, lf, idx);
-            /* pass */
+#line 6525 "src/taumir/lower.tr"
             if (((ariv < 0LL) || (LFunc_vreg_type(lf, ariv) != 0LL))) {
-                /* pass */
+#line 6525 "src/taumir/lower.tr"
                 _tr_str_release(gicls);
                 _tr_str_release(arn);
                 return (-1LL);
             }
-            /* pass */
+#line 6526 "src/taumir/lower.tr"
             long long araddr = _array_elem_addr(m, lf, arn, ariv);
-            /* pass */
+#line 6527 "src/taumir/lower.tr"
             long long ard = LFunc_new_vreg(lf);
-            /* pass */
+#line 6528 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ILoad(ard, araddr, 0LL, 2LL));
-            /* pass */
+#line 6529 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, ard, _fixed_arr_elem_tag(m, lf, arn));
-            /* pass */
+#line 6530 "src/taumir/lower.tr"
+            long long _trret1709 = ard;
             _tr_str_release(gicls);
             _tr_str_release(arn);
-            return ard;
+            return _trret1709;
         }
-        /* pass */
+#line 6531 "src/taumir/lower.tr"
         long long ov = lower_expr(m, lf, obj);
-        /* pass */
+#line 6532 "src/taumir/lower.tr"
         if ((ov < 0LL)) {
-            /* pass */
+#line 6532 "src/taumir/lower.tr"
             _tr_str_release(gicls);
             _tr_str_release(arn);
             return (-1LL);
         }
-        /* pass */
+#line 6533 "src/taumir/lower.tr"
         long long ovt = LFunc_vreg_type(lf, ov);
-        /* pass */
+#line 6534 "src/taumir/lower.tr"
         if (_is_dict_tag(ovt)) {
-            /* pass */
+#line 6535 "src/taumir/lower.tr"
             long long dkv = lower_expr(m, lf, idx);
-            /* pass */
+#line 6536 "src/taumir/lower.tr"
             if ((dkv < 0LL)) {
-                /* pass */
+#line 6536 "src/taumir/lower.tr"
                 _tr_str_release(gicls);
                 _tr_str_release(arn);
                 return (-1LL);
             }
-            /* pass */
+#line 6537 "src/taumir/lower.tr"
             if ((_dict_key_is_str(ovt) && (LFunc_vreg_type(lf, dkv) != 1LL))) {
-                /* pass */
+#line 6537 "src/taumir/lower.tr"
                 _tr_str_release(gicls);
                 _tr_str_release(arn);
                 return (-1LL);
             }
-            /* pass */
+#line 6538 "src/taumir/lower.tr"
             if (((!_dict_key_is_str(ovt)) && (LFunc_vreg_type(lf, dkv) != 0LL))) {
-                /* pass */
+#line 6538 "src/taumir/lower.tr"
                 _tr_str_release(gicls);
                 _tr_str_release(arn);
                 return (-1LL);
             }
-            /* pass */
+#line 6539 "src/taumir/lower.tr"
             TrStr dget = _dict_sym(ovt, _tr_str_lit_len("get", 3LL));
-            /* pass */
+#line 6540 "src/taumir/lower.tr"
             LModule_add_extern(m, dget);
-            /* pass */
+#line 6541 "src/taumir/lower.tr"
             List_i64* dga = (void*)List_i64_new();
-            /* pass */
+#line 6542 "src/taumir/lower.tr"
             List_i64_append(dga, ov);
-            /* pass */
+#line 6543 "src/taumir/lower.tr"
             List_i64_append(dga, dkv);
-            /* pass */
+#line 6544 "src/taumir/lower.tr"
             long long dgd = LFunc_new_vreg(lf);
-            /* pass */
+#line 6545 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(dgd, dget, dga));
-            /* pass */
+#line 6546 "src/taumir/lower.tr"
             if ((_dict_val_tag(ovt) == 5LL)) {
-                /* pass */
+#line 6547 "src/taumir/lower.tr"
                 long long dgf = LFunc_new_vreg(lf);
-                /* pass */
+#line 6548 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IBitsF(dgf, dgd));
-                /* pass */
+#line 6549 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, dgf, 5LL);
-                /* pass */
+#line 6550 "src/taumir/lower.tr"
+                long long _trret1710 = dgf;
                 _tr_str_release(gicls);
                 _tr_str_release(arn);
                 _tr_str_release(dget);
-                return dgf;
+                return _trret1710;
             }
-            /* pass */
+#line 6551 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, dgd, _dict_val_tag(ovt));
-            /* pass */
+#line 6552 "src/taumir/lower.tr"
+            long long _trret1711 = dgd;
             _tr_str_release(gicls);
             _tr_str_release(arn);
             _tr_str_release(dget);
-            return dgd;
+            return _trret1711;
         }
-        /* pass */
+#line 6553 "src/taumir/lower.tr"
         if ((ovt == 1LL)) {
-            /* pass */
+#line 6554 "src/taumir/lower.tr"
             long long siv = lower_expr(m, lf, idx);
-            /* pass */
+#line 6555 "src/taumir/lower.tr"
             if ((siv < 0LL)) {
-                /* pass */
+#line 6555 "src/taumir/lower.tr"
                 _tr_str_release(gicls);
                 _tr_str_release(arn);
                 return (-1LL);
             }
-            /* pass */
+#line 6556 "src/taumir/lower.tr"
+            long long _trret1712 = _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_char_at", 18LL), ov, siv, 0LL);
             _tr_str_release(gicls);
             _tr_str_release(arn);
-            return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_char_at", 18LL), ov, siv, 0LL);
+            return _trret1712;
         }
-        /* pass */
+#line 6557 "src/taumir/lower.tr"
         if ((!_is_list_tag(ovt))) {
-            /* pass */
+#line 6557 "src/taumir/lower.tr"
             _tr_str_release(gicls);
             _tr_str_release(arn);
             return (-1LL);
         }
-        /* pass */
+#line 6558 "src/taumir/lower.tr"
         long long iv = lower_expr(m, lf, idx);
-        /* pass */
+#line 6559 "src/taumir/lower.tr"
         if ((iv < 0LL)) {
-            /* pass */
+#line 6559 "src/taumir/lower.tr"
             _tr_str_release(gicls);
             _tr_str_release(arn);
             return (-1LL);
         }
-        /* pass */
+#line 6560 "src/taumir/lower.tr"
+        long long _trret1713 = _list_get_elem(m, lf, ovt, ov, iv);
         _tr_str_release(gicls);
         _tr_str_release(arn);
-        return _list_get_elem(m, lf, ovt, ov, iv);
-    } else if (_t3291.tag == HirExpr_EPropAccess) {
-        __auto_type obj = _t3291.data.EPropAccess.obj;
-__auto_type prop = _t3291.data.EPropAccess.prop;
-        /* pass */
-        __auto_type _t3325 = (*obj);
-        if (_t3325.tag == HirExpr_EIdent) {
-            __auto_type uvn = _t3325.data.EIdent.name;
-            /* pass */
-            if (({ TrStr _at_t3326 = (_norm_variant(uvn, prop)); __auto_type _wr = ((LModule_is_enum(m, uvn) && (LModule_enum_variant_index(m, uvn, _at_t3326) >= 0LL))); _tr_str_release(_at_t3326); _wr; })) {
-                /* pass */
-                return ({ TrStr _at_t3327 = (_norm_variant(uvn, prop)); __auto_type _wr = (_lower_enum_ctor(m, lf, uvn, _at_t3327, (void*)List_ptr_new())); _tr_str_release(_at_t3327); _wr; });
+        return _trret1713;
+    } else if (_t6316.tag == HirExpr_EPropAccess) {
+        __auto_type obj = _t6316.data.EPropAccess.obj;
+__auto_type prop = _t6316.data.EPropAccess.prop;
+#line 6563 "src/taumir/lower.tr"
+        __auto_type _t6373 = (*obj);
+        if (_t6373.tag == HirExpr_EIdent) {
+            __auto_type uvn = _t6373.data.EIdent.name;
+#line 6565 "src/taumir/lower.tr"
+            if ((LModule_is_enum(m, uvn) && ({ TrStr _at_t6374 = (_norm_variant(uvn, prop)); __auto_type _wr = ((LModule_enum_variant_index(m, uvn, _at_t6374) >= 0LL)); _tr_str_release(_at_t6374); _wr; }))) {
+#line 6566 "src/taumir/lower.tr"
+                long long _trret1714 = ({ TrStr _at_t6375 = (_norm_variant(uvn, prop)); __auto_type _wr = (_lower_enum_ctor(m, lf, uvn, _at_t6375, (void*)List_ptr_new())); _tr_str_release(_at_t6375); _wr; });
+                return _trret1714;
             }
         } else if (1) {
-            __auto_type _ = _t3325;
-            /* pass */
+            __auto_type _ = _t6373;
+#line 6568 "src/taumir/lower.tr"
             /* pass */
         }
-        /* pass */
+#line 6571 "src/taumir/lower.tr"
         if (_tr_str_eqv((prop), (_tr_str_lit_len("len", 3LL)))) {
-            /* pass */
+#line 6572 "src/taumir/lower.tr"
             TrStr aln = _ident_name(obj);
-            /* pass */
+#line 6573 "src/taumir/lower.tr"
             if (((!_tr_str_eqv((aln), (_tr_str_lit_len("", 0LL)))) && (_fixed_arr_len(m, lf, aln) > 0LL))) {
-                /* pass */
+#line 6574 "src/taumir/lower.tr"
                 long long ald = LFunc_new_vreg(lf);
-                /* pass */
+#line 6575 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IConst(ald, _fixed_arr_len(m, lf, aln)));
-                /* pass */
+#line 6576 "src/taumir/lower.tr"
+                long long _trret1715 = ald;
                 _tr_str_release(aln);
-                return ald;
+                return _trret1715;
             }
         }
-        /* pass */
+#line 6581 "src/taumir/lower.tr"
         TrStr pcls = _recv_class(m, lf, obj);
-        /* pass */
+#line 6582 "src/taumir/lower.tr"
         if (((!_tr_str_eqv((pcls), (_tr_str_lit_len("", 0LL)))) && LModule_is_class(m, pcls))) {
-            /* pass */
+#line 6583 "src/taumir/lower.tr"
             long long foff = LModule_field_offset(m, pcls, prop);
-            /* pass */
+#line 6584 "src/taumir/lower.tr"
             if ((foff < 0LL)) {
-                /* pass */
+#line 6584 "src/taumir/lower.tr"
                 _tr_str_release(pcls);
                 return (-1LL);
             }
-            /* pass */
+#line 6585 "src/taumir/lower.tr"
             long long ftg = LModule_field_tag(m, pcls, prop);
-            /* pass */
+#line 6586 "src/taumir/lower.tr"
             if ((ftg < 0LL)) {
-                /* pass */
+#line 6586 "src/taumir/lower.tr"
                 _tr_str_release(pcls);
                 return (-1LL);
             }
-            /* pass */
+#line 6587 "src/taumir/lower.tr"
             long long fobj = lower_expr(m, lf, obj);
-            /* pass */
+#line 6588 "src/taumir/lower.tr"
             if ((fobj < 0LL)) {
-                /* pass */
+#line 6588 "src/taumir/lower.tr"
                 _tr_str_release(pcls);
                 return (-1LL);
             }
-            /* pass */
+#line 6589 "src/taumir/lower.tr"
             if ((ftg == 5LL)) {
-                /* pass */
+#line 6590 "src/taumir/lower.tr"
                 long long fraw = _emit_field_get(m, lf, fobj, foff, 0LL);
-                /* pass */
+#line 6591 "src/taumir/lower.tr"
                 long long ffv = LFunc_new_vreg(lf);
-                /* pass */
+#line 6592 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IBitsF(ffv, fraw));
-                /* pass */
+#line 6593 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, ffv, 5LL);
-                /* pass */
+#line 6594 "src/taumir/lower.tr"
+                long long _trret1716 = ffv;
                 _tr_str_release(pcls);
-                return ffv;
+                return _trret1716;
             }
-            /* pass */
+#line 6595 "src/taumir/lower.tr"
+            long long _trret1717 = _emit_field_get(m, lf, fobj, foff, ftg);
             _tr_str_release(pcls);
-            return _emit_field_get(m, lf, fobj, foff, ftg);
+            return _trret1717;
         }
-        /* pass */
+#line 6596 "src/taumir/lower.tr"
         if (((!_tr_str_eqv((pcls), (_tr_str_lit_len("", 0LL)))) && LModule_is_enum(m, pcls))) {
-            /* pass */
+#line 6597 "src/taumir/lower.tr"
             long long ep = _lower_enum_prop(m, lf, obj, pcls, prop);
-            /* pass */
+#line 6598 "src/taumir/lower.tr"
             if ((ep >= 0LL)) {
-                /* pass */
+#line 6598 "src/taumir/lower.tr"
+                long long _trret1718 = ep;
                 _tr_str_release(pcls);
-                return ep;
+                return _trret1718;
             }
         }
-        /* pass */
+#line 6599 "src/taumir/lower.tr"
         if ((!_tr_str_eqv((prop), (_tr_str_lit_len("len", 3LL))))) {
-            /* pass */
+#line 6599 "src/taumir/lower.tr"
             _tr_str_release(pcls);
             return (-1LL);
         }
-        /* pass */
+#line 6600 "src/taumir/lower.tr"
         long long ovl = lower_expr(m, lf, obj);
-        /* pass */
+#line 6601 "src/taumir/lower.tr"
         if ((ovl < 0LL)) {
-            /* pass */
+#line 6601 "src/taumir/lower.tr"
             _tr_str_release(pcls);
             return (-1LL);
         }
-        /* pass */
+#line 6602 "src/taumir/lower.tr"
         if (_is_set_tag(LFunc_vreg_type(lf, ovl))) {
-            /* pass */
+#line 6603 "src/taumir/lower.tr"
             TrStr pslsym = _set_sym(LFunc_vreg_type(lf, ovl), _tr_str_lit_len("len", 3LL));
-            /* pass */
+#line 6604 "src/taumir/lower.tr"
             LModule_add_extern(m, pslsym);
-            /* pass */
+#line 6605 "src/taumir/lower.tr"
             List_i64* psla = (void*)List_i64_new();
-            /* pass */
+#line 6606 "src/taumir/lower.tr"
             List_i64_append(psla, ovl);
-            /* pass */
+#line 6607 "src/taumir/lower.tr"
             long long psld = LFunc_new_vreg(lf);
-            /* pass */
+#line 6608 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(psld, pslsym, psla));
-            /* pass */
+#line 6609 "src/taumir/lower.tr"
+            long long _trret1719 = psld;
             _tr_str_release(pcls);
             _tr_str_release(pslsym);
-            return psld;
+            return _trret1719;
         }
-        /* pass */
+#line 6610 "src/taumir/lower.tr"
         if (_is_dict_tag(LFunc_vreg_type(lf, ovl))) {
-            /* pass */
+#line 6611 "src/taumir/lower.tr"
             TrStr dlsym = _dict_sym(LFunc_vreg_type(lf, ovl), _tr_str_lit_len("len", 3LL));
-            /* pass */
+#line 6612 "src/taumir/lower.tr"
             LModule_add_extern(m, dlsym);
-            /* pass */
+#line 6613 "src/taumir/lower.tr"
             List_i64* dla = (void*)List_i64_new();
-            /* pass */
+#line 6614 "src/taumir/lower.tr"
             List_i64_append(dla, ovl);
-            /* pass */
+#line 6615 "src/taumir/lower.tr"
             long long dld = LFunc_new_vreg(lf);
-            /* pass */
+#line 6616 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(dld, dlsym, dla));
-            /* pass */
+#line 6617 "src/taumir/lower.tr"
+            long long _trret1720 = dld;
             _tr_str_release(pcls);
             _tr_str_release(dlsym);
-            return dld;
+            return _trret1720;
         }
-        /* pass */
+#line 6618 "src/taumir/lower.tr"
         if ((LFunc_vreg_type(lf, ovl) == 1LL)) {
-            /* pass */
+#line 6619 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_strlen", 13LL));
-            /* pass */
+#line 6620 "src/taumir/lower.tr"
             List_i64* sla = (void*)List_i64_new();
-            /* pass */
+#line 6621 "src/taumir/lower.tr"
             List_i64_append(sla, ovl);
-            /* pass */
+#line 6622 "src/taumir/lower.tr"
             long long sld = LFunc_new_vreg(lf);
-            /* pass */
+#line 6623 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(sld, _tr_str_lit_len("_tr_rt_strlen", 13LL), sla));
-            /* pass */
+#line 6624 "src/taumir/lower.tr"
+            long long _trret1721 = sld;
             _tr_str_release(pcls);
-            return sld;
+            return _trret1721;
         }
-        /* pass */
+#line 6625 "src/taumir/lower.tr"
         if ((!_is_list_tag(LFunc_vreg_type(lf, ovl)))) {
-            /* pass */
+#line 6625 "src/taumir/lower.tr"
             _tr_str_release(pcls);
             return (-1LL);
         }
-        /* pass */
+#line 6626 "src/taumir/lower.tr"
         LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_len", 15LL));
-        /* pass */
+#line 6627 "src/taumir/lower.tr"
         List_i64* la = (void*)List_i64_new();
-        /* pass */
+#line 6628 "src/taumir/lower.tr"
         List_i64_append(la, ovl);
-        /* pass */
+#line 6629 "src/taumir/lower.tr"
         long long ld = LFunc_new_vreg(lf);
-        /* pass */
+#line 6630 "src/taumir/lower.tr"
         LFunc_emit(lf, LInst_ctor_ICall(ld, _tr_str_lit_len("_tr_rt_list_len", 15LL), la));
-        /* pass */
+#line 6631 "src/taumir/lower.tr"
+        long long _trret1722 = ld;
         _tr_str_release(pcls);
-        return ld;
-    } else if (_t3291.tag == HirExpr_EMethodCall) {
-        __auto_type obj = _t3291.data.EMethodCall.obj;
-__auto_type method = _t3291.data.EMethodCall.method;
-__auto_type margs = _t3291.data.EMethodCall.args;
-        /* pass */
-        __auto_type _t3328 = (*obj);
-        if (_t3328.tag == HirExpr_EIdent) {
-            __auto_type styn = _t3328.data.EIdent.name;
-            /* pass */
+        return _trret1722;
+    } else if (_t6316.tag == HirExpr_EMethodCall) {
+        __auto_type obj = _t6316.data.EMethodCall.obj;
+__auto_type method = _t6316.data.EMethodCall.method;
+__auto_type margs = _t6316.data.EMethodCall.args;
+#line 6635 "src/taumir/lower.tr"
+        __auto_type _t6376 = (*obj);
+        if (_t6376.tag == HirExpr_EIdent) {
+            __auto_type styn = _t6376.data.EIdent.name;
+#line 6637 "src/taumir/lower.tr"
             if (_tr_str_eqv((styn), (_tr_str_lit_len("Coro", 4LL)))) {
-                /* pass */
+#line 6639 "src/taumir/lower.tr"
                 if (_tr_str_eqv((method), (_tr_str_lit_len("yield_now", 9LL)))) {
-                    /* pass */
+#line 6640 "src/taumir/lower.tr"
                     LModule_add_extern(m, _tr_str_lit_len("_tr_co_yield_h", 14LL));
-                    /* pass */
+#line 6641 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_co_yield_h", 14LL), (void*)List_i64_new()));
-                    /* pass */
+#line 6642 "src/taumir/lower.tr"
                     long long cyd = LFunc_new_vreg(lf);
-                    /* pass */
+#line 6643 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_IConst(cyd, 0LL));
-                    /* pass */
-                    return cyd;
+#line 6644 "src/taumir/lower.tr"
+                    long long _trret1723 = cyd;
+                    return _trret1723;
                 }
-                /* pass */
+#line 6645 "src/taumir/lower.tr"
                 if (((_tr_str_eqv((method), (_tr_str_lit_len("sleep_ms", 8LL))) || _tr_str_eqv((method), (_tr_str_lit_len("sleep", 5LL)))) && (margs->len >= 1LL))) {
-                    /* pass */
+#line 6646 "src/taumir/lower.tr"
                     long long msv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-                    /* pass */
+#line 6647 "src/taumir/lower.tr"
                     if ((msv < 0LL)) {
-                        /* pass */
+#line 6647 "src/taumir/lower.tr"
                         return (-1LL);
                     }
-                    /* pass */
+#line 6648 "src/taumir/lower.tr"
                     LModule_add_extern(m, _tr_str_lit_len("_tr_co_sleep_h", 14LL));
-                    /* pass */
+#line 6649 "src/taumir/lower.tr"
                     List_i64* sma = (void*)List_i64_new();
-                    /* pass */
+#line 6650 "src/taumir/lower.tr"
                     List_i64_append(sma, msv);
-                    /* pass */
+#line 6651 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_co_sleep_h", 14LL), sma));
-                    /* pass */
+#line 6652 "src/taumir/lower.tr"
                     long long csd = LFunc_new_vreg(lf);
-                    /* pass */
+#line 6653 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_IConst(csd, 0LL));
-                    /* pass */
-                    return csd;
+#line 6654 "src/taumir/lower.tr"
+                    long long _trret1724 = csd;
+                    return _trret1724;
                 }
             }
-            /* pass */
+#line 6655 "src/taumir/lower.tr"
             if (_tr_str_eqv((styn), (_tr_str_lit_len("Thread", 6LL)))) {
-                /* pass */
+#line 6657 "src/taumir/lower.tr"
                 if (((_tr_str_eqv((method), (_tr_str_lit_len("current_id", 10LL))) || _tr_str_eqv((method), (_tr_str_lit_len("id", 2LL)))) && (margs->len == 0LL))) {
-                    /* pass */
+#line 6658 "src/taumir/lower.tr"
                     LModule_add_extern(m, _tr_str_lit_len("_tr_thread_current_id", 21LL));
-                    /* pass */
+#line 6659 "src/taumir/lower.tr"
                     long long tcd = LFunc_new_vreg(lf);
-                    /* pass */
+#line 6660 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_ICall(tcd, _tr_str_lit_len("_tr_thread_current_id", 21LL), (void*)List_i64_new()));
-                    /* pass */
+#line 6661 "src/taumir/lower.tr"
                     LFunc_set_vreg_type(lf, tcd, 0LL);
-                    /* pass */
-                    return tcd;
+#line 6662 "src/taumir/lower.tr"
+                    long long _trret1725 = tcd;
+                    return _trret1725;
                 }
-                /* pass */
+#line 6666 "src/taumir/lower.tr"
                 if ((_tr_str_eqv((method), (_tr_str_lit_len("sleep", 5LL))) && (margs->len >= 1LL))) {
-                    /* pass */
+#line 6667 "src/taumir/lower.tr"
                     long long tmsv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-                    /* pass */
+#line 6668 "src/taumir/lower.tr"
                     if ((tmsv < 0LL)) {
-                        /* pass */
+#line 6668 "src/taumir/lower.tr"
                         return (-1LL);
                     }
-                    /* pass */
+#line 6669 "src/taumir/lower.tr"
                     LModule_add_extern(m, _tr_str_lit_len("_tr_co_sleep_h", 14LL));
-                    /* pass */
+#line 6670 "src/taumir/lower.tr"
                     List_i64* tsa = (void*)List_i64_new();
-                    /* pass */
+#line 6671 "src/taumir/lower.tr"
                     List_i64_append(tsa, tmsv);
-                    /* pass */
+#line 6672 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_co_sleep_h", 14LL), tsa));
-                    /* pass */
+#line 6673 "src/taumir/lower.tr"
                     long long tsd = LFunc_new_vreg(lf);
-                    /* pass */
+#line 6674 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_IConst(tsd, 0LL));
-                    /* pass */
-                    return tsd;
+#line 6675 "src/taumir/lower.tr"
+                    long long _trret1726 = tsd;
+                    return _trret1726;
                 }
-                /* pass */
+#line 6679 "src/taumir/lower.tr"
                 if ((_tr_str_eqv((method), (_tr_str_lit_len("spawn", 5LL))) && (margs->len >= 1LL))) {
-                    /* pass */
+#line 6680 "src/taumir/lower.tr"
                     TrStr tsfn = _ident_name(((HirExpr*)List_ptr_get(margs, 0LL)));
-                    /* pass */
+#line 6681 "src/taumir/lower.tr"
                     if (((_is_null_str(tsfn) || _tr_str_eqv((tsfn), (_tr_str_lit_len("", 0LL)))) || (!LModule_is_user_fn(m, tsfn)))) {
-                        /* pass */
+#line 6681 "src/taumir/lower.tr"
                         _tr_str_release(tsfn);
                         return (-1LL);
                     }
-                    /* pass */
+#line 6682 "src/taumir/lower.tr"
                     if ((!_ensure_await_wrapper(m, tsfn))) {
-                        /* pass */
+#line 6682 "src/taumir/lower.tr"
                         _tr_str_release(tsfn);
                         return (-1LL);
                     }
-                    /* pass */
+#line 6683 "src/taumir/lower.tr"
                     long long tsbuf = _pack_spawn_args(m, lf, margs, 1LL);
-                    /* pass */
+#line 6684 "src/taumir/lower.tr"
                     if ((tsbuf < 0LL)) {
-                        /* pass */
+#line 6684 "src/taumir/lower.tr"
                         _tr_str_release(tsfn);
                         return (-1LL);
                     }
-                    /* pass */
+#line 6685 "src/taumir/lower.tr"
                     long long tsfa = LFunc_new_vreg(lf);
-                    /* pass */
+#line 6686 "src/taumir/lower.tr"
                     LFunc_set_vreg_type(lf, tsfa, 12LL);
-                    /* pass */
-                    ({ TrStr _at_t3329 = (_tr_strx_concatv((_tr_str_lit_len("_awaitwrap_", 11LL)), (tsfn))); LFunc_emit(lf, LInst_ctor_IFuncAddr(tsfa, _at_t3329)); _tr_str_release(_at_t3329); });
-                    /* pass */
+#line 6687 "src/taumir/lower.tr"
+                    ({ TrStr _at_t6377 = (_tr_strx_concatv((_tr_str_lit_len("_awaitwrap_", 11LL)), (tsfn))); LFunc_emit(lf, LInst_ctor_IFuncAddr(tsfa, _at_t6377)); _tr_str_release(_at_t6377); });
+#line 6688 "src/taumir/lower.tr"
                     LModule_add_extern(m, _tr_str_lit_len("_tr_threadobj_spawn", 19LL));
-                    /* pass */
+#line 6689 "src/taumir/lower.tr"
                     List_i64* toa = (void*)List_i64_new();
-                    /* pass */
+#line 6690 "src/taumir/lower.tr"
                     List_i64_append(toa, tsfa);
-                    /* pass */
+#line 6691 "src/taumir/lower.tr"
                     List_i64_append(toa, tsbuf);
-                    /* pass */
+#line 6692 "src/taumir/lower.tr"
                     long long tod = LFunc_new_vreg(lf);
-                    /* pass */
+#line 6693 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_ICall(tod, _tr_str_lit_len("_tr_threadobj_spawn", 19LL), toa));
-                    /* pass */
+#line 6694 "src/taumir/lower.tr"
                     LFunc_set_vreg_type(lf, tod, 0LL);
-                    /* pass */
+#line 6695 "src/taumir/lower.tr"
+                    long long _trret1727 = tod;
                     _tr_str_release(tsfn);
-                    return tod;
+                    return _trret1727;
                 }
             }
-            /* pass */
+#line 6696 "src/taumir/lower.tr"
             if (((_tr_str_eqv((styn), (_tr_str_lit_len("Str", 3LL))) || _tr_str_eqv((styn), (_tr_str_lit_len("str", 3LL)))) || _tr_str_eqv((styn), (_tr_str_lit_len("String", 6LL))))) {
-                /* pass */
+#line 6697 "src/taumir/lower.tr"
                 if ((_tr_str_eqv((method), (_tr_str_lit_len("join", 4LL))) && (margs->len == 2LL))) {
-                    /* pass */
+#line 6698 "src/taumir/lower.tr"
                     long long sjl = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-                    /* pass */
+#line 6699 "src/taumir/lower.tr"
                     if (((sjl < 0LL) || (LFunc_vreg_type(lf, sjl) != 3LL))) {
-                        /* pass */
+#line 6699 "src/taumir/lower.tr"
                         return (-1LL);
                     }
-                    /* pass */
+#line 6700 "src/taumir/lower.tr"
                     long long sjs = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
-                    /* pass */
+#line 6701 "src/taumir/lower.tr"
                     if (((sjs < 0LL) || (LFunc_vreg_type(lf, sjs) != 1LL))) {
-                        /* pass */
+#line 6701 "src/taumir/lower.tr"
                         return (-1LL);
                     }
-                    /* pass */
-                    return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_list_join", 16LL), sjl, sjs, 1LL);
+#line 6702 "src/taumir/lower.tr"
+                    long long _trret1728 = _str_call1(m, lf, _tr_str_lit_len("_tr_rt_list_join", 16LL), sjl, sjs, 1LL);
+                    return _trret1728;
                 }
-                /* pass */
+#line 6703 "src/taumir/lower.tr"
                 if (((_tr_str_eqv((method), (_tr_str_lit_len("len", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("length", 6LL)))) && (margs->len == 1LL))) {
-                    /* pass */
+#line 6704 "src/taumir/lower.tr"
                     long long sll = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-                    /* pass */
+#line 6705 "src/taumir/lower.tr"
                     if (((sll < 0LL) || (LFunc_vreg_type(lf, sll) != 1LL))) {
-                        /* pass */
+#line 6705 "src/taumir/lower.tr"
                         return (-1LL);
                     }
-                    /* pass */
-                    return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_strlen", 13LL), sll, 0LL);
+#line 6706 "src/taumir/lower.tr"
+                    long long _trret1729 = _str_call0(m, lf, _tr_str_lit_len("_tr_rt_strlen", 13LL), sll, 0LL);
+                    return _trret1729;
                 }
-                /* pass */
+#line 6709 "src/taumir/lower.tr"
                 if ((_tr_str_eqv((method), (_tr_str_lit_len("slice", 5LL))) && (margs->len == 3LL))) {
-                    /* pass */
+#line 6710 "src/taumir/lower.tr"
                     long long scv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-                    /* pass */
+#line 6711 "src/taumir/lower.tr"
                     if (((scv < 0LL) || (LFunc_vreg_type(lf, scv) != 1LL))) {
-                        /* pass */
+#line 6711 "src/taumir/lower.tr"
                         return (-1LL);
                     }
-                    /* pass */
+#line 6712 "src/taumir/lower.tr"
                     long long sca = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
-                    /* pass */
+#line 6713 "src/taumir/lower.tr"
                     if (((sca < 0LL) || (LFunc_vreg_type(lf, sca) != 0LL))) {
-                        /* pass */
+#line 6713 "src/taumir/lower.tr"
                         return (-1LL);
                     }
-                    /* pass */
+#line 6714 "src/taumir/lower.tr"
                     long long scb = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 2LL)));
-                    /* pass */
+#line 6715 "src/taumir/lower.tr"
                     if (((scb < 0LL) || (LFunc_vreg_type(lf, scb) != 0LL))) {
-                        /* pass */
+#line 6715 "src/taumir/lower.tr"
                         return (-1LL);
                     }
-                    /* pass */
+#line 6716 "src/taumir/lower.tr"
                     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_slice", 16LL));
-                    /* pass */
+#line 6717 "src/taumir/lower.tr"
                     List_i64* scargs = (void*)List_i64_new();
-                    /* pass */
+#line 6718 "src/taumir/lower.tr"
                     List_i64_append(scargs, scv);
-                    /* pass */
+#line 6718 "src/taumir/lower.tr"
                     List_i64_append(scargs, sca);
-                    /* pass */
+#line 6718 "src/taumir/lower.tr"
                     List_i64_append(scargs, scb);
-                    /* pass */
+#line 6719 "src/taumir/lower.tr"
                     long long scd = LFunc_new_vreg(lf);
-                    /* pass */
+#line 6720 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_ICall(scd, _tr_str_lit_len("_tr_rt_str_slice", 16LL), scargs));
-                    /* pass */
+#line 6721 "src/taumir/lower.tr"
                     LFunc_set_vreg_type(lf, scd, 1LL);
-                    /* pass */
+#line 6722 "src/taumir/lower.tr"
                     _fresh_mark(lf, scd);
-                    /* pass */
-                    return scd;
+#line 6723 "src/taumir/lower.tr"
+                    long long _trret1730 = scd;
+                    return _trret1730;
                 }
-                /* pass */
+#line 6725 "src/taumir/lower.tr"
                 if (((_tr_str_eqv((method), (_tr_str_lit_len("index_of", 8LL))) || _tr_str_eqv((method), (_tr_str_lit_len("find", 4LL)))) && (margs->len == 2LL))) {
-                    /* pass */
+#line 6726 "src/taumir/lower.tr"
                     long long sfv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-                    /* pass */
+#line 6727 "src/taumir/lower.tr"
                     if (((sfv < 0LL) || (LFunc_vreg_type(lf, sfv) != 1LL))) {
-                        /* pass */
+#line 6727 "src/taumir/lower.tr"
                         return (-1LL);
                     }
-                    /* pass */
+#line 6728 "src/taumir/lower.tr"
                     long long sfb = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
-                    /* pass */
+#line 6729 "src/taumir/lower.tr"
                     if (((sfb < 0LL) || (LFunc_vreg_type(lf, sfb) != 1LL))) {
-                        /* pass */
+#line 6729 "src/taumir/lower.tr"
                         return (-1LL);
                     }
-                    /* pass */
-                    return _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_find", 15LL), sfv, sfb, 0LL);
+#line 6730 "src/taumir/lower.tr"
+                    long long _trret1731 = _str_call1(m, lf, _tr_str_lit_len("_tr_rt_str_find", 15LL), sfv, sfb, 0LL);
+                    return _trret1731;
                 }
             }
         } else if (1) {
-            __auto_type _ = _t3328;
-            /* pass */
+            __auto_type _ = _t6376;
+#line 6732 "src/taumir/lower.tr"
             /* pass */
         }
-        /* pass */
+#line 6734 "src/taumir/lower.tr"
         long long boxr = _lower_box_method(m, lf, obj, method, margs);
-        /* pass */
+#line 6735 "src/taumir/lower.tr"
         if ((boxr != (-2LL))) {
-            /* pass */
-            return boxr;
+#line 6735 "src/taumir/lower.tr"
+            long long _trret1732 = boxr;
+            return _trret1732;
         }
-        /* pass */
+#line 6739 "src/taumir/lower.tr"
         if ((_tr_str_eqv((hir_expr_type(obj)->name), (_tr_str_lit_len("Chan", 4LL))) && ((((((_tr_str_eqv((method), (_tr_str_lit_len("send", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("recv", 4LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("try_recv", 8LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("try_send", 8LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("close", 5LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("is_closed", 9LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("len", 3LL)))))) {
-            /* pass */
+#line 6740 "src/taumir/lower.tr"
             long long cho = lower_expr(m, lf, obj);
-            /* pass */
+#line 6741 "src/taumir/lower.tr"
             if ((cho < 0LL)) {
-                /* pass */
+#line 6741 "src/taumir/lower.tr"
                 return (-1LL);
             }
-            /* pass */
+#line 6742 "src/taumir/lower.tr"
             if ((_tr_str_eqv((method), (_tr_str_lit_len("send", 4LL))) && (margs->len == 1LL))) {
-                /* pass */
+#line 6743 "src/taumir/lower.tr"
                 long long chv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-                /* pass */
+#line 6744 "src/taumir/lower.tr"
                 if (((chv < 0LL) || (LFunc_vreg_type(lf, chv) != 0LL))) {
-                    /* pass */
+#line 6744 "src/taumir/lower.tr"
                     return (-1LL);
                 }
-                /* pass */
+#line 6745 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_chan_send", 13LL));
-                /* pass */
+#line 6746 "src/taumir/lower.tr"
                 List_i64* csa = (void*)List_i64_new();
-                /* pass */
+#line 6747 "src/taumir/lower.tr"
                 List_i64_append(csa, cho);
-                /* pass */
+#line 6748 "src/taumir/lower.tr"
                 List_i64_append(csa, chv);
-                /* pass */
+#line 6749 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_chan_send", 13LL), csa));
-                /* pass */
-                return cho;
+#line 6750 "src/taumir/lower.tr"
+                long long _trret1733 = cho;
+                return _trret1733;
             }
-            /* pass */
+#line 6751 "src/taumir/lower.tr"
             if (((_tr_str_eqv((method), (_tr_str_lit_len("recv", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("try_recv", 8LL)))) && (margs->len == 0LL))) {
-                /* pass */
+#line 6752 "src/taumir/lower.tr"
                 TrStr crs = _tr_str_lit_len("_tr_chan_recv", 13LL);
-                /* pass */
+#line 6753 "src/taumir/lower.tr"
                 if (_tr_str_eqv((method), (_tr_str_lit_len("try_recv", 8LL)))) {
-                    /* pass */
-                    TrStr _strtmp_t3330 = _tr_str_lit_len("_tr_chan_try_recv_val", 21LL);
+#line 6753 "src/taumir/lower.tr"
+                    TrStr _strtmp_t6378 = _tr_str_lit_len("_tr_chan_try_recv_val", 21LL);
                     _tr_str_release(crs);
-                    crs = _strtmp_t3330;
+                    crs = _strtmp_t6378;
                 }
-                /* pass */
+#line 6754 "src/taumir/lower.tr"
                 LModule_add_extern(m, crs);
-                /* pass */
+#line 6755 "src/taumir/lower.tr"
                 List_i64* cra = (void*)List_i64_new();
-                /* pass */
+#line 6756 "src/taumir/lower.tr"
                 List_i64_append(cra, cho);
-                /* pass */
+#line 6757 "src/taumir/lower.tr"
                 long long crd = LFunc_new_vreg(lf);
-                /* pass */
+#line 6758 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(crd, crs, cra));
-                /* pass */
+#line 6759 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, crd, 0LL);
-                /* pass */
+#line 6760 "src/taumir/lower.tr"
+                long long _trret1734 = crd;
                 _tr_str_release(crs);
-                return crd;
+                return _trret1734;
             }
-            /* pass */
+#line 6761 "src/taumir/lower.tr"
             if ((_tr_str_eqv((method), (_tr_str_lit_len("try_send", 8LL))) && (margs->len == 1LL))) {
-                /* pass */
+#line 6762 "src/taumir/lower.tr"
                 long long ctv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-                /* pass */
+#line 6763 "src/taumir/lower.tr"
                 if (((ctv < 0LL) || (LFunc_vreg_type(lf, ctv) != 0LL))) {
-                    /* pass */
+#line 6763 "src/taumir/lower.tr"
                     return (-1LL);
                 }
-                /* pass */
+#line 6764 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_chan_try_send", 17LL));
-                /* pass */
+#line 6765 "src/taumir/lower.tr"
                 List_i64* cta = (void*)List_i64_new();
-                /* pass */
+#line 6766 "src/taumir/lower.tr"
                 List_i64_append(cta, cho);
-                /* pass */
+#line 6767 "src/taumir/lower.tr"
                 List_i64_append(cta, ctv);
-                /* pass */
+#line 6768 "src/taumir/lower.tr"
                 long long ctd = LFunc_new_vreg(lf);
-                /* pass */
+#line 6769 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(ctd, _tr_str_lit_len("_tr_chan_try_send", 17LL), cta));
-                /* pass */
+#line 6770 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, ctd, 4LL);
-                /* pass */
-                return ctd;
+#line 6771 "src/taumir/lower.tr"
+                long long _trret1735 = ctd;
+                return _trret1735;
             }
-            /* pass */
+#line 6772 "src/taumir/lower.tr"
             if ((_tr_str_eqv((method), (_tr_str_lit_len("close", 5LL))) && (margs->len == 0LL))) {
-                /* pass */
+#line 6773 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_chan_close", 14LL));
-                /* pass */
+#line 6774 "src/taumir/lower.tr"
                 List_i64* cca = (void*)List_i64_new();
-                /* pass */
+#line 6775 "src/taumir/lower.tr"
                 List_i64_append(cca, cho);
-                /* pass */
+#line 6776 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_chan_close", 14LL), cca));
-                /* pass */
-                return cho;
+#line 6777 "src/taumir/lower.tr"
+                long long _trret1736 = cho;
+                return _trret1736;
             }
-            /* pass */
+#line 6778 "src/taumir/lower.tr"
             if (((_tr_str_eqv((method), (_tr_str_lit_len("is_closed", 9LL))) || _tr_str_eqv((method), (_tr_str_lit_len("len", 3LL)))) && (margs->len == 0LL))) {
-                /* pass */
+#line 6779 "src/taumir/lower.tr"
                 TrStr cqs = _tr_str_lit_len("_tr_chan_len", 12LL);
-                /* pass */
+#line 6780 "src/taumir/lower.tr"
                 long long cqtag = 0LL;
-                /* pass */
+#line 6781 "src/taumir/lower.tr"
                 if (_tr_str_eqv((method), (_tr_str_lit_len("is_closed", 9LL)))) {
-                    /* pass */
-                    TrStr _strtmp_t3331 = _tr_str_lit_len("_tr_chan_is_closed", 18LL);
+#line 6782 "src/taumir/lower.tr"
+                    TrStr _strtmp_t6379 = _tr_str_lit_len("_tr_chan_is_closed", 18LL);
                     _tr_str_release(cqs);
-                    cqs = _strtmp_t3331;
-                    /* pass */
+                    cqs = _strtmp_t6379;
+#line 6783 "src/taumir/lower.tr"
                     cqtag = 4LL;
                 }
-                /* pass */
+#line 6784 "src/taumir/lower.tr"
                 LModule_add_extern(m, cqs);
-                /* pass */
+#line 6785 "src/taumir/lower.tr"
                 List_i64* cqa = (void*)List_i64_new();
-                /* pass */
+#line 6786 "src/taumir/lower.tr"
                 List_i64_append(cqa, cho);
-                /* pass */
+#line 6787 "src/taumir/lower.tr"
                 long long cqd = LFunc_new_vreg(lf);
-                /* pass */
+#line 6788 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(cqd, cqs, cqa));
-                /* pass */
+#line 6789 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, cqd, cqtag);
-                /* pass */
+#line 6790 "src/taumir/lower.tr"
+                long long _trret1737 = cqd;
                 _tr_str_release(cqs);
-                return cqd;
+                return _trret1737;
             }
-            /* pass */
+#line 6791 "src/taumir/lower.tr"
             return (-1LL);
         }
-        /* pass */
+#line 6793 "src/taumir/lower.tr"
         if (_tr_str_eqv((hir_expr_type(obj)->name), (_tr_str_lit_len("Pointer", 7LL)))) {
-            /* pass */
+#line 6794 "src/taumir/lower.tr"
             AstType* pty = _ptr_chain_ty(m, obj);
-            /* pass */
+#line 6795 "src/taumir/lower.tr"
             long long pstride = _ptr_stride(m, pty);
-            /* pass */
+#line 6796 "src/taumir/lower.tr"
             if ((pstride == 0LL)) {
-                /* pass */
+#line 6796 "src/taumir/lower.tr"
                 return (-1LL);
             }
-            /* pass */
+#line 6797 "src/taumir/lower.tr"
             bool pbyte = (pstride == 1LL);
-            /* pass */
+#line 6798 "src/taumir/lower.tr"
             bool pword = (pstride == 4LL);
-            /* pass */
+#line 6799 "src/taumir/lower.tr"
             long long petag = 0LL;
-            /* pass */
+#line 6800 "src/taumir/lower.tr"
             TrStr pvcls = _tr_str_lit_len("", 0LL);
-            /* pass */
+#line 6801 "src/taumir/lower.tr"
             if ((pty->args->len > 0LL)) {
-                /* pass */
+#line 6802 "src/taumir/lower.tr"
                 TrStr petn = _tr_str_retain(_subst_ty(m, (*((AstType**)List_ptr_get(pty->args, 0LL))))->name);
-                /* pass */
+#line 6803 "src/taumir/lower.tr"
                 if ((_tr_str_eqv((petn), (_tr_str_lit_len("float", 5LL))) || _tr_str_eqv((petn), (_tr_str_lit_len("f64", 3LL))))) {
-                    /* pass */
+#line 6803 "src/taumir/lower.tr"
                     petag = 5LL;
                 } else if ((_tr_str_eqv((petn), (_tr_str_lit_len("str", 3LL))) || _tr_str_eqv((petn), (_tr_str_lit_len("String", 6LL))))) {
-                    /* pass */
+#line 6804 "src/taumir/lower.tr"
                     petag = 1LL;
                 } else if (_tr_str_eqv((petn), (_tr_str_lit_len("bool", 4LL)))) {
-                    /* pass */
+#line 6805 "src/taumir/lower.tr"
                     petag = 4LL;
                 } else if (LModule_is_value_class(m, petn)) {
-                    /* pass */
+#line 6806 "src/taumir/lower.tr"
                     petag = 10LL;
-                    /* pass */
-                    TrStr _strtmp_t3332 = _own(petn);
+#line 6806 "src/taumir/lower.tr"
+                    TrStr _strtmp_t6380 = _own(petn);
                     _tr_str_release(pvcls);
-                    pvcls = _strtmp_t3332;
+                    pvcls = _strtmp_t6380;
                 } else if (LModule_is_class(m, petn)) {
-                    /* pass */
+#line 6807 "src/taumir/lower.tr"
                     petag = 10LL;
                 } else if (LModule_is_enum(m, petn)) {
-                    /* pass */
+#line 6808 "src/taumir/lower.tr"
                     petag = 11LL;
                 }
-                /* pass */
+#line 6809 "src/taumir/lower.tr"
                 if ((_tr_str_eqv((pvcls), (_tr_str_lit_len("", 0LL))) && (_value_struct_generic_size(m, (*((AstType**)List_ptr_get(pty->args, 0LL)))) > 0LL))) {
-                    /* pass */
+#line 6810 "src/taumir/lower.tr"
                     petag = 10LL;
-                    /* pass */
+#line 6811 "src/taumir/lower.tr"
                     TrStr _pmg = _ensure_generic_class(m, _subst_ty(m, (*((AstType**)List_ptr_get(pty->args, 0LL)))));
-                    /* pass */
+#line 6812 "src/taumir/lower.tr"
                     if ((!_tr_str_eqv((_pmg), (_tr_str_lit_len("", 0LL))))) {
-                        /* pass */
-                        TrStr _strtmp_t3333 = _tr_str_retain(_pmg);
+#line 6812 "src/taumir/lower.tr"
+                        TrStr _strtmp_t6381 = _tr_str_retain(_pmg);
                         _tr_str_release(pvcls);
-                        pvcls = _strtmp_t3333;
+                        pvcls = _strtmp_t6381;
                     } else {
-                        /* pass */
-                        TrStr _strtmp_t3334 = _own(petn);
+#line 6813 "src/taumir/lower.tr"
+                        TrStr _strtmp_t6382 = _own(petn);
                         _tr_str_release(pvcls);
-                        pvcls = _strtmp_t3334;
+                        pvcls = _strtmp_t6382;
                     }
                 }
             }
-            /* pass */
+#line 6814 "src/taumir/lower.tr"
             long long pbase = lower_expr(m, lf, obj);
-            /* pass */
+#line 6815 "src/taumir/lower.tr"
             if ((pbase < 0LL)) {
-                /* pass */
+#line 6815 "src/taumir/lower.tr"
                 _tr_str_release(pvcls);
                 return (-1LL);
             }
-            /* pass */
+#line 6816 "src/taumir/lower.tr"
             if (((_tr_str_eqv((method), (_tr_str_lit_len("offset", 6LL))) || _tr_str_eqv((method), (_tr_str_lit_len("add", 3LL)))) && (margs->len == 1LL))) {
-                /* pass */
+#line 6818 "src/taumir/lower.tr"
                 long long poff = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-                /* pass */
+#line 6819 "src/taumir/lower.tr"
                 if (((poff < 0LL) || (LFunc_vreg_type(lf, poff) != 0LL))) {
-                    /* pass */
+#line 6819 "src/taumir/lower.tr"
                     _tr_str_release(pvcls);
                     return (-1LL);
                 }
-                /* pass */
+#line 6820 "src/taumir/lower.tr"
                 long long pstr = LFunc_new_vreg(lf);
-                /* pass */
+#line 6821 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IConst(pstr, pstride));
-                /* pass */
+#line 6822 "src/taumir/lower.tr"
                 long long pscaled = LFunc_new_vreg(lf);
-                /* pass */
+#line 6823 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IBinOp(pscaled, _tr_str_lit_len("*", 1LL), poff, pstr));
-                /* pass */
+#line 6824 "src/taumir/lower.tr"
                 long long padr = LFunc_new_vreg(lf);
-                /* pass */
+#line 6825 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IBinOp(padr, _tr_str_lit_len("+", 1LL), pbase, pscaled));
-                /* pass */
+#line 6826 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, padr, 0LL);
-                /* pass */
+#line 6827 "src/taumir/lower.tr"
+                long long _trret1738 = padr;
                 _tr_str_release(pvcls);
-                return padr;
+                return _trret1738;
             }
-            /* pass */
+#line 6828 "src/taumir/lower.tr"
             if (((_tr_str_eqv((method), (_tr_str_lit_len("read", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("deref", 5LL)))) && (margs->len == 0LL))) {
-                /* pass */
+#line 6829 "src/taumir/lower.tr"
                 if (pbyte) {
-                    /* pass */
+#line 6830 "src/taumir/lower.tr"
                     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_load_u8", 14LL));
-                    /* pass */
+#line 6831 "src/taumir/lower.tr"
                     List_i64* lba = (void*)List_i64_new();
-                    /* pass */
+#line 6832 "src/taumir/lower.tr"
                     List_i64_append(lba, pbase);
-                    /* pass */
+#line 6833 "src/taumir/lower.tr"
                     long long lbd = LFunc_new_vreg(lf);
-                    /* pass */
+#line 6834 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_ICall(lbd, _tr_str_lit_len("_tr_rt_load_u8", 14LL), lba));
-                    /* pass */
+#line 6835 "src/taumir/lower.tr"
+                    long long _trret1739 = lbd;
                     _tr_str_release(pvcls);
-                    return lbd;
+                    return _trret1739;
                 }
-                /* pass */
+#line 6836 "src/taumir/lower.tr"
                 if (pword) {
-                    /* pass */
+#line 6837 "src/taumir/lower.tr"
                     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_load_i32", 15LL));
-                    /* pass */
+#line 6838 "src/taumir/lower.tr"
                     List_i64* lwa = (void*)List_i64_new();
-                    /* pass */
+#line 6839 "src/taumir/lower.tr"
                     List_i64_append(lwa, pbase);
-                    /* pass */
+#line 6840 "src/taumir/lower.tr"
                     long long lwd = LFunc_new_vreg(lf);
-                    /* pass */
+#line 6841 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_ICall(lwd, _tr_str_lit_len("_tr_rt_load_i32", 15LL), lwa));
-                    /* pass */
+#line 6842 "src/taumir/lower.tr"
+                    long long _trret1740 = lwd;
                     _tr_str_release(pvcls);
-                    return lwd;
+                    return _trret1740;
                 }
-                /* pass */
+#line 6846 "src/taumir/lower.tr"
                 if ((!_tr_str_eqv((pvcls), (_tr_str_lit_len("", 0LL))))) {
-                    /* pass */
+#line 6847 "src/taumir/lower.tr"
                     long long rcp = _copy_value_struct(m, lf, pbase, pvcls);
-                    /* pass */
+#line 6848 "src/taumir/lower.tr"
                     if ((rcp < 0LL)) {
-                        /* pass */
+#line 6848 "src/taumir/lower.tr"
                         _tr_str_release(pvcls);
                         return (-1LL);
                     }
-                    /* pass */
+#line 6849 "src/taumir/lower.tr"
+                    long long _trret1741 = rcp;
                     _tr_str_release(pvcls);
-                    return rcp;
+                    return _trret1741;
                 }
-                /* pass */
+#line 6851 "src/taumir/lower.tr"
                 if ((petag == 5LL)) {
-                    /* pass */
+#line 6852 "src/taumir/lower.tr"
                     long long prraw = _emit_field_get(m, lf, pbase, 0LL, 0LL);
-                    /* pass */
+#line 6853 "src/taumir/lower.tr"
                     long long prf = LFunc_new_vreg(lf);
-                    /* pass */
+#line 6854 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_IBitsF(prf, prraw));
-                    /* pass */
+#line 6855 "src/taumir/lower.tr"
                     LFunc_set_vreg_type(lf, prf, 5LL);
-                    /* pass */
+#line 6856 "src/taumir/lower.tr"
+                    long long _trret1742 = prf;
                     _tr_str_release(pvcls);
-                    return prf;
+                    return _trret1742;
                 }
-                /* pass */
+#line 6857 "src/taumir/lower.tr"
+                long long _trret1743 = _emit_field_get(m, lf, pbase, 0LL, petag);
                 _tr_str_release(pvcls);
-                return _emit_field_get(m, lf, pbase, 0LL, petag);
+                return _trret1743;
             }
-            /* pass */
+#line 6858 "src/taumir/lower.tr"
             if ((_tr_str_eqv((method), (_tr_str_lit_len("write", 5LL))) && (margs->len == 1LL))) {
-                /* pass */
+#line 6860 "src/taumir/lower.tr"
                 long long pwv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-                /* pass */
+#line 6861 "src/taumir/lower.tr"
                 if ((pwv < 0LL)) {
-                    /* pass */
+#line 6861 "src/taumir/lower.tr"
                     _tr_str_release(pvcls);
                     return (-1LL);
                 }
-                /* pass */
+#line 6863 "src/taumir/lower.tr"
                 if ((!_tr_str_eqv((pvcls), (_tr_str_lit_len("", 0LL))))) {
-                    /* pass */
+#line 6864 "src/taumir/lower.tr"
                     long long wsz = LFunc_new_vreg(lf);
-                    /* pass */
+#line 6865 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_IConst(wsz, pstride));
-                    /* pass */
+#line 6866 "src/taumir/lower.tr"
                     LModule_add_extern(m, _tr_str_lit_len("_tr_c_memcpy", 12LL));
-                    /* pass */
+#line 6867 "src/taumir/lower.tr"
                     List_i64* wca = (void*)List_i64_new();
-                    /* pass */
+#line 6868 "src/taumir/lower.tr"
                     List_i64_append(wca, pbase);
-                    /* pass */
+#line 6869 "src/taumir/lower.tr"
                     List_i64_append(wca, pwv);
-                    /* pass */
+#line 6870 "src/taumir/lower.tr"
                     List_i64_append(wca, wsz);
-                    /* pass */
+#line 6871 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_c_memcpy", 12LL), wca));
-                    /* pass */
+#line 6872 "src/taumir/lower.tr"
+                    long long _trret1744 = pbase;
                     _tr_str_release(pvcls);
-                    return pbase;
+                    return _trret1744;
                 }
-                /* pass */
+#line 6873 "src/taumir/lower.tr"
                 if (pbyte) {
-                    /* pass */
+#line 6874 "src/taumir/lower.tr"
                     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_store_u8", 15LL));
-                    /* pass */
+#line 6875 "src/taumir/lower.tr"
                     List_i64* sba = (void*)List_i64_new();
-                    /* pass */
+#line 6876 "src/taumir/lower.tr"
                     List_i64_append(sba, pbase);
-                    /* pass */
+#line 6877 "src/taumir/lower.tr"
                     List_i64_append(sba, pwv);
-                    /* pass */
+#line 6878 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_store_u8", 15LL), sba));
-                    /* pass */
+#line 6879 "src/taumir/lower.tr"
+                    long long _trret1745 = pbase;
                     _tr_str_release(pvcls);
-                    return pbase;
+                    return _trret1745;
                 }
-                /* pass */
+#line 6880 "src/taumir/lower.tr"
                 if (pword) {
-                    /* pass */
+#line 6881 "src/taumir/lower.tr"
                     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_store_i32", 16LL));
-                    /* pass */
+#line 6882 "src/taumir/lower.tr"
                     List_i64* swa = (void*)List_i64_new();
-                    /* pass */
+#line 6883 "src/taumir/lower.tr"
                     List_i64_append(swa, pbase);
-                    /* pass */
+#line 6884 "src/taumir/lower.tr"
                     List_i64_append(swa, pwv);
-                    /* pass */
+#line 6885 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_store_i32", 16LL), swa));
-                    /* pass */
+#line 6886 "src/taumir/lower.tr"
+                    long long _trret1746 = pbase;
                     _tr_str_release(pvcls);
-                    return pbase;
+                    return _trret1746;
                 }
-                /* pass */
+#line 6887 "src/taumir/lower.tr"
                 if ((petag == 5LL)) {
-                    /* pass */
+#line 6888 "src/taumir/lower.tr"
                     long long pwvt = LFunc_vreg_type(lf, pwv);
-                    /* pass */
+#line 6889 "src/taumir/lower.tr"
                     if ((pwvt == 0LL)) {
-                        /* pass */
+#line 6889 "src/taumir/lower.tr"
                         pwv = _promote_f(lf, pwv);
                     } else if ((pwvt != 5LL)) {
-                        /* pass */
+#line 6890 "src/taumir/lower.tr"
                         _tr_str_release(pvcls);
                         return (-1LL);
                     }
-                    /* pass */
+#line 6891 "src/taumir/lower.tr"
                     long long pwb = LFunc_new_vreg(lf);
-                    /* pass */
+#line 6892 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_IFBits(pwb, pwv));
-                    /* pass */
+#line 6893 "src/taumir/lower.tr"
                     pwv = pwb;
                 } else if ((petag == 1LL)) {
-                    /* pass */
+#line 6894 "src/taumir/lower.tr"
                     _secure_str(m, lf, pwv);
                 } else if (((petag == 10LL) || (petag == 11LL))) {
-                    /* pass */
+#line 6895 "src/taumir/lower.tr"
                     _secure_obj(m, lf, pwv);
                 }
-                /* pass */
+#line 6896 "src/taumir/lower.tr"
                 _emit_field_set(m, lf, pbase, 0LL, pwv);
-                /* pass */
+#line 6897 "src/taumir/lower.tr"
+                long long _trret1747 = pbase;
                 _tr_str_release(pvcls);
-                return pbase;
+                return _trret1747;
             }
-            /* pass */
+#line 6898 "src/taumir/lower.tr"
             _tr_str_release(pvcls);
             return (-1LL);
         }
-        /* pass */
-        __auto_type _t3335 = (*obj);
-        if (_t3335.tag == HirExpr_EIdent) {
-            __auto_type inm = _t3335.data.EIdent.name;
-__auto_type ity_g = _t3335.data.EIdent.ty;
-            /* pass */
+#line 6901 "src/taumir/lower.tr"
+        __auto_type _t6383 = (*obj);
+        if (_t6383.tag == HirExpr_EIdent) {
+            __auto_type inm = _t6383.data.EIdent.name;
+__auto_type ity_g = _t6383.data.EIdent.ty;
+#line 6911 "src/taumir/lower.tr"
             if (((_tr_str_eqv((inm), (_tr_str_lit_len("Map", 3LL))) || _tr_str_eqv((inm), (_tr_str_lit_len("Dict", 4LL)))) && (_tr_str_eqv((method), (_tr_str_lit_len("init", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("new", 3LL)))))) {
-                /* pass */
+#line 6912 "src/taumir/lower.tr"
                 long long mtag = _tag_of(m, ity_g);
-                /* pass */
+#line 6913 "src/taumir/lower.tr"
                 if ((!_is_dict_tag(mtag))) {
-                    /* pass */
+#line 6913 "src/taumir/lower.tr"
                     return (-1LL);
                 }
-                /* pass */
+#line 6914 "src/taumir/lower.tr"
                 TrStr mnewsym = _dict_new_sym(mtag);
-                /* pass */
+#line 6915 "src/taumir/lower.tr"
                 LModule_add_extern(m, mnewsym);
-                /* pass */
+#line 6916 "src/taumir/lower.tr"
                 long long mnd = LFunc_new_vreg(lf);
-                /* pass */
+#line 6917 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(mnd, mnewsym, (void*)List_i64_new()));
-                /* pass */
+#line 6918 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, mnd, mtag);
-                /* pass */
+#line 6919 "src/taumir/lower.tr"
+                long long _trret1748 = mnd;
                 _tr_str_release(mnewsym);
-                return mnd;
+                return _trret1748;
             }
-            /* pass */
+#line 6920 "src/taumir/lower.tr"
             if (((_tr_str_eqv((inm), (_tr_str_lit_len("Set", 3LL))) && (_tr_str_eqv((method), (_tr_str_lit_len("init", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("new", 3LL))))) && (margs->len == 0LL))) {
-                /* pass */
+#line 6921 "src/taumir/lower.tr"
                 long long stag = (-1LL);
-                /* pass */
+#line 6922 "src/taumir/lower.tr"
                 if ((ity_g->args->len > 0LL)) {
-                    /* pass */
+#line 6923 "src/taumir/lower.tr"
                     TrStr se = _tr_str_retain((*((AstType**)List_ptr_get(ity_g->args, 0LL)))->name);
-                    /* pass */
+#line 6924 "src/taumir/lower.tr"
                     if ((_tr_str_eqv((se), (_tr_str_lit_len("str", 3LL))) || _tr_str_eqv((se), (_tr_str_lit_len("String", 6LL))))) {
-                        /* pass */
+#line 6924 "src/taumir/lower.tr"
                         stag = 16LL;
                     } else if (_is_int_typename(se)) {
-                        /* pass */
+#line 6925 "src/taumir/lower.tr"
                         stag = 13LL;
                     }
                 }
-                /* pass */
+#line 6926 "src/taumir/lower.tr"
                 if ((stag < 0LL)) {
-                    /* pass */
+#line 6926 "src/taumir/lower.tr"
                     return (-1LL);
                 }
-                /* pass */
+#line 6927 "src/taumir/lower.tr"
                 TrStr newsym = _set_sym(stag, _tr_str_lit_len("new", 3LL));
-                /* pass */
+#line 6928 "src/taumir/lower.tr"
                 LModule_add_extern(m, newsym);
-                /* pass */
+#line 6929 "src/taumir/lower.tr"
                 long long snd = LFunc_new_vreg(lf);
-                /* pass */
+#line 6930 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(snd, newsym, (void*)List_i64_new()));
-                /* pass */
+#line 6931 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, snd, stag);
-                /* pass */
+#line 6932 "src/taumir/lower.tr"
+                long long _trret1749 = snd;
                 _tr_str_release(newsym);
-                return snd;
+                return _trret1749;
             }
-            /* pass */
+#line 6934 "src/taumir/lower.tr"
             if (((_tr_str_eqv((inm), (_tr_str_lit_len("Vec", 3LL))) && (_tr_str_eqv((method), (_tr_str_lit_len("init", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("new", 3LL))))) && (ity_g->args->len > 0LL))) {
-                /* pass */
+#line 6935 "src/taumir/lower.tr"
                 TrStr ven = _tr_str_retain((*((AstType**)List_ptr_get(ity_g->args, 0LL)))->name);
-                /* pass */
+#line 6936 "src/taumir/lower.tr"
                 if ((_tr_str_eqv((ven), (_tr_str_lit_len("Tuple", 5LL))) || _tr_str_eqv((ven), (_tr_str_lit_len("tuple", 5LL))))) {
-                    /* pass */
+#line 6937 "src/taumir/lower.tr"
                     LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_new", 15LL));
-                    /* pass */
+#line 6938 "src/taumir/lower.tr"
                     long long vnd = LFunc_new_vreg(lf);
-                    /* pass */
+#line 6939 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_ICall(vnd, _tr_str_lit_len("_tr_rt_list_new", 15LL), (void*)List_i64_new()));
-                    /* pass */
+#line 6940 "src/taumir/lower.tr"
                     LFunc_set_vreg_type(lf, vnd, 21LL);
-                    /* pass */
+#line 6941 "src/taumir/lower.tr"
+                    long long _trret1750 = vnd;
                     _tr_str_release(ven);
-                    return vnd;
+                    return _trret1750;
                 }
             }
-            /* pass */
+#line 6945 "src/taumir/lower.tr"
             if ((_tr_str_eqv((inm), (_tr_str_lit_len("List", 4LL))) && (_tr_str_eqv((method), (_tr_str_lit_len("init", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("new", 3LL)))))) {
-                /* pass */
+#line 6946 "src/taumir/lower.tr"
                 long long ltag2 = (-1LL);
-                /* pass */
+#line 6947 "src/taumir/lower.tr"
                 if ((ity_g->args->len > 0LL)) {
-                    /* pass */
+#line 6948 "src/taumir/lower.tr"
                     long long letag = _tag_of(m, _subst_ty(m, (*((AstType**)List_ptr_get(ity_g->args, 0LL)))));
-                    /* pass */
+#line 6949 "src/taumir/lower.tr"
                     ltag2 = _list_tag_for_elem(letag);
                 }
-                /* pass */
+#line 6950 "src/taumir/lower.tr"
                 if (((ltag2 < 0LL) || (!_is_list_tag(ltag2)))) {
-                    /* pass */
+#line 6950 "src/taumir/lower.tr"
                     return (-1LL);
                 }
-                /* pass */
+#line 6951 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_new", 15LL));
-                /* pass */
+#line 6952 "src/taumir/lower.tr"
                 long long lnd = LFunc_new_vreg(lf);
-                /* pass */
+#line 6953 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(lnd, _tr_str_lit_len("_tr_rt_list_new", 15LL), (void*)List_i64_new()));
-                /* pass */
+#line 6954 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, lnd, ltag2);
-                /* pass */
-                return lnd;
+#line 6955 "src/taumir/lower.tr"
+                long long _trret1751 = lnd;
+                return _trret1751;
             }
-            /* pass */
+#line 6958 "src/taumir/lower.tr"
             if (((_tr_str_eqv((inm), (_tr_str_lit_len("Chan", 4LL))) && (_tr_str_eqv((method), (_tr_str_lit_len("init", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("new", 3LL))))) && (margs->len == 1LL))) {
-                /* pass */
+#line 6959 "src/taumir/lower.tr"
                 long long ccap = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-                /* pass */
+#line 6960 "src/taumir/lower.tr"
                 if (((ccap < 0LL) || (LFunc_vreg_type(lf, ccap) != 0LL))) {
-                    /* pass */
+#line 6960 "src/taumir/lower.tr"
                     return (-1LL);
                 }
-                /* pass */
+#line 6961 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_chan_new", 12LL));
-                /* pass */
+#line 6962 "src/taumir/lower.tr"
                 List_i64* cna = (void*)List_i64_new();
-                /* pass */
+#line 6963 "src/taumir/lower.tr"
                 List_i64_append(cna, ccap);
-                /* pass */
+#line 6964 "src/taumir/lower.tr"
                 long long cnd = LFunc_new_vreg(lf);
-                /* pass */
+#line 6965 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(cnd, _tr_str_lit_len("_tr_chan_new", 12LL), cna));
-                /* pass */
+#line 6966 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, cnd, 0LL);
-                /* pass */
-                return cnd;
+#line 6967 "src/taumir/lower.tr"
+                long long _trret1752 = cnd;
+                return _trret1752;
             }
-            /* pass */
+#line 6970 "src/taumir/lower.tr"
             if (((((((_tr_str_eqv((inm), (_tr_str_lit_len("Mutex", 5LL))) || _tr_str_eqv((inm), (_tr_str_lit_len("RwLock", 6LL)))) || _tr_str_eqv((inm), (_tr_str_lit_len("Atomic", 6LL)))) || _tr_str_eqv((inm), (_tr_str_lit_len("ThreadPool", 10LL)))) || _tr_str_eqv((inm), (_tr_str_lit_len("ThreadLocal", 11LL)))) && (_tr_str_eqv((method), (_tr_str_lit_len("init", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("new", 3LL))))) && (margs->len == 1LL))) {
-                /* pass */
+#line 6971 "src/taumir/lower.tr"
                 TrStr boxrt = _tr_str_lit_len("_tr_mutexbox_new", 16LL);
-                /* pass */
+#line 6972 "src/taumir/lower.tr"
                 if (_tr_str_eqv((inm), (_tr_str_lit_len("RwLock", 6LL)))) {
-                    /* pass */
-                    TrStr _strtmp_t3336 = _tr_str_lit_len("_tr_rwlbox_new", 14LL);
+#line 6972 "src/taumir/lower.tr"
+                    TrStr _strtmp_t6384 = _tr_str_lit_len("_tr_rwlbox_new", 14LL);
                     _tr_str_release(boxrt);
-                    boxrt = _strtmp_t3336;
+                    boxrt = _strtmp_t6384;
                 } else if (_tr_str_eqv((inm), (_tr_str_lit_len("Atomic", 6LL)))) {
-                    /* pass */
-                    TrStr _strtmp_t3337 = _tr_str_lit_len("_tr_atomic_new", 14LL);
+#line 6973 "src/taumir/lower.tr"
+                    TrStr _strtmp_t6385 = _tr_str_lit_len("_tr_atomic_new", 14LL);
                     _tr_str_release(boxrt);
-                    boxrt = _strtmp_t3337;
+                    boxrt = _strtmp_t6385;
                 } else if (_tr_str_eqv((inm), (_tr_str_lit_len("ThreadPool", 10LL)))) {
-                    /* pass */
-                    TrStr _strtmp_t3338 = _tr_str_lit_len("_tr_threadpool_new", 18LL);
+#line 6974 "src/taumir/lower.tr"
+                    TrStr _strtmp_t6386 = _tr_str_lit_len("_tr_threadpool_new", 18LL);
                     _tr_str_release(boxrt);
-                    boxrt = _strtmp_t3338;
+                    boxrt = _strtmp_t6386;
                 } else if (_tr_str_eqv((inm), (_tr_str_lit_len("ThreadLocal", 11LL)))) {
-                    /* pass */
-                    TrStr _strtmp_t3339 = _tr_str_lit_len("_tr_tls_new", 11LL);
+#line 6975 "src/taumir/lower.tr"
+                    TrStr _strtmp_t6387 = _tr_str_lit_len("_tr_tls_new", 11LL);
                     _tr_str_release(boxrt);
-                    boxrt = _strtmp_t3339;
+                    boxrt = _strtmp_t6387;
                 }
-                /* pass */
+#line 6976 "src/taumir/lower.tr"
                 long long bxv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-                /* pass */
+#line 6977 "src/taumir/lower.tr"
                 if (((bxv < 0LL) || (LFunc_vreg_type(lf, bxv) != 0LL))) {
-                    /* pass */
+#line 6977 "src/taumir/lower.tr"
                     _tr_str_release(boxrt);
                     return (-1LL);
                 }
-                /* pass */
+#line 6978 "src/taumir/lower.tr"
                 LModule_add_extern(m, boxrt);
-                /* pass */
+#line 6979 "src/taumir/lower.tr"
                 List_i64* bxa = (void*)List_i64_new();
-                /* pass */
+#line 6980 "src/taumir/lower.tr"
                 List_i64_append(bxa, bxv);
-                /* pass */
+#line 6981 "src/taumir/lower.tr"
                 long long bxd = LFunc_new_vreg(lf);
-                /* pass */
+#line 6982 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(bxd, boxrt, bxa));
-                /* pass */
+#line 6983 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, bxd, 0LL);
-                /* pass */
+#line 6984 "src/taumir/lower.tr"
+                long long _trret1753 = bxd;
                 _tr_str_release(boxrt);
-                return bxd;
+                return _trret1753;
             }
-            /* pass */
+#line 6985 "src/taumir/lower.tr"
             if (((_prog_generic_class_index(m, inm) >= 0LL) && (ity_g->args->len > 0LL))) {
-                /* pass */
+#line 6986 "src/taumir/lower.tr"
                 TrStr gsm = _ensure_generic_class(m, ity_g);
-                /* pass */
+#line 6987 "src/taumir/lower.tr"
                 if (_tr_str_eqv((gsm), (_tr_str_lit_len("", 0LL)))) {
-                    /* pass */
+#line 6987 "src/taumir/lower.tr"
                     _tr_str_release(gsm);
                     return (-1LL);
                 }
-                /* pass */
-                return ({ TrStr _at_t3340 = (({ TrStr _cl = (_tr_strx_concatv((gsm), (_tr_str_lit_len("_", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (method)); _tr_str_release(_cl); _cres; })); __auto_type _wr = (_lower_obj_call(m, lf, _at_t3340, (-1LL), margs)); _tr_str_release(_at_t3340); _wr; });
+#line 6988 "src/taumir/lower.tr"
+                long long _trret1754 = ({ TrStr _at_t6388 = (({ TrStr _tr_cl = (_tr_strx_concatv((gsm), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (method)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (_lower_obj_call(m, lf, _at_t6388, (-1LL), margs)); _tr_str_release(_at_t6388); _wr; });
+                _tr_str_release(gsm);
+                return _trret1754;
             }
-            /* pass */
+#line 6989 "src/taumir/lower.tr"
             if (LModule_is_class(m, inm)) {
-                /* pass */
+#line 6990 "src/taumir/lower.tr"
                 TrStr smang = LModule_resolve_method_ov(m, inm, method, margs->len);
-                /* pass */
+#line 6991 "src/taumir/lower.tr"
                 if (_tr_str_eqv((smang), (_tr_str_lit_len("", 0LL)))) {
-                    /* pass */
+#line 6991 "src/taumir/lower.tr"
                     _tr_str_release(smang);
                     return (-1LL);
                 }
-                /* pass */
-                return _lower_obj_call(m, lf, smang, (-1LL), margs);
+#line 6992 "src/taumir/lower.tr"
+                long long _trret1755 = _lower_obj_call(m, lf, smang, (-1LL), margs);
+                _tr_str_release(smang);
+                return _trret1755;
             }
-            /* pass */
+#line 6993 "src/taumir/lower.tr"
             if (LModule_is_enum(m, inm)) {
-                /* pass */
+#line 6994 "src/taumir/lower.tr"
                 TrStr nvm = _norm_variant(inm, method);
-                /* pass */
+#line 6995 "src/taumir/lower.tr"
                 if ((LModule_enum_variant_index(m, inm, nvm) >= 0LL)) {
-                    /* pass */
-                    return _lower_enum_ctor(m, lf, inm, nvm, margs);
+#line 6996 "src/taumir/lower.tr"
+                    long long _trret1756 = _lower_enum_ctor(m, lf, inm, nvm, margs);
+                    _tr_str_release(nvm);
+                    return _trret1756;
                 }
-                /* pass */
+#line 6997 "src/taumir/lower.tr"
+                long long _trret1757 = ({ TrStr _at_t6389 = (({ TrStr _tr_cl = (_tr_strx_concatv((inm), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (method)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (_lower_obj_call(m, lf, _at_t6389, (-1LL), margs)); _tr_str_release(_at_t6389); _wr; });
                 _tr_str_release(nvm);
-                return ({ TrStr _at_t3341 = (({ TrStr _cl = (_tr_strx_concatv((inm), (_tr_str_lit_len("_", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (method)); _tr_str_release(_cl); _cres; })); __auto_type _wr = (_lower_obj_call(m, lf, _at_t3341, (-1LL), margs)); _tr_str_release(_at_t3341); _wr; });
+                return _trret1757;
             }
         } else if (1) {
-            __auto_type _ = _t3335;
-            /* pass */
+            __auto_type _ = _t6383;
+#line 6999 "src/taumir/lower.tr"
             /* pass */
         }
-        /* pass */
+#line 7002 "src/taumir/lower.tr"
         TrStr recv_cls = _recv_class(m, lf, obj);
-        /* pass */
+#line 7005 "src/taumir/lower.tr"
         TrStr amn = _ident_name(obj);
-        /* pass */
+#line 7006 "src/taumir/lower.tr"
         if (((!_tr_str_eqv((amn), (_tr_str_lit_len("", 0LL)))) && (_fixed_arr_len(m, lf, amn) > 0LL))) {
-            /* pass */
+#line 7007 "src/taumir/lower.tr"
             if (((_tr_str_eqv((method), (_tr_str_lit_len("get_index", 9LL))) || _tr_str_eqv((method), (_tr_str_lit_len("get", 3LL)))) && (margs->len == 1LL))) {
-                /* pass */
+#line 7008 "src/taumir/lower.tr"
                 long long amiv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-                /* pass */
+#line 7009 "src/taumir/lower.tr"
                 if (((amiv < 0LL) || (LFunc_vreg_type(lf, amiv) != 0LL))) {
-                    /* pass */
+#line 7009 "src/taumir/lower.tr"
                     _tr_str_release(recv_cls);
                     _tr_str_release(amn);
                     return (-1LL);
                 }
-                /* pass */
+#line 7010 "src/taumir/lower.tr"
                 long long amaddr = _array_elem_addr(m, lf, amn, amiv);
-                /* pass */
+#line 7011 "src/taumir/lower.tr"
                 long long amd = LFunc_new_vreg(lf);
-                /* pass */
+#line 7012 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ILoad(amd, amaddr, 0LL, 2LL));
-                /* pass */
+#line 7013 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, amd, _fixed_arr_elem_tag(m, lf, amn));
-                /* pass */
+#line 7014 "src/taumir/lower.tr"
+                long long _trret1758 = amd;
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
-                return amd;
+                return _trret1758;
             }
-            /* pass */
+#line 7015 "src/taumir/lower.tr"
             if (((_tr_str_eqv((method), (_tr_str_lit_len("len", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("length", 6LL)))) && (margs->len == 0LL))) {
-                /* pass */
+#line 7016 "src/taumir/lower.tr"
                 long long amld = LFunc_new_vreg(lf);
-                /* pass */
+#line 7017 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IConst(amld, _fixed_arr_len(m, lf, amn)));
-                /* pass */
+#line 7018 "src/taumir/lower.tr"
+                long long _trret1759 = amld;
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
-                return amld;
+                return _trret1759;
             }
-            /* pass */
+#line 7019 "src/taumir/lower.tr"
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
             return (-1LL);
         }
-        /* pass */
+#line 7025 "src/taumir/lower.tr"
         if (((_tr_str_eqv((recv_cls), (_tr_str_lit_len("StrView", 7LL))) && _tr_str_eqv((method), (_tr_str_lit_len("to_str", 6LL)))) && (margs->len == 0LL))) {
-            /* pass */
+#line 7026 "src/taumir/lower.tr"
             long long svo = lower_expr(m, lf, obj);
-            /* pass */
+#line 7027 "src/taumir/lower.tr"
             if ((svo < 0LL)) {
-                /* pass */
+#line 7027 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7028 "src/taumir/lower.tr"
             long long svdata = _emit_field_get(m, lf, svo, 0LL, 0LL);
-            /* pass */
+#line 7029 "src/taumir/lower.tr"
             long long svlen = _emit_field_get(m, lf, svo, 8LL, 0LL);
-            /* pass */
+#line 7030 "src/taumir/lower.tr"
             long long svz = LFunc_new_vreg(lf);
-            /* pass */
+#line 7031 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IConst(svz, 0LL));
-            /* pass */
+#line 7032 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_slice", 16LL));
-            /* pass */
+#line 7033 "src/taumir/lower.tr"
             List_i64* sva = (void*)List_i64_new();
-            /* pass */
+#line 7034 "src/taumir/lower.tr"
             List_i64_append(sva, svdata);
-            /* pass */
+#line 7034 "src/taumir/lower.tr"
             List_i64_append(sva, svz);
-            /* pass */
+#line 7034 "src/taumir/lower.tr"
             List_i64_append(sva, svlen);
-            /* pass */
+#line 7035 "src/taumir/lower.tr"
             long long svd = LFunc_new_vreg(lf);
-            /* pass */
+#line 7036 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(svd, _tr_str_lit_len("_tr_rt_str_slice", 16LL), sva));
-            /* pass */
+#line 7037 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, svd, 1LL);
-            /* pass */
+#line 7038 "src/taumir/lower.tr"
             _fresh_mark(lf, svd);
-            /* pass */
+#line 7039 "src/taumir/lower.tr"
+            long long _trret1760 = svd;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return svd;
+            return _trret1760;
         }
-        /* pass */
+#line 7043 "src/taumir/lower.tr"
         if (((_tr_str_eqv((recv_cls), (_tr_str_lit_len("StringObj", 9LL))) && _tr_str_eqv((method), (_tr_str_lit_len("as_str", 6LL)))) && (margs->len == 0LL))) {
-            /* pass */
+#line 7044 "src/taumir/lower.tr"
             long long soo = lower_expr(m, lf, obj);
-            /* pass */
+#line 7045 "src/taumir/lower.tr"
             if ((soo < 0LL)) {
-                /* pass */
+#line 7045 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7046 "src/taumir/lower.tr"
             long long sodata = _emit_field_get(m, lf, soo, 0LL, 0LL);
-            /* pass */
+#line 7047 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_str_new", 14LL));
-            /* pass */
+#line 7048 "src/taumir/lower.tr"
             List_i64* soa = (void*)List_i64_new();
-            /* pass */
+#line 7049 "src/taumir/lower.tr"
             List_i64_append(soa, sodata);
-            /* pass */
+#line 7050 "src/taumir/lower.tr"
             long long sod = LFunc_new_vreg(lf);
-            /* pass */
+#line 7051 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(sod, _tr_str_lit_len("_tr_rt_str_new", 14LL), soa));
-            /* pass */
+#line 7052 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, sod, 1LL);
-            /* pass */
+#line 7053 "src/taumir/lower.tr"
             _fresh_mark(lf, sod);
-            /* pass */
+#line 7054 "src/taumir/lower.tr"
+            long long _trret1761 = sod;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return sod;
+            return _trret1761;
         }
-        /* pass */
+#line 7055 "src/taumir/lower.tr"
         if ((!_tr_str_eqv((recv_cls), (_tr_str_lit_len("", 0LL))))) {
-            /* pass */
+#line 7058 "src/taumir/lower.tr"
             TrStr dmethod = _tr_str_retain(method);
-            /* pass */
+#line 7059 "src/taumir/lower.tr"
             if (LModule_is_class(m, recv_cls)) {
-                /* pass */
-                if (((_tr_str_eqv((method), (_tr_str_lit_len("get_index", 9LL))) || _tr_str_eqv((method), (_tr_str_lit_len("get", 3LL)))) && (!_tr_str_eqv((LModule_resolve_method(m, recv_cls, _tr_str_lit_len("__getitem__", 11LL))), (_tr_str_lit_len("", 0LL)))))) {
-                    /* pass */
-                    TrStr _strtmp_t3342 = _tr_str_lit_len("__getitem__", 11LL);
+#line 7060 "src/taumir/lower.tr"
+                if (((_tr_str_eqv((method), (_tr_str_lit_len("get_index", 9LL))) || _tr_str_eqv((method), (_tr_str_lit_len("get", 3LL)))) && ({ TrStr _cmpa_t6390 = (LModule_resolve_method(m, recv_cls, _tr_str_lit_len("__getitem__", 11LL))); TrStr _cmpb_t6391 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t6392 = !_tr_str_eqv(_cmpa_t6390, _cmpb_t6391); _tr_str_release(_cmpa_t6390); _cmpr_t6392; }))) {
+#line 7061 "src/taumir/lower.tr"
+                    TrStr _strtmp_t6393 = _tr_str_lit_len("__getitem__", 11LL);
                     _tr_str_release(dmethod);
-                    dmethod = _strtmp_t3342;
+                    dmethod = _strtmp_t6393;
                 }
             }
-            /* pass */
-            TrStr mangled = ({ TrStr _cl = (_tr_strx_concatv((recv_cls), (_tr_str_lit_len("_", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (dmethod)); _tr_str_release(_cl); _cres; });
-            /* pass */
+#line 7062 "src/taumir/lower.tr"
+            TrStr mangled = ({ TrStr _tr_cl = (_tr_strx_concatv((recv_cls), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (dmethod)); _tr_str_release(_tr_cl); _tr_cres; });
+#line 7063 "src/taumir/lower.tr"
             if (LModule_is_class(m, recv_cls)) {
-                /* pass */
-                TrStr _strtmp_t3343 = LModule_resolve_method_ov(m, recv_cls, dmethod, margs->len);
+#line 7064 "src/taumir/lower.tr"
+                TrStr _strtmp_t6394 = LModule_resolve_method_ov(m, recv_cls, dmethod, margs->len);
                 _tr_str_release(mangled);
-                mangled = _strtmp_t3343;
-                /* pass */
+                mangled = _strtmp_t6394;
+#line 7065 "src/taumir/lower.tr"
                 if (_tr_str_eqv((mangled), (_tr_str_lit_len("", 0LL)))) {
-                    /* pass */
+#line 7068 "src/taumir/lower.tr"
                     long long gmix = _find_generic_method(m, recv_cls, method);
-                    /* pass */
+#line 7069 "src/taumir/lower.tr"
                     if ((gmix < 0LL)) {
-                        /* pass */
+#line 7069 "src/taumir/lower.tr"
                         _tr_str_release(recv_cls);
                         _tr_str_release(amn);
                         _tr_str_release(dmethod);
                         _tr_str_release(mangled);
                         return (-1LL);
                     }
-                    /* pass */
+#line 7070 "src/taumir/lower.tr"
                     long long gm_self = lower_expr(m, lf, obj);
-                    /* pass */
+#line 7071 "src/taumir/lower.tr"
                     if ((gm_self < 0LL)) {
-                        /* pass */
+#line 7071 "src/taumir/lower.tr"
                         _tr_str_release(recv_cls);
                         _tr_str_release(amn);
                         _tr_str_release(dmethod);
                         _tr_str_release(mangled);
                         return (-1LL);
                     }
-                    /* pass */
+#line 7072 "src/taumir/lower.tr"
                     List_i64* gm_tags = (void*)List_i64_new();
-                    /* pass */
+#line 7073 "src/taumir/lower.tr"
                     List_TrStr* gm_cls = (void*)List_TrStr_new();
-                    /* pass */
+#line 7074 "src/taumir/lower.tr"
                     List_i64* gm_regs = (void*)List_i64_new();
-                    /* pass */
+#line 7075 "src/taumir/lower.tr"
                     List_i64_append(gm_tags, LFunc_vreg_type(lf, gm_self));
-                    /* pass */
-                    ({ TrStr _at_t3344 = (_own(recv_cls)); List_TrStr_append(gm_cls, _at_t3344); _tr_str_release(_at_t3344); });
-                    /* pass */
+#line 7076 "src/taumir/lower.tr"
+                    ({ TrStr _at_t6395 = (_own(recv_cls)); List_TrStr_append(gm_cls, _at_t6395); _tr_str_release(_at_t6395); });
+#line 7077 "src/taumir/lower.tr"
                     List_i64_append(gm_regs, gm_self);
-                    /* pass */
-                    TrStr gm_name = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concatv((recv_cls), (_tr_str_lit_len("_", 1LL)))); TrStr _cres = _tr_strx_concatv(_cl, (method)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concatv(_cl, (_tr_str_lit_len("__m", 3LL))); _tr_str_release(_cl); _cres; });
-                    /* pass */
+#line 7078 "src/taumir/lower.tr"
+                    TrStr gm_name = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((recv_cls), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (method)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("__m", 3LL))); _tr_str_release(_tr_cl); _tr_cres; });
+#line 7079 "src/taumir/lower.tr"
                     long long gmj = 0LL;
-                    /* pass */
+#line 7080 "src/taumir/lower.tr"
                     while ((gmj < margs->len)) {
-                        /* pass */
+#line 7081 "src/taumir/lower.tr"
                         long long gmv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, gmj)));
-                        /* pass */
+#line 7082 "src/taumir/lower.tr"
                         if ((gmv < 0LL)) {
-                            /* pass */
+#line 7082 "src/taumir/lower.tr"
                             _tr_str_release(recv_cls);
                             _tr_str_release(amn);
                             _tr_str_release(dmethod);
@@ -17163,19 +17477,19 @@ __auto_type ity_g = _t3335.data.EIdent.ty;
                             _tr_str_release(gm_name);
                             return (-1LL);
                         }
-                        /* pass */
+#line 7083 "src/taumir/lower.tr"
                         long long gmt = LFunc_vreg_type(lf, gmv);
-                        /* pass */
+#line 7084 "src/taumir/lower.tr"
                         TrStr gmc = _tr_str_lit_len("", 0LL);
-                        /* pass */
+#line 7085 "src/taumir/lower.tr"
                         if (((gmt == 10LL) || (gmt == 11LL))) {
-                            /* pass */
-                            TrStr _strtmp_t3345 = _recv_class(m, lf, ((HirExpr*)List_ptr_get(margs, gmj)));
+#line 7086 "src/taumir/lower.tr"
+                            TrStr _strtmp_t6396 = _recv_class(m, lf, ((HirExpr*)List_ptr_get(margs, gmj)));
                             _tr_str_release(gmc);
-                            gmc = _strtmp_t3345;
-                            /* pass */
+                            gmc = _strtmp_t6396;
+#line 7087 "src/taumir/lower.tr"
                             if (_tr_str_eqv((gmc), (_tr_str_lit_len("", 0LL)))) {
-                                /* pass */
+#line 7087 "src/taumir/lower.tr"
                                 _tr_str_release(recv_cls);
                                 _tr_str_release(amn);
                                 _tr_str_release(dmethod);
@@ -17188,37 +17502,31 @@ __auto_type ity_g = _t3335.data.EIdent.ty;
                                 return (-1LL);
                             }
                         }
-                        /* pass */
+#line 7088 "src/taumir/lower.tr"
                         List_i64_append(gm_regs, gmv);
-                        /* pass */
+#line 7089 "src/taumir/lower.tr"
                         List_i64_append(gm_tags, gmt);
-                        /* pass */
+#line 7090 "src/taumir/lower.tr"
                         List_TrStr_append(gm_cls, gmc);
-                        /* pass */
+#line 7091 "src/taumir/lower.tr"
                         if ((gmj > 0LL)) {
-                            /* pass */
-                            TrStr _strtmp_t3346 = _tr_strx_concatv((gm_name), (_tr_str_lit_len("_", 1LL)));
-                            _tr_str_release(gm_name);
-                            gm_name = _strtmp_t3346;
+#line 7091 "src/taumir/lower.tr"
+                            ({ TrStr _ap_t6397 = (_tr_str_lit_len("_", 1LL)); _tr_str_append(&gm_name, _ap_t6397); });
                         }
-                        /* pass */
-                        TrStr _strtmp_t3347 = ({ TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(gmt)))); TrStr _cres = _tr_strx_concatv((gm_name), _cr); _tr_str_release(_cr); _cres; });
-                        _tr_str_release(gm_name);
-                        gm_name = _strtmp_t3347;
-                        /* pass */
+#line 7092 "src/taumir/lower.tr"
+                        ({ TrStr _ap_t6398 = (_tr_str_wrap(_tr_int_to_str((long long)(gmt)))); _tr_str_append(&gm_name, _ap_t6398); _tr_str_release(_ap_t6398); });
+#line 7093 "src/taumir/lower.tr"
                         if ((!_tr_str_eqv((gmc), (_tr_str_lit_len("", 0LL))))) {
-                            /* pass */
-                            TrStr _strtmp_t3348 = _tr_strx_concatv((gm_name), (gmc));
-                            _tr_str_release(gm_name);
-                            gm_name = _strtmp_t3348;
+#line 7093 "src/taumir/lower.tr"
+                            ({ TrStr _ap_t6399 = (gmc); _tr_str_append(&gm_name, _ap_t6399); });
                         }
-                        /* pass */
+#line 7094 "src/taumir/lower.tr"
                         gmj = (gmj + 1LL);
                         _tr_str_release(gmc);
                     }
-                    /* pass */
+#line 7095 "src/taumir/lower.tr"
                     if ((gm_regs->len > 6LL)) {
-                        /* pass */
+#line 7095 "src/taumir/lower.tr"
                         _tr_str_release(recv_cls);
                         _tr_str_release(amn);
                         _tr_str_release(dmethod);
@@ -17229,11 +17537,11 @@ __auto_type ity_g = _t3335.data.EIdent.ty;
                         _tr_str_release(gm_name);
                         return (-1LL);
                     }
-                    /* pass */
+#line 7096 "src/taumir/lower.tr"
                     if ((!LModule_is_user_fn(m, gm_name))) {
-                        /* pass */
+#line 7097 "src/taumir/lower.tr"
                         if ((!_lir_lower_generic(m, ((HirFunction*)List_ptr_get(m->hir_prog->functions, gmix)), gm_tags, gm_cls, gm_name))) {
-                            /* pass */
+#line 7098 "src/taumir/lower.tr"
                             _tr_str_release(recv_cls);
                             _tr_str_release(amn);
                             _tr_str_release(dmethod);
@@ -17245,827 +17553,860 @@ __auto_type ity_g = _t3335.data.EIdent.ty;
                             return (-1LL);
                         }
                     }
-                    /* pass */
+#line 7099 "src/taumir/lower.tr"
                     long long gm_ret = LModule_fn_ret_tag(m, gm_name);
-                    /* pass */
+#line 7100 "src/taumir/lower.tr"
                     long long gm_d = LFunc_new_vreg(lf);
-                    /* pass */
+#line 7101 "src/taumir/lower.tr"
                     LFunc_emit(lf, LInst_ctor_ICall(gm_d, gm_name, gm_regs));
-                    /* pass */
+#line 7102 "src/taumir/lower.tr"
                     LFunc_set_vreg_type(lf, gm_d, gm_ret);
-                    /* pass */
+#line 7103 "src/taumir/lower.tr"
                     if ((gm_ret == 1LL)) {
-                        /* pass */
+#line 7103 "src/taumir/lower.tr"
                         _fresh_mark(lf, gm_d);
                     }
-                    /* pass */
+#line 7104 "src/taumir/lower.tr"
+                    long long _trret1762 = gm_d;
                     _tr_str_release(recv_cls);
                     _tr_str_release(amn);
                     _tr_str_release(dmethod);
                     _tr_str_release(mangled);
                     _tr_str_release(gm_name);
-                    return gm_d;
+                    return _trret1762;
                 }
             }
-            /* pass */
+#line 7105 "src/taumir/lower.tr"
             long long rself = lower_expr(m, lf, obj);
-            /* pass */
+#line 7106 "src/taumir/lower.tr"
             if ((rself < 0LL)) {
-                /* pass */
+#line 7106 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 _tr_str_release(dmethod);
                 _tr_str_release(mangled);
                 return (-1LL);
             }
-            /* pass */
+#line 7107 "src/taumir/lower.tr"
+            long long _trret1763 = _lower_obj_call(m, lf, mangled, rself, margs);
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
             _tr_str_release(dmethod);
-            return _lower_obj_call(m, lf, mangled, rself, margs);
+            _tr_str_release(mangled);
+            return _trret1763;
         }
-        /* pass */
+#line 7108 "src/taumir/lower.tr"
         long long ovm = lower_expr(m, lf, obj);
-        /* pass */
+#line 7109 "src/taumir/lower.tr"
         if ((ovm < 0LL)) {
-            /* pass */
+#line 7109 "src/taumir/lower.tr"
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
             return (-1LL);
         }
-        /* pass */
+#line 7110 "src/taumir/lower.tr"
         long long ovmt = LFunc_vreg_type(lf, ovm);
-        /* pass */
+#line 7111 "src/taumir/lower.tr"
         if ((ovmt == 1LL)) {
-            /* pass */
+#line 7112 "src/taumir/lower.tr"
+            long long _trret1764 = _lower_str_method(m, lf, ovm, method, margs);
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return _lower_str_method(m, lf, ovm, method, margs);
+            return _trret1764;
         }
-        /* pass */
+#line 7113 "src/taumir/lower.tr"
         if ((ovmt == 5LL)) {
-            /* pass */
+#line 7114 "src/taumir/lower.tr"
+            long long _trret1765 = _lower_float_method(m, lf, ovm, method, margs);
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return _lower_float_method(m, lf, ovm, method, margs);
+            return _trret1765;
         }
-        /* pass */
+#line 7115 "src/taumir/lower.tr"
         if ((ovmt == 0LL)) {
-            /* pass */
+#line 7116 "src/taumir/lower.tr"
+            long long _trret1766 = _lower_int_method(m, lf, ovm, method, margs);
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return _lower_int_method(m, lf, ovm, method, margs);
+            return _trret1766;
         }
-        /* pass */
+#line 7117 "src/taumir/lower.tr"
         if (_is_dict_tag(ovmt)) {
-            /* pass */
+#line 7118 "src/taumir/lower.tr"
+            long long _trret1767 = _lower_dict_method(m, lf, ovm, ovmt, method, margs);
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return _lower_dict_method(m, lf, ovm, ovmt, method, margs);
+            return _trret1767;
         }
-        /* pass */
+#line 7119 "src/taumir/lower.tr"
         if (_is_set_tag(ovmt)) {
-            /* pass */
+#line 7120 "src/taumir/lower.tr"
+            long long _trret1768 = _lower_set_method(m, lf, ovm, ovmt, method, margs);
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return _lower_set_method(m, lf, ovm, ovmt, method, margs);
+            return _trret1768;
         }
-        /* pass */
+#line 7121 "src/taumir/lower.tr"
         if ((((ovmt == 15LL) && (_tr_str_eqv((method), (_tr_str_lit_len("get_index", 9LL))) || _tr_str_eqv((method), (_tr_str_lit_len("get", 3LL))))) && (margs->len == 1LL))) {
-            /* pass */
+#line 7123 "src/taumir/lower.tr"
             long long tgt_idx = (-1LL);
-            /* pass */
-            __auto_type _t3349 = (*((HirExpr*)List_ptr_get(margs, 0LL)));
-            if (_t3349.tag == HirExpr_ELitInt) {
-                __auto_type tgt_v = _t3349.data.ELitInt.val;
+#line 7124 "src/taumir/lower.tr"
+            __auto_type _t6400 = (*((HirExpr*)List_ptr_get(margs, 0LL)));
+            if (_t6400.tag == HirExpr_ELitInt) {
+                __auto_type tgt_v = _t6400.data.ELitInt.val;
                 tgt_idx = tgt_v;
             } else if (1) {
-                __auto_type _ = _t3349;
+                __auto_type _ = _t6400;
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7127 "src/taumir/lower.tr"
             AstType* tup_hty = hir_expr_type(obj);
-            /* pass */
+#line 7128 "src/taumir/lower.tr"
             if (((tgt_idx < 0LL) || (tgt_idx >= tup_hty->args->len))) {
-                /* pass */
+#line 7128 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7129 "src/taumir/lower.tr"
             long long tgt_tag = _tag_of(m, (*((AstType**)List_ptr_get(tup_hty->args, tgt_idx))));
-            /* pass */
+#line 7130 "src/taumir/lower.tr"
             if (((((tgt_tag < 0LL) || _is_list_tag(tgt_tag)) || _is_dict_tag(tgt_tag)) || _is_set_tag(tgt_tag))) {
-                /* pass */
+#line 7130 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7131 "src/taumir/lower.tr"
             if ((tgt_tag == 5LL)) {
-                /* pass */
+#line 7132 "src/taumir/lower.tr"
                 long long tgr = _emit_field_get(m, lf, ovm, (tgt_idx * 8LL), 0LL);
-                /* pass */
+#line 7133 "src/taumir/lower.tr"
                 long long tgf = LFunc_new_vreg(lf);
-                /* pass */
+#line 7134 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IBitsF(tgf, tgr));
-                /* pass */
+#line 7135 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, tgf, 5LL);
-                /* pass */
+#line 7136 "src/taumir/lower.tr"
+                long long _trret1769 = tgf;
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
-                return tgf;
+                return _trret1769;
             }
-            /* pass */
+#line 7137 "src/taumir/lower.tr"
+            long long _trret1770 = _emit_field_get(m, lf, ovm, (tgt_idx * 8LL), tgt_tag);
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return _emit_field_get(m, lf, ovm, (tgt_idx * 8LL), tgt_tag);
+            return _trret1770;
         }
-        /* pass */
+#line 7138 "src/taumir/lower.tr"
         if ((!_is_list_tag(ovmt))) {
-            /* pass */
+#line 7138 "src/taumir/lower.tr"
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
             return (-1LL);
         }
-        /* pass */
+#line 7139 "src/taumir/lower.tr"
         long long want_elem = _list_elem_tag(ovmt);
-        /* pass */
+#line 7140 "src/taumir/lower.tr"
         if (((_tr_str_eqv((method), (_tr_str_lit_len("len", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("length", 6LL)))) && (margs->len == 0LL))) {
-            /* pass */
+#line 7141 "src/taumir/lower.tr"
+            long long _trret1771 = _str_call0(m, lf, _tr_str_lit_len("_tr_rt_list_len", 15LL), ovm, 0LL);
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return _str_call0(m, lf, _tr_str_lit_len("_tr_rt_list_len", 15LL), ovm, 0LL);
+            return _trret1771;
         }
-        /* pass */
+#line 7142 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("push", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("append", 6LL))))) {
-            /* pass */
+#line 7143 "src/taumir/lower.tr"
             if ((margs->len != 1LL)) {
-                /* pass */
+#line 7143 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7144 "src/taumir/lower.tr"
             long long av = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-            /* pass */
+#line 7145 "src/taumir/lower.tr"
             if ((av < 0LL)) {
-                /* pass */
+#line 7145 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7146 "src/taumir/lower.tr"
             long long avt = LFunc_vreg_type(lf, av);
-            /* pass */
+#line 7148 "src/taumir/lower.tr"
             if (((want_elem == 0LL) && (avt == 4LL))) {
-                /* pass */
+#line 7149 "src/taumir/lower.tr"
                 avt = 0LL;
             }
-            /* pass */
+#line 7150 "src/taumir/lower.tr"
             if ((avt != want_elem)) {
-                /* pass */
+#line 7150 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7151 "src/taumir/lower.tr"
             if ((want_elem == 1LL)) {
-                /* pass */
+#line 7151 "src/taumir/lower.tr"
                 _secure_str(m, lf, av);
             }
-            /* pass */
+#line 7152 "src/taumir/lower.tr"
             if ((((want_elem == 10LL) || (want_elem == 11LL)) || (want_elem == 15LL))) {
-                /* pass */
+#line 7152 "src/taumir/lower.tr"
                 _secure_obj(m, lf, av);
             }
-            /* pass */
+#line 7153 "src/taumir/lower.tr"
             if ((want_elem == 5LL)) {
-                /* pass */
+#line 7154 "src/taumir/lower.tr"
                 long long avfb = LFunc_new_vreg(lf);
-                /* pass */
+#line 7155 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFBits(avfb, av));
-                /* pass */
+#line 7156 "src/taumir/lower.tr"
                 av = avfb;
             }
-            /* pass */
+#line 7157 "src/taumir/lower.tr"
             TrStr apush = _tr_str_lit_len("_tr_rt_list_push_i64", 20LL);
-            /* pass */
+#line 7158 "src/taumir/lower.tr"
             if ((ovmt == 22LL)) {
-                /* pass */
-                TrStr _strtmp_t3350 = _tr_str_lit_len("_tr_rt_blist_push", 17LL);
+#line 7158 "src/taumir/lower.tr"
+                TrStr _strtmp_t6401 = _tr_str_lit_len("_tr_rt_blist_push", 17LL);
                 _tr_str_release(apush);
-                apush = _strtmp_t3350;
+                apush = _strtmp_t6401;
             }
-            /* pass */
+#line 7159 "src/taumir/lower.tr"
             LModule_add_extern(m, apush);
-            /* pass */
+#line 7160 "src/taumir/lower.tr"
             List_i64* ppa = (void*)List_i64_new();
-            /* pass */
+#line 7161 "src/taumir/lower.tr"
             List_i64_append(ppa, ovm);
-            /* pass */
+#line 7162 "src/taumir/lower.tr"
             List_i64_append(ppa, av);
-            /* pass */
+#line 7163 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), apush, ppa));
-            /* pass */
+#line 7164 "src/taumir/lower.tr"
+            long long _trret1772 = ovm;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
             _tr_str_release(apush);
-            return ovm;
+            return _trret1772;
         }
-        /* pass */
+#line 7165 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("get", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("get_index", 9LL))))) {
-            /* pass */
+#line 7166 "src/taumir/lower.tr"
             if ((margs->len != 1LL)) {
-                /* pass */
+#line 7166 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7167 "src/taumir/lower.tr"
             long long giv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-            /* pass */
+#line 7168 "src/taumir/lower.tr"
             if ((giv < 0LL)) {
-                /* pass */
+#line 7168 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7169 "src/taumir/lower.tr"
+            long long _trret1773 = _list_get_elem(m, lf, ovmt, ovm, giv);
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return _list_get_elem(m, lf, ovmt, ovm, giv);
+            return _trret1773;
         }
-        /* pass */
+#line 7170 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("set", 3LL))) && (margs->len == 2LL))) {
-            /* pass */
+#line 7171 "src/taumir/lower.tr"
             long long sti = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-            /* pass */
+#line 7172 "src/taumir/lower.tr"
             if (((sti < 0LL) || (LFunc_vreg_type(lf, sti) != 0LL))) {
-                /* pass */
+#line 7172 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7173 "src/taumir/lower.tr"
             long long stv = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
-            /* pass */
+#line 7174 "src/taumir/lower.tr"
             if ((stv < 0LL)) {
-                /* pass */
+#line 7174 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7175 "src/taumir/lower.tr"
             long long stvt = LFunc_vreg_type(lf, stv);
-            /* pass */
+#line 7176 "src/taumir/lower.tr"
             if (((want_elem == 0LL) && (stvt == 4LL))) {
-                /* pass */
+#line 7176 "src/taumir/lower.tr"
                 stvt = 0LL;
             }
-            /* pass */
+#line 7177 "src/taumir/lower.tr"
             if ((stvt != want_elem)) {
-                /* pass */
+#line 7177 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7178 "src/taumir/lower.tr"
             if ((want_elem == 1LL)) {
-                /* pass */
+#line 7178 "src/taumir/lower.tr"
                 _secure_str(m, lf, stv);
             }
-            /* pass */
+#line 7179 "src/taumir/lower.tr"
             if ((((want_elem == 10LL) || (want_elem == 11LL)) || (want_elem == 15LL))) {
-                /* pass */
+#line 7179 "src/taumir/lower.tr"
                 _secure_obj(m, lf, stv);
             }
-            /* pass */
+#line 7180 "src/taumir/lower.tr"
             if ((want_elem == 5LL)) {
-                /* pass */
+#line 7181 "src/taumir/lower.tr"
                 long long stfb = LFunc_new_vreg(lf);
-                /* pass */
+#line 7182 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IFBits(stfb, stv));
-                /* pass */
+#line 7183 "src/taumir/lower.tr"
                 stv = stfb;
             }
-            /* pass */
+#line 7184 "src/taumir/lower.tr"
             long long st_addr = _inline_list_addr(m, lf, ovm, sti, _list_stride(ovmt));
-            /* pass */
+#line 7185 "src/taumir/lower.tr"
             if ((ovmt == 22LL)) {
-                /* pass */
+#line 7186 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IStoreB(st_addr, 0LL, stv));
             } else {
-                /* pass */
+#line 7188 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IStore(st_addr, 0LL, stv, 2LL));
             }
-            /* pass */
+#line 7189 "src/taumir/lower.tr"
+            long long _trret1774 = ovm;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return ovm;
+            return _trret1774;
         }
-        /* pass */
+#line 7190 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("pop", 3LL))) && (margs->len == 0LL))) {
-            /* pass */
+#line 7191 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_pop_i64", 19LL));
-            /* pass */
+#line 7192 "src/taumir/lower.tr"
             List_i64* poa = (void*)List_i64_new();
-            /* pass */
+#line 7193 "src/taumir/lower.tr"
             List_i64_append(poa, ovm);
-            /* pass */
+#line 7194 "src/taumir/lower.tr"
             long long pod = LFunc_new_vreg(lf);
-            /* pass */
+#line 7195 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(pod, _tr_str_lit_len("_tr_rt_list_pop_i64", 19LL), poa));
-            /* pass */
+#line 7196 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, pod, want_elem);
-            /* pass */
+#line 7197 "src/taumir/lower.tr"
+            long long _trret1775 = pod;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return pod;
+            return _trret1775;
         }
-        /* pass */
+#line 7198 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("index_of", 8LL))) && (margs->len == 1LL))) {
-            /* pass */
+#line 7199 "src/taumir/lower.tr"
             long long ixa = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-            /* pass */
+#line 7200 "src/taumir/lower.tr"
             if ((ixa < 0LL)) {
-                /* pass */
+#line 7200 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7201 "src/taumir/lower.tr"
             long long ixat = LFunc_vreg_type(lf, ixa);
-            /* pass */
+#line 7202 "src/taumir/lower.tr"
             if (((want_elem == 0LL) && (ixat == 4LL))) {
-                /* pass */
+#line 7202 "src/taumir/lower.tr"
                 ixat = 0LL;
             }
-            /* pass */
+#line 7203 "src/taumir/lower.tr"
             if ((ixat != want_elem)) {
-                /* pass */
+#line 7203 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7204 "src/taumir/lower.tr"
             TrStr ixsym = _tr_str_lit_len("_tr_rt_list_index_i64", 21LL);
-            /* pass */
+#line 7205 "src/taumir/lower.tr"
             if ((want_elem == 1LL)) {
-                /* pass */
-                TrStr _strtmp_t3351 = _tr_str_lit_len("_tr_rt_list_index_str", 21LL);
+#line 7205 "src/taumir/lower.tr"
+                TrStr _strtmp_t6402 = _tr_str_lit_len("_tr_rt_list_index_str", 21LL);
                 _tr_str_release(ixsym);
-                ixsym = _strtmp_t3351;
+                ixsym = _strtmp_t6402;
             }
-            /* pass */
+#line 7206 "src/taumir/lower.tr"
             LModule_add_extern(m, ixsym);
-            /* pass */
+#line 7207 "src/taumir/lower.tr"
             List_i64* ixargs = (void*)List_i64_new();
-            /* pass */
+#line 7208 "src/taumir/lower.tr"
             List_i64_append(ixargs, ovm);
-            /* pass */
+#line 7209 "src/taumir/lower.tr"
             List_i64_append(ixargs, ixa);
-            /* pass */
+#line 7210 "src/taumir/lower.tr"
             long long ixd = LFunc_new_vreg(lf);
-            /* pass */
+#line 7211 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(ixd, ixsym, ixargs));
-            /* pass */
+#line 7212 "src/taumir/lower.tr"
+            long long _trret1776 = ixd;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
             _tr_str_release(ixsym);
-            return ixd;
+            return _trret1776;
         }
-        /* pass */
+#line 7213 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("contains", 8LL))) && (margs->len == 1LL))) {
-            /* pass */
+#line 7214 "src/taumir/lower.tr"
             long long cxa = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-            /* pass */
+#line 7215 "src/taumir/lower.tr"
             if ((cxa < 0LL)) {
-                /* pass */
+#line 7215 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7216 "src/taumir/lower.tr"
             long long cxat = LFunc_vreg_type(lf, cxa);
-            /* pass */
+#line 7217 "src/taumir/lower.tr"
             if (((want_elem == 0LL) && (cxat == 4LL))) {
-                /* pass */
+#line 7217 "src/taumir/lower.tr"
                 cxat = 0LL;
             }
-            /* pass */
+#line 7218 "src/taumir/lower.tr"
             if ((cxat != want_elem)) {
-                /* pass */
+#line 7218 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7219 "src/taumir/lower.tr"
             TrStr cxsym = _tr_str_lit_len("_tr_rt_list_contains_i64", 24LL);
-            /* pass */
+#line 7220 "src/taumir/lower.tr"
             if ((want_elem == 1LL)) {
-                /* pass */
-                TrStr _strtmp_t3352 = _tr_str_lit_len("_tr_rt_list_contains_str", 24LL);
+#line 7220 "src/taumir/lower.tr"
+                TrStr _strtmp_t6403 = _tr_str_lit_len("_tr_rt_list_contains_str", 24LL);
                 _tr_str_release(cxsym);
-                cxsym = _strtmp_t3352;
+                cxsym = _strtmp_t6403;
             }
-            /* pass */
+#line 7221 "src/taumir/lower.tr"
             LModule_add_extern(m, cxsym);
-            /* pass */
+#line 7222 "src/taumir/lower.tr"
             List_i64* cxargs = (void*)List_i64_new();
-            /* pass */
+#line 7223 "src/taumir/lower.tr"
             List_i64_append(cxargs, ovm);
-            /* pass */
+#line 7224 "src/taumir/lower.tr"
             List_i64_append(cxargs, cxa);
-            /* pass */
+#line 7225 "src/taumir/lower.tr"
             long long cxd = LFunc_new_vreg(lf);
-            /* pass */
+#line 7226 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(cxd, cxsym, cxargs));
-            /* pass */
+#line 7227 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, cxd, 4LL);
-            /* pass */
+#line 7228 "src/taumir/lower.tr"
+            long long _trret1777 = cxd;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
             _tr_str_release(cxsym);
-            return cxd;
+            return _trret1777;
         }
-        /* pass */
+#line 7229 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("count", 5LL))) && (margs->len == 1LL))) {
-            /* pass */
+#line 7230 "src/taumir/lower.tr"
             long long cta = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-            /* pass */
+#line 7231 "src/taumir/lower.tr"
             if ((cta < 0LL)) {
-                /* pass */
+#line 7231 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7232 "src/taumir/lower.tr"
             long long ctat = LFunc_vreg_type(lf, cta);
-            /* pass */
+#line 7233 "src/taumir/lower.tr"
             if (((want_elem == 0LL) && (ctat == 4LL))) {
-                /* pass */
+#line 7233 "src/taumir/lower.tr"
                 ctat = 0LL;
             }
-            /* pass */
+#line 7234 "src/taumir/lower.tr"
             if ((ctat != want_elem)) {
-                /* pass */
+#line 7234 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7235 "src/taumir/lower.tr"
             TrStr ctsym = _tr_str_lit_len("_tr_rt_list_count_i64", 21LL);
-            /* pass */
+#line 7236 "src/taumir/lower.tr"
             if ((want_elem == 1LL)) {
-                /* pass */
-                TrStr _strtmp_t3353 = _tr_str_lit_len("_tr_rt_list_count_str", 21LL);
+#line 7236 "src/taumir/lower.tr"
+                TrStr _strtmp_t6404 = _tr_str_lit_len("_tr_rt_list_count_str", 21LL);
                 _tr_str_release(ctsym);
-                ctsym = _strtmp_t3353;
+                ctsym = _strtmp_t6404;
             }
-            /* pass */
+#line 7237 "src/taumir/lower.tr"
             LModule_add_extern(m, ctsym);
-            /* pass */
+#line 7238 "src/taumir/lower.tr"
             List_i64* ctargs = (void*)List_i64_new();
-            /* pass */
+#line 7239 "src/taumir/lower.tr"
             List_i64_append(ctargs, ovm);
-            /* pass */
+#line 7240 "src/taumir/lower.tr"
             List_i64_append(ctargs, cta);
-            /* pass */
+#line 7241 "src/taumir/lower.tr"
             long long ctd = LFunc_new_vreg(lf);
-            /* pass */
+#line 7242 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(ctd, ctsym, ctargs));
-            /* pass */
+#line 7243 "src/taumir/lower.tr"
+            long long _trret1778 = ctd;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
             _tr_str_release(ctsym);
-            return ctd;
+            return _trret1778;
         }
-        /* pass */
+#line 7244 "src/taumir/lower.tr"
         if (((((_tr_str_eqv((method), (_tr_str_lit_len("min", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("min_val", 7LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("max", 3LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("max_val", 7LL)))) && (margs->len == 0LL))) {
-            /* pass */
+#line 7245 "src/taumir/lower.tr"
             if ((want_elem != 0LL)) {
-                /* pass */
+#line 7245 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7246 "src/taumir/lower.tr"
             TrStr mmsym = _tr_str_lit_len("_tr_rt_list_min_i64", 19LL);
-            /* pass */
+#line 7247 "src/taumir/lower.tr"
             if ((_tr_str_eqv((method), (_tr_str_lit_len("max", 3LL))) || _tr_str_eqv((method), (_tr_str_lit_len("max_val", 7LL))))) {
-                /* pass */
-                TrStr _strtmp_t3354 = _tr_str_lit_len("_tr_rt_list_max_i64", 19LL);
+#line 7247 "src/taumir/lower.tr"
+                TrStr _strtmp_t6405 = _tr_str_lit_len("_tr_rt_list_max_i64", 19LL);
                 _tr_str_release(mmsym);
-                mmsym = _strtmp_t3354;
+                mmsym = _strtmp_t6405;
             }
-            /* pass */
+#line 7248 "src/taumir/lower.tr"
+            long long _trret1779 = _list_call1(m, lf, mmsym, ovm, 0LL);
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return _list_call1(m, lf, mmsym, ovm, 0LL);
+            _tr_str_release(mmsym);
+            return _trret1779;
         }
-        /* pass */
+#line 7249 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("sum", 3LL))) && (margs->len == 0LL))) {
-            /* pass */
+#line 7250 "src/taumir/lower.tr"
             if ((want_elem == 0LL)) {
-                /* pass */
+#line 7251 "src/taumir/lower.tr"
+                long long _trret1780 = _list_call1(m, lf, _tr_str_lit_len("_tr_rt_list_sum_i64", 19LL), ovm, 0LL);
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
-                return _list_call1(m, lf, _tr_str_lit_len("_tr_rt_list_sum_i64", 19LL), ovm, 0LL);
+                return _trret1780;
             }
-            /* pass */
+#line 7252 "src/taumir/lower.tr"
             if ((want_elem == 5LL)) {
-                /* pass */
+#line 7253 "src/taumir/lower.tr"
                 LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_sum_f64", 19LL));
-                /* pass */
+#line 7254 "src/taumir/lower.tr"
                 long long fsum = LFunc_new_vreg(lf);
-                /* pass */
+#line 7255 "src/taumir/lower.tr"
                 List_i64* fsa = (void*)List_i64_new();
-                /* pass */
+#line 7256 "src/taumir/lower.tr"
                 List_i64_append(fsa, ovm);
-                /* pass */
+#line 7257 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_ICall(fsum, _tr_str_lit_len("_tr_rt_list_sum_f64", 19LL), fsa));
-                /* pass */
+#line 7258 "src/taumir/lower.tr"
                 long long fsr = LFunc_new_vreg(lf);
-                /* pass */
+#line 7259 "src/taumir/lower.tr"
                 LFunc_emit(lf, LInst_ctor_IBitsF(fsr, fsum));
-                /* pass */
+#line 7260 "src/taumir/lower.tr"
                 LFunc_set_vreg_type(lf, fsr, 5LL);
-                /* pass */
+#line 7261 "src/taumir/lower.tr"
+                long long _trret1781 = fsr;
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
-                return fsr;
+                return _trret1781;
             }
-            /* pass */
+#line 7262 "src/taumir/lower.tr"
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
             return (-1LL);
         }
-        /* pass */
+#line 7263 "src/taumir/lower.tr"
         if (((_tr_str_eqv((method), (_tr_str_lit_len("clone", 5LL))) || _tr_str_eqv((method), (_tr_str_lit_len("copy", 4LL)))) && (margs->len == 0LL))) {
-            /* pass */
+#line 7264 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_clone", 17LL));
-            /* pass */
+#line 7265 "src/taumir/lower.tr"
             List_i64* cla = (void*)List_i64_new();
-            /* pass */
+#line 7266 "src/taumir/lower.tr"
             List_i64_append(cla, ovm);
-            /* pass */
+#line 7267 "src/taumir/lower.tr"
             long long cld = LFunc_new_vreg(lf);
-            /* pass */
+#line 7268 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(cld, _tr_str_lit_len("_tr_rt_list_clone", 17LL), cla));
-            /* pass */
+#line 7269 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, cld, ovmt);
-            /* pass */
+#line 7270 "src/taumir/lower.tr"
+            long long _trret1782 = cld;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return cld;
+            return _trret1782;
         }
-        /* pass */
+#line 7271 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("remove", 6LL))) && (margs->len == 1LL))) {
-            /* pass */
+#line 7272 "src/taumir/lower.tr"
             long long rmi = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-            /* pass */
+#line 7273 "src/taumir/lower.tr"
             if (((rmi < 0LL) || (LFunc_vreg_type(lf, rmi) != 0LL))) {
-                /* pass */
+#line 7273 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7274 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_remove", 18LL));
-            /* pass */
+#line 7275 "src/taumir/lower.tr"
             List_i64* rma = (void*)List_i64_new();
-            /* pass */
+#line 7276 "src/taumir/lower.tr"
             List_i64_append(rma, ovm);
-            /* pass */
+#line 7277 "src/taumir/lower.tr"
             List_i64_append(rma, rmi);
-            /* pass */
+#line 7278 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_list_remove", 18LL), rma));
-            /* pass */
+#line 7279 "src/taumir/lower.tr"
+            long long _trret1783 = ovm;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return ovm;
+            return _trret1783;
         }
-        /* pass */
+#line 7280 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("swap", 4LL))) && (margs->len == 2LL))) {
-            /* pass */
+#line 7281 "src/taumir/lower.tr"
             long long swi = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-            /* pass */
+#line 7282 "src/taumir/lower.tr"
             if (((swi < 0LL) || (LFunc_vreg_type(lf, swi) != 0LL))) {
-                /* pass */
+#line 7282 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7283 "src/taumir/lower.tr"
             long long swj = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 1LL)));
-            /* pass */
+#line 7284 "src/taumir/lower.tr"
             if (((swj < 0LL) || (LFunc_vreg_type(lf, swj) != 0LL))) {
-                /* pass */
+#line 7284 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7285 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_swap", 16LL));
-            /* pass */
+#line 7286 "src/taumir/lower.tr"
             List_i64* swa = (void*)List_i64_new();
-            /* pass */
+#line 7287 "src/taumir/lower.tr"
             List_i64_append(swa, ovm);
-            /* pass */
+#line 7288 "src/taumir/lower.tr"
             List_i64_append(swa, swi);
-            /* pass */
+#line 7289 "src/taumir/lower.tr"
             List_i64_append(swa, swj);
-            /* pass */
+#line 7290 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_list_swap", 16LL), swa));
-            /* pass */
+#line 7291 "src/taumir/lower.tr"
+            long long _trret1784 = ovm;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return ovm;
+            return _trret1784;
         }
-        /* pass */
+#line 7292 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("join", 4LL))) && (margs->len == 1LL))) {
-            /* pass */
+#line 7293 "src/taumir/lower.tr"
             if ((ovmt != 3LL)) {
-                /* pass */
+#line 7293 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7294 "src/taumir/lower.tr"
             long long jsep = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-            /* pass */
+#line 7295 "src/taumir/lower.tr"
             if (((jsep < 0LL) || (LFunc_vreg_type(lf, jsep) != 1LL))) {
-                /* pass */
+#line 7295 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7296 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_join", 16LL));
-            /* pass */
+#line 7297 "src/taumir/lower.tr"
             List_i64* jargs = (void*)List_i64_new();
-            /* pass */
+#line 7298 "src/taumir/lower.tr"
             List_i64_append(jargs, ovm);
-            /* pass */
+#line 7299 "src/taumir/lower.tr"
             List_i64_append(jargs, jsep);
-            /* pass */
+#line 7300 "src/taumir/lower.tr"
             long long jd = LFunc_new_vreg(lf);
-            /* pass */
+#line 7301 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall(jd, _tr_str_lit_len("_tr_rt_list_join", 16LL), jargs));
-            /* pass */
+#line 7302 "src/taumir/lower.tr"
             LFunc_set_vreg_type(lf, jd, 1LL);
-            /* pass */
+#line 7303 "src/taumir/lower.tr"
             _fresh_mark(lf, jd);
-            /* pass */
+#line 7304 "src/taumir/lower.tr"
+            long long _trret1785 = jd;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return jd;
+            return _trret1785;
         }
-        /* pass */
+#line 7305 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("is_empty", 8LL))) && (margs->len == 0LL))) {
-            /* pass */
+#line 7306 "src/taumir/lower.tr"
+            long long _trret1786 = _list_call1(m, lf, _tr_str_lit_len("_tr_rt_list_is_empty", 20LL), ovm, 4LL);
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return _list_call1(m, lf, _tr_str_lit_len("_tr_rt_list_is_empty", 20LL), ovm, 4LL);
+            return _trret1786;
         }
-        /* pass */
+#line 7307 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("first", 5LL))) && (margs->len == 0LL))) {
-            /* pass */
+#line 7308 "src/taumir/lower.tr"
+            long long _trret1787 = _list_call1(m, lf, _tr_str_lit_len("_tr_rt_list_first_i64", 21LL), ovm, want_elem);
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return _list_call1(m, lf, _tr_str_lit_len("_tr_rt_list_first_i64", 21LL), ovm, want_elem);
+            return _trret1787;
         }
-        /* pass */
+#line 7309 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("last", 4LL))) && (margs->len == 0LL))) {
-            /* pass */
+#line 7310 "src/taumir/lower.tr"
+            long long _trret1788 = _list_call1(m, lf, _tr_str_lit_len("_tr_rt_list_last_i64", 20LL), ovm, want_elem);
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return _list_call1(m, lf, _tr_str_lit_len("_tr_rt_list_last_i64", 20LL), ovm, want_elem);
+            return _trret1788;
         }
-        /* pass */
+#line 7311 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("reverse", 7LL))) && (margs->len == 0LL))) {
-            /* pass */
+#line 7312 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_reverse", 19LL));
-            /* pass */
+#line 7313 "src/taumir/lower.tr"
             List_i64* rva = (void*)List_i64_new();
-            /* pass */
+#line 7314 "src/taumir/lower.tr"
             List_i64_append(rva, ovm);
-            /* pass */
+#line 7315 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_list_reverse", 19LL), rva));
-            /* pass */
+#line 7316 "src/taumir/lower.tr"
+            long long _trret1789 = ovm;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return ovm;
+            return _trret1789;
         }
-        /* pass */
+#line 7317 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("extend", 6LL))) && (margs->len == 1LL))) {
-            /* pass */
+#line 7318 "src/taumir/lower.tr"
             long long exo = lower_expr(m, lf, ((HirExpr*)List_ptr_get(margs, 0LL)));
-            /* pass */
+#line 7319 "src/taumir/lower.tr"
             if (((exo < 0LL) || (LFunc_vreg_type(lf, exo) != ovmt))) {
-                /* pass */
+#line 7319 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7320 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_extend", 18LL));
-            /* pass */
+#line 7321 "src/taumir/lower.tr"
             List_i64* exa = (void*)List_i64_new();
-            /* pass */
+#line 7322 "src/taumir/lower.tr"
             List_i64_append(exa, ovm);
-            /* pass */
+#line 7323 "src/taumir/lower.tr"
             List_i64_append(exa, exo);
-            /* pass */
+#line 7324 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_list_extend", 18LL), exa));
-            /* pass */
+#line 7325 "src/taumir/lower.tr"
+            long long _trret1790 = ovm;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return ovm;
+            return _trret1790;
         }
-        /* pass */
+#line 7326 "src/taumir/lower.tr"
         if ((_tr_str_eqv((method), (_tr_str_lit_len("clear", 5LL))) && (margs->len == 0LL))) {
-            /* pass */
+#line 7327 "src/taumir/lower.tr"
             LModule_add_extern(m, _tr_str_lit_len("_tr_rt_list_clear", 17LL));
-            /* pass */
+#line 7328 "src/taumir/lower.tr"
             List_i64* cla = (void*)List_i64_new();
-            /* pass */
+#line 7329 "src/taumir/lower.tr"
             List_i64_append(cla, ovm);
-            /* pass */
+#line 7330 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), _tr_str_lit_len("_tr_rt_list_clear", 17LL), cla));
-            /* pass */
+#line 7331 "src/taumir/lower.tr"
+            long long _trret1791 = ovm;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
-            return ovm;
+            return _trret1791;
         }
-        /* pass */
+#line 7332 "src/taumir/lower.tr"
         if ((((_tr_str_eqv((method), (_tr_str_lit_len("sort", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("sort_asc", 8LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("sort_desc", 9LL)))) && (margs->len == 0LL))) {
-            /* pass */
+#line 7333 "src/taumir/lower.tr"
             if (((want_elem != 0LL) && (want_elem != 1LL))) {
-                /* pass */
+#line 7333 "src/taumir/lower.tr"
                 _tr_str_release(recv_cls);
                 _tr_str_release(amn);
                 return (-1LL);
             }
-            /* pass */
+#line 7334 "src/taumir/lower.tr"
             long long dirv = LFunc_new_vreg(lf);
-            /* pass */
+#line 7335 "src/taumir/lower.tr"
             long long dir = 1LL;
-            /* pass */
+#line 7336 "src/taumir/lower.tr"
             if (_tr_str_eqv((method), (_tr_str_lit_len("sort_desc", 9LL)))) {
-                /* pass */
+#line 7336 "src/taumir/lower.tr"
                 dir = (0LL - 1LL);
             }
-            /* pass */
+#line 7337 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_IConst(dirv, dir));
-            /* pass */
+#line 7338 "src/taumir/lower.tr"
             TrStr sortsym = _tr_str_lit_len("_tr_rt_list_sort", 16LL);
-            /* pass */
+#line 7339 "src/taumir/lower.tr"
             if ((want_elem == 1LL)) {
-                /* pass */
-                TrStr _strtmp_t3355 = _tr_str_lit_len("_tr_rt_list_sort_str", 20LL);
+#line 7339 "src/taumir/lower.tr"
+                TrStr _strtmp_t6406 = _tr_str_lit_len("_tr_rt_list_sort_str", 20LL);
                 _tr_str_release(sortsym);
-                sortsym = _strtmp_t3355;
+                sortsym = _strtmp_t6406;
             }
-            /* pass */
+#line 7340 "src/taumir/lower.tr"
             LModule_add_extern(m, sortsym);
-            /* pass */
+#line 7341 "src/taumir/lower.tr"
             List_i64* soa = (void*)List_i64_new();
-            /* pass */
+#line 7342 "src/taumir/lower.tr"
             List_i64_append(soa, ovm);
-            /* pass */
+#line 7343 "src/taumir/lower.tr"
             List_i64_append(soa, dirv);
-            /* pass */
+#line 7344 "src/taumir/lower.tr"
             LFunc_emit(lf, LInst_ctor_ICall((-1LL), sortsym, soa));
-            /* pass */
+#line 7345 "src/taumir/lower.tr"
+            long long _trret1792 = ovm;
             _tr_str_release(recv_cls);
             _tr_str_release(amn);
             _tr_str_release(sortsym);
-            return ovm;
+            return _trret1792;
         }
-        /* pass */
+#line 7346 "src/taumir/lower.tr"
         _tr_str_release(recv_cls);
         _tr_str_release(amn);
         return (-1LL);
     } else if (1) {
-        __auto_type _ = _t3291;
-        /* pass */
+        __auto_type _ = _t6316;
+#line 7348 "src/taumir/lower.tr"
         return (-1LL);
     }
 }
 
 __attribute__((hot)) long long lower_expr(LModule* m, LFunc* lf, HirExpr* e) {
-    /* pass */
+#line 7351 "src/taumir/lower.tr"
     long long r = _lower_expr_impl(m, lf, e);
-    /* pass */
+#line 7352 "src/taumir/lower.tr"
     if (((r < 0LL) && _tr_str_eqv((m->fail_note), (_tr_str_lit_len("", 0LL))))) {
-        /* pass */
-        m->fail_note = ({ TrStr _cr = (_expr_kind(e)); TrStr _cres = _tr_strx_concatv((_tr_str_lit_len("unsupported expression: ", 24LL)), _cr); _tr_str_release(_cr); _cres; });
+#line 7353 "src/taumir/lower.tr"
+        m->fail_note = ({ TrStr _tr_cr = (_expr_kind(e)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("unsupported expression: ", 24LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
     }
-    /* pass */
+#line 7354 "src/taumir/lower.tr"
     return r;
 }
 

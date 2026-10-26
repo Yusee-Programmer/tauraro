@@ -2,28 +2,28 @@
 
 
 __attribute__((hot)) bool emit_lir_object(LModule* m, TrStr out_path) {
-    /* pass */
+#line 13 "src/codegen/native/emit.tr"
     if ((!m->ok)) {
-        /* pass */
+#line 13 "src/codegen/native/emit.tr"
         return false;
     }
-    /* pass */
+#line 14 "src/codegen/native/emit.tr"
     if ((m->funcs->len == 0LL)) {
-        /* pass */
+#line 14 "src/codegen/native/emit.tr"
         return false;
     }
-    /* pass */
+#line 15 "src/codegen/native/emit.tr"
     List_ptr* encoded = (void*)List_ptr_new();
-    /* pass */
+#line 16 "src/codegen/native/emit.tr"
     long long i = 0LL;
-    /* pass */
+#line 17 "src/codegen/native/emit.tr"
     while ((i < m->funcs->len)) {
-        /* pass */
+#line 18 "src/codegen/native/emit.tr"
         List_ptr_append(encoded, encode_func(((LFunc*)List_ptr_get(m->funcs, i))));
-        /* pass */
+#line 19 "src/codegen/native/emit.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 20 "src/codegen/native/emit.tr"
     return write_elf_object(out_path, encoded, m->externs, m->strings, m->string_lens, m->globals->len);
 }
 

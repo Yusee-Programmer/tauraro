@@ -2,162 +2,162 @@
 
 
 __attribute__((hot)) TrStr _ll_ty(long long tag) {
-    /* pass */
+#line 15 "src/codegen/llvm/lltype.tr"
     if ((tag == 5LL)) {
-        /* pass */
+#line 15 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("double", 6LL);
     }
-    /* pass */
+#line 16 "src/codegen/llvm/lltype.tr"
     if ((tag == 1LL)) {
-        /* pass */
+#line 16 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("ptr", 3LL);
     }
-    /* pass */
+#line 17 "src/codegen/llvm/lltype.tr"
     if ((tag == 2LL)) {
-        /* pass */
+#line 17 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("ptr", 3LL);
     }
-    /* pass */
+#line 18 "src/codegen/llvm/lltype.tr"
     if ((tag == 3LL)) {
-        /* pass */
+#line 18 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("ptr", 3LL);
     }
-    /* pass */
+#line 19 "src/codegen/llvm/lltype.tr"
     if (((tag >= 6LL) && (tag <= 9LL))) {
-        /* pass */
+#line 19 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("ptr", 3LL);
     }
-    /* pass */
+#line 20 "src/codegen/llvm/lltype.tr"
     if ((tag == 10LL)) {
-        /* pass */
+#line 20 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("ptr", 3LL);
     }
-    /* pass */
+#line 21 "src/codegen/llvm/lltype.tr"
     if ((tag == 11LL)) {
-        /* pass */
+#line 21 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("ptr", 3LL);
     }
-    /* pass */
+#line 22 "src/codegen/llvm/lltype.tr"
     if ((tag == 12LL)) {
-        /* pass */
+#line 22 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("ptr", 3LL);
     }
-    /* pass */
+#line 23 "src/codegen/llvm/lltype.tr"
     if ((tag == 15LL)) {
-        /* pass */
+#line 23 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("ptr", 3LL);
     }
-    /* pass */
+#line 24 "src/codegen/llvm/lltype.tr"
     if (((tag == 13LL) || (tag == 16LL))) {
-        /* pass */
+#line 24 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("ptr", 3LL);
     }
-    /* pass */
+#line 25 "src/codegen/llvm/lltype.tr"
     if (((tag == 14LL) || (tag == 19LL))) {
-        /* pass */
+#line 25 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("ptr", 3LL);
     }
-    /* pass */
+#line 26 "src/codegen/llvm/lltype.tr"
     if (((tag == 17LL) || (tag == 18LL))) {
-        /* pass */
+#line 26 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("ptr", 3LL);
     }
-    /* pass */
+#line 27 "src/codegen/llvm/lltype.tr"
     return _tr_str_lit_len("i64", 3LL);
 }
 
 __attribute__((hot)) TrStr _ll_ty_name(TrStr n) {
-    /* pass */
+#line 32 "src/codegen/llvm/lltype.tr"
     if ((_tr_str_eqv((n), (_tr_str_lit_len("void", 4LL))) || _tr_str_eqv((n), (_tr_str_lit_len("None", 4LL))))) {
-        /* pass */
+#line 32 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("void", 4LL);
     }
-    /* pass */
+#line 33 "src/codegen/llvm/lltype.tr"
     if (_tr_str_eqv((n), (_tr_str_lit_len("bool", 4LL)))) {
-        /* pass */
+#line 33 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("i64", 3LL);
     }
-    /* pass */
+#line 34 "src/codegen/llvm/lltype.tr"
     if (((_tr_str_eqv((n), (_tr_str_lit_len("float", 5LL))) || _tr_str_eqv((n), (_tr_str_lit_len("f64", 3LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("f32", 3LL))))) {
-        /* pass */
+#line 34 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("double", 6LL);
     }
-    /* pass */
+#line 35 "src/codegen/llvm/lltype.tr"
     if (((_tr_str_eqv((n), (_tr_str_lit_len("str", 3LL))) || _tr_str_eqv((n), (_tr_str_lit_len("String", 6LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("char", 4LL))))) {
-        /* pass */
+#line 35 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("ptr", 3LL);
     }
-    /* pass */
+#line 36 "src/codegen/llvm/lltype.tr"
     if (((((_tr_str_eqv((n), (_tr_str_lit_len("int", 3LL))) || _tr_str_eqv((n), (_tr_str_lit_len("i64", 3LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("i32", 3LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("i16", 3LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("i8", 2LL))))) {
-        /* pass */
+#line 36 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("i64", 3LL);
     }
-    /* pass */
+#line 37 "src/codegen/llvm/lltype.tr"
     if ((((((_tr_str_eqv((n), (_tr_str_lit_len("u64", 3LL))) || _tr_str_eqv((n), (_tr_str_lit_len("u32", 3LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("u16", 3LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("u8", 2LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("usize", 5LL)))) || _tr_str_eqv((n), (_tr_str_lit_len("isize", 5LL))))) {
-        /* pass */
+#line 37 "src/codegen/llvm/lltype.tr"
         return _tr_str_lit_len("i64", 3LL);
     }
-    /* pass */
+#line 38 "src/codegen/llvm/lltype.tr"
     return _tr_str_lit_len("ptr", 3LL);
 }
 
 __attribute__((hot)) long long _ll_hexdigit(long long n) {
-    /* pass */
+#line 41 "src/codegen/llvm/lltype.tr"
     if ((n < 10LL)) {
-        /* pass */
+#line 41 "src/codegen/llvm/lltype.tr"
         return (48LL + n);
     }
-    /* pass */
+#line 42 "src/codegen/llvm/lltype.tr"
     return (65LL + (n - 10LL));
 }
 
 __attribute__((hot)) TrStr _ll_hexpad16(long long v) {
-    /* pass */
+#line 47 "src/codegen/llvm/lltype.tr"
     StringBuilder* sb = StringBuilder_init(16LL);
-    /* pass */
+#line 48 "src/codegen/llvm/lltype.tr"
     long long k = 15LL;
-    /* pass */
+#line 49 "src/codegen/llvm/lltype.tr"
     while ((k >= 0LL)) {
-        /* pass */
+#line 50 "src/codegen/llvm/lltype.tr"
         long long nib = ((v >> (4LL * k)) & 15LL);
-        /* pass */
+#line 51 "src/codegen/llvm/lltype.tr"
         StringBuilder_append_char(sb, _ll_hexdigit(nib));
-        /* pass */
+#line 52 "src/codegen/llvm/lltype.tr"
         k = (k - 1LL);
     }
-    /* pass */
+#line 53 "src/codegen/llvm/lltype.tr"
     return StringObj_as_str(StringBuilder_to_string(sb));
 }
 
 __attribute__((hot)) TrStr _ll_str_escape(TrStr s, long long blen) {
-    /* pass */
+#line 63 "src/codegen/llvm/lltype.tr"
     StringBuilder* sb = StringBuilder_init(64LL);
-    /* pass */
+#line 64 "src/codegen/llvm/lltype.tr"
     char* p = ((char*)(_tr_strz(s)));
-    /* pass */
+#line 65 "src/codegen/llvm/lltype.tr"
     long long i = 0LL;
-    /* pass */
+#line 66 "src/codegen/llvm/lltype.tr"
     while ((i < blen)) {
-        /* pass */
+#line 67 "src/codegen/llvm/lltype.tr"
         long long c = ((long long)((*(p + i))));
-        /* pass */
+#line 68 "src/codegen/llvm/lltype.tr"
         long long b = (c & 255LL);
-        /* pass */
+#line 69 "src/codegen/llvm/lltype.tr"
         if (((((b >= 32LL) && (b <= 126LL)) && (b != 34LL)) && (b != 92LL))) {
-            /* pass */
+#line 70 "src/codegen/llvm/lltype.tr"
             StringBuilder_append_char(sb, b);
         } else {
-            /* pass */
+#line 72 "src/codegen/llvm/lltype.tr"
             StringBuilder_append(sb, _tr_str_lit_len("\\", 1LL));
-            /* pass */
+#line 73 "src/codegen/llvm/lltype.tr"
             StringBuilder_append_char(sb, _ll_hexdigit(((b >> 4LL) & 15LL)));
-            /* pass */
+#line 74 "src/codegen/llvm/lltype.tr"
             StringBuilder_append_char(sb, _ll_hexdigit((b & 15LL)));
         }
-        /* pass */
+#line 75 "src/codegen/llvm/lltype.tr"
         i = (i + 1LL);
     }
-    /* pass */
+#line 76 "src/codegen/llvm/lltype.tr"
     return StringObj_as_str(StringBuilder_to_string(sb));
 }
 

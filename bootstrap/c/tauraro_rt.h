@@ -459,11 +459,45 @@ static int printf(const char* fmt,...){ char b[1024]; va_list ap; va_start(ap,fm
 #  endif
 #else
 #  ifndef _TR_DIAG
-#    define _TR_DIAG(...)   fprintf(stderr, __VA_ARGS__)
+#    define _TR_DIAG(...)   (fflush(stdout), fprintf(stderr, __VA_ARGS__))   /* keep earlier output ordered before the diagnostic */
 #  endif
 #  ifndef _TR_TRAP
 #    define _TR_TRAP()      abort()
 #  endif
+#endif
+
+/* Internal-compiler-error context.  The compiler driver (src/main.tr) records what it is doing
+ * (parsing / type-checking / generating C for FILE) and installs crash handlers, so a bug in the
+ * compiler itself (index out of range, null dereference, ...) is reported as a Tauraro [ICE] that
+ * names the file being compiled instead of a bare "Aborted" / "Segmentation fault".  User programs
+ * never set a context, so they keep the plain runtime behaviour. */
+#if !defined(TAURARO_KERNEL) && !defined(TAURARO_NO_OS)
+static char _tr_ice_ctx[512];
+static inline void _tr_set_ice_ctx(const char* s) { snprintf(_tr_ice_ctx, sizeof _tr_ice_ctx, "%s", s ? s : ""); }
+static inline void _tr_ice_report(const char* what) {
+    if (!_tr_ice_ctx[0]) return;
+    fflush(stdout);
+    fprintf(stderr, "error: [ICE] internal compiler error: %s\n  while %s\n  This is a Tauraro bug - please report it with the program that triggered it.\n", what, _tr_ice_ctx);
+}
+#else
+static inline void _tr_set_ice_ctx(const char* s) { (void)s; }
+static inline void _tr_ice_report(const char* what) { (void)what; }
+#endif
+#if !defined(TAURARO_KERNEL) && !defined(TAURARO_NO_OS) && !defined(_WIN32)
+#include <signal.h>
+static void _tr_ice_signal(int sig) {
+    _tr_ice_report(sig == SIGSEGV ? "the compiler crashed (invalid memory access)" : sig == SIGFPE ? "the compiler crashed (arithmetic fault)" : sig == SIGILL ? "the compiler crashed (illegal instruction)" : "the compiler aborted");
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+static inline void _tr_install_ice_handlers(void) {
+    signal(SIGSEGV, _tr_ice_signal); signal(SIGFPE, _tr_ice_signal); signal(SIGILL, _tr_ice_signal);
+#ifdef SIGBUS
+    signal(SIGBUS, _tr_ice_signal);
+#endif
+}
+#else
+static inline void _tr_install_ice_handlers(void) {}
 #endif
 
 /* Opt-in live-allocation counter for leak bisection. Compile with
@@ -736,6 +770,32 @@ static inline void _tr_str_release(TrStr s) {
             _tr_free((void*)s.rc);
         }
     }
+}
+
+/* `dst = dst + p` for a string variable that owns its buffer: when `dst` is the sole owner
+ * (rc == 1) the buffer is grown in place (realloc), so building a string piece by piece in a loop
+ * is amortised linear instead of copying the whole string every time. A shared or literal `dst`
+ * falls back to a fresh buffer. `p` may alias `dst` (`s = s + s`). */
+static inline void _tr_str_append(TrStr* dst, TrStr p) {
+    size_t n = p.len;
+    if (n == 0) return;
+    size_t old = dst->len;
+    if (dst->rc && *dst->rc == 1) {
+        size_t off = 0; int alias = 0;
+        if (p.data >= dst->data && p.data <= dst->data + old) { alias = 1; off = (size_t)(p.data - dst->data); }
+        char* nd = (char*)_tr_c_realloc(dst->data, old + n + 1);
+        if (!nd) { _TR_OOM_ABORT(); }
+        memcpy(nd + old, alias ? nd + off : p.data, n);
+        nd[old + n] = '\0';
+        dst->data = nd;
+        dst->len = old + n;
+        return;
+    }
+    TrStr t = _tr_str_new(old + n);
+    memcpy(t.data, dst->data, old);
+    memcpy(t.data + old, p.data, n);
+    _tr_str_release(*dst);
+    *dst = t;
 }
 
 /* Wraps an EXISTING heap `char*` (e.g. the result of any legacy
@@ -5169,6 +5229,7 @@ static inline long long _tr_file_size(const char* path)                  { (void
 
 static inline void _tr_bounds_check(long long i, size_t len) {
     if (__builtin_expect(i < 0 || (size_t)i >= len, 0)) {
+        _tr_ice_report("an index was out of range");
         _TR_DIAG("Index %lld out of bounds (length %zu)\n", i, len);
         _TR_TRAP();
     }
@@ -5545,6 +5606,7 @@ static char* _tr_str_replace(const char* s, const char* old, const char* nw) {
     *dst='\0'; return r;
 }
 _TR_XLINK char* _tr_int_to_str(long long n)   { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%lld",n); return b; }
+_TR_XLINK char* _tr_uint_to_str(unsigned long long n) { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%llu",n); return b; }
 /* Thousands grouping for f"{n:,d}": 1234567 -> "1,234,567" (fresh heap C string). */
 static char* _tr_i64_grouped(long long v) {
     char t[24]; int n=0, neg=v<0;
@@ -5555,7 +5617,109 @@ static char* _tr_i64_grouped(long long v) {
     for (int i=n-1,c=0;i>=0;i--,c++) { if (c&&c%3==0) b[w++]=','; b[w++]=t[i]; }
     b[w]=0; return b;
 }
-_TR_XLINK char* _tr_float_to_str(double n)    { char* b=(char*)TAURARO_ALLOC(32); snprintf(b,32,"%g",n);   return b; }
+/* ── Float -> text: shortest representation that parses back to the same value ──────────────
+ * Python's repr rules: 0.1+0.2 -> "0.30000000000000004", 1/3 -> "0.3333333333333333", 100.0 -> "100.0",
+ * fixed notation for decimal exponents -4..15, otherwise "1e+16" / "1.5e-05".  The previous "%g"
+ * kept only 6 significant digits, so printing and re-reading a float silently lost precision.
+ * `f32` selects the float round-trip (0.1f -> "0.1").  Hosted builds only; freestanding keeps %g. */
+#ifndef TAURARO_BARE
+static int _tr_fmt_float(double x, int is_f32, char* out) {
+    if (x != x) { memcpy(out, "nan", 4); return 3; }
+    if (x > 1.7976931348623157e308) { memcpy(out, "inf", 4); return 3; }
+    if (x < -1.7976931348623157e308) { memcpy(out, "-inf", 5); return 4; }
+    if (x == 0.0) {
+        if (signbit(x)) { memcpy(out, "-0.0", 5); return 4; }
+        memcpy(out, "0.0", 4); return 3;
+    }
+    char e[48];
+    int lo = 0, hi = is_f32 ? 8 : 16;      /* precision after the point: 1 + p significant digits */
+    /* round-tripping is monotone in the digit count, so binary-search the smallest that works */
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        snprintf(e, sizeof e, "%.*e", mid, x);
+        int ok = is_f32 ? (strtof(e, NULL) == (float)x) : (strtod(e, NULL) == x);
+        if (ok) hi = mid; else lo = mid + 1;
+    }
+    snprintf(e, sizeof e, "%.*e", lo, x);
+    /* printf rounds to the NEAREST digit string, but a value's rounding interval is asymmetric at a power
+     * of two, so a one-digit-shorter string (the other neighbour) may still round-trip: 2^-24 prints as
+     * 5.960464477539063e-08, though nearest-rounding gives ...062. Try dropping the last digit with and
+     * without rounding up, as Python's repr (shortest string) does. */
+    if (lo > 0) {
+        char m[24]; int nm = 0; const char* q = e; int ng = 0;
+        if (*q == '-') { ng = 1; q++; }
+        while (*q && *q != 'e' && nm < 22) { if (*q != '.') m[nm++] = *q; q++; }
+        const char* exs = q;
+        for (int mode = 0; mode < 2 && nm > 1; mode++) {
+            char t[24]; int len = nm - 1; memcpy(t, m, (size_t)len);
+            if (mode == 1) {
+                int i = len - 1;
+                while (i >= 0) { if (t[i] == '9') { t[i] = '0'; i--; } else { t[i]++; break; } }
+                if (i < 0) continue;
+            }
+            char cand[56]; int w = 0;
+            if (ng) cand[w++] = '-';
+            cand[w++] = t[0];
+            if (len > 1) { cand[w++] = '.'; memcpy(cand + w, t + 1, (size_t)(len - 1)); w += len - 1; }
+            snprintf(cand + w, sizeof cand - (size_t)w, "%s", exs);
+            int ok2 = is_f32 ? (strtof(cand, NULL) == (float)x) : (strtod(cand, NULL) == x);
+            if (ok2) { snprintf(e, sizeof e, "%s", cand); break; }
+        }
+    }
+    char* sp = e; int neg = 0;
+    if (*sp == '-') { neg = 1; sp++; }
+    char digs[24]; int nd = 0;
+    while (*sp && *sp != 'e') { if (*sp != '.') digs[nd++] = *sp; sp++; }
+    int ex = (*sp == 'e') ? atoi(sp + 1) : 0;
+    while (nd > 1 && digs[nd - 1] == '0') nd--;
+    char* o = out;
+    if (neg) *o++ = '-';
+    int i;
+    if (ex >= -4 && ex < 16) {
+        if (ex >= 0) {
+            for (i = 0; i <= ex; i++) *o++ = (i < nd) ? digs[i] : '0';
+            *o++ = '.';
+            if (nd > ex + 1) { for (i = ex + 1; i < nd; i++) *o++ = digs[i]; }
+            else *o++ = '0';
+        } else {
+            *o++ = '0'; *o++ = '.';
+            for (i = 0; i < -ex - 1; i++) *o++ = '0';
+            for (i = 0; i < nd; i++) *o++ = digs[i];
+        }
+    } else {
+        *o++ = digs[0];
+        if (nd > 1) { *o++ = '.'; for (i = 1; i < nd; i++) *o++ = digs[i]; }
+        *o++ = 'e'; *o++ = (ex < 0) ? '-' : '+';
+        int ax = ex < 0 ? -ex : ex;
+        if (ax < 10) *o++ = '0';
+        o += snprintf(o, 8, "%d", ax);
+    }
+    *o = 0;
+    return (int)(o - out);
+}
+/* Non-owning variant for printf-style callers (print, f-strings): a small thread-local ring of
+ * buffers, so several floats can appear in one snprintf call (it is invoked twice per f-string). */
+static const char* _tr_f64_buf(double x) {
+    static _Thread_local char ring[64][40];
+    static _Thread_local unsigned idx;
+    char* b = ring[idx++ & 63u];
+    _tr_fmt_float(x, 0, b);
+    return b;
+}
+static const char* _tr_f32_buf(double x) {
+    static _Thread_local char ring[64][40];
+    static _Thread_local unsigned idx;
+    char* b = ring[idx++ & 63u];
+    _tr_fmt_float(x, 1, b);
+    return b;
+}
+#else
+static const char* _tr_f64_buf(double x) { static char b[40]; snprintf(b, sizeof b, "%g", x); return b; }
+static const char* _tr_f32_buf(double x) { return _tr_f64_buf(x); }
+#endif
+
+_TR_XLINK char* _tr_float_to_str(double n)    { char* b=(char*)TAURARO_ALLOC(40); snprintf(b,40,"%s",_tr_f64_buf(n)); return b; }
+_TR_XLINK char* _tr_f32_to_str(double n)      { char* b=(char*)TAURARO_ALLOC(40); snprintf(b,40,"%s",_tr_f32_buf(n)); return b; }
 _TR_XLINK char* _tr_float_to_c_lit(double n) {
     char* b=(char*)TAURARO_ALLOC(32);
     int len = snprintf(b,32,"%.17g",n);
@@ -5577,7 +5741,7 @@ static char* _tr_bool_to_str(bool b)       { return b ? "true" : "false"; }
  * Uses _Generic so __auto_type variables work without an explicit type annotation.
  * Each branch is a distinct typed helper to avoid cross-type implicit-cast errors. */
 static inline char* _tr__ll_s(long long x)          { return _tr_int_to_str(x); }
-static inline char* _tr__ull_s(unsigned long long x) { return _tr_int_to_str((long long)x); }
+static inline char* _tr__ull_s(unsigned long long x) { return _tr_uint_to_str(x); }
 static inline char* _tr__i32_s(int x)               { return _tr_int_to_str((long long)x); }
 static inline char* _tr__u32_s(unsigned int x)       { return _tr_int_to_str((long long)x); }
 static inline char* _tr__i16_s(short x)              { return _tr_int_to_str((long long)x); }
@@ -5585,7 +5749,7 @@ static inline char* _tr__u16_s(unsigned short x)     { return _tr_int_to_str((lo
 static inline char* _tr__i8_s(signed char x)         { return _tr_int_to_str((long long)x); }
 static inline char* _tr__u8_s(unsigned char x)       { return _tr_int_to_str((long long)x); }
 static inline char* _tr__dbl_s(double x)             { return _tr_float_to_str(x); }
-static inline char* _tr__flt_s(float x)              { return _tr_float_to_str((double)x); }
+static inline char* _tr__flt_s(float x)              { return _tr_f32_to_str((double)x); }
 static inline char* _tr__bool_s(bool x)              { return x ? "true" : "false"; }
 static inline char* _tr__ptr_s(void* x)              { return (char*)x; }
 static inline char* _tr__trstr_s(TrStr x)            { return x.data; }
@@ -6150,8 +6314,33 @@ static inline void _tr_panic(const char* msg) {
         _tr_thread_panic_message = (char*)msg;
         longjmp(_tr_thread_panic_jmpbuf, 1);
     }
+#if !defined(TAURARO_KERNEL) && !defined(TAURARO_NO_OS)
+    fflush(stdout);   /* output printed before the panic must not be lost with the buffer */
+    _tr_ice_report(msg ? msg : "a runtime panic");
+#endif
     _TR_DIAG("panic: %s\n", msg ? msg : "(null)");
     _TR_TRAP();
+}
+
+/* Integer division: a zero divisor panics; INT_MIN / -1 wraps (the quotient is -INT_MIN == INT_MIN)
+ * and INT_MIN % -1 is 0, instead of the hardware trap C gives for both. */
+static inline long long _tr_idiv(long long a, long long b) {
+    if (__builtin_expect(b == 0, 0)) _tr_panic("integer division by zero");
+    if (__builtin_expect(b == -1, 0)) return (long long)(0ULL - (unsigned long long)a);
+    return a / b;
+}
+static inline long long _tr_imod(long long a, long long b) {
+    if (__builtin_expect(b == 0, 0)) _tr_panic("integer modulo by zero");
+    if (__builtin_expect(b == -1, 0)) return 0;
+    return a % b;
+}
+static inline unsigned long long _tr_udiv(unsigned long long a, unsigned long long b) {
+    if (__builtin_expect(b == 0, 0)) _tr_panic("integer division by zero");
+    return a / b;
+}
+static inline unsigned long long _tr_umod(unsigned long long a, unsigned long long b) {
+    if (__builtin_expect(b == 0, 0)) _tr_panic("integer modulo by zero");
+    return a % b;
 }
 
 /* ── Generic contains (for `in` operator on strings) ────────────────── */
@@ -6161,11 +6350,8 @@ static inline bool _tr_contains(const char* haystack, const char* needle) {
 
 /* ── Range iteration helper ──────────────────────────────────────────── */
 /* Note: range() on for-loops is compiled to C for() loops directly.     */
-/* This stub satisfies any residual reference in generic code paths.     */
-static inline long long _tr_range(long long start, long long end, long long step) {
-    (void)start; (void)end; (void)step;
-    return 0LL;
-}
+/* Anywhere else (comprehension source, assigned to a variable) range()  */
+/* is a fresh List[int]; defined after List_i64 below.                   */
 
 /* ── Dict (hash map: str → void*) ───────────────────────────────────── */
 
@@ -6186,6 +6372,25 @@ static Dict* Dict_new(void) {
     d->cap=0; d->len=0; d->buckets=NULL;
     return d;
 }
+/* Grow the bucket array (x2) once the load factor passes 0.75, so lookups stay O(1)
+ * on average. Without this the 16 initial buckets never grew and a dict with N keys
+ * had chains of N/16 (quadratic bulk inserts). */
+static void _dict_rehash(Dict* d) {
+    size_t ncap = d->cap * 2;
+    _DictNode** nb = (_DictNode**)TAURARO_CALLOC(ncap, sizeof(_DictNode*));
+    if (!nb) return;
+    for (size_t i = 0; i < d->cap; i++) {
+        _DictNode* n = d->buckets[i];
+        while (n) {
+            _DictNode* nx = n->next;
+            size_t j = _dict_hash(n->key, ncap);
+            n->next = nb[j]; nb[j] = n;
+            n = nx;
+        }
+    }
+    _tr_free(d->buckets);
+    d->buckets = nb; d->cap = ncap;
+}
 static void Dict_set(Dict* d, char* key, void* val) {
     if (!d || !key) return;
     if (d->cap==0) { d->cap=16; d->buckets=(_DictNode**)TAURARO_CALLOC(16,sizeof(_DictNode*)); _TR_MEMCOUNT_INC(); }
@@ -6194,6 +6399,7 @@ static void Dict_set(Dict* d, char* key, void* val) {
     while (n) { if (strcmp(n->key,key)==0) { n->value=val; return; } n=n->next; }
     _DictNode* nd=(_DictNode*)malloc(sizeof(_DictNode)); _TR_MEMCOUNT_INC();
     nd->key=strdup(key); _TR_MEMCOUNT_INC(); nd->value=val; nd->next=d->buckets[i]; d->buckets[i]=nd; d->len++;
+    if (d->len > d->cap - (d->cap >> 2)) _dict_rehash(d);
 }
 static void*     Dict_get(Dict* d, char* key) {
     if (!d||!key||d->cap==0) return NULL;
@@ -6310,6 +6516,17 @@ static inline void _tr_idict_set_impl(TrIDict* d, long long k, void* v) {
     _TrIDictNode* nd = (_TrIDictNode*)malloc(sizeof(_TrIDictNode));
     nd->key = k; nd->value = v; nd->next = d->buckets[idx];
     d->buckets[idx] = nd; d->len++;
+    if (d->len > d->cap - (d->cap >> 2)) {   /* keep chains short: grow x2 at 75% load */
+        size_t ncap = d->cap * 2;
+        _TrIDictNode** nb = (_TrIDictNode**)TAURARO_CALLOC(ncap, sizeof(_TrIDictNode*));
+        if (nb) {
+            for (size_t i = 0; i < d->cap; i++) {
+                _TrIDictNode* m = d->buckets[i];
+                while (m) { _TrIDictNode* nx = m->next; size_t j = (size_t)((unsigned long long)m->key % ncap); m->next = nb[j]; nb[j] = m; m = nx; }
+            }
+            free(d->buckets); d->buckets = nb; d->cap = ncap;
+        }
+    }
 }
 #define _tr_idict_set(d, k, v) _tr_idict_set_impl((d), (k), (void*)(uintptr_t)(v))
 static inline void* _tr_idict_get(TrIDict* d, long long k) {
@@ -6319,7 +6536,13 @@ static inline void* _tr_idict_get(TrIDict* d, long long k) {
     while (n) { if (n->key == k) return n->value; n = n->next; }
     return NULL;
 }
-static inline bool   _tr_idict_contains(TrIDict* d, long long k) { return _tr_idict_get(d,k) != NULL; }
+/* Walk the chain itself: a stored 0 / false / NULL value is still present. */
+static inline bool   _tr_idict_contains(TrIDict* d, long long k) {
+    if (!d) return false;
+    _TrIDictNode* n = d->buckets[(size_t)((unsigned long long)k % d->cap)];
+    while (n) { if (n->key == k) return true; n = n->next; }
+    return false;
+}
 static inline void   _tr_idict_remove(TrIDict* d, long long k) {
     if (!d) return;
     size_t idx = (size_t)((unsigned long long)k % d->cap);
@@ -6540,7 +6763,7 @@ static inline List_TrStr* _tr_dict_keys(TrMap* d) {
            freeing the list (List_TrStr_free -> _tr_str_release) doesn't free
            the dict's own key storage (which would dangle d's keys -> a later
            d.get() / d[key] would miss). */
-        while (n) { if (n->key && n->value) List_TrStr_append_owned(out, _tr_str_wrap(strdup(n->key))); n = n->next; }
+        while (n) { if (n->key) List_TrStr_append_owned(out, _tr_str_wrap(strdup(n->key))); n = n->next; }
     }
     return out;
 }
@@ -6549,7 +6772,7 @@ static inline List_ptr* _tr_dict_values(TrMap* d) {
     if (!d) return out;
     for (size_t i = 0; i < d->cap; i++) {
         _DictNode* n = d->buckets[i];
-        while (n) { if (n->key && n->value) List_ptr_append(out, n->value); n = n->next; }
+        while (n) { if (n->key) List_ptr_append(out, n->value); n = n->next; }
     }
     return out;
 }
@@ -6558,8 +6781,34 @@ static inline List_i64* _tr_idict_keys(TrIDict* d) {
     if (!d) return out;
     for (size_t i = 0; i < d->cap; i++) {
         _TrIDictNode* n = d->buckets[i];
-        while (n) { if (n->value) List_i64_append(out, n->key); n = n->next; }
+        while (n) { List_i64_append(out, n->key); n = n->next; }
     }
+    return out;
+}
+/* values() for Dict[K,int] / Dict[K,float]: scalar values live in the void* slot (floats as their
+ * bit pattern), so build a properly TYPED list instead of a List_ptr the caller cannot use. */
+static inline List_i64* _tr_dict_values_i64(TrMap* d) {
+    List_i64* out = List_i64_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) { _DictNode* n = d->buckets[i]; while (n) { if (n->key) List_i64_append(out, (long long)(uintptr_t)n->value); n = n->next; } }
+    return out;
+}
+static inline List_i64* _tr_idict_values_i64(TrIDict* d) {
+    List_i64* out = List_i64_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) { _TrIDictNode* n = d->buckets[i]; while (n) { List_i64_append(out, (long long)(uintptr_t)n->value); n = n->next; } }
+    return out;
+}
+static inline List_f64* _tr_dict_values_f64(TrMap* d) {
+    List_f64* out = List_f64_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) { _DictNode* n = d->buckets[i]; while (n) { if (n->key) List_f64_append(out, _tr_ptr_to_f64(n->value)); n = n->next; } }
+    return out;
+}
+static inline List_f64* _tr_idict_values_f64(TrIDict* d) {
+    List_f64* out = List_f64_new();
+    if (!d) return out;
+    for (size_t i = 0; i < d->cap; i++) { _TrIDictNode* n = d->buckets[i]; while (n) { List_f64_append(out, _tr_ptr_to_f64(n->value)); n = n->next; } }
     return out;
 }
 static inline List_ptr* _tr_idict_values(TrIDict* d) {
@@ -6567,7 +6816,7 @@ static inline List_ptr* _tr_idict_values(TrIDict* d) {
     if (!d) return out;
     for (size_t i = 0; i < d->cap; i++) {
         _TrIDictNode* n = d->buckets[i];
-        while (n) { if (n->value) List_ptr_append(out, n->value); n = n->next; }
+        while (n) { List_ptr_append(out, n->value); n = n->next; }
     }
     return out;
 }
@@ -6579,7 +6828,7 @@ static inline List_TrStr* _tr_dict_values_strval(TrMap* d) {
     if (!d) return out;
     for (size_t i = 0; i < d->cap; i++) {
         _DictNode* n = d->buckets[i];
-        while (n) { if (n->key && n->value) List_TrStr_append(out, _tr_str_unbox(n->value)); n = n->next; }
+        while (n) { if (n->key) List_TrStr_append(out, _tr_str_unbox(n->value)); n = n->next; }
     }
     return out;
 }
@@ -6588,7 +6837,7 @@ static inline List_TrStr* _tr_idict_values_strval(TrIDict* d) {
     if (!d) return out;
     for (size_t i = 0; i < d->cap; i++) {
         _TrIDictNode* n = d->buckets[i];
-        while (n) { if (n->value) List_TrStr_append(out, _tr_str_unbox(n->value)); n = n->next; }
+        while (n) { List_TrStr_append(out, _tr_str_unbox(n->value)); n = n->next; }
     }
     return out;
 }
@@ -6666,6 +6915,30 @@ _TR_LIST_RESERVE(List_u64)
 _TR_LIST_RESERVE(List_u16)
 _TR_LIST_RESERVE(List_i16)
 _TR_LIST_RESERVE(List_f32)
+/* list.insert(i, v): shift the tail up and place v at i (i is clamped to 0..len, like Python). The
+ * append step does the element-type-specific work (e.g. retaining a TrStr). */
+#define _TR_LIST_INSERT(LT) static inline void LT##_insert(LT* l, long long i, __typeof__(*((LT*)0)->data) v){ \
+    if(!l) return; if(i<0) i=0; if((size_t)i>l->len) i=(long long)l->len; \
+    LT##_append(l, v); \
+    for(size_t j=l->len-1;j>(size_t)i;j--) l->data[j]=l->data[j-1]; \
+    l->data[i]=v; }
+_TR_LIST_INSERT(List_bool)
+_TR_LIST_INSERT(List_char)
+_TR_LIST_INSERT(List_f64)
+_TR_LIST_INSERT(List_i32)
+_TR_LIST_INSERT(List_i64)
+_TR_LIST_INSERT(List_i8)
+_TR_LIST_INSERT(List_ptr)
+_TR_LIST_INSERT(List_str)
+_TR_LIST_INSERT(List_TrStr)
+_TR_LIST_INSERT(List_TrTuple)
+_TR_LIST_INSERT(List_TrFnVal)
+_TR_LIST_INSERT(List_u32)
+_TR_LIST_INSERT(List_u8)
+_TR_LIST_INSERT(List_u64)
+_TR_LIST_INSERT(List_u16)
+_TR_LIST_INSERT(List_i16)
+_TR_LIST_INSERT(List_f32)
 /* ── Extended Vec/List operations: remove, swap, clear, is_empty, extend ──── */
 static inline void List_i64_remove(List_i64* l, long long i) { if(!l||(size_t)i>=l->len) return; for(size_t j=(size_t)i;j<l->len-1;j++) l->data[j]=l->data[j+1]; l->len--; }
 static inline void List_i64_swap(List_i64* l, long long a, long long b) { if(!l||(size_t)a>=l->len||(size_t)b>=l->len) return; long long t=l->data[a]; l->data[a]=l->data[b]; l->data[b]=t; }
@@ -6771,6 +7044,12 @@ static inline _Bool Set_str_is_empty(Set_str* l) { return !l || l->len==0; }
 static inline void Set_str_remove(Set_str* l, const char* v) { if(!l||!v) return; for(size_t i=0;i<l->len;i++) if(l->data[i]&&strcmp(l->data[i],v)==0){ for(size_t j=i;j+1<l->len;j++) l->data[j]=l->data[j+1]; l->len--; return; } }
 
 /* ── Bounds-checked list access ─────────────────────────────────────────── */
+static inline List_i64* _tr_range(long long start, long long end, long long step) {
+    List_i64* l = List_i64_new();
+    if (step > 0) { for (long long i = start; i < end; i += step) List_i64_append(l, i); }
+    else if (step < 0) { for (long long i = start; i > end; i += step) List_i64_append(l, i); }
+    return l;
+}
 static inline List_i64* _tr_range_new(long long start, long long stop, bool inclusive) {
     List_i64* l = List_i64_new();
     long long end = inclusive ? stop : stop - 1;
@@ -7021,6 +7300,36 @@ static inline List_TrStr* _tr_str_splitv(TrStr s, TrStr sep) {
     }
     return l;
 }
+/* s.split_exact(sep): Python's str.split(sep) -- `sep` is matched as a whole
+ * substring and empty parts are kept ("a,,b" -> ["a", "", "b"], "" -> [""]).
+ * (split() treats sep as a SET of delimiter bytes and drops empty parts.) */
+static inline List_TrStr* _tr_str_split_exactv(TrStr s, TrStr sep) {
+    List_TrStr* l = List_TrStr_new();
+    size_t sl = s.data ? s.len : 0, pl = sep.data ? sep.len : 0, i = 0, start = 0;
+    if (pl == 0) {
+        TrStr whole = _tr_str_new(sl);
+        if (sl) memcpy(whole.data, s.data, sl);
+        List_TrStr_append_owned(l, whole);
+        return l;
+    }
+    while (i + pl <= sl) {
+        if (memcmp(s.data + i, sep.data, pl) == 0) {
+            TrStr tok = _tr_str_new(i - start);
+            if (i > start) memcpy(tok.data, s.data + start, i - start);
+            List_TrStr_append_owned(l, tok);
+            i += pl;
+            start = i;
+        } else {
+            i++;
+        }
+    }
+    {
+        TrStr last = _tr_str_new(sl - start);
+        if (sl > start) memcpy(last.data, s.data + start, sl - start);
+        List_TrStr_append_owned(l, last);
+    }
+    return l;
+}
 static inline List_TrStr* _tr_str_linesv(TrStr s) { return _tr_str_splitv(s, _tr_str_lit("\n")); }
 static inline List_TrStr* _tr_str_wordsv(TrStr s) { return _tr_str_splitv(s, _tr_str_lit(" ")); }
 static inline List_TrStr* _tr_str_charsv(TrStr s) {
@@ -7198,7 +7507,7 @@ static inline void StringBuilder_append_int(StringBuilder* sb, long long n) {
     StringBuilder_append(sb, _tr_str_lit_len(tmp, (size_t)tl));
 }
 static inline void StringBuilder_append_float(StringBuilder* sb, double f) {
-    char tmp[32]; int tl = snprintf(tmp, sizeof(tmp), "%g", f);
+    const char* tmp = _tr_f64_buf(f); int tl = (int)strlen(tmp);
     StringBuilder_append(sb, _tr_str_lit_len(tmp, (size_t)tl));
 }
 static inline long long StringBuilder_length(StringBuilder* sb) { return sb->buf->len; }
@@ -8217,7 +8526,7 @@ static const _tr_gf _tr_gf0={0}, _tr_gf1={1},
   _tr_edY={0x6658,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666,0x6666},
   _tr_edI={0xa0b0,0x4a0e,0x1b27,0xc4ee,0xe478,0xad2f,0x1806,0x2f43,0xd7a7,0x3dfb,0x0099,0x2b4d,0xdf0b,0x4fc1,0x2480,0x2b83};
 static void _tr_edset(_tr_gf r,const _tr_gf a){ int i; for(i=0;i<16;i++) r[i]=a[i]; }
-static void _tr_edcar(_tr_gf o){ int i; int64_t c; for(i=0;i<16;i++){ o[i]+=(1LL<<16); c=o[i]>>16; o[(i+1)*(i<15)]+=c-1+37*(c-1)*(i==15); o[i]-=c<<16; } }
+static void _tr_edcar(_tr_gf o){ int i; int64_t c; for(i=0;i<16;i++){ o[i]+=(1LL<<16); c=o[i]>>16; o[(i+1)*(i<15)]+=c-1+37*(c-1)*(i==15); o[i]-=(int64_t)((uint64_t)c<<16); } }
 static void _tr_edsel(_tr_gf p,_tr_gf q,int b){ int64_t t,i,c=~(b-1); for(i=0;i<16;i++){ t=c&(p[i]^q[i]); p[i]^=t; q[i]^=t; } }
 static void _tr_edpack25519(uint8_t*o,const _tr_gf n){
   int i,j,b; _tr_gf m,t;
@@ -10216,7 +10525,7 @@ _TR_XLINK void _tr_prof_cpu_stop(void) {
 }
 static char* _tr_prof_symbolize(void* pc) {
     Dl_info info;
-    if (dladdr(pc, &info) && info.dli_sname) return _tr_strdup(info.dli_sname);
+    if (dladdr(pc, &info) && info.dli_sname) return _tr_strdup((char*)info.dli_sname);
     return NULL;
 }
 #endif

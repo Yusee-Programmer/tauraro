@@ -34,6 +34,8 @@ typedef struct ImportItem ImportItem;
 typedef struct Program Program;
 typedef struct Parser Parser;
 typedef struct ModuleResolver ModuleResolver;
+typedef struct PJob PJob;
+typedef struct PendingShims PendingShims;
 typedef struct HirComprehension HirComprehension;
 typedef struct HirCatchClause HirCatchClause;
 typedef struct HirFStringPart HirFStringPart;
@@ -59,9 +61,13 @@ typedef struct Symbol Symbol;
 typedef struct Scope Scope;
 typedef struct Sema Sema;
 typedef struct Formatter Formatter;
+typedef struct DocItem DocItem;
+typedef struct DocModule DocModule;
 typedef struct CTok CTok;
 typedef struct Bindgen Bindgen;
 typedef struct CppType CppType;
+typedef struct NameSnap NameSnap;
+typedef struct WrapSave WrapSave;
 typedef struct CGenerator CGenerator;
 typedef struct CppExporter CppExporter;
 typedef struct LBlock LBlock;
@@ -125,6 +131,8 @@ static void _trdrop_ImportItem(void* vp);
 static void _trdrop_Program(void* vp);
 static void _trdrop_Parser(void* vp);
 static void _trdrop_ModuleResolver(void* vp);
+static void _trdrop_PJob(void* vp);
+static void _trdrop_PendingShims(void* vp);
 static void _trdrop_HirComprehension(void* vp);
 static void _trdrop_HirCatchClause(void* vp);
 static void _trdrop_HirFStringPart(void* vp);
@@ -150,9 +158,13 @@ static void _trdrop_Symbol(void* vp);
 static void _trdrop_Scope(void* vp);
 static void _trdrop_Sema(void* vp);
 static void _trdrop_Formatter(void* vp);
+static void _trdrop_DocItem(void* vp);
+static void _trdrop_DocModule(void* vp);
 static void _trdrop_CTok(void* vp);
 static void _trdrop_Bindgen(void* vp);
 static void _trdrop_CppType(void* vp);
+static void _trdrop_NameSnap(void* vp);
+static void _trdrop_WrapSave(void* vp);
 static void _trdrop_CGenerator(void* vp);
 static void _trdrop_CppExporter(void* vp);
 static void _trdrop_LBlock(void* vp);
@@ -1929,6 +1941,7 @@ typedef struct AstType {
     bool is_borrow;
     bool is_mut_borrow;
     long long array_size;
+    bool is_throws;
 } AstType;
 static void _trdrop_AstType(void* vp) {
     AstType* self = (AstType*)vp; (void)self;
@@ -2016,11 +2029,13 @@ typedef struct FStringPart {
     long long text_len;
     Expr* expr;
     TrStr fmt_spec;
+    List_ptr* spec_args;
 } FStringPart;
 static void _trdrop_FStringPart(void* vp) {
     FStringPart* self = (FStringPart*)vp; (void)self;
     _tr_str_release(self->text);
     _tr_str_release(self->fmt_spec);
+    List_ptr_free(self->spec_args);
 }
 #endif
 
@@ -2241,6 +2256,7 @@ typedef struct Parser {
     List_i64* cols;
     TrStr src_text;
     long long error_count;
+    long long aug_ctr;
     TrStr current_file;
     TrMap* import_aliases;
 } Parser;
@@ -2264,6 +2280,7 @@ typedef struct ModuleResolver {
     List_TrStr* all_decl_modules;
     TrStr current_mod;
     long long parse_errors;
+    TrMap* fn_owner;
 } ModuleResolver;
 static void _trdrop_ModuleResolver(void* vp) {
     ModuleResolver* self = (ModuleResolver*)vp; (void)self;
@@ -2274,6 +2291,44 @@ static void _trdrop_ModuleResolver(void* vp) {
     List_TrStr_free(self->mod_file_paths);
     List_TrStr_free(self->all_decl_modules);
     _tr_str_release(self->current_mod);
+    Dict_free_strval(self->fn_owner);
+}
+#endif
+
+#ifndef PJob_STRUCT_DEFINED
+#define PJob_STRUCT_DEFINED
+typedef struct PJob {
+    size_t __rc;
+    _TrAtomic* next;
+    _TrAtomic* total;
+    TrStr blob;
+    TrStr base;
+    _TrAtomic* done;
+} PJob;
+static void _trdrop_PJob(void* vp) {
+    PJob* self = (PJob*)vp; (void)self;
+    _tr_str_release(self->blob);
+    _tr_str_release(self->base);
+}
+#endif
+
+#ifndef PendingShims_STRUCT_DEFINED
+#define PendingShims_STRUCT_DEFINED
+typedef struct PendingShims {
+    size_t __rc;
+    List_TrStr* cmds;
+    List_TrStr* names;
+    List_TrStr* logs;
+    List_TrStr* sidecars;
+    List_TrStr* keys;
+} PendingShims;
+static void _trdrop_PendingShims(void* vp) {
+    PendingShims* self = (PendingShims*)vp; (void)self;
+    List_TrStr_free(self->cmds);
+    List_TrStr_free(self->names);
+    List_TrStr_free(self->logs);
+    List_TrStr_free(self->sidecars);
+    List_TrStr_free(self->keys);
 }
 #endif
 
@@ -2316,11 +2371,13 @@ typedef struct HirFStringPart {
     long long text_len;
     HirExpr* expr;
     TrStr fmt_spec;
+    List_ptr* spec_args;
 } HirFStringPart;
 static void _trdrop_HirFStringPart(void* vp) {
     HirFStringPart* self = (HirFStringPart*)vp; (void)self;
     _tr_str_release(self->text);
     _tr_str_release(self->fmt_spec);
+    List_ptr_free(self->spec_args);
 }
 #endif
 
@@ -2374,6 +2431,7 @@ typedef struct HirParam {
     size_t __rc;
     TrStr name;
     AstType* ty;
+    bool by_val;
 } HirParam;
 static void _trdrop_HirParam(void* vp) {
     HirParam* self = (HirParam*)vp; (void)self;
@@ -2660,12 +2718,14 @@ typedef struct Symbol {
     long long decl_block_id;
     bool str_escaped;
     bool coll_escaped;
+    TrStr firm;
     TrStr borrows_region;
 } Symbol;
 static void _trdrop_Symbol(void* vp) {
     Symbol* self = (Symbol*)vp; (void)self;
     _tr_str_release(self->name);
     List_TrStr_free(self->borrowed_by);
+    _tr_str_release(self->firm);
     _tr_str_release(self->borrows_region);
 }
 #endif
@@ -2688,6 +2748,8 @@ static void _trdrop_Scope(void* vp) {
 #define Sema_STRUCT_DEFINED
 typedef struct Sema {
     size_t __rc;
+    List_TrStr* sendable_tparams;
+    TrMap* alias_assigned;
     TrMap* globals;
     List_ptr* scopes;
     List_TrStr* errors;
@@ -2700,10 +2762,15 @@ typedef struct Sema {
     TrStr current_file;
     TrStr current_func_name;
     TrStr current_class_name;
+    TrMap* ambiguous_classes;
     long long current_scope_depth;
     bool in_async_fn;
+    bool fn_try_ok;
+    long long closure_depth;
     TrMap* assign_froms;
     TrMap* fn_sigs;
+    AstType** closure_hint;
+    AstType** list_hint;
     TrMap* extern_names;
     List_ptr* nested_classes;
     List_ptr* nested_functions;
@@ -2716,6 +2783,7 @@ typedef struct Sema {
     List_ptr* closure_caps;
     TrMap* closure_cap_set;
     bool in_assign_target;
+    bool in_assign_target_plain;
     bool in_recv_pos;
     TrMap* container_borrows;
     bool capturing_moves;
@@ -2726,6 +2794,7 @@ typedef struct Sema {
     bool in_unsafe;
     bool cur_fn_is_lib;
     TrStr current_func_ret_from;
+    TrStr current_func_ret_family;
     bool current_func_ret_borrow_str;
     List_TrStr* current_func_ret_regions;
     List_TrStr* current_func_outlives_a;
@@ -2744,14 +2813,24 @@ typedef struct Sema {
     TrMap* variadic_fns;
     TrMap* variadic_elem_ty;
     TrMap* fn_defs;
+    List_TrStr* clo_let_names;
+    List_ptr* clo_let_ptrs;
+    List_i64* clo_let_scopes;
+    List_i64* loop_blk_floor;
+    List_i64* loop_blk_scope;
     List_i64* loop_scope_base;
     List_i64* fn_scope_base;
     long long block_depth;
     List_i64* block_depth_stack;
     long long next_block_id;
     List_i64* block_stack;
+    List_TrStr* shadow_names;
+    List_ptr* shadow_prevs;
+    List_i64* shadow_blocks;
+    List_i64* shadow_scopes;
     List_i64* block_stack_base;
     long long do_temp_ctr;
+    bool pc_alias_consumes;
 } Sema;
 static void _trdrop_Sema(void* vp) {
     Sema* self = (Sema*)vp; (void)self;
@@ -2766,6 +2845,7 @@ static void _trdrop_Sema(void* vp) {
     _tr_str_release(self->current_file);
     _tr_str_release(self->current_func_name);
     _tr_str_release(self->current_class_name);
+    Dict_free(self->ambiguous_classes);
     Dict_free(self->assign_froms);
     Dict_free(self->fn_sigs);
     Dict_free(self->extern_names);
@@ -2777,6 +2857,7 @@ static void _trdrop_Sema(void* vp) {
     Dict_free_strval(self->container_borrows);
     Dict_free(self->copy_classes);
     _tr_str_release(self->current_func_ret_from);
+    _tr_str_release(self->current_func_ret_family);
     List_TrStr_free(self->cur_func_borrowers);
     List_TrStr_free(self->cur_func_sources);
     Dict_free(self->mutating_methods);
@@ -2787,10 +2868,19 @@ static void _trdrop_Sema(void* vp) {
     Dict_free_strval(self->variadic_fns);
     Dict_free(self->variadic_elem_ty);
     Dict_free_objval(self->fn_defs, _trdrop_FunctionDef);
+    List_TrStr_free(self->clo_let_names);
+    List_ptr_free(self->clo_let_ptrs);
+    List_i64_free(self->clo_let_scopes);
+    List_i64_free(self->loop_blk_floor);
+    List_i64_free(self->loop_blk_scope);
     List_i64_free(self->loop_scope_base);
     List_i64_free(self->fn_scope_base);
     List_i64_free(self->block_depth_stack);
     List_i64_free(self->block_stack);
+    List_TrStr_free(self->shadow_names);
+    List_ptr_free(self->shadow_prevs);
+    List_i64_free(self->shadow_blocks);
+    List_i64_free(self->shadow_scopes);
     List_i64_free(self->block_stack_base);
 }
 #endif
@@ -2810,6 +2900,43 @@ typedef struct Formatter {
 } Formatter;
 static void _trdrop_Formatter(void* vp) {
     Formatter* self = (Formatter*)vp; (void)self;
+}
+#endif
+
+#ifndef DocItem_STRUCT_DEFINED
+#define DocItem_STRUCT_DEFINED
+typedef struct DocItem {
+    size_t __rc;
+    TrStr kind;
+    TrStr name;
+    TrStr sig;
+    TrStr doc;
+    TrStr owner;
+} DocItem;
+static void _trdrop_DocItem(void* vp) {
+    DocItem* self = (DocItem*)vp; (void)self;
+    _tr_str_release(self->kind);
+    _tr_str_release(self->name);
+    _tr_str_release(self->sig);
+    _tr_str_release(self->doc);
+    _tr_str_release(self->owner);
+}
+#endif
+
+#ifndef DocModule_STRUCT_DEFINED
+#define DocModule_STRUCT_DEFINED
+typedef struct DocModule {
+    size_t __rc;
+    TrStr name;
+    TrStr path;
+    TrStr doc;
+    List_ptr* items;
+} DocModule;
+static void _trdrop_DocModule(void* vp) {
+    DocModule* self = (DocModule*)vp; (void)self;
+    _tr_str_release(self->name);
+    _tr_str_release(self->path);
+    _tr_str_release(self->doc);
 }
 #endif
 
@@ -2863,6 +2990,49 @@ typedef struct CppType {
 static void _trdrop_CppType(void* vp) {
     CppType* self = (CppType*)vp; (void)self;
     _tr_str_release(self->base);
+}
+#endif
+
+#ifndef NameSnap_STRUCT_DEFINED
+#define NameSnap_STRUCT_DEFINED
+typedef struct NameSnap {
+    size_t __rc;
+    TrStr name;
+    bool decl;
+    bool str_l;
+    bool cls;
+    bool idict;
+    bool strval;
+    bool has_mono;
+    TrStr mono;
+    bool has_sfx;
+    TrStr sfx;
+    bool has_vtc;
+    TrStr vtc;
+    bool has_sh;
+    TrStr sh;
+} NameSnap;
+static void _trdrop_NameSnap(void* vp) {
+    NameSnap* self = (NameSnap*)vp; (void)self;
+    _tr_str_release(self->name);
+    _tr_str_release(self->mono);
+    _tr_str_release(self->sfx);
+    _tr_str_release(self->vtc);
+    _tr_str_release(self->sh);
+}
+#endif
+
+#ifndef WrapSave_STRUCT_DEFINED
+#define WrapSave_STRUCT_DEFINED
+typedef struct WrapSave {
+    size_t __rc;
+    List_TrStr* d;
+    List_TrStr* n;
+    List_TrStr* o;
+    List_TrStr* r;
+} WrapSave;
+static void _trdrop_WrapSave(void* vp) {
+    WrapSave* self = (WrapSave*)vp; (void)self;
 }
 #endif
 
@@ -2934,6 +3104,9 @@ typedef struct CGenerator {
     TrStr last_clo_estruct;
     TrStr last_clo_ptypes;
     TrStr last_clo_ret;
+    TrMap* free_self_cache;
+    TrMap* libc_names_cache;
+    bool closure_heap_env;
     TrStr last_clo_init;
     TrMap* decorator_defs;
     TrMap* overloaded_sigs;
@@ -2991,16 +3164,14 @@ static void _trdrop_CGenerator(void* vp) {
     _tr_str_release(self->last_clo_estruct);
     _tr_str_release(self->last_clo_ptypes);
     _tr_str_release(self->last_clo_ret);
+    Dict_free(self->free_self_cache);
+    Dict_free(self->libc_names_cache);
     _tr_str_release(self->last_clo_init);
     Dict_free_objval(self->decorator_defs, _trdrop_HirFunction);
     Dict_free(self->overloaded_sigs);
     Dict_free_strval(self->type_alias_map);
     Dict_free_strval(self->type_alias_tr);
     List_TrStr_free(self->defer_stack);
-    List_TrStr_free(self->wrap_temp_decls);
-    List_TrStr_free(self->wrap_temp_names);
-    List_TrStr_free(self->wrap_obj_names);
-    List_TrStr_free(self->wrap_obj_drops);
     List_TrStr_free(self->loop_res_stack);
     List_TrStr_free(self->loop_done_stack);
     _tr_str_release(self->cur_src_file);
@@ -3544,6 +3715,8 @@ __attribute__((hot)) bool Token_is_newline(Token self);
 __attribute__((hot)) bool Token_is_keyword(Token self);
 __attribute__((hot)) TrStr Token_debug(Token self);
 __attribute__((hot)) Token keyword_to_token(TrStr s);
+__attribute__((hot)) long long lex_hex_val(long long c);
+__attribute__((hot)) void lex_append_utf8(StringBuilder* sb, long long cp);
 __attribute__((hot)) bool char_is_digit(long long c);
 __attribute__((hot)) bool char_is_alpha(long long c);
 __attribute__((hot)) bool char_is_alnum(long long c);
@@ -3604,8 +3777,11 @@ __attribute__((malloc,returns_nonnull,hot)) Program* Program_init();
 __attribute__((hot)) void Program_push(Program* self, Decl* d);
 __attribute__((hot)) long long Program_len(Program* self);
 __attribute__((hot)) Decl* Program_get(Program* self, long long i);
+__attribute__((hot)) TrStr unify_generic(AstType* pty, AstType* aty, TrStr gp);
+__attribute__((hot)) bool type_mentions(AstType* ty, TrStr gp);
 __attribute__((hot)) void _dummy_instantiations();
 __attribute__((hot)) Expr* box_expr(Expr e);
+__attribute__((hot)) AstType* throws_result_type(AstType* ret, AstType** err);
 __attribute__((hot)) Stmt* box_stmt(Stmt s);
 __attribute__((hot)) Decl* box_decl(Decl d);
 __attribute__((hot)) AstType** box_asttype(AstType* t);
@@ -3646,6 +3822,8 @@ __attribute__((hot)) Stmt* Parser_parse_for_stmt(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_match_stmt(Parser* self);
 __attribute__((hot)) List_ptr* Parser_parse_match_arms(Parser* self);
 __attribute__((hot)) Pattern Parser_parse_pattern(Parser* self);
+__attribute__((hot)) bool Parser__ast_simple(Parser* self, Expr* e);
+__attribute__((hot)) Stmt* Parser_mk_aug(Parser* self, Expr* lhs, TrStr op, Expr* rhs);
 __attribute__((hot)) Stmt* Parser_parse_assign_or_expr_stmt(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_expr(Parser* self);
 __attribute__((hot)) Expr* Parser_parse_match_expr(Parser* self);
@@ -3683,6 +3861,7 @@ __attribute__((hot)) Decl* Parser_parse_enum_decl(Parser* self);
 __attribute__((hot)) Decl* Parser_parse_interface_decl(Parser* self);
 __attribute__((hot)) Decl* Parser_parse_extend_decl(Parser* self);
 __attribute__((hot)) Decl* Parser_parse_extern_decl(Parser* self);
+__attribute__((hot)) bool _fstr_hex_ok(char* p, long long at, long long n, long long esc);
 __attribute__((hot)) long long _find_fmt_colon(TrStr s);
 __attribute__((hot)) bool decl_is_pub(Decl d);
 __attribute__((malloc,returns_nonnull,hot)) ModuleResolver* ModuleResolver_init();
@@ -3691,6 +3870,8 @@ __attribute__((hot)) TrStr ModuleResolver_dir_of_path(ModuleResolver* self, TrSt
 __attribute__((hot)) TrStr ModuleResolver_base_of_path(ModuleResolver* self, TrStr path);
 __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, TrStr main_path);
 __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, TrStr path, bool is_root);
+__attribute__((hot)) void ModuleResolver__dedupe_private_fns(ModuleResolver* self, List_Token* tokens, TrStr path, bool is_root, bool trusted);
+__attribute__((hot)) TrStr ModuleResolver__path_tag(ModuleResolver* self, TrStr path);
 __attribute__((hot)) bool ModuleResolver__path_is_lib(ModuleResolver* self, TrStr path);
 __attribute__((hot)) bool ModuleResolver__source_is_trusted(ModuleResolver* self, TrStr source);
 __attribute__((hot)) bool ModuleResolver__contains(ModuleResolver* self, TrStr hay, TrStr needle);
@@ -3698,6 +3879,12 @@ __attribute__((hot)) void ModuleResolver__mark_decl_lib(ModuleResolver* self, De
 __attribute__((hot)) void ModuleResolver__mark_methods_lib(ModuleResolver* self, ClassDef* c);
 __attribute__((hot)) void ModuleResolver_resolve_recursive(ModuleResolver* self, TrStr path);
 __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* self, TrStr mod_path);
+__attribute__((hot)) TrStr pj_line(TrStr blob, long long idx);
+__attribute__((hot)) void pj_worker(_TrSharedBox* job);
+__attribute__((hot)) long long pj_parse_int(TrStr s);
+__attribute__((hot)) long long pjobs_workers(long long njobs);
+__attribute__((hot)) List_i64* pjobs_run(List_TrStr* cmds, long long workers, TrStr rcbase);
+__attribute__((malloc,returns_nonnull,hot)) PendingShims* PendingShims_init();
 __attribute__((malloc,returns_nonnull,hot)) HirFStringPart* HirFStringPart_init();
 __attribute__((malloc,returns_nonnull,hot)) HirMatchArm* HirMatchArm_init(Pattern pat, HirBlock* body);
 __attribute__((malloc,returns_nonnull,hot)) HirBlock* HirBlock_init();
@@ -3760,6 +3947,7 @@ __attribute__((hot)) TrStr set_str(List_TrStr* v);
 __attribute__((hot)) TrStr term_str(MirTerm* t);
 __attribute__((hot)) TrStr stmt_str(MirStmt* s);
 __attribute__((hot)) TrStr dump_mir(MirProgram* mp);
+__attribute__((hot)) bool _is_builtin_type_word(TrStr n);
 __attribute__((malloc,returns_nonnull,hot)) Symbol* Symbol_init(TrStr name, SymbolKind kind, AstType** ty);
 __attribute__((malloc,returns_nonnull,hot)) Scope* Scope_init();
 __attribute__((hot)) bool _expr_is_self_field(Expr* e);
@@ -3768,6 +3956,10 @@ __attribute__((hot)) bool _hl_has_float(List_ptr* hl);
 __attribute__((hot)) bool _block_mutates_self(Block* b);
 __attribute__((hot)) bool _pblock_mutates_self(Block** pb);
 __attribute__((hot)) bool _stmt_mutates_self(Stmt* s);
+__attribute__((hot)) bool _rhs_is_alias(Expr* e);
+__attribute__((hot)) void _block_alias_assigns(Block* b, TrMap* out);
+__attribute__((hot)) void _pblock_alias_assigns(Block** pb, TrMap* out);
+__attribute__((hot)) void _stmt_alias_assigns(Stmt* s, TrMap* out);
 __attribute__((hot)) AstType** Sema_build_ast_type(Sema* self, Expr* e);
 __attribute__((hot)) AstType** Sema__targ_of(Sema* self, Expr* e);
 __attribute__((malloc,returns_nonnull,hot)) Sema* Sema_init();
@@ -3778,6 +3970,28 @@ __attribute__((hot)) TrStr Sema_build_inspect_str(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_error(Sema* self, TrStr msg);
 __attribute__((hot)) bool Sema_is_sendable_type(Sema* self, TrStr ty_name);
 __attribute__((hot)) bool Sema_is_sendable_ty(Sema* self, AstType* ty);
+__attribute__((hot)) TrStr Sema_decl_family(Sema* self, AstType* ty);
+__attribute__((hot)) TrStr Sema_firm_family(Sema* self, HirExpr* e);
+__attribute__((hot)) bool Sema_family_mismatch(Sema* self, TrStr exp, TrStr act);
+__attribute__((hot)) TrStr Sema_family_word(Sema* self, TrStr fam);
+__attribute__((hot)) void Sema_check_expr_assignable(Sema* self, AstType* exp_ty, HirExpr* e, TrStr what);
+__attribute__((hot)) void Sema_check_call_args(Sema* self, FunctionDef* fd, List_ptr* args, long long sk, TrStr what);
+__attribute__((hot)) long long Sema_builtin_method_range(Sema* self, TrStr fam, TrStr method);
+__attribute__((hot)) void Sema_check_builtin_method_arity(Sema* self, TrStr fam, TrStr method, long long nargs);
+__attribute__((hot)) bool Sema_class_has_field(Sema* self, TrStr cls_name, TrStr name);
+__attribute__((hot)) bool Sema_is_rt_builtin_class(Sema* self, TrStr n);
+__attribute__((hot)) bool Sema_is_builtin_dispatch_class(Sema* self, TrStr n);
+__attribute__((hot)) bool Sema_type_name_known(Sema* self, TrStr n);
+__attribute__((hot)) void Sema_check_type_known(Sema* self, AstType** tp, TrStr where_);
+__attribute__((hot)) void Sema_check_scalar_method(Sema* self, TrStr fam, TrStr method, TrStr ty_name);
+__attribute__((hot)) void Sema_check_static_call(Sema* self, TrStr type_name, TrStr variant, List_ptr* hl);
+__attribute__((hot)) HirExpr* Sema_lower_index_operand(Sema* self, Expr* idx, HirExpr* base);
+__attribute__((hot)) bool Sema_known_collection_method(Sema* self, TrStr fam, TrStr m);
+__attribute__((hot)) long long Sema_builtin_class_method_arity(Sema* self, TrStr cls, TrStr m);
+__attribute__((hot)) void Sema_check_builtin_class_method(Sema* self, TrStr cls, TrStr method, List_ptr* hl);
+__attribute__((hot)) void Sema_check_user_method_call(Sema* self, TrStr cls, Expr* obj, TrStr method, List_ptr* hl);
+__attribute__((hot)) bool Sema_known_number_method(Sema* self, TrStr m);
+__attribute__((hot)) void Sema_check_collection_arg_types(Sema* self, AstType* ty, TrStr method, List_ptr* hl);
 __attribute__((hot)) bool Sema_class_method_exists(Sema* self, TrStr cls_name, TrStr method);
 __attribute__((hot)) bool Sema_is_universal_method(Sema* self, TrStr method);
 __attribute__((hot)) bool Sema_expr_is_borrow(Sema* self, HirExpr* e);
@@ -3795,10 +4009,12 @@ __attribute__((hot)) void Sema_mark_init(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_clear_container_borrow(Sema* self, TrStr var_name);
 __attribute__((hot)) void Sema_unmark_moved(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_mark_maybe_moved(Sema* self, TrStr name);
+__attribute__((hot)) void Sema_revive_moved(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_unmark_init(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_mark_maybe_init(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema_vec_str_contains(Sema* self, List_TrStr* v, TrStr s);
 __attribute__((hot)) bool Sema_has_copy_decorator(Sema* self, List_ptr* decs);
+__attribute__((hot)) bool Sema_class_has_free(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema_is_copy_class(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_enter_scope(Sema* self);
 __attribute__((hot)) void Sema_exit_scope(Sema* self);
@@ -3823,6 +4039,10 @@ __attribute__((hot)) List_ptr* Sema_compute_scope_drops(Sema* self, long long sc
 __attribute__((hot)) void Sema_append_drops_from(Sema* self, HirBlock* hb, long long from_idx);
 __attribute__((hot)) void Sema_append_drops_from_excl(Sema* self, HirBlock* hb, long long from_idx, TrStr exclude);
 __attribute__((hot)) void Sema_append_drops_from_excl_multi(Sema* self, HirBlock* hb, long long from_idx, List_TrStr* excludes);
+__attribute__((hot)) AstType** Sema_closure_hint_for_fn(Sema* self, TrStr fname, long long k);
+__attribute__((hot)) AstType** Sema_closure_hint_for_method(Sema* self, TrStr method, long long k);
+__attribute__((hot)) AstType** Sema_list_hint_for_fn(Sema* self, TrStr fname, long long k);
+__attribute__((hot)) AstType** Sema_list_hint_for_method(Sema* self, TrStr method, long long k);
 __attribute__((hot)) void Sema_collect_idents(Sema* self, HirExpr* e, List_TrStr* out);
 __attribute__((hot)) bool Sema_is_local_var(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_mark_str_escaped(Sema* self, TrStr name);
@@ -3837,6 +4057,8 @@ __attribute__((hot)) void Sema_mark_coll_arg(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_mark_escaped_coll_args(Sema* self, HirExpr* e);
 __attribute__((hot)) bool Sema_block_ends_in_jump(Sema* self, HirBlock* b);
 __attribute__((hot)) void Sema_append_block_local_drops(Sema* self, HirBlock* hb, long long block_id);
+__attribute__((hot)) bool Sema__early_exit_drop_ok(Sema* self, TrStr tn);
+__attribute__((hot)) void Sema_append_while_exit_drops(Sema* self, HirBlock* hb);
 __attribute__((hot)) void Sema_finalize_scope_drops(Sema* self, HirBlock* hb);
 __attribute__((hot)) bool Sema_block_str_decl(Sema* self, HirBlock* hb, TrStr nm);
 __attribute__((hot)) bool Sema_block_has_autodrop(Sema* self, HirBlock* hb, TrStr nm);
@@ -3879,9 +4101,16 @@ __attribute__((hot)) bool Sema__ret_yields_owned(Sema* self, HirExpr* e);
 __attribute__((hot)) bool Sema__is_type_param_in_scope(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema__type_satisfies_bound(Sema* self, TrStr type_name, TrStr iface_name);
 __attribute__((hot)) AstType** Sema__resolve_generic_bound_method_ret(Sema* self, TrStr pname, TrStr method);
+__attribute__((hot)) long long Sema_fn_value_throws_kind(Sema* self, AstType* ty);
+__attribute__((hot)) void Sema_check_fn_value_throws(Sema* self, AstType** expected_p, AstType* actual, TrStr what);
+__attribute__((hot)) void Sema_check_call_fn_args(Sema* self, TrStr fname, List_ptr* hargs);
+__attribute__((hot)) AstType* Sema_closure_return_type(Sema* self, HirBlock* block);
 __attribute__((hot)) void Sema_check_call_bounds(Sema* self, TrStr fname, List_ptr* hargs);
 __attribute__((hot)) AstType* Sema__subst_ret_generics(Sema* self, AstType* ty, List_TrStr* generics, List_ptr* concrete);
 __attribute__((hot)) void Sema_check_class_bounds(Sema* self, TrStr cls_name, List_ptr* arg_tys);
+__attribute__((hot)) void Sema__check_ty_arity(Sema* self, AstType** tp, TrStr where_, long long line);
+__attribute__((hot)) void Sema__check_fn_arities(Sema* self, FunctionDef* f, TrStr owner);
+__attribute__((hot)) void Sema_check_type_arities(Sema* self, Program* prog);
 __attribute__((hot)) void Sema_register_decl(Sema* self, Decl* d);
 __attribute__((hot)) HirFunction* Sema_lower_func(Sema* self, FunctionDef* f);
 __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c);
@@ -3893,6 +4122,8 @@ __attribute__((hot)) HirStmt* Sema_lower_stmt(Sema* self, Stmt* s_ptr);
 __attribute__((hot)) AstType* Sema_variant_field_ty(Sema* self, TrStr type_name, TrStr variant_name, long long field_idx);
 __attribute__((hot)) void Sema_declare_pattern_binds(Sema* self, Pattern pat);
 __attribute__((hot)) void Sema_declare_pattern_binds_typed(Sema* self, Pattern pat, AstType* subj_ty);
+__attribute__((hot)) void Sema_check_match_expr_exhaustive(Sema* self, TrStr ty_name, List_ptr* arms);
+__attribute__((hot)) HirExpr* Sema_retype_none(Sema* self, HirExpr* e, AstType* expected);
 __attribute__((hot)) AstType* Sema_str_method_ret_ty(Sema* self, TrStr method);
 __attribute__((hot)) void Sema_collect_block_refs(Sema* self, HirBlock* b, List_TrStr* out);
 __attribute__((hot)) void Sema_collect_stmt_refs(Sema* self, HirStmt* s, List_TrStr* out);
@@ -3908,7 +4139,9 @@ __attribute__((hot)) void Sema_pattern_covers(Sema* self, Pattern p, List_TrStr*
 __attribute__((hot)) bool Sema_is_primitive(Sema* self, AstType* ty);
 __attribute__((hot)) bool Sema__is_known_type_name(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema_is_primitive_name(Sema* self, TrStr name);
+__attribute__((hot)) Stmt* box_astestmt(Stmt t);
 __attribute__((hot)) Symbol** box_symbol(Symbol* s);
+__attribute__((hot)) bool _str_method_known(TrStr m);
 __attribute__((malloc,returns_nonnull,hot)) Formatter* Formatter_init(List_i64* c_lines, List_TrStr* c_texts, List_bool* c_trailing);
 __attribute__((hot)) TrStr Formatter_pad(Formatter* self);
 __attribute__((hot)) void Formatter_line(Formatter* self, TrStr text);
@@ -3945,6 +4178,40 @@ __attribute__((hot)) void Formatter_emit_decl(Formatter* self, Decl* dp);
 __attribute__((hot)) TrStr Formatter_fn_header_no_colon(Formatter* self, FunctionDef* f);
 __attribute__((hot)) bool Formatter_is_block_decl(Formatter* self, Decl* dp);
 __attribute__((hot)) TrStr Formatter_format_program(Formatter* self, Program* prog);
+__attribute__((hot)) long long _indent_of(TrStr line);
+__attribute__((hot)) TrStr _comment_text(TrStr line);
+__attribute__((hot)) long long _bracket_depth(TrStr s);
+__attribute__((hot)) TrStr _signature(TrStr decl);
+__attribute__((hot)) TrStr _first_word_after(TrStr s, TrStr kw);
+__attribute__((hot)) TrStr _join_doc(List_TrStr* lines);
+__attribute__((hot)) DocItem* _new_item(TrStr kind, TrStr name, TrStr sig, TrStr doc, TrStr owner);
+__attribute__((hot)) TrStr doc_module_name(TrStr path);
+__attribute__((hot)) List_TrStr* _doc_lines(TrStr text);
+__attribute__((hot)) DocModule* doc_parse(TrStr path, TrStr text);
+__attribute__((hot)) bool _has_kind(DocModule* m, TrStr kind, TrStr owner);
+__attribute__((hot)) TrStr _md_cell(TrStr s);
+__attribute__((hot)) void _md_members(StringBuilder* sb, DocModule* m, TrStr owner);
+__attribute__((hot)) TrStr doc_markdown(DocModule* m);
+__attribute__((hot)) TrStr _html_esc(TrStr s);
+__attribute__((hot)) TrStr _html_doc(TrStr s);
+__attribute__((hot)) TrStr _html_anchor(TrStr s);
+__attribute__((hot)) TrStr doc_html(DocModule* m);
+__attribute__((hot)) TrStr doc_css();
+__attribute__((hot)) TrStr doc_index_markdown(List_ptr* mods);
+__attribute__((hot)) TrStr doc_index_html(List_ptr* mods);
+__attribute__((hot)) TrStr _summary(TrStr doc);
+__attribute__((hot)) List_TrStr* _doc_expand(TrStr path);
+__attribute__((hot)) long long run_doc(List_TrStr* inputs, TrStr out_dir, bool html);
+__attribute__((hot)) TrStr _cov_obj_base(TrStr c_path);
+__attribute__((hot)) void _cov_rm(TrStr path);
+__attribute__((hot)) void coverage_reset(List_TrStr* c_files);
+__attribute__((hot)) TrStr _cov_tool(TrStr cc);
+__attribute__((hot)) long long _cov_int(TrStr s);
+__attribute__((hot)) bool _cov_is_std(TrStr path);
+__attribute__((hot)) TrStr _cov_ranges(List_i64* lines);
+__attribute__((hot)) TrStr _cov_pad(TrStr s, long long w);
+__attribute__((hot)) TrStr _cov_lpad(TrStr s, long long w);
+__attribute__((hot)) long long coverage_report(List_TrStr* c_files, TrStr cc, TrStr lcov_path, bool include_std);
 __attribute__((malloc,returns_nonnull,hot)) CTok* CTok_init(long long kind, TrStr text);
 __attribute__((hot)) bool _is_alpha(long long c);
 __attribute__((hot)) bool _is_digit(long long c);
@@ -4061,6 +4328,7 @@ __attribute__((hot)) void _cpp_cleanup();
 __attribute__((hot)) bool _is_expr_proxy_spec(TrStr s);
 __attribute__((hot)) List_TrStr* _collect_specs(TrStr ir);
 __attribute__((hot)) void run_bindgen_cpp(TrStr header, TrStr out, TrStr cc, TrStr extra, TrStr pkglibs);
+__attribute__((hot)) TrStr libc_fn_names();
 __attribute__((hot)) TrStr _c_dot_to_safe(TrStr s);
 __attribute__((hot)) TrStr _indent_str(long long n);
 __attribute__((hot)) bool _is_invalid_ptr(unsigned long long addr);
@@ -4069,11 +4337,15 @@ __attribute__((hot)) bool _is_int_type(TrStr n);
 __attribute__((hot)) bool _is_float_type(TrStr n);
 __attribute__((hot)) bool _is_c_int_scalar(TrStr n);
 __attribute__((hot)) TrStr _safe_c_varname(TrStr n);
+__attribute__((hot)) bool _is_c_macro_name(TrStr n);
+__attribute__((hot)) TrStr _c_field(TrStr n);
+__attribute__((hot)) bool _is_c_lang_keyword(TrStr n);
 __attribute__((hot)) bool _is_c_keyword(TrStr n);
 __attribute__((hot)) bool _starts_with_tr(TrStr s);
 __attribute__((hot)) bool _is_primitive(TrStr n);
 __attribute__((hot)) TrStr _escape_str_for_c(TrStr s, long long blen);
 __attribute__((hot)) TrStr _escape_fmt_for_c(TrStr s, long long blen);
+__attribute__((hot)) TrStr _fstr_star_spec(TrStr spec);
 __attribute__((hot)) LInst* box_linst(LInst i);
 __attribute__((hot)) bool _ir_bytes_eq(TrStr a, TrStr b, long long n);
 __attribute__((malloc,returns_nonnull,hot)) LBlock* LBlock_init(long long id);
@@ -4360,6 +4632,7 @@ __attribute__((malloc,returns_nonnull,hot)) LlvmGenerator* LlvmGenerator_init();
 __attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgram* prog);
 __attribute__((hot)) TrStr LlvmGenerator_generate_nh(LlvmGenerator* self, HirProgram* prog, bool no_heap);
 __attribute__((malloc,returns_nonnull,hot)) ByteBuf* ByteBuf_init();
+__attribute__((hot)) void ByteBuf_grow(ByteBuf* self);
 __attribute__((hot)) void ByteBuf_u8(ByteBuf* self, long long v);
 __attribute__((hot)) void ByteBuf_u16(ByteBuf* self, long long v);
 __attribute__((hot)) void ByteBuf_u32(ByteBuf* self, long long v);
@@ -4489,7 +4762,7 @@ __attribute__((hot)) bool mingw_regex_libs_link(TrStr cc, TrStr cross_flags);
 __attribute__((hot)) TrStr pkg_config_query(TrStr name, TrStr kind);
 __attribute__((hot)) TrStr cxx_of(TrStr cc);
 __attribute__((hot)) bool cpp_lto_ok(TrStr cc, TrStr target);
-__attribute__((hot)) bool auto_link_cpp_shims(List_TrStr* mod_file_paths, TrStr build_dir, TrStr cc, TrStr opt_level, List_TrStr* link_paths, List_TrStr* lib_flags, bool verbose, bool lto);
+__attribute__((hot)) bool auto_link_cpp_shims(List_TrStr* mod_file_paths, TrStr build_dir, TrStr cc, TrStr opt_level, List_TrStr* link_paths, List_TrStr* lib_flags, bool verbose, bool lto, PendingShims* pend);
 __attribute__((hot)) TrStr resolve_target_triple(TrStr target);
 __attribute__((hot)) TrStr linker_script_cortex_m();
 __attribute__((hot)) TrStr linker_script_riscv();
@@ -4503,12 +4776,14 @@ __attribute__((hot)) bool activate_bundled_zig();
 __attribute__((hot)) TrStr detect_lld_flag();
 __attribute__((hot)) TrStr zig_target_of(TrStr triple);
 __attribute__((hot)) TrStr slice_after_arch(TrStr triple);
+__attribute__((hot)) bool out_is_macos(TrStr target, TrStr triple);
 __attribute__((hot)) bool out_is_windows(TrStr target, TrStr triple);
 __attribute__((hot)) long long parse_uint_arg(TrStr s, long long fallback);
 __attribute__((hot)) long long str_len_of(TrStr s);
 __attribute__((hot)) TrStr resolve_cross_driver(TrStr triple);
 __attribute__((hot)) TrStr dir_of_path(TrStr path);
 __attribute__((hot)) TrStr strip_trailing_sep_inline(TrStr s);
+__attribute__((hot)) TrStr find_runtime_file_above_binary(TrStr name);
 __attribute__((hot)) TrStr find_native_abi_c(TrStr input_path);
 __attribute__((hot)) TrStr read_runtime_header(TrStr bin_path, TrStr input_path);
 __attribute__((hot)) void ensure_runtime_header(TrStr out_dir, TrStr bin_path, TrStr input_path);
@@ -4533,7 +4808,11 @@ __attribute__((hot)) bool is_builtin_mod(TrStr dot_path);
 __attribute__((hot)) void make_dir(TrStr path);
 __attribute__((hot)) long long compile_all_c(List_TrStr* c_files, TrStr exe_path, TrStr inc_dir, List_TrStr* link_paths, List_TrStr* lib_flags, TrStr opt_level, bool verbose, bool static_link, TrStr target, TrStr sysroot, bool debug_mode);
 __attribute__((hot)) TrStr obj_path_for(TrStr c_path);
-__attribute__((hot)) long long compile_all_c_incremental(List_TrStr* c_files, List_bool* needs, TrStr exe_path, TrStr inc_dir, List_TrStr* link_paths, List_TrStr* lib_flags, TrStr opt_level, bool verbose, bool static_link, TrStr target, TrStr sysroot, bool debug_mode, bool build_shared, bool link_cxx, bool use_lto);
+__attribute__((hot)) TrStr text_hash(TrStr s);
+__attribute__((hot)) bool prepare_pch(TrStr cc, TrStr common, TrStr inc_dir, long long ncompile, TrStr target, bool verbose);
+__attribute__((hot)) void print_ice(TrStr cpath, TrStr log);
+__attribute__((hot)) TrStr c_msg_to_tauraro(TrStr msg);
+__attribute__((hot)) long long compile_all_c_incremental(List_TrStr* c_files, List_bool* needs, TrStr exe_path, TrStr inc_dir, List_TrStr* link_paths, List_TrStr* lib_flags, TrStr opt_level, bool verbose, bool static_link, TrStr target, TrStr sysroot, bool debug_mode, bool build_shared, bool link_cxx, bool use_lto, bool coverage, PendingShims* pend);
 __attribute__((hot)) long long compile_wasm_incremental(List_TrStr* c_files, List_bool* needs, TrStr exe_path, TrStr inc_dir, TrStr opt_level, bool verbose, long long memory_mb);
 __attribute__((hot)) long long compile_c_to_exe(TrStr c_path, TrStr exe_path, TrStr opt_level, bool verbose);
 __attribute__((hot)) void _print_diag(TrStr level, TrStr msg);
@@ -4550,9 +4829,12 @@ __attribute__((hot)) long long Lexer_advance(Lexer* self);
 __attribute__((hot)) bool Lexer_at_end(Lexer* self);
 __attribute__((hot)) void Lexer_skip_spaces(Lexer* self);
 __attribute__((hot)) void Lexer_skip_comment(Lexer* self, bool trailing);
+__attribute__((hot)) void Lexer_skip_float_exponent(Lexer* self);
+__attribute__((hot)) double Lexer_float_from_text(Lexer* self, long long start);
 __attribute__((hot)) Token Lexer_read_int(Lexer* self);
 __attribute__((hot)) Token Lexer_read_triple_string(Lexer* self, long long quote);
 __attribute__((hot)) Token Lexer_read_string(Lexer* self, long long quote);
+__attribute__((hot)) bool Lexer_hex_run_ok(Lexer* self, long long esc);
 __attribute__((hot)) Token Lexer_read_char(Lexer* self);
 __attribute__((hot)) Token Lexer_read_fstring(Lexer* self);
 __attribute__((hot)) Token Lexer_read_triple_fstring(Lexer* self, long long quote);
@@ -4621,8 +4903,18 @@ __attribute__((hot)) bool CGenerator_is_rt_concurrency_type(CGenerator* self, Tr
 __attribute__((hot)) TrStr CGenerator_get_proto_attrs(CGenerator* self, HirFunction* f);
 __attribute__((hot)) bool CGenerator_vt_method_mutates_self(CGenerator* self, HirFunction* f);
 __attribute__((hot)) bool CGenerator_vt_call_needs_ptr_self(CGenerator* self, TrStr class_name, TrStr method);
+__attribute__((hot)) bool CGenerator_hir_expr_is_self(CGenerator* self, HirExpr* e);
+__attribute__((hot)) bool CGenerator_hir_expr_frees_self(CGenerator* self, HirExpr* e);
+__attribute__((hot)) bool CGenerator_hir_block_frees_self(CGenerator* self, HirBlock* block);
+__attribute__((hot)) bool CGenerator_hir_stmt_frees_self(CGenerator* self, HirStmt* s);
+__attribute__((hot)) void CGenerator_hir_collect_returns(CGenerator* self, HirBlock* block, List_ptr* out);
+__attribute__((hot)) bool CGenerator_closure_returns_owned(CGenerator* self, HirBlock* body);
+__attribute__((hot)) bool CGenerator_class_free_frees_self(CGenerator* self, TrStr cn);
+__attribute__((hot)) bool CGenerator_user_free_releases_struct(CGenerator* self, TrStr cn);
 __attribute__((hot)) bool CGenerator_hir_block_mutates_self(CGenerator* self, HirBlock* block);
 __attribute__((hot)) bool CGenerator_hir_stmt_mutates_self(CGenerator* self, HirStmt* s);
+__attribute__((hot)) TrStr CGenerator_fn_cname(CGenerator* self, TrStr n);
+__attribute__((hot)) TrStr CGenerator_export_cname(CGenerator* self, TrStr n);
 __attribute__((hot)) TrStr CGenerator_gen_func_sig(CGenerator* self, HirFunction* f, TrStr class_name);
 __attribute__((hot)) void CGenerator_emit_base_fields(CGenerator* self, TrStr base_name);
 __attribute__((hot)) void CGenerator_emit_drop_fwd_decls(CGenerator* self, HirProgram* prog);
@@ -4668,6 +4960,7 @@ __attribute__((hot)) bool CGenerator__obj_expr_owns_ref(CGenerator* self, HirExp
 __attribute__((hot)) bool CGenerator__is_user_borrow_wrapper_call(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__store_target_is_borrow_field(CGenerator* self, HirExpr* t);
 __attribute__((hot)) bool CGenerator__obj_store_needs_retain(CGenerator* self, HirExpr* e);
+__attribute__((hot)) TrStr CGenerator_lv_name(CGenerator* self, TrStr n);
 __attribute__((hot)) TrStr CGenerator_obj_drop_fn(CGenerator* self, TrStr tn);
 __attribute__((hot)) TrStr CGenerator__mtxcd_spec(CGenerator* self, AstType** ptp);
 __attribute__((hot)) TrStr CGenerator__mtxcd_name_from_spec(CGenerator* self, TrStr spec);
@@ -4675,10 +4968,22 @@ __attribute__((hot)) TrStr CGenerator__mtxcd_body_from_spec(CGenerator* self, Tr
 __attribute__((hot)) TrStr CGenerator__mtxcd_name(CGenerator* self, AstType** ptp);
 __attribute__((hot)) void CGenerator_emit_mtxcd_wrappers(CGenerator* self);
 __attribute__((hot)) bool CGenerator__mutex_payload_fresh_coll(CGenerator* self, HirExpr* e);
+__attribute__((hot)) long long CGenerator__op_class(CGenerator* self, HirExpr* e);
+__attribute__((hot)) long long CGenerator__items_class(CGenerator* self, List_ptr* items);
+__attribute__((hot)) TrStr CGenerator_hoist_operand(CGenerator* self, TrStr s);
+__attribute__((hot)) TrStr CGenerator_hoist_at(CGenerator* self, long long mark, TrStr s);
+__attribute__((hot)) bool CGenerator__needs_order(CGenerator* self, List_ptr* parts);
+__attribute__((hot)) bool CGenerator__needs_order_with_recv(CGenerator* self, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_gen_cond_expr(CGenerator* self, HirExpr* cond);
+__attribute__((hot)) NameSnap* CGenerator_snap_name(CGenerator* self, TrStr n);
+__attribute__((hot)) void CGenerator_clear_name(CGenerator* self, TrStr n);
+__attribute__((hot)) void CGenerator_restore_name(CGenerator* self, NameSnap* sn);
+__attribute__((hot)) WrapSave* CGenerator_wrap_enter(CGenerator* self);
+__attribute__((hot)) void CGenerator_wrap_leave(CGenerator* self, WrapSave* w);
+__attribute__((hot)) TrStr CGenerator_gen_expr_scoped(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_gen_binop(CGenerator* self, TrStr op, HirExpr* l, HirExpr* r);
 __attribute__((hot)) TrStr CGenerator_gen_unary(CGenerator* self, TrStr op, HirExpr* expr);
-__attribute__((hot)) TrStr CGenerator_gen_prop_access(CGenerator* self, HirExpr* o, TrStr p);
+__attribute__((hot)) TrStr CGenerator_gen_prop_access(CGenerator* self, HirExpr* o, TrStr p0);
 __attribute__((hot)) TrStr CGenerator_gen_index(CGenerator* self, HirExpr* o, HirExpr* idx);
 __attribute__((hot)) bool CGenerator__call_arg_needs_shared_unwrap(CGenerator* self, HirExpr* arg, AstType* param_ty);
 __attribute__((hot)) TrStr CGenerator__gpu_arg_kind(CGenerator* self, AstType* pty);
@@ -4688,6 +4993,9 @@ __attribute__((hot)) TrStr CGenerator_gen_print_call(CGenerator* self, List_ptr*
 __attribute__((hot)) TrStr CGenerator_gen_to_cstr(CGenerator* self, HirExpr* arg);
 __attribute__((hot)) TrStr CGenerator_gen_print_one(CGenerator* self, HirExpr* arg);
 __attribute__((hot)) TrStr CGenerator_wrap_voidp_arg(CGenerator* self, HirExpr* arg);
+__attribute__((hot)) TrStr CGenerator_box_value(CGenerator* self, TrStr s, TrStr tn);
+__attribute__((hot)) TrStr CGenerator_take_payload(CGenerator* self, TrStr slot, TrStr tn);
+__attribute__((hot)) TrStr CGenerator_payload_free_stmt(CGenerator* self, TrStr slot, TrStr tn);
 __attribute__((hot)) TrStr CGenerator_unwrap_voidp_as(CGenerator* self, TrStr expr_s, AstType* ty);
 __attribute__((hot)) TrStr CGenerator_dict_key_arg(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_dict_val_arg(CGenerator* self, HirExpr* e);
@@ -4701,7 +5009,9 @@ __attribute__((hot)) TrStr CGenerator_gen_args_casts(CGenerator* self, List_ptr*
 __attribute__((hot)) TrStr CGenerator_gen_args_strify(CGenerator* self, List_ptr* args, TrStr elem_sfx);
 __attribute__((hot)) TrStr CGenerator__resolve_alias_tr(CGenerator* self, TrStr name);
 __attribute__((hot)) TrStr CGenerator_gen_iface_wrapped_args(CGenerator* self, List_ptr* params, List_ptr* args);
+__attribute__((hot)) HirExpr* CGenerator_order_operand(CGenerator* self, HirExpr* a, bool own_fresh);
 __attribute__((hot)) TrStr CGenerator_gen_method_call(CGenerator* self, HirExpr* obj, TrStr method, List_ptr* args, AstType* call_ty);
+__attribute__((hot)) TrStr CGenerator_gen_method_call_impl(CGenerator* self, HirExpr* obj, TrStr method, List_ptr* args, AstType* call_ty);
 __attribute__((hot)) TrStr CGenerator_gen_fstring(CGenerator* self, List_ptr* parts);
 __attribute__((hot)) TrStr CGenerator_gen_tuple(CGenerator* self, List_ptr* items);
 __attribute__((hot)) TrStr CGenerator_gen_tuple_to_str(CGenerator* self, TrStr s, AstType* ty);
@@ -4712,10 +5022,13 @@ __attribute__((hot)) void CGenerator_gen_multi_let(CGenerator* self, List_TrStr*
 __attribute__((hot)) TrStr CGenerator_gen_list_literal(CGenerator* self, List_ptr* items, AstType* ty);
 __attribute__((hot)) TrStr CGenerator_pod_list_ctype(CGenerator* self, TrStr lsfx);
 __attribute__((hot)) TrStr CGenerator_gen_dict_literal(CGenerator* self, List_ptr* keys, List_ptr* vals, AstType* hint_ty);
+__attribute__((hot)) TrStr CGenerator_gen_dict_entry(CGenerator* self, TrStr tmp, HirExpr* key, HirExpr* val, bool int_key);
+__attribute__((hot)) bool CGenerator_collect_append_pieces(CGenerator* self, HirExpr* e, TrStr name, List_ptr* out);
+__attribute__((hot)) TrStr CGenerator_gen_minmax_many(CGenerator* self, TrStr which, List_ptr* args);
 __attribute__((hot)) TrStr CGenerator_gen_list_comp(CGenerator* self, HirExpr* element, List_ptr* generators);
 __attribute__((hot)) TrStr CGenerator__comp_src_free_stmt(CGenerator* self, HirExpr* iter_e, long long idx);
 __attribute__((hot)) TrStr CGenerator_cb_trampoline(CGenerator* self, AstType* sig);
-__attribute__((hot)) TrStr CGenerator_gen_closure(CGenerator* self, List_ptr* params, AstType* ret_ty, HirBlock* body, List_ptr* captures);
+__attribute__((hot)) TrStr CGenerator_gen_closure(CGenerator* self, List_ptr* params, AstType* ret_ty, HirBlock* body, List_ptr* captures_in);
 __attribute__((hot)) TrStr CGenerator__spawn_wrap_cast_ty(CGenerator* self, TrStr fn_name, HirExpr* arg_expr);
 __attribute__((hot)) TrStr CGenerator__spawn_wrap_cast_ty_n(CGenerator* self, TrStr fn_name, long long pi, HirExpr* arg_expr);
 __attribute__((hot)) void CGenerator_emit_spawn_wrapper_for_expr(CGenerator* self, HirExpr* e);
@@ -4729,6 +5042,7 @@ __attribute__((hot)) void CGenerator_prescan_stmt_awaits(CGenerator* self, HirSt
 __attribute__((hot)) void CGenerator_prescan_awaits(CGenerator* self, HirProgram* prog);
 __attribute__((hot)) void CGenerator_gen_stmt(CGenerator* self, HirStmt* s_ptr, long long indent);
 __attribute__((hot)) void CGenerator_gen_for_loop(CGenerator* self, TrStr var, HirExpr* iter, HirBlock* body, long long indent);
+__attribute__((hot)) void CGenerator_gen_for_loop_impl(CGenerator* self, TrStr var, HirExpr* iter, HirBlock* body, long long indent);
 __attribute__((hot)) void CGenerator_gen_for_unpack(CGenerator* self, List_TrStr* vars, HirExpr* iter, HirBlock* body, long long indent);
 __attribute__((hot)) void CGenerator_gen_try(CGenerator* self, HirBlock* try_body, List_ptr* catches, HirBlock* finally_b, long long indent);
 __attribute__((hot)) void CGenerator_gen_chan_select(CGenerator* self, List_ptr* arms, long long indent);
@@ -4792,6 +5106,8 @@ __attribute__((hot)) TrStr CppExporter__cpp_list_bridges(CppExporter* self);
 __attribute__((hot)) TrStr CppExporter_generate_export_cpp_header(CppExporter* self, HirProgram* prog, TrStr ns);
 __attribute__((hot)) TrStr CppExporter__cpp_class_bridge_protos(CppExporter* self, HirClass* c);
 __attribute__((hot)) TrStr CppExporter__cpp_free_fn_bridge_proto(CppExporter* self, HirFunction* f);
+
+static void* _tr_spawn_wrap_pj_worker(void* _vp) { pj_worker((_TrSharedBox*)_vp); return NULL; }
 
 
 /* === Module-prefixed typedef aliases (auto-generated) === */
@@ -5308,6 +5624,42 @@ __attribute__((hot)) void core_alloc_dealloc_resolver_ModuleResolver_ptr(resolve
 __attribute__((hot)) core_map_MapNode_str_resolver_ModuleResolver** core_alloc_alloc_core_map_MapNode_str_resolver_ModuleResolver(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_resolver_ModuleResolver(core_map_MapNode_str_resolver_ModuleResolver** ptr);
 
+typedef PJob pjobs_PJob;
+struct core_vec_Vec_pjobs_PJob { pjobs_PJob** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_pjobs_PJob core_vec_Vec_pjobs_PJob;
+struct core_vec_Vec_pjobs_PJob_ptr { pjobs_PJob*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_pjobs_PJob_ptr core_vec_Vec_pjobs_PJob_ptr;
+struct core_map_MapNode_str_pjobs_PJob { char* key; pjobs_PJob* value; struct core_map_MapNode_str_pjobs_PJob* next; };
+typedef struct core_map_MapNode_str_pjobs_PJob core_map_MapNode_str_pjobs_PJob;
+struct core_map_Map_str_pjobs_PJob { core_map_MapNode_str_pjobs_PJob** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_pjobs_PJob core_map_Map_str_pjobs_PJob;
+__attribute__((hot)) pjobs_PJob** core_alloc_alloc_pjobs_PJob(long long count);
+__attribute__((hot)) pjobs_PJob** core_alloc_resize_pjobs_PJob(pjobs_PJob** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_pjobs_PJob(pjobs_PJob** ptr);
+__attribute__((hot)) pjobs_PJob*** core_alloc_alloc_pjobs_PJob_ptr(long long count);
+__attribute__((hot)) pjobs_PJob*** core_alloc_resize_pjobs_PJob_ptr(pjobs_PJob*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_pjobs_PJob_ptr(pjobs_PJob*** ptr);
+__attribute__((hot)) core_map_MapNode_str_pjobs_PJob** core_alloc_alloc_core_map_MapNode_str_pjobs_PJob(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_pjobs_PJob(core_map_MapNode_str_pjobs_PJob** ptr);
+
+typedef PendingShims pjobs_PendingShims;
+struct core_vec_Vec_pjobs_PendingShims { pjobs_PendingShims** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_pjobs_PendingShims core_vec_Vec_pjobs_PendingShims;
+struct core_vec_Vec_pjobs_PendingShims_ptr { pjobs_PendingShims*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_pjobs_PendingShims_ptr core_vec_Vec_pjobs_PendingShims_ptr;
+struct core_map_MapNode_str_pjobs_PendingShims { char* key; pjobs_PendingShims* value; struct core_map_MapNode_str_pjobs_PendingShims* next; };
+typedef struct core_map_MapNode_str_pjobs_PendingShims core_map_MapNode_str_pjobs_PendingShims;
+struct core_map_Map_str_pjobs_PendingShims { core_map_MapNode_str_pjobs_PendingShims** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_pjobs_PendingShims core_map_Map_str_pjobs_PendingShims;
+__attribute__((hot)) pjobs_PendingShims** core_alloc_alloc_pjobs_PendingShims(long long count);
+__attribute__((hot)) pjobs_PendingShims** core_alloc_resize_pjobs_PendingShims(pjobs_PendingShims** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_pjobs_PendingShims(pjobs_PendingShims** ptr);
+__attribute__((hot)) pjobs_PendingShims*** core_alloc_alloc_pjobs_PendingShims_ptr(long long count);
+__attribute__((hot)) pjobs_PendingShims*** core_alloc_resize_pjobs_PendingShims_ptr(pjobs_PendingShims*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_pjobs_PendingShims_ptr(pjobs_PendingShims*** ptr);
+__attribute__((hot)) core_map_MapNode_str_pjobs_PendingShims** core_alloc_alloc_core_map_MapNode_str_pjobs_PendingShims(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_pjobs_PendingShims(core_map_MapNode_str_pjobs_PendingShims** ptr);
+
 typedef HirExpr hir_HirExpr;
 struct core_vec_Vec_hir_HirExpr { hir_HirExpr* data; long long len; long long capacity; };
 typedef struct core_vec_Vec_hir_HirExpr core_vec_Vec_hir_HirExpr;
@@ -5818,6 +6170,42 @@ __attribute__((hot)) void core_alloc_dealloc_fmt_Formatter_ptr(fmt_Formatter*** 
 __attribute__((hot)) core_map_MapNode_str_fmt_Formatter** core_alloc_alloc_core_map_MapNode_str_fmt_Formatter(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_fmt_Formatter(core_map_MapNode_str_fmt_Formatter** ptr);
 
+typedef DocItem doc_DocItem;
+struct core_vec_Vec_doc_DocItem { doc_DocItem** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_doc_DocItem core_vec_Vec_doc_DocItem;
+struct core_vec_Vec_doc_DocItem_ptr { doc_DocItem*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_doc_DocItem_ptr core_vec_Vec_doc_DocItem_ptr;
+struct core_map_MapNode_str_doc_DocItem { char* key; doc_DocItem* value; struct core_map_MapNode_str_doc_DocItem* next; };
+typedef struct core_map_MapNode_str_doc_DocItem core_map_MapNode_str_doc_DocItem;
+struct core_map_Map_str_doc_DocItem { core_map_MapNode_str_doc_DocItem** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_doc_DocItem core_map_Map_str_doc_DocItem;
+__attribute__((hot)) doc_DocItem** core_alloc_alloc_doc_DocItem(long long count);
+__attribute__((hot)) doc_DocItem** core_alloc_resize_doc_DocItem(doc_DocItem** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_doc_DocItem(doc_DocItem** ptr);
+__attribute__((hot)) doc_DocItem*** core_alloc_alloc_doc_DocItem_ptr(long long count);
+__attribute__((hot)) doc_DocItem*** core_alloc_resize_doc_DocItem_ptr(doc_DocItem*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_doc_DocItem_ptr(doc_DocItem*** ptr);
+__attribute__((hot)) core_map_MapNode_str_doc_DocItem** core_alloc_alloc_core_map_MapNode_str_doc_DocItem(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_doc_DocItem(core_map_MapNode_str_doc_DocItem** ptr);
+
+typedef DocModule doc_DocModule;
+struct core_vec_Vec_doc_DocModule { doc_DocModule** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_doc_DocModule core_vec_Vec_doc_DocModule;
+struct core_vec_Vec_doc_DocModule_ptr { doc_DocModule*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_doc_DocModule_ptr core_vec_Vec_doc_DocModule_ptr;
+struct core_map_MapNode_str_doc_DocModule { char* key; doc_DocModule* value; struct core_map_MapNode_str_doc_DocModule* next; };
+typedef struct core_map_MapNode_str_doc_DocModule core_map_MapNode_str_doc_DocModule;
+struct core_map_Map_str_doc_DocModule { core_map_MapNode_str_doc_DocModule** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_doc_DocModule core_map_Map_str_doc_DocModule;
+__attribute__((hot)) doc_DocModule** core_alloc_alloc_doc_DocModule(long long count);
+__attribute__((hot)) doc_DocModule** core_alloc_resize_doc_DocModule(doc_DocModule** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_doc_DocModule(doc_DocModule** ptr);
+__attribute__((hot)) doc_DocModule*** core_alloc_alloc_doc_DocModule_ptr(long long count);
+__attribute__((hot)) doc_DocModule*** core_alloc_resize_doc_DocModule_ptr(doc_DocModule*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_doc_DocModule_ptr(doc_DocModule*** ptr);
+__attribute__((hot)) core_map_MapNode_str_doc_DocModule** core_alloc_alloc_core_map_MapNode_str_doc_DocModule(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_doc_DocModule(core_map_MapNode_str_doc_DocModule** ptr);
+
 typedef CTok bindgen_CTok;
 struct core_vec_Vec_bindgen_CTok { bindgen_CTok** data; long long len; long long capacity; };
 typedef struct core_vec_Vec_bindgen_CTok core_vec_Vec_bindgen_CTok;
@@ -5871,6 +6259,42 @@ __attribute__((hot)) bindgen_CppType*** core_alloc_resize_bindgen_CppType_ptr(bi
 __attribute__((hot)) void core_alloc_dealloc_bindgen_CppType_ptr(bindgen_CppType*** ptr);
 __attribute__((hot)) core_map_MapNode_str_bindgen_CppType** core_alloc_alloc_core_map_MapNode_str_bindgen_CppType(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_bindgen_CppType(core_map_MapNode_str_bindgen_CppType** ptr);
+
+typedef NameSnap codegen_c_NameSnap;
+struct core_vec_Vec_codegen_c_NameSnap { codegen_c_NameSnap** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_c_NameSnap core_vec_Vec_codegen_c_NameSnap;
+struct core_vec_Vec_codegen_c_NameSnap_ptr { codegen_c_NameSnap*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_c_NameSnap_ptr core_vec_Vec_codegen_c_NameSnap_ptr;
+struct core_map_MapNode_str_codegen_c_NameSnap { char* key; codegen_c_NameSnap* value; struct core_map_MapNode_str_codegen_c_NameSnap* next; };
+typedef struct core_map_MapNode_str_codegen_c_NameSnap core_map_MapNode_str_codegen_c_NameSnap;
+struct core_map_Map_str_codegen_c_NameSnap { core_map_MapNode_str_codegen_c_NameSnap** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_c_NameSnap core_map_Map_str_codegen_c_NameSnap;
+__attribute__((hot)) codegen_c_NameSnap** core_alloc_alloc_codegen_c_NameSnap(long long count);
+__attribute__((hot)) codegen_c_NameSnap** core_alloc_resize_codegen_c_NameSnap(codegen_c_NameSnap** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_c_NameSnap(codegen_c_NameSnap** ptr);
+__attribute__((hot)) codegen_c_NameSnap*** core_alloc_alloc_codegen_c_NameSnap_ptr(long long count);
+__attribute__((hot)) codegen_c_NameSnap*** core_alloc_resize_codegen_c_NameSnap_ptr(codegen_c_NameSnap*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_c_NameSnap_ptr(codegen_c_NameSnap*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_c_NameSnap** core_alloc_alloc_core_map_MapNode_str_codegen_c_NameSnap(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_c_NameSnap(core_map_MapNode_str_codegen_c_NameSnap** ptr);
+
+typedef WrapSave codegen_c_WrapSave;
+struct core_vec_Vec_codegen_c_WrapSave { codegen_c_WrapSave** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_c_WrapSave core_vec_Vec_codegen_c_WrapSave;
+struct core_vec_Vec_codegen_c_WrapSave_ptr { codegen_c_WrapSave*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_codegen_c_WrapSave_ptr core_vec_Vec_codegen_c_WrapSave_ptr;
+struct core_map_MapNode_str_codegen_c_WrapSave { char* key; codegen_c_WrapSave* value; struct core_map_MapNode_str_codegen_c_WrapSave* next; };
+typedef struct core_map_MapNode_str_codegen_c_WrapSave core_map_MapNode_str_codegen_c_WrapSave;
+struct core_map_Map_str_codegen_c_WrapSave { core_map_MapNode_str_codegen_c_WrapSave** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_codegen_c_WrapSave core_map_Map_str_codegen_c_WrapSave;
+__attribute__((hot)) codegen_c_WrapSave** core_alloc_alloc_codegen_c_WrapSave(long long count);
+__attribute__((hot)) codegen_c_WrapSave** core_alloc_resize_codegen_c_WrapSave(codegen_c_WrapSave** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_c_WrapSave(codegen_c_WrapSave** ptr);
+__attribute__((hot)) codegen_c_WrapSave*** core_alloc_alloc_codegen_c_WrapSave_ptr(long long count);
+__attribute__((hot)) codegen_c_WrapSave*** core_alloc_resize_codegen_c_WrapSave_ptr(codegen_c_WrapSave*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_codegen_c_WrapSave_ptr(codegen_c_WrapSave*** ptr);
+__attribute__((hot)) core_map_MapNode_str_codegen_c_WrapSave** core_alloc_alloc_core_map_MapNode_str_codegen_c_WrapSave(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_codegen_c_WrapSave(core_map_MapNode_str_codegen_c_WrapSave** ptr);
 
 typedef CGenerator codegen_c_CGenerator;
 struct core_vec_Vec_codegen_c_CGenerator { codegen_c_CGenerator** data; long long len; long long capacity; };

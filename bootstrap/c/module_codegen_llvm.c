@@ -2,40 +2,42 @@
 
 
 __attribute__((malloc,returns_nonnull,hot)) LlvmGenerator* LlvmGenerator_init() {
-    /* pass */
+#line 27 "src/codegen/llvm/mod.tr"
     LlvmGenerator* g = ((LlvmGenerator*)_tr_obj_alloc(sizeof(LlvmGenerator)));
-    /* pass */
+#line 28 "src/codegen/llvm/mod.tr"
     g->ok = true;
-    /* pass */
+#line 29 "src/codegen/llvm/mod.tr"
     g->fail_note = _tr_str_lit_len("", 0LL);
-    /* pass */
+#line 30 "src/codegen/llvm/mod.tr"
     return g;
 }
 
 __attribute__((hot)) TrStr LlvmGenerator_generate(LlvmGenerator* self, HirProgram* prog) {
-    /* pass */
+#line 36 "src/codegen/llvm/mod.tr"
     return LlvmGenerator_generate_nh(self, prog, false);
 }
 
 __attribute__((hot)) TrStr LlvmGenerator_generate_nh(LlvmGenerator* self, HirProgram* prog, bool no_heap) {
-    /* pass */
+#line 41 "src/codegen/llvm/mod.tr"
     LModule* m = lower_to_lir_nh(prog, true, no_heap);
-    /* pass */
+#line 42 "src/codegen/llvm/mod.tr"
     if ((!m->ok)) {
-        /* pass */
+#line 43 "src/codegen/llvm/mod.tr"
         self->ok = false;
-        /* pass */
+#line 44 "src/codegen/llvm/mod.tr"
         self->fail_note = _tr_str_retain(m->fail_note);
-        /* pass */
+#line 45 "src/codegen/llvm/mod.tr"
         _tr_obj_release(m, _trdrop_LModule);
         return _tr_str_lit_len("", 0LL);
     }
-    /* pass */
+#line 46 "src/codegen/llvm/mod.tr"
     self->ok = true;
-    /* pass */
+#line 47 "src/codegen/llvm/mod.tr"
     LlvmEmitter* e = LlvmEmitter_init(m);
-    /* pass */
+#line 48 "src/codegen/llvm/mod.tr"
+    TrStr _trret1801 = LlvmEmitter_emit_module(e);
     _tr_obj_release(m, _trdrop_LModule);
-    return LlvmEmitter_emit_module(e);
+    _tr_obj_release(e, _trdrop_LlvmEmitter);
+    return _trret1801;
 }
 
