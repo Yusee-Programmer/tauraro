@@ -911,6 +911,10 @@ extend Sema:
             bi = bi + 1
         return false
 
+    # Classes whose methods are implemented inside the code generator / runtime (no Tauraro signatures to check).
+    pub def is_rt_builtin_class(self, n: str) -> bool:
+        return n == "Thread" or n == "Atomic" or n == "ThreadLocal" or n == "ThreadPool" or n == "Mutex" or n == "RwLock" or n == "Chan" or n == "Channel" or n == "Shared" or n == "Weak" or n == "StringBuilder" or n == "AsyncPool" or n == "AsyncTask"
+
     pub def is_builtin_dispatch_class(self, n: str) -> bool:
         return n == "Thread" or n == "Atomic" or n == "ThreadLocal" or n == "ThreadPool" or n == "Mutex" or n == "RwLock" or n == "Chan" or n == "Channel" or n == "Shared" or n == "Weak" or n == "StringBuilder" or n == "OS" or n == "Process" or n == "Env" or n == "Hash" or n == "File" or n == "AsyncPool" or n == "AsyncTask"
 
@@ -956,7 +960,14 @@ extend Sema:
 
     # `Type.method(args)` on a user class: argument count and (for a single overload) argument types.
     pub def check_static_call(self, type_name: str, variant: str, hl: Vec[Pointer[HirExpr]]):
-        if self.in_unsafe or self.ambiguous_classes.contains(type_name) or self.is_builtin_dispatch_class(type_name): return
+        if type_name == "Atomic" and (variant == "new" or variant == "init") and not self.in_unsafe:
+            if hl.len != 1:
+                self.error("[E-4] 'Atomic." + variant + "()' takes 1 argument but " + hl.len.to_str() + " were given.\n      FIX: Atomic.new(initial_value).")
+            else:
+                mut af = self.firm_family(hl.get(0))
+                if af == "str" or af == "List" or af == "Dict":
+                    self.error("[E-5] Type mismatch: Atomic needs a number as its initial value but is given " + self.family_word(af) + ".\n      FIX: Atomic.new(0).")
+        if self.in_unsafe or self.ambiguous_classes.contains(type_name) or self.is_rt_builtin_class(type_name): return
         if not self.classes.contains(type_name): return
         mut cdef = self.classes.get(type_name)
         mut named = 0
@@ -7335,7 +7346,7 @@ extend Sema:
                                     ret_ty = _mdef.ret_ty.read()  # fallback: first match
                                     _mdef_throws_ty = _mdef.throws_ty
                         _mi = _mi + 1
-                    if _m_named == 1 and _m_arity_ok and not _m_variadic and not _is_builtin_dispatch and not self.in_unsafe and _cls.generics.len == 0 and _m_one.generics.len == 0:
+                    if _m_named == 1 and _m_arity_ok and not _m_variadic and not self.is_rt_builtin_class(hobj_ty.name) and not self.in_unsafe and _cls.generics.len == 0 and _m_one.generics.len == 0:
                         mut _m1_sk = 0
                         if _m_one.params.len > 0 and _m_one.params.get(0).name == "self": _m1_sk = 1
                         if _m_one.params.len - _m1_sk == hl.len:
@@ -7345,7 +7356,7 @@ extend Sema:
                                 if _m1_pt as usize != 0 as usize:
                                     self.check_expr_assignable(_m1_pt.read(), hl.get(_m1_i), "argument " + (_m1_i + 1).to_str() + " of '" + hobj_ty.name + "." + method + "()'")
                                 _m1_i = _m1_i + 1
-                    if _m_named > 0 and not _m_arity_ok and not _m_variadic and not _is_builtin_dispatch and not self.in_unsafe:
+                    if _m_named > 0 and not _m_arity_ok and not _m_variadic and not self.is_rt_builtin_class(hobj_ty.name) and not self.in_unsafe:
                         mut _m_pl = "s"
                         if _m_first_want == 1: _m_pl = ""
                         mut _m_vb = "were"
