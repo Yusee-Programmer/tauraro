@@ -160,7 +160,7 @@ expect_diag() {
     printf '%b' "$2" > "$diagdir/ed.tr"
     dout=$("$TAURAROC" "$diagdir/ed.tr" -o "$diagdir/ed" 2>&1)
     case "$dout" in
-        *"[ICE]"*) diagfail="$diagfail [$1: reached the C compiler]";;
+        *"[ICE]"*|*"[C-1]"*) diagfail="$diagfail [$1: reached the C compiler]";;
         *"$3"*) ;;
         *) diagfail="$diagfail [$1: expected '$3']";;
     esac
@@ -187,6 +187,17 @@ expect_diag "str method arity" 'def main():\n    mut s = "abc"\n    print(s.find
 expect_diag "trailing tokens" 'def main():\n    mut b = 5 7\n' "unexpected token after the end of the statement"
 expect_diag "in non-collection" 'def main():\n    mut b = 1 in 5\n' "[E-5] Type mismatch: the right-hand side of 'in'"
 expect_diag "generic cannot infer" 'def conv[T](x: int) -> T:\n    return x as T\ndef main():\n    mut a = conv(3)\n' "[G-2] Cannot infer type parameter 'T'"
+expect_diag "enum variant" 'enum C:\n    R\n    G\ndef main():\n    mut c = C.Gren\n' "[E-7] Enum 'C' has no variant or method 'Gren'"
+expect_diag "option arithmetic" 'def f(x: Option[int]) -> int:\n    return x + 1\ndef main():\n    f(None)\n' "[E-5] Type mismatch: '+' cannot be applied to an Option value"
+expect_diag "list property" 'def main():\n    mut xs = [1, 2]\n    print(xs.size)\n' "[E-7] A List has no field 'size'"
+expect_diag "list element type" 'def main():\n    mut xs: List[str] = [1, 2]\n' "[E-5] Type mismatch: the initializer of 'xs' is a List[str]"
+expect_diag "collection arg kind" 'def main():\n    mut xs: List[str] = []\n    xs.append(5)\n' "[E-5] Type mismatch: List[str].append() is given"
+expect_diag "dict key kind" 'def main():\n    mut d: Dict[str, int] = {}\n    d.set(1, 2)\n' "[E-5] Type mismatch: the key of Dict[str, int].set()"
+expect_diag "mixed list literal" 'def main():\n    mut xs = [1, "a"]\n' "[E-5] Type mismatch: a list literal mixes"
+expect_diag "string minus" 'def main():\n    mut s = "a" - "b"\n' "[E-5] Type mismatch: '-' is not defined for strings"
+expect_diag "None arithmetic" 'def main():\n    mut x = None\n    mut y = x + 1\n' "[E-5] Type mismatch: '+' cannot be applied to None"
+expect_diag "atomic arity" 'def main():\n    mut a: Atomic[int] = Atomic.new(0)\n    a.add()\n' "[E-4] 'Atomic.add()' takes 1 argument"
+expect_diag "spawn arity" 'def w(a: int, b: int) -> void:\n    pass\ndef main():\n    mut t = Thread.spawn(w, 1)\n' "[E-4] 'Thread.spawn(w, ...)'"
 if [ -n "$diagfail" ]; then
     echo "  FAILED:$diagfail"
     failed=$((failed + 1))

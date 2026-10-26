@@ -1295,8 +1295,8 @@ def print_ice(cpath: str, log: str):
         if parts.len >= 2 and parts.get(0).ends_with(".tr"):
             src_file = parts.get(0)
             src_line = int(parts.get(1))
-    print(c_red("error") + ": [ICE] internal compiler error: " + c_msg_to_tauraro(msg))
     if src_file != "":
+        print(c_red("error") + ": [C-1] " + c_msg_to_tauraro(msg))
         print("  --> " + src_file + ":" + str(src_line))
         if file_exists(src_file):
             mut src_text = read_file(src_file)
@@ -1313,10 +1313,13 @@ def print_ice(cpath: str, log: str):
                 mut stop = start
                 while stop < src_text.len() and src_text.slice(stop, stop + 1) != "\n": stop = stop + 1
                 print("   " + str(src_line) + " | " + src_text.slice(start, stop))
-    elif first != "":
-        print("  (in the C generated for '" + cpath + "')")
-    print("      This is a Tauraro bug: the program should have been rejected with a normal diagnostic, or compiled.")
-    print("      Please report it with this program. Set TAURARO_SHOW_C_ERRORS=1 to see the raw C compiler output.")
+        print("  = note: this was only noticed late, while generating code, so the message is less specific than usual.")
+        print("  = help: look at this line (and the names / types it uses). If it is correct, please report it as a compiler bug;")
+        print("          set TAURARO_SHOW_C_ERRORS=1 to see the raw C compiler diagnostic.")
+    else:
+        print(c_red("error") + ": [ICE] internal compiler error: " + c_msg_to_tauraro(msg))
+        if first != "": print("  (in the C generated for '" + cpath + "')")
+        print("      This is a Tauraro bug. Please report it with this program. Set TAURARO_SHOW_C_ERRORS=1 to see the raw C compiler output.")
 
 # Plain-words version of the most common C compiler complaints about generated code.
 def c_msg_to_tauraro(msg: str) -> str:

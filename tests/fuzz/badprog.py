@@ -195,7 +195,7 @@ MUTS = [m_undef_name, m_wrong_literal, m_str_to_int, m_drop_arg, m_extra_arg, m_
 def classify(rc, text):
     if rc in (124,): return "CRASH", "timeout"
     if rc < 0 or rc >= 128 and "error" not in text: return "CRASH", "signal rc=%d" % rc
-    if "[ICE]" in text or re.search(r"compiling .*\.c failed|build/\S+\.[ch]:\d+:\d+: error", text): return "ICE", ""
+    if "[ICE]" in text or "[C-1]" in text or re.search(r"compiling .*\.c failed|build/\S+\.[ch]:\d+:\d+: error", text): return "ICE", ""
     if "Segmentation fault" in text or "Aborted" in text or "core dumped" in text: return "CRASH", "crash"
     if rc == 0: return "OK", ""
     return "DIAG", ""

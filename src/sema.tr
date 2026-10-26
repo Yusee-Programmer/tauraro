@@ -755,6 +755,8 @@ extend Sema:
         if n == "Dict" or n == "Map": return "Dict"
         if n == "Tuple" or n == "tuple": return "Tuple"
         if n == "Option": return "Option"
+        if n == "Pointer": return "Pointer"
+        if n == "Result": return "Result"
         mut gi = 0
         while gi < self.current_func_generics.len:
             if self.current_func_generics.get(gi) == n: return ""
@@ -927,6 +929,7 @@ extend Sema:
         if act_scalar and (exp == "List" or exp == "Dict" or exp == "class"): return true
         if (exp == "List" and act == "Dict") or (exp == "Dict" and act == "List"): return true
         if exp == "class" and (act == "List" or act == "Dict"): return true
+        if (exp == "Pointer" or exp == "Result") and (act == "List" or act == "Dict" or act == "Tuple" or act == "float" or act == "bool" or (exp == "Result" and (act == "int" or act == "str"))): return true
         if act == "class" and (exp_scalar or exp == "List" or exp == "Dict" or exp == "Tuple"): return true
         if act == "Option" and (exp_scalar or exp == "List" or exp == "Dict" or exp == "class"): return true
         if exp == "Tuple" and act != "Tuple": return act_scalar or act == "List" or act == "Dict"
@@ -936,6 +939,8 @@ extend Sema:
     pub def family_word(self, fam: str) -> str:
         if fam == "class": return "a class/enum value"
         if fam == "Option": return "an Option (maybe-empty) value"
+        if fam == "Pointer": return "a Pointer"
+        if fam == "Result": return "a Result"
         return "a " + fam
     # Report an E-5 mismatch when `e` is certainly a different kind of value than `exp_ty` declares.
     pub def check_expr_assignable(self, exp_ty: AstType, e: Pointer[HirExpr], what: str):
@@ -1031,7 +1036,7 @@ extend Sema:
 
     # Classes whose methods are implemented inside the code generator / runtime (no Tauraro signatures to check).
     pub def is_rt_builtin_class(self, n: str) -> bool:
-        return n == "Thread" or n == "Atomic" or n == "ThreadLocal" or n == "ThreadPool" or n == "Mutex" or n == "RwLock" or n == "Chan" or n == "Channel" or n == "Shared" or n == "Weak" or n == "StringBuilder" or n == "AsyncPool" or n == "AsyncTask"
+        return n == "Thread" or n == "Atomic" or n == "ThreadLocal" or n == "ThreadPool" or n == "Mutex" or n == "RwLock" or n == "Chan" or n == "Channel" or n == "Shared" or n == "Weak" or n == "AsyncPool" or n == "AsyncTask"
 
     pub def is_builtin_dispatch_class(self, n: str) -> bool:
         return n == "Thread" or n == "Atomic" or n == "ThreadLocal" or n == "ThreadPool" or n == "Mutex" or n == "RwLock" or n == "Chan" or n == "Channel" or n == "Shared" or n == "Weak" or n == "StringBuilder" or n == "OS" or n == "Process" or n == "Env" or n == "Hash" or n == "File" or n == "AsyncPool" or n == "AsyncTask"
@@ -1080,6 +1085,18 @@ extend Sema:
 
     # `Type.method(args)` on a user class: argument count and (for a single overload) argument types.
     pub def check_static_call(self, type_name: str, variant: str, hl: Vec[Pointer[HirExpr]]):
+        if type_name == "Thread" and variant == "spawn" and hl.len >= 1:
+            match hl.get(0).read():
+                case HirExpr.EIdent(sfn, _, _):
+                    if self.fn_defs.contains(sfn) and self.resolve(sfn).kind == SymbolKind.SFunction:
+                        mut sfd = self.fn_defs.get(sfn)
+                        mut sk = 0
+                        while sk < sfd.params.len:
+                            if sfd.params.get(sk).is_variadic: return
+                            sk = sk + 1
+                        if sfd.params.len != hl.len - 1:
+                            self.error("[E-4] 'Thread.spawn(" + sfn + ", ...)' passes " + (hl.len - 1).to_str() + " argument(s) to '" + sfn + "()', which takes " + sfd.params.len.to_str() + ".\n      FIX: Thread.spawn(f, arg1, arg2, ...) passes exactly the arguments f declares.")
+                case _: pass
         if type_name == "Atomic" and (variant == "new" or variant == "init"):
             if hl.len != 1:
                 self.error("[E-4] 'Atomic." + variant + "()' takes 1 argument but " + hl.len.to_str() + " were given.\n      FIX: Atomic.new(initial_value).")
@@ -1140,6 +1157,8 @@ extend Sema:
             mut bty = hir_expr_type(base)
             if (bty.name == "Dict" or bty.name == "Map") and bty.args.len > 0 and self.family_mismatch(self.decl_family(bty.args.get(0).read()), xf):
                 self.error("[E-5] Type mismatch: a " + bty.name + "[" + bty.args.get(0).read().name + ", ...] is indexed with " + self.family_word(xf) + ".\n      FIX: use a '" + bty.args.get(0).read().name + "' key.")
+            if (bf == "List" or bf == "str") and xf == "float":
+                self.error("[E-5] Type mismatch: a " + bf + " is indexed with a float, but the index must be an int.\n      FIX: convert it: int(x).")
             if (bf == "List" or bf == "str") and (xf == "str" or xf == "List" or xf == "Dict"):
                 self.error("[E-5] Type mismatch: a " + bf + " is indexed with " + self.family_word(xf) + ", but the index must be an int.\n      FIX: use an integer index (for a dict, declare it as a Dict).")
         return r
@@ -1173,6 +1192,10 @@ extend Sema:
             if m == "set": return 1
         elif cls == "Weak":
             if m == "drop" or m == "free" or m == "is_alive" or m == "upgrade": return 0
+        elif cls == "Thread":
+            if m == "join" or m == "detach" or m == "id" or m == "free" or m == "current_id": return 0
+            if m == "sleep" or m == "sleep_ms": return 1
+            if m == "spawn" or m == "new" or m == "init" or m == "auto": return 99   # variadic: checked in check_static_call
         elif cls == "Atomic":
             if m == "free" or m == "get" or m == "increment" or m == "decrement" or m == "load" or m == "load_acquire" or m == "load_relaxed" or m == "load_seqcst": return 0
             if m == "add" or m == "add_acqrel" or m == "add_relaxed" or m == "add_release" or m == "exchange" or m == "fetch_add" or m == "fetch_add_acqrel" or m == "fetch_add_relaxed" or m == "fetch_add_release" or m == "fetch_sub" or m == "fetch_sub_relaxed" or m == "fetch_sub_release": return 1
@@ -1182,13 +1205,22 @@ extend Sema:
 
     pub def check_builtin_class_method(self, cls: str, method: str, hl: Vec[Pointer[HirExpr]]):
         # (checked inside unsafe: too - these are plain type / arity facts)
-        if cls != "Chan" and cls != "Mutex" and cls != "RwLock" and cls != "ThreadLocal" and cls != "Weak" and cls != "Atomic": return
+        if cls == "StringBuilder":
+            if not (self.class_method_exists(cls, method) or method == "append" or method == "append_char" or method == "free" or method == "init" or method == "len" or method == "length" or method == "to_string" or method == "as_str" or self.is_universal_method(method)):
+                self.error("[E-1] No method '" + method + "' found on type 'StringBuilder'.\n      FIX: check the spelling; see the StringBuilder methods in docs/std/string.md.")
+            return
+        if cls == "Pointer":
+            if not (method == "read" or method == "write" or method == "offset" or method == "is_null" or method == "free" or method == "cast" or method == "add" or method == "sub" or method == "to_int" or method == "addr" or self.is_universal_method(method) or self.class_method_exists("Pointer", method)):
+                self.error("[E-1] No method '" + method + "' found on type 'Pointer'.\n      FIX: check the spelling; pointers support .read(), .write(v) and .offset(n) (inside unsafe:).")
+            return
+        if cls != "Chan" and cls != "Mutex" and cls != "RwLock" and cls != "ThreadLocal" and cls != "Weak" and cls != "Atomic" and cls != "Thread": return
         if self.classes.contains(cls) and self.class_method_exists(cls, method): return
         if self.is_universal_method(method) and method != "len" : return
         mut want = self.builtin_class_method_arity(cls, method)
         if want < 0:
             self.error("[E-1] No method '" + method + "' found on type '" + cls + "'.\n      FIX: check the spelling; see the " + cls + " method list in docs/lang/16_concurrency.md.")
             return
+        if want == 99: return
         if want != hl.len:
             mut pl = "s"
             if want == 1: pl = ""
@@ -6400,6 +6432,8 @@ extend Sema:
                     if _bo_lf == "str" or _bo_lf == "List" or _bo_lf == "Dict": _bo_bad = _bo_lf
                     if (op == "|" or op == "&" or op == "^" or op == "<<" or op == ">>") and (_bo_lf == "str" or _bo_rf == "str" or _bo_lf == "List" or _bo_rf == "List" or _bo_lf == "Dict" or _bo_rf == "Dict"):
                         self.error("[E-5] Type mismatch: '" + op + "' needs integer operands, but one side is " + self.family_word(_bo_bad) + ".\n      FIX: convert it to an int first.")
+                    if (_bo_lf == "None" or _bo_rf == "None") and (op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**" or op == "<" or op == ">" or op == "<=" or op == ">="):
+                        self.error("[E-5] Type mismatch: '" + op + "' cannot be applied to None.\n      FIX: the value here is None; give the variable a real value before using it in arithmetic or comparisons.")
                     if (_bo_lf == "Option" or _bo_rf == "Option") and (op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**" or op == "<" or op == ">" or op == "<=" or op == ">="):
                         self.error("[E-5] Type mismatch: '" + op + "' cannot be applied to an Option value directly.\n      FIX: unwrap it first: `x.unwrap()`, `x.unwrap_or(default)`, or check `x.is_some()`.")
                     if (_bo_lf == "str" or _bo_rf == "str") and (op == "-" or op == "/" or op == "//" or op == "%" or op == "**"):
@@ -6952,6 +6986,11 @@ extend Sema:
                     self.check_builtin_class_method(hir_expr_type(hobj).name, method, hl)
                     self.check_collection_arg_types(hir_expr_type(hobj), method, hl)
                     if method == "get" or method == "pop" or method == "get_or": self.check_user_method_call(hir_expr_type(hobj).name, obj, method, hl)
+                    if method == "spawn":
+                        match obj.read():
+                            case Expr.EIdent(_sp_t):
+                                if _sp_t == "Thread": self.check_static_call("Thread", "spawn", hl)
+                            case _: pass
                 # Resolve type aliases: `type IntList = List[int]` -> hobj_ty becomes List[int].
                 if self.type_aliases.contains(hobj_ty.name):
                     mut _alias_base = self.type_aliases.get(hobj_ty.name)
@@ -7566,6 +7605,20 @@ extend Sema:
                 match obj.read():
                     case Expr.EIdent(_pmv_cn):
                         mut _pmv_sym = self.resolve(_pmv_cn)
+                        # `Color.Gren`: a name that is neither a variant nor a method of the enum
+                        if self.enums.contains(_pmv_cn) and _pmv_cn != "Option" and _pmv_cn != "Result" and _pmv_sym.kind != SymbolKind.SVariable and not self.ambiguous_classes.contains(_pmv_cn):
+                            mut _ev_def = self.enums.get(_pmv_cn)
+                            mut _ev_found = false
+                            mut _ev_i = 0
+                            while _ev_i < _ev_def.variants.len:
+                                if _ev_def.variants.get(_ev_i).name == prop: _ev_found = true
+                                _ev_i = _ev_i + 1
+                            _ev_i = 0
+                            while _ev_i < _ev_def.methods.len:
+                                if _ev_def.methods.get(_ev_i).name == prop: _ev_found = true
+                                _ev_i = _ev_i + 1
+                            if not _ev_found and not self.is_universal_method(prop) and prop != "tag" and prop != "name" and prop != "values":
+                                self.error("[E-7] Enum '" + _pmv_cn + "' has no variant or method '" + prop + "'.\n      FIX: check the spelling of the variant name.")
                         # A class name is itself a registered `SymbolKind.SClass` symbol
                         # (declared alongside the class, see `Decl.DClass` handling above)
                         # -- NOT an empty/unresolved symbol as originally assumed here. An
