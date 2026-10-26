@@ -771,6 +771,7 @@ extend Sema:
             case HirExpr.ELitFloat(_, _): return "float"
             case HirExpr.ELitStr(_, _, _): return "str"
             case HirExpr.ELitBool(_, _): return "bool"
+            case HirExpr.ELitNone(_): return "None"
             case HirExpr.EFString(_, _): return "str"
             case HirExpr.EList(_, _): return "List"
             case HirExpr.EDict(_, _, _): return "Dict"
@@ -941,6 +942,13 @@ extend Sema:
             if self.known_collection_method(fam, method): return
             self.error("[E-6] " + self.family_word(fam) + " has no method '" + method + "()'.\n      FIX: check the spelling, or that the receiver is the collection you meant.")
             return
+        if fam == "int" or fam == "float":
+            if self.is_universal_method(method) or self.known_number_method(method): return
+            self.error("[E-6] " + self.family_word(fam) + " has no method '" + method + "()'.\n      FIX: check that the receiver is the value you meant; numbers only have methods such as abs(), pow() and to_str().")
+            return
+        if fam == "None":
+            self.error("[E-6] None has no method '" + method + "()'.\n      FIX: the variable holds None here; give it a real value, or use an Option[T] and check .is_some first.")
+            return
         if fam != "bool" and fam != "Tuple": return
         if self.is_universal_method(method): return
         if fam == "Tuple" and (method == "get" or method == "first" or method == "last" or method == "count"): return
@@ -987,7 +995,7 @@ extend Sema:
                 ti = ti + 1
 
     # The subscript of `xs[k] = v` is read, not assigned: an undefined `k` there must still be reported.
-    pub def lower_index_operand(self, idx: Pointer[Expr]) -> Pointer[HirExpr]:
+    pub def lower_index_operand(self, idx: Pointer[Expr], base: Pointer[HirExpr]) -> Pointer[HirExpr]:
         mut sv_a = self.in_assign_target
         mut sv_p = self.in_assign_target_plain
         self.in_assign_target = false
@@ -995,6 +1003,11 @@ extend Sema:
         mut r = self.lower_expr(idx)
         self.in_assign_target = sv_a
         self.in_assign_target_plain = sv_p
+        if not self.in_unsafe:
+            mut bf = self.firm_family(base)
+            mut xf = self.firm_family(r)
+            if (bf == "List" or bf == "str") and (xf == "str" or xf == "List" or xf == "Dict"):
+                self.error("[E-5] Type mismatch: a " + bf + " is indexed with " + self.family_word(xf) + ", but the index must be an int.\n      FIX: use an integer index (for a dict, declare it as a Dict).")
         return r
 
     # Method names the code generator implements for List / Set / Dict receivers (kept in step with
@@ -1055,6 +1068,58 @@ extend Sema:
                 if self.firm_family(hl.get(ai)) == "str" or self.firm_family(hl.get(ai)) == "List" or self.firm_family(hl.get(ai)) == "Dict":
                     self.error("[E-5] Type mismatch: argument " + (ai + 1).to_str() + " of 'Atomic." + method + "()' must be a number but is " + self.family_word(self.firm_family(hl.get(ai))) + ".\n      FIX: pass an int.")
                 ai = ai + 1
+
+    # Argument count / types of `value.get(..)`-style calls on a USER class. These names are matched
+    # earlier in the lowering chain (as collection methods), so the class branch never sees them.
+    pub def check_user_method_call(self, cls: str, obj: Pointer[Expr], method: str, hl: Vec[Pointer[HirExpr]]):
+        if self.in_unsafe or not self.classes.contains(cls) or self.ambiguous_classes.contains(cls) or self.is_builtin_dispatch_class(cls): return
+        if cls == "Map" or cls == "Vec" or cls == "List" or cls == "Dict" or cls == "Set": return
+        match obj.read():
+            case Expr.EIdent(_ru_n):
+                if self.classes.contains(_ru_n) and self.resolve(_ru_n).kind != SymbolKind.SVariable: return   # Type.get(instance, ...)
+            case _: pass
+        mut cd = self.classes.get(cls)
+        mut named = 0
+        mut ok = false
+        mut want = 0
+        mut one = FunctionDef.init("")
+        mut i = 0
+        while i < cd.methods.len:
+            mut m = cd.methods.get(i)
+            if m.name == method:
+                mut cnt = 0
+                mut pj = 0
+                while pj < m.params.len:
+                    if m.params.get(pj).name != "self": cnt = cnt + 1
+                    if m.params.get(pj).is_variadic: return
+                    pj = pj + 1
+                if named == 0: want = cnt
+                named = named + 1
+                if cnt == hl.len: ok = true
+                one = m
+            i = i + 1
+        if named == 0: return
+        if not ok:
+            mut pl = "s"
+            if want == 1: pl = ""
+            mut vb = "were"
+            if hl.len == 1: vb = "was"
+            self.error("[E-4] '" + cls + "." + method + "()' takes " + want.to_str() + " argument" + pl + " but " + hl.len.to_str() + " " + vb + " given.\n      FIX: call it with exactly " + want.to_str() + " argument" + pl + " (see its definition).")
+        elif named == 1 and cd.generics.len == 0 and one.generics.len == 0:
+            mut sk = 0
+            if one.params.len > 0 and one.params.get(0).name == "self": sk = 1
+            mut ti = 0
+            while ti < hl.len and sk + ti < one.params.len:
+                if one.params.get(sk + ti).ty as usize != 0 as usize:
+                    self.check_expr_assignable(one.params.get(sk + ti).ty.read(), hl.get(ti), "argument " + (ti + 1).to_str() + " of '" + cls + "." + method + "()'")
+                ti = ti + 1
+
+    # Every method the code generator implements on int / float receivers (codegen/c.tr numeric block).
+    pub def known_number_method(self, m: str) -> bool:
+        if m == "abs" or m == "acos" or m == "as_str" or m == "asin" or m == "atan" or m == "atan2" or m == "ceil" or m == "checked_add" or m == "checked_mul" or m == "checked_sub" or m == "clamp" or m == "cos" or m == "exp" or m == "fabs" or m == "floor" or m == "gcd": return true
+        if m == "is_inf" or m == "is_nan" or m == "lcm" or m == "log" or m == "log10" or m == "log2" or m == "max" or m == "min" or m == "pow" or m == "round" or m == "sign" or m == "sin" or m == "sqrt" or m == "tan": return true
+        if m == "to_HEX" or m == "to_bin" or m == "to_binary" or m == "to_f64" or m == "to_float" or m == "to_hex" or m == "to_hex_upper" or m == "to_i64" or m == "to_int" or m == "to_oct" or m == "to_octal" or m == "to_str" or m == "to_string": return true
+        return false
 
     # Recursively checks cls_name and its base classes for a method named `method`.
     pub def class_method_exists(self, cls_name: str, method: str) -> bool:
@@ -6162,6 +6227,10 @@ extend Sema:
                 if not self.in_unsafe:
                     mut _bo_lf = self.firm_family(hleft)
                     mut _bo_rf = self.firm_family(hright)
+                    mut _bo_bad = _bo_rf
+                    if _bo_lf == "str" or _bo_lf == "List" or _bo_lf == "Dict": _bo_bad = _bo_lf
+                    if (op == "|" or op == "&" or op == "^" or op == "<<" or op == ">>") and (_bo_lf == "str" or _bo_rf == "str" or _bo_lf == "List" or _bo_rf == "List" or _bo_lf == "Dict" or _bo_rf == "Dict"):
+                        self.error("[E-5] Type mismatch: '" + op + "' needs integer operands, but one side is " + self.family_word(_bo_bad) + ".\n      FIX: convert it to an int first.")
                     if op == "is" and _bo_rf != "":
                         self.error("[E-5] Type mismatch: the right-hand side of 'is' must be an enum variant or a type, not " + self.family_word(_bo_rf) + ".\n      FIX: compare values with '==' (e.g. `x == 3`); use `is` only as `shape is Shape.Circle`.")
                     if (op == "in" or op == "not in") and (_bo_rf == "int" or _bo_rf == "float" or _bo_rf == "bool") and not (_bo_lf == "int" or _bo_lf == "float" or _bo_lf == "bool" or _bo_lf == "str"):
@@ -6708,6 +6777,7 @@ extend Sema:
                     self.check_builtin_method_arity(self.firm_family(hobj), method, hl.len)
                     self.check_scalar_method(self.firm_family(hobj), method, hir_expr_type(hobj).name)
                     self.check_builtin_class_method(hir_expr_type(hobj).name, method, hl)
+                    if method == "get" or method == "pop" or method == "get_or": self.check_user_method_call(hir_expr_type(hobj).name, obj, method, hl)
                 # Resolve type aliases: `type IntList = List[int]` -> hobj_ty becomes List[int].
                 if self.type_aliases.contains(hobj_ty.name):
                     mut _alias_base = self.type_aliases.get(hobj_ty.name)
@@ -7520,7 +7590,7 @@ extend Sema:
                         else:
                             container_ty.args.push(box_asttype(AstType.init(generic_arg_n)))
                         if obj_name == "alloc" or obj_name == "dealloc" or obj_name == "resize" or obj_name == "copy":
-                             return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_index_operand(idx_inner), container_ty))
+                             return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_index_operand(idx_inner, hexpr_obj), container_ty))
                         return box_hirexpr(HirExpr.EIdent(eff_ty_n, container_ty, false))
                     # User-defined generic class or enum: preserve the concrete type args
                     if (self.classes.contains(obj_name) or self.enums.contains(obj_name)) and generic_arg_n != "":
@@ -7549,7 +7619,7 @@ extend Sema:
                     mut dobj_full = hir_expr_type(hexpr_obj)
                     if dobj_full.args.len > 1: dval_ty = dobj_full.args.get(1).read()
                     mut didx_args = Vec[Pointer[HirExpr]].init(1)
-                    didx_args.push(self.lower_index_operand(idx_inner))
+                    didx_args.push(self.lower_index_operand(idx_inner, hexpr_obj))
                     return box_hirexpr(HirExpr.EMethodCall(hexpr_obj, "get_index", didx_args, dval_ty))
                 # Tuple index t[i]: a CONSTANT index types the read as element #i's type
                 # (tuples are heterogeneous, so only literal indices are well-typed).
@@ -7562,11 +7632,11 @@ extend Sema:
                                 telem_ty = tup_full.args.get(tup_ci).read()
                         case _: pass
                     mut tup_args = Vec[Pointer[HirExpr]].init(1)
-                    tup_args.push(self.lower_index_operand(idx_inner))
+                    tup_args.push(self.lower_index_operand(idx_inner, hexpr_obj))
                     return box_hirexpr(HirExpr.EMethodCall(hexpr_obj, "get_index", tup_args, telem_ty))
                 if not self.is_primitive_name(obj_ty_n) and obj_ty_n != "str" and obj_ty_n != "Pointer" and obj_ty_n != "List" and obj_ty_n != "Vec":
                     mut call_args = Vec[Pointer[HirExpr]].init(1)
-                    call_args.push(self.lower_index_operand(idx_inner))
+                    call_args.push(self.lower_index_operand(idx_inner, hexpr_obj))
                     return box_hirexpr(HirExpr.EMethodCall(hexpr_obj, "get_index", call_args, AstType.init("void")))
                 # EIndex type is the element type, not the container type
                 mut elem_ty = AstType.init("void")
@@ -7577,7 +7647,7 @@ extend Sema:
                     if hir_expr_type(hexpr_obj).args.len > 0:
                         elem_ty = hir_expr_type(hexpr_obj).args.get(0).read()
                 elif obj_ty_n == "str": elem_ty = AstType.init("char")
-                return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_index_operand(idx_inner), elem_ty))
+                return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_index_operand(idx_inner, hexpr_obj), elem_ty))
             case Expr.ESizeOf(ty):
                 if ty as usize == 0 as usize: return box_hirexpr(HirExpr.ESizeOf(AstType.init("void"), AstType.init("int")))
                 return box_hirexpr(HirExpr.ESizeOf(ty.read(), AstType.init("int")))
