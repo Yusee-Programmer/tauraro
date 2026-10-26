@@ -752,6 +752,7 @@ extend Sema:
         if n == "List" or n == "Vec": return "List"
         if n == "Dict" or n == "Map": return "Dict"
         if n == "Tuple" or n == "tuple": return "Tuple"
+        if n == "Option": return "Option"
         mut gi = 0
         while gi < self.current_func_generics.len:
             if self.current_func_generics.get(gi) == n: return ""
@@ -829,12 +830,14 @@ extend Sema:
         if act_scalar and (exp == "List" or exp == "Dict" or exp == "class"): return true
         if (exp == "List" and act == "Dict") or (exp == "Dict" and act == "List"): return true
         if exp == "class" and (act == "List" or act == "Dict"): return true
+        if act == "Option" and (exp_scalar or exp == "List" or exp == "Dict" or exp == "class"): return true
         if exp == "Tuple" and act != "Tuple": return act_scalar or act == "List" or act == "Dict"
         if act == "Tuple" and exp != "Tuple": return exp_scalar or exp == "List" or exp == "Dict" or exp == "class"
         return false
 
     pub def family_word(self, fam: str) -> str:
         if fam == "class": return "a class/enum value"
+        if fam == "Option": return "an Option (maybe-empty) value"
         return "a " + fam
     # Report an E-5 mismatch when `e` is certainly a different kind of value than `exp_ty` declares.
     pub def check_expr_assignable(self, exp_ty: AstType, e: Pointer[HirExpr], what: str):
@@ -6294,6 +6297,8 @@ extend Sema:
                     if _bo_lf == "str" or _bo_lf == "List" or _bo_lf == "Dict": _bo_bad = _bo_lf
                     if (op == "|" or op == "&" or op == "^" or op == "<<" or op == ">>") and (_bo_lf == "str" or _bo_rf == "str" or _bo_lf == "List" or _bo_rf == "List" or _bo_lf == "Dict" or _bo_rf == "Dict"):
                         self.error("[E-5] Type mismatch: '" + op + "' needs integer operands, but one side is " + self.family_word(_bo_bad) + ".\n      FIX: convert it to an int first.")
+                    if (_bo_lf == "Option" or _bo_rf == "Option") and (op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**" or op == "<" or op == ">" or op == "<=" or op == ">="):
+                        self.error("[E-5] Type mismatch: '" + op + "' cannot be applied to an Option value directly.\n      FIX: unwrap it first: `x.unwrap()`, `x.unwrap_or(default)`, or check `x.is_some()`.")
                     if (_bo_lf == "str" or _bo_rf == "str") and (op == "-" or op == "/" or op == "//" or op == "%" or op == "**"):
                         self.error("[E-5] Type mismatch: '" + op + "' is not defined for strings.\n      FIX: only '+' (concatenate), comparisons, 'str * int' (repeat) and 'in' work on strings; build text with f-strings or str(x).")
                     if op == "is" and _bo_rf != "":
@@ -7509,6 +7514,12 @@ extend Sema:
                 if self.classes.contains(hobj_ty_n) and not self.ambiguous_classes.contains(hobj_ty_n) and hobj_ty_n != "Result" and hobj_ty_n != "Option" and not self.is_builtin_dispatch_class(hobj_ty_n):
                     if not self.class_has_field(hobj_ty_n, prop) and not self.class_method_exists(hobj_ty_n, prop) and not self.is_universal_method(prop):
                         self.error("[E-7] Type '" + hobj_ty_n + "' has no field '" + prop + "'.\n      FIX: check the spelling, or declare 'pub " + prop + ": <type>' in the class.")
+                mut _pc_f = self.firm_family(hobj)
+                if (_pc_f == "List" or _pc_f == "Dict") and not self.class_method_exists(hobj_ty_n, prop) and not self.class_has_field(hobj_ty_n, prop):
+                    if not (prop == "len" or prop == "length" or prop == "capacity" or prop == "data" or prop == "keys" or prop == "values" or prop == "items"):
+                        self.error("[E-7] A " + _pc_f + " has no field '" + prop + "'.\n      FIX: collections expose .len (and methods such as .append()); check the spelling.")
+                elif _pc_f == "str" and not (prop == "len" or prop == "length" or prop == "data"):
+                    self.error("[E-7] A str has no field '" + prop + "'.\n      FIX: strings expose .len and methods such as .upper(); check the spelling.")
                 if (hobj_ty_n == "Result" or hobj_ty_n == "Option"):
                     if not (prop == "err" or prop == "ok" or prop == "is_err" or prop == "is_ok" or prop == "is_some" or prop == "is_none" or prop == "val" or prop == "value" or prop == "some" or prop == "none" or prop == "tag" or prop == "data" or (prop.len() > 0 and prop.slice(0, 1) >= "A" and prop.slice(0, 1) <= "Z")):
                         self.error("[E-7] '" + hobj_ty_n + "' has no field '" + prop + "'.\n      FIX: use .is_ok / .is_err / .ok / .err (Result) or .is_some / .is_none / .value (Option), or the unwrap() family of methods.")
