@@ -1003,6 +1003,54 @@ extend Sema:
         if m == "map" or m == "filter" or m == "each" or m == "for_each" or m == "fold" or m == "reduce" or m == "find" or m == "sorted" or m == "enumerate" or m == "zip" or m == "take" or m == "skip" or m == "flat_map" or m == "find_index" or m == "position" or m == "partition" or m == "group_by": return true
         return false
 
+    # Exact argument counts of the built-in concurrency classes' methods (-1 = no such method).
+    # Mirrors the dispatch in codegen/c.tr for Chan / Mutex / RwLock / Atomic / ThreadLocal / Weak.
+    pub def builtin_class_method_arity(self, cls: str, m: str) -> int:
+        if cls == "Chan":
+            if m == "cap" or m == "close" or m == "free" or m == "is_closed" or m == "len" or m == "recv" or m == "try_recv": return 0
+            if m == "recv_timeout" or m == "send" or m == "try_send": return 1
+            if m == "send_timeout": return 2
+        elif cls == "Mutex":
+            if m == "free" or m == "get" or m == "lock" or m == "unlock": return 0
+            if m == "set": return 1
+        elif cls == "RwLock":
+            if m == "free" or m == "read" or m == "read_lock" or m == "read_unlock" or m == "write" or m == "write_lock" or m == "write_unlock": return 0
+            if m == "set" or m == "write_set": return 1
+        elif cls == "ThreadLocal":
+            if m == "free" or m == "get": return 0
+            if m == "set": return 1
+        elif cls == "Weak":
+            if m == "drop" or m == "free" or m == "is_alive" or m == "upgrade": return 0
+        elif cls == "Atomic":
+            if m == "free" or m == "get" or m == "increment" or m == "decrement" or m == "load" or m == "load_acquire" or m == "load_relaxed" or m == "load_seqcst": return 0
+            if m == "add" or m == "add_acqrel" or m == "add_relaxed" or m == "add_release" or m == "exchange" or m == "fetch_add" or m == "fetch_add_acqrel" or m == "fetch_add_relaxed" or m == "fetch_add_release" or m == "fetch_sub" or m == "fetch_sub_relaxed" or m == "fetch_sub_release": return 1
+            if m == "set" or m == "store" or m == "store_relaxed" or m == "store_release" or m == "store_seqcst" or m == "sub" or m == "sub_relaxed" or m == "sub_release" or m == "swap": return 1
+            if m == "cas" or m == "cas_acqrel" or m == "cas_weak" or m == "compare_exchange": return 2
+        return 0 - 1
+
+    pub def check_builtin_class_method(self, cls: str, method: str, hl: Vec[Pointer[HirExpr]]):
+        if self.in_unsafe: return
+        if cls != "Chan" and cls != "Mutex" and cls != "RwLock" and cls != "ThreadLocal" and cls != "Weak" and cls != "Atomic": return
+        if self.classes.contains(cls) and self.class_method_exists(cls, method): return
+        if self.is_universal_method(method) and method != "len" : return
+        mut want = self.builtin_class_method_arity(cls, method)
+        if want < 0:
+            self.error("[E-1] No method '" + method + "' found on type '" + cls + "'.\n      FIX: check the spelling; see the " + cls + " method list in docs/lang/16_concurrency.md.")
+            return
+        if want != hl.len:
+            mut pl = "s"
+            if want == 1: pl = ""
+            mut vb = "were"
+            if hl.len == 1: vb = "was"
+            self.error("[E-4] '" + cls + "." + method + "()' takes " + want.to_str() + " argument" + pl + " but " + hl.len.to_str() + " " + vb + " given.\n      FIX: call it with exactly " + want.to_str() + " argument" + pl + ".")
+            return
+        if cls == "Atomic":
+            mut ai = 0
+            while ai < hl.len:
+                if self.firm_family(hl.get(ai)) == "str" or self.firm_family(hl.get(ai)) == "List" or self.firm_family(hl.get(ai)) == "Dict":
+                    self.error("[E-5] Type mismatch: argument " + (ai + 1).to_str() + " of 'Atomic." + method + "()' must be a number but is " + self.family_word(self.firm_family(hl.get(ai))) + ".\n      FIX: pass an int.")
+                ai = ai + 1
+
     # Recursively checks cls_name and its base classes for a method named `method`.
     pub def class_method_exists(self, cls_name: str, method: str) -> bool:
         if not self.classes.contains(cls_name): return false
@@ -6654,6 +6702,7 @@ extend Sema:
                 if not self.in_unsafe:
                     self.check_builtin_method_arity(self.firm_family(hobj), method, hl.len)
                     self.check_scalar_method(self.firm_family(hobj), method, hir_expr_type(hobj).name)
+                    self.check_builtin_class_method(hir_expr_type(hobj).name, method, hl)
                 # Resolve type aliases: `type IntList = List[int]` -> hobj_ty becomes List[int].
                 if self.type_aliases.contains(hobj_ty.name):
                     mut _alias_base = self.type_aliases.get(hobj_ty.name)
