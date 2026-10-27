@@ -45,6 +45,7 @@ pub class Symbol:
     pub decl_block_id: int    # auto-drop: id of the innermost if/while C block open at declaration within the current scope; 0 = scope top-level
     pub str_escaped: bool     # auto-drop: a `str` local passed as a call/method-call ARGUMENT - may be aliased into a legacy List_str/Dict/Set (#52 not yet migrated); excluded from auto-drop to avoid UAF
     pub coll_escaped: bool    # auto-drop: a List/Vec/Dict/Map/Set local that is ever read in a non-receiver position (call/method arg, assigned to another var, returned, stored in a literal) - raw unrefcounted pointer, so any alias must disable auto-free to avoid UAF
+    pub firm_ty: AstType      # the FULL declared / inferred type this variable is certain to have (name == "" when unsure)
     pub firm_cls: str         # class name this variable is CERTAIN to hold ("" when unsure); lets field / method result kinds be known
     pub firm: str             # type family this variable is CERTAIN to have ("int"/"float"/"bool"/"str"/"List"/"Dict"/"class"), "" when unsure; drives the E-5 mismatch checks
     pub borrows_region: str   # [L-3/L-4] region derivation of this str local's CURRENT value: "" = unknown (never flagged), "@owned" = freshly built (concat — owned, not a borrow), "<name>" = shares parameter/local <name>'s region (transitive). Tracks the LAST assignment.
@@ -75,6 +76,7 @@ extend Symbol:
         s.borrows_region = ""
         s.firm = ""
         s.firm_cls = ""
+        s.firm_ty = AstType.init("")
         return s
 
 pub class Scope:
@@ -800,6 +802,20 @@ extend Sema:
             si = si - 1
         return true
 
+    # Like set_symbol_firm, and also records the full certain type.
+    pub def set_symbol_firm_ty(self, name: str, fam: str, cls: str, ty: AstType):
+        mut si = self.scopes.len - 1
+        while si >= 0:
+            mut sc = self.scopes.get(si)
+            if sc.variables.contains(name):
+                mut sy = sc.variables.get(name)
+                sy.firm = fam
+                sy.firm_cls = cls
+                sy.firm_ty = ty
+                sc.variables.insert(name, sy)
+                return
+            si = si - 1
+
     # The single (non-overloaded) method `m` of user class `cls` (searching base classes), or an
     # empty FunctionDef (name == "") when absent / overloaded / the class is generic or ambiguous.
     pub def find_unique_method(self, cls: str, m: str) -> FunctionDef:
@@ -885,9 +901,119 @@ extend Sema:
             case _: return self.firm_class(mo)
         return ""
 
+    # The full type `e` is CERTAIN to have (name == "" when unsure): declared types of variables, fields,
+    # function / method results, constructor calls, and the element / value types of typed collections.
+    pub def firm_type(self, e: Pointer[HirExpr]) -> AstType:
+        mut nothing = AstType.init("")
+        if _is_invalid_ptr(e as usize): return nothing
+        match e.read():
+            case HirExpr.EIdent(nm, _, _):
+                mut sy = self.resolve(nm)
+                if sy.name == "" or sy.kind != SymbolKind.SVariable: return nothing
+                if sy.firm_ty.name != "": return sy.firm_ty
+                mut sf = sy.firm
+                if sf == "" and self.global_firm.contains(nm) and self.is_global_symbol(nm): sf = self.global_firm.get(nm)
+                if sf == "int" or sf == "float" or sf == "bool" or sf == "str" or sf == "List" or sf == "Dict" or sf == "Tuple": return AstType.init(sf)
+                if sf == "class" and sy.firm_cls != "": return AstType.init(sy.firm_cls)
+                return nothing
+            case HirExpr.ECast(_, tt):
+                if self.decl_family(tt) != "": return tt
+                return nothing
+            case HirExpr.ECall(callee, cargs, _):
+                match callee.read():
+                    case HirExpr.EIdent(fn, _, _):
+                        if self.classes.contains(fn) and self.resolve(fn).kind != SymbolKind.SVariable and self.decl_family(AstType.init(fn)) == "class": return AstType.init(fn)
+                        if self.fn_defs.contains(fn):
+                            mut fd = self.fn_defs.get(fn)
+                            if fd.generics.len > 0 or fd.ret_ty as usize == 0 as usize: return nothing
+                            if fd.throws_ty as usize != 0 as usize and fd.throws_ty.read().name != "": return nothing
+                            return fd.ret_ty.read()
+                        return nothing
+                    case _: return nothing
+            case HirExpr.EPropAccess(po, pf, _):
+                mut pc = self.firm_class(po)
+                if pc == "": return nothing
+                return self.find_field_type(pc, pf)
+            case HirExpr.EIndex(ib, _, _):
+                mut bt = self.firm_type(ib)
+                if bt.name == "": return nothing
+                if (bt.name == "List" or bt.name == "Vec") and bt.args.len > 0 and not self.classes.contains(bt.name): return bt.args.get(0).read()
+                if (bt.name == "Dict" or bt.name == "Map") and bt.args.len > 1 and not self.classes.contains(bt.name): return bt.args.get(1).read()
+                return nothing   # indexing a str yields a character code, not a str
+            case HirExpr.EMethodCall(mo, mm, margs, _):
+                # `List[int].init(4)` / `Dict[str, int].init(8)`
+                if mm == "init" or mm == "new":
+                    match mo.read():
+                        case HirExpr.EIndex(cb, ci, _):
+                            match cb.read():
+                                case HirExpr.EIdent(cbn, _, _):
+                                    if (cbn == "List" or cbn == "Vec" or cbn == "Set") and not self.classes.contains(cbn):
+                                        mut one = self.type_from_hir_arg(ci)
+                                        if one.name != "":
+                                            mut lt = AstType.init(cbn)
+                                            lt.args.push(box_asttype(one))
+                                            return lt
+                                        return nothing
+                                    if (cbn == "Dict" or cbn == "Map") and not self.classes.contains(cbn):
+                                        match ci.read():
+                                            case HirExpr.ETuple(tis, _):
+                                                if tis.len == 2:
+                                                    mut kt = self.type_from_hir_arg(tis.get(0))
+                                                    mut vt = self.type_from_hir_arg(tis.get(1))
+                                                    if kt.name != "" and vt.name != "":
+                                                        mut dt = AstType.init(cbn)
+                                                        dt.args.push(box_asttype(kt))
+                                                        dt.args.push(box_asttype(vt))
+                                                        return dt
+                                            case _: pass
+                                        return nothing
+                                case _: pass
+                        case _: pass
+                mut rt = self.firm_type(mo)
+                if rt.name == "":
+                    mut rf = self.firm_family(mo)
+                    if rf == "str" or rf == "List" or rf == "Dict": rt = AstType.init(rf)
+                if (rt.name == "List" or rt.name == "Vec") and not self.classes.contains(rt.name):
+                    if (mm == "get" or mm == "pop" or mm == "first" or mm == "last") and rt.args.len > 0: return rt.args.get(0).read()
+                    if mm == "copy" or mm == "clone" or mm == "reversed" or mm == "reversed_copy": return rt
+                    if mm == "len" or mm == "length" or mm == "count" or mm == "index_of": return AstType.init("int")
+                    if mm == "contains" or mm == "is_empty": return AstType.init("bool")
+                    return nothing
+                if (rt.name == "Dict" or rt.name == "Map") and not self.classes.contains(rt.name):
+                    if (mm == "get" or mm == "get_or") and rt.args.len > 1: return rt.args.get(1).read()
+                    if mm == "len" or mm == "length": return AstType.init("int")
+                    if mm == "has" or mm == "contains" or mm == "is_empty": return AstType.init("bool")
+                    return nothing
+                if rt.name == "str":
+                    if mm == "len" or mm == "length" or mm == "find" or mm == "index_of" or mm == "count": return AstType.init("int")
+                    if mm == "upper" or mm == "lower" or mm == "strip" or mm == "trim" or mm == "replace" or mm == "to_upper" or mm == "to_lower" or mm == "repeat" or mm == "reverse" or mm == "capitalize": return AstType.init("str")
+                    if mm == "contains" or mm == "starts_with" or mm == "ends_with": return AstType.init("bool")
+                    return nothing
+                mut rc = self.method_receiver_class(mo)
+                if rc != "":
+                    mut md = self.find_unique_method(rc, mm)
+                    if md.name != "" and md.ret_ty as usize != 0 as usize and not (md.throws_ty as usize != 0 as usize and md.throws_ty.read().name != ""):
+                        return md.ret_ty.read()
+                return nothing
+            case _: return nothing
+        return nothing
+
+    # A type written as an expression argument (`List[int]` -> the `int` identifier) as a type.
+    pub def type_from_hir_arg(self, a: Pointer[HirExpr]) -> AstType:
+        match a.read():
+            case HirExpr.EIdent(an, _, _):
+                if self.decl_family(AstType.init(an)) != "" or _is_builtin_type_word(an) or self.classes.contains(an): return AstType.init(an)
+                return AstType.init("")
+            case _: return AstType.init("")
+        return AstType.init("")
+
     pub def firm_family(self, e: Pointer[HirExpr]) -> str:
         if _is_invalid_ptr(e as usize): return ""
         match e.read():
+            case HirExpr.EIndex(_, _, _):
+                return self.decl_family(self.firm_type(e))
+            case HirExpr.ECast(_, _):
+                return self.decl_family(self.firm_type(e))
             case HirExpr.ELitInt(_, _): return "int"
             case HirExpr.ELitFloat(_, _): return "float"
             case HirExpr.ELitStr(_, _, _): return "str"
@@ -940,7 +1066,7 @@ extend Sema:
                 if (mm == "to_str" or mm == "to_string") and margs.len == 0:
                     mut mty = hir_expr_type(mo).name
                     if not (self.classes.contains(mty) and self.class_method_exists(mty, mm)): return "str"
-                return ""
+                return self.decl_family(self.firm_type(e))
             case HirExpr.EPropAccess(po, pf, _):
                 mut pc = self.firm_class(po)
                 if pc != "":
@@ -4737,6 +4863,7 @@ extend Sema:
                         pb_sym.firm_cls = self.current_class_name
                     if p.ty as usize != 0 as usize and not p.is_variadic and f.generics.len == 0:
                         pb_sym.firm = self.decl_family(p_ty)
+                        if pb_sym.firm != "": pb_sym.firm_ty = p_ty
                         if pb_sym.firm == "class" and self.classes.contains(p_ty.name): pb_sym.firm_cls = p_ty.name
                     pb_scope.variables.insert(p.name, pb_sym)
 
@@ -5295,13 +5422,18 @@ extend Sema:
                     self.check_expr_assignable(ty_ptr.read(), hval, "the initializer of '" + name + "'")
                 mut _let_firm = ""
                 mut _let_cls = ""
+                mut _let_ty = AstType.init("")
                 if not is_shared:
                     if ty_ptr as usize != 0 as usize:
                         _let_firm = self.decl_family(ty_ptr.read())
+                        if _let_firm != "": _let_ty = ty_ptr.read()
                         if _let_firm == "class" and self.classes.contains(ty_ptr.read().name): _let_cls = ty_ptr.read().name
                     elif val_ptr as usize != 0 as usize:
                         _let_firm = self.firm_family(hval)
+                        _let_ty = self.firm_type(hval)
+                        if _let_ty.name != "" and _let_firm == "": _let_firm = self.decl_family(_let_ty)
                         if _let_firm == "class": _let_cls = self.firm_class(hval)
+                        if _let_firm == "class" and _let_cls == "" and _let_ty.name != "" and self.classes.contains(_let_ty.name): _let_cls = _let_ty.name
                 self.declare(name, SymbolKind.SVariable, box_asttype(ty), is_mut)
                 if _let_firm != "" and self.scopes.len > 0:
                     mut _fm_scope = self.scopes.get(self.scopes.len - 1)
@@ -5309,6 +5441,7 @@ extend Sema:
                         mut _fm_sym = _fm_scope.variables.get(name)
                         _fm_sym.firm = _let_firm
                         _fm_sym.firm_cls = _let_cls
+                        _fm_sym.firm_ty = _let_ty
                         _fm_scope.variables.insert(name, _fm_sym)
                 # A `shared` local: record is_shared on the symbol so the Shared[T]
                 # control methods (clone/downgrade/drop) resolve on it and its drop is
@@ -5771,6 +5904,14 @@ extend Sema:
                 elif iter_hn == "str":
                     var_ty_for = AstType.init("char")
                 self.declare(var, SymbolKind.SVariable, box_asttype(var_ty_for), false)
+                mut _fv_it = self.firm_type(h_iter_for)
+                if (_fv_it.name == "List" or _fv_it.name == "Vec" or _fv_it.name == "Set") and _fv_it.args.len > 0 and not self.classes.contains(_fv_it.name):
+                    mut _fv_el = _fv_it.args.get(0).read()
+                    mut _fv_fam = self.decl_family(_fv_el)
+                    if _fv_fam != "":
+                        mut _fv_cls = ""
+                        if _fv_fam == "class" and self.classes.contains(_fv_el.name): _fv_cls = _fv_el.name
+                        self.set_symbol_firm_ty(var, _fv_fam, _fv_cls, _fv_el)
                 # The loop variable of `for row in grid` ALIASES the container's element: it must never be
                 # auto-dropped. Collections are not reference counted, so freeing `row` at the end of an
                 # iteration freed the element out of `grid` (a use-after-free on the next read). Mark it
