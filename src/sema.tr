@@ -237,6 +237,7 @@ pub class Sema:
     pub current_file:        str             # path of source file currently being analysed
     pub current_func_name:  str
     pub current_class_name: str
+    pub global_firm: Map[str, str]   # module-level variables whose kind is certain (annotation / literal initialiser)
     pub extern_defs: Map[str, FunctionDef]   # extern "C" declarations (name -> signature) for call checks
     pub ambiguous_classes: Map[str, bool]   # class names declared more than once (different modules); member checks skip them
     pub current_scope_depth: int
@@ -400,6 +401,7 @@ extend Sema:
         s.current_func_ret_family = ""
         s.ambiguous_classes = Map[str, bool].init(8)
         s.extern_defs = Map[str, FunctionDef].init(16)
+        s.global_firm = Map[str, str].init(16)
         s.current_func_ret_regions = Vec[str].init(0)
         s.current_func_outlives_a = Vec[str].init(0)
         s.current_func_outlives_b = Vec[str].init(0)
@@ -790,6 +792,14 @@ extend Sema:
             gs.firm_cls = cls
             self.globals.insert(name, gs)
 
+    # True when `name` resolves to a module-level variable (no enclosing function / block scope declares it).
+    pub def is_global_symbol(self, name: str) -> bool:
+        mut si = self.scopes.len - 1
+        while si >= 1:
+            if self.scopes.get(si).variables.contains(name): return false
+            si = si - 1
+        return true
+
     # The single (non-overloaded) method `m` of user class `cls` (searching base classes), or an
     # empty FunctionDef (name == "") when absent / overloaded / the class is generic or ambiguous.
     pub def find_unique_method(self, cls: str, m: str) -> FunctionDef:
@@ -889,7 +899,9 @@ extend Sema:
             case HirExpr.ETuple(_, _): return "Tuple"
             case HirExpr.EIdent(nm, _, _):
                 mut sy = self.resolve(nm)
-                if sy.name != "" and sy.kind == SymbolKind.SVariable: return sy.firm
+                if sy.name != "" and sy.kind == SymbolKind.SVariable:
+                    if sy.firm == "" and self.global_firm.contains(nm) and self.is_global_symbol(nm): return self.global_firm.get(nm)
+                    return sy.firm
                 return ""
             case HirExpr.EUnaryOp(op, x, _):
                 if op == "not" or op == "!": return "bool"
@@ -913,6 +925,9 @@ extend Sema:
                     mut mmd = self.find_unique_method(mrc, mm)
                     if mmd.name != "" and mmd.ret_ty as usize != 0 as usize and not (mmd.throws_ty as usize != 0 as usize and mmd.throws_ty.read().name != ""):
                         return self.decl_family(mmd.ret_ty.read())
+                if (mm == "len" or mm == "length") and margs.len == 0:
+                    mut lrf = self.firm_family(mo)
+                    if lrf == "str" or lrf == "List" or lrf == "Dict": return "int"
                 if (mm == "to_str" or mm == "to_string") and margs.len == 0:
                     mut mty = hir_expr_type(mo).name
                     if not (self.classes.contains(mty) and self.class_method_exists(mty, mm)): return "str"
@@ -3344,7 +3359,7 @@ extend Sema:
                             if g_ty as usize != 0 as usize:
                                 self.declare(g_name, SymbolKind.SVariable, g_ty, g_is_mut)
                                 mut g_fam = self.decl_family(g_ty.read())
-                                if g_fam != "class" and g_fam != "Pointer" and g_fam != "Result" and g_fam != "Option": self.set_symbol_firm(g_name, g_fam, "")
+                                if g_fam == "int" or g_fam == "float" or g_fam == "bool" or g_fam == "str" or g_fam == "List" or g_fam == "Dict": self.global_firm.insert(g_name, g_fam)
                         case _: pass
                 case _: pass
             gpi = gpi + 1
