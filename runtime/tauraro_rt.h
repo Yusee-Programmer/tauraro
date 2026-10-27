@@ -7606,9 +7606,18 @@ static inline void _tr_init_console(void) {
 #endif
 /* POSIX: a write()/send() to a peer-closed socket or pipe must surface as an error
  * return (EPIPE), not kill the whole process with SIGPIPE (bug log #13). */
+#if !defined(TAURARO_BARE) && !defined(__wasi__) && !defined(TAURARO_KERNEL) && !defined(TAURARO_NO_OS)
+/* Flush stdout before the sanitizers' exit hooks run: under --debug, a leak report ends the process
+ * with _exit() and would otherwise drop buffered program output. atexit handlers run last-in-first-out,
+ * so registering here (after the sanitizer's own hook) makes this one run first. */
+static void _tr_flush_stdout_at_exit(void) { fflush(stdout); }
+#endif
 static inline void _tr_init_console(void) {
 #if !defined(TAURARO_BARE) && !defined(__wasi__) && defined(SIGPIPE)
     signal(SIGPIPE, SIG_IGN);
+#endif
+#if !defined(TAURARO_BARE) && !defined(__wasi__) && !defined(TAURARO_KERNEL) && !defined(TAURARO_NO_OS)
+    atexit(_tr_flush_stdout_at_exit);
 #endif
 }
 #endif

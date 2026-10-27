@@ -37,6 +37,9 @@ The `//` operator is an alias for `/` on integers (it truncates toward zero; it 
 10 // 3     # 3  — explicit integer division
 ```
 
+`%` also works on floats (`7.5 % 2.0` is `1.5`) and, like integer `%`, the result takes the
+sign of the dividend (`-7.5 % 2.0` is `-1.5`) - it is C's `fmod`, not Python's floored modulo.
+
 To get a float result, cast at least one operand before dividing:
 ```python
 precise = 10 as float / 3        # 3.333...

@@ -4678,6 +4678,7 @@ pub class CGenerator:
                     if op == "%": _dv_fn = "_tr_umod"
                     return "" + _dv_fn + "((unsigned long long)(" + ls + "), (unsigned long long)(" + rs + "))"
                 return "" + _dv_fn + "((long long)(" + ls + "), (long long)(" + rs + "))"
+            if op == "%" and (_is_float_type(lt_n) or _is_float_type(rt_n)): return "fmod((double)(" + ls + "), (double)(" + rs + "))"   # float remainder, truncating like the integer %
             if op == "//": return "((long long)(" + ls + ") / (long long)(" + rs + "))"
         if (_is_str_type(lt_n) and _is_str_type(rt_n)) and (op == "==" or op == "!=") and (self._is_fresh_str_expr(l) or self._is_fresh_str_expr(r)):
             # A fresh operand (call result, slice, concat, f-string) is owned by the

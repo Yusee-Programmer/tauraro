@@ -1036,7 +1036,7 @@ extend Sema:
                     if xf == "int" or xf == "float": return xf
                 return ""
             case HirExpr.EBinOp(op, l, r, _):
-                if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or": return "bool"
+                if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or" or op == "in" or op == "not in" or op == "is": return "bool"
                 mut lf = self.firm_family(l)
                 mut rf = self.firm_family(r)
                 if op == "+" and lf == "str" and rf == "str": return "str"
@@ -1259,6 +1259,9 @@ extend Sema:
     # `Type.method(args)` on a user class: argument count and (for a single overload) argument types.
     pub def check_static_call(self, type_name: str, variant: str, hl: Vec[Pointer[HirExpr]]):
         if type_name == "Thread" and variant == "spawn" and hl.len >= 1:
+            mut spf = self.firm_family(hl.get(0))
+            if spf == "int" or spf == "float" or spf == "bool" or spf == "str" or spf == "List" or spf == "Dict" or spf == "Tuple" or spf == "class" or spf == "None":
+                self.error("[E-5] Type mismatch: the first argument of Thread.spawn() must be a function, but is given " + self.family_word(spf) + ".\n      FIX: Thread.spawn(worker_fn, arg1, ...) - pass the function, then its arguments.")
             match hl.get(0).read():
                 case HirExpr.EIdent(sfn, _, _):
                     if self.fn_defs.contains(sfn) and self.resolve(sfn).kind == SymbolKind.SFunction:
@@ -1465,6 +1468,12 @@ extend Sema:
     # Argument kinds of the built-in collection methods, from the receiver's DECLARED element types:
     # `names: List[str]` + `names.append(5)`, `d: Dict[str, int]` + `d.get(3)`, `p.offset("x")`.
     pub def check_collection_arg_types(self, ty: AstType, method: str, hl: Vec[Pointer[HirExpr]]):
+        if (ty.name == "Mutex" or ty.name == "RwLock" or ty.name == "ThreadLocal" or ty.name == "Chan" or ty.name == "Channel" or ty.name == "Atomic") and ty.args.len > 0 and hl.len >= 1:
+            if method == "set" or method == "send" or method == "write_set" or method == "try_send" or method == "store":
+                mut hf = self.decl_family(ty.args.get(0).read())
+                if self.family_mismatch(hf, self.firm_family(hl.get(0))):
+                    self.error("[E-5] Type mismatch: " + ty.name + "[" + ty.args.get(0).read().name + "]." + method + "() is given " + self.family_word(self.firm_family(hl.get(0))) + ".\n      FIX: pass a '" + ty.args.get(0).read().name + "'.")
+            return
         if ty.name == "Pointer" and method == "offset" and hl.len == 1:
             mut pf = self.firm_family(hl.get(0))
             if pf == "str" or pf == "List" or pf == "Dict":

@@ -102,6 +102,11 @@ def main():
     t.assert_eq_int(imin % neg1, 0, "MIN % -1 is 0")
     t.assert_eq_int((0 - 7) / 2, 0 - 3, "division truncates toward zero")
 
+    t.section("float remainder truncates like the integer one")
+    mut fr = 7.5
+    t.assert_eq_str(str(fr % 2.0), "1.5", "7.5 % 2.0")
+    t.assert_eq_str(str(-7.5 % 2.0), "-1.5", "-7.5 % 2.0 keeps the dividend's sign")
+
     t.section("str.find is an int")
     mut s = "hello"
     t.assert_eq_str(str(s.find("l")), "2", "find in a str() call")
