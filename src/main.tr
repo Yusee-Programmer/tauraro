@@ -1286,6 +1286,7 @@ def print_ice(cpath: str, log: str):
     # `file.tr:LINE:COL: error: message` (the #line directives map C errors back to the source)
     mut src_file = ""
     mut src_line = 0
+    mut src_col = 0
     mut msg = first
     mut epos = first.find(": error: ")
     if epos > 0:
@@ -1295,43 +1296,65 @@ def print_ice(cpath: str, log: str):
         if parts.len >= 2 and parts.get(0).ends_with(".tr"):
             src_file = parts.get(0)
             src_line = int(parts.get(1))
-    if src_file != "":
-        print(c_red("error") + ": [C-1] " + c_msg_to_tauraro(msg))
-        print("  --> " + src_file + ":" + str(src_line))
-        if file_exists(src_file):
-            mut src_text = read_file(src_file)
-            mut want = src_line - 1
-            mut cur = 0
-            mut start = 0
-            mut ci = 0
-            while ci < src_text.len() and cur < want:
-                if src_text.slice(ci, ci + 1) == "\n":
-                    cur = cur + 1
-                    start = ci + 1
-                ci = ci + 1
-            if cur == want:
-                mut stop = start
-                while stop < src_text.len() and src_text.slice(stop, stop + 1) != "\n": stop = stop + 1
-                print("   " + str(src_line) + " | " + src_text.slice(start, stop))
-        print("  = note: this was only noticed late, while generating code, so the message is less specific than usual.")
-        print("  = help: look at this line (and the names / types it uses). If it is correct, please report it as a compiler bug;")
-        print("          set TAURARO_SHOW_C_ERRORS=1 to see the raw C compiler diagnostic.")
-    else:
-        print(c_red("error") + ": [ICE] internal compiler error: " + c_msg_to_tauraro(msg))
+            if parts.len >= 3: src_col = int(parts.get(2))
+    if src_file == "":
+        print(c_red("error") + ": " + c_bold("[ICE] internal compiler error: " + c_msg_to_tauraro(msg)))
         if first != "": print("  (in the C generated for '" + cpath + "')")
-        print("      This is a Tauraro bug. Please report it with this program. Set TAURARO_SHOW_C_ERRORS=1 to see the raw C compiler output.")
+        print("  " + c_green("= help") + ": this is a Tauraro bug - please report it with the program that triggered it (TAURARO_SHOW_C_ERRORS=1 shows the raw C compiler output).")
+        _tr_setenv("TAURARO_ICE_PRINTED", "1")
+        return
+    print(c_red("error") + ": " + c_bold("[C-1] " + c_msg_to_tauraro(msg)))
+    print("  " + c_cyan("-->") + " " + src_file + ":" + str(src_line))
+    if file_exists(src_file):
+        mut src_text = read_file(src_file)
+        mut want = src_line - 1
+        mut cur = 0
+        mut start = 0
+        mut ci = 0
+        while ci < src_text.len() and cur < want:
+            if src_text.slice(ci, ci + 1) == "\n":
+                cur = cur + 1
+                start = ci + 1
+            ci = ci + 1
+        if cur == want:
+            mut stop = start
+            while stop < src_text.len() and src_text.slice(stop, stop + 1) != "\n": stop = stop + 1
+            mut srcline = src_text.slice(start, stop)
+            mut gnum = "   " + str(src_line) + " | "
+            print(c_dim(gnum) + srcline)
+            # The C compiler's column refers to the GENERATED C, not this source line, so underline the
+            # whole statement rather than guess at a token.
+            mut lead = 0
+            while lead < srcline.len() and srcline.slice(lead, lead + 1) == " ": lead = lead + 1
+            if srcline.len() > lead:
+                mut gbar = spaces(gnum.len() - 2) + "| "
+                print(c_dim(gbar) + spaces(lead) + c_red(repeat_char("^", srcline.len() - lead)))
+    print("  " + c_green("= help") + ": " + c_hint_for(msg))
+    print("  " + c_green("= note") + ": this was only noticed late, while generating code, so the message is less specific than usual. If the line is correct, please report a compiler bug (TAURARO_SHOW_C_ERRORS=1 shows the raw C diagnostic).")
+    _tr_setenv("TAURARO_ICE_PRINTED", "1")
 
 # Plain-words version of the most common C compiler complaints about generated code.
 def c_msg_to_tauraro(msg: str) -> str:
     if msg == "": return "the generated C was rejected by the C compiler."
     if _tr_str_contains(msg, "undeclared"): return "a name used here is not defined (or its type is unknown)."
-    if _tr_str_contains(msg, "implicit declaration of function"): return "a call to a function that does not exist."
+    if _tr_str_contains(msg, "implicit declaration of function"): return "a call to a function or method that does not exist."
     if _tr_str_contains(msg, "has no member named"): return "access to a field or property that does not exist."
     if _tr_str_contains(msg, "too many arguments") or _tr_str_contains(msg, "too few arguments"): return "a call with the wrong number of arguments."
     if _tr_str_contains(msg, "incompatible type") or _tr_str_contains(msg, "incompatible pointer") or _tr_str_contains(msg, "makes pointer from integer") or _tr_str_contains(msg, "makes integer from pointer"): return "a value of the wrong type is used here."
     if _tr_str_contains(msg, "invalid operands") or _tr_str_contains(msg, "wrong type argument") or _tr_str_contains(msg, "invalid type argument"): return "an operator or member access is applied to a value of the wrong type."
     if _tr_str_contains(msg, "unknown type name"): return "a type is used here that is not defined."
     return "the generated C was rejected (" + msg + ")."
+
+# One actionable hint per class of late failure, in the same voice as the regular `= help:` lines.
+def c_hint_for(msg: str) -> str:
+    if _tr_str_contains(msg, "undeclared"): return "check the spelling of the name and that it is declared (or imported) before this line."
+    if _tr_str_contains(msg, "implicit declaration of function"): return "check the spelling of the function or method, and that its type has such a method (or import the module that defines it)."
+    if _tr_str_contains(msg, "has no member named"): return "check the field name and the type of the value it is read from."
+    if _tr_str_contains(msg, "too many arguments") or _tr_str_contains(msg, "too few arguments"): return "compare the arguments with the function's definition: the count must match."
+    if _tr_str_contains(msg, "incompatible type") or _tr_str_contains(msg, "incompatible pointer") or _tr_str_contains(msg, "makes pointer from integer") or _tr_str_contains(msg, "makes integer from pointer"): return "compare each argument or assigned value with the declared type; convert explicitly (str(x), int(s), float(x)) if needed."
+    if _tr_str_contains(msg, "invalid operands") or _tr_str_contains(msg, "wrong type argument") or _tr_str_contains(msg, "invalid type argument"): return "check the types on both sides of the operator, or of the value you are reading a member from."
+    if _tr_str_contains(msg, "unknown type name"): return "check the spelling of the type, or import it."
+    return "check this line for a type or name mistake."
 
 pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: str, inc_dir: str,
                       link_paths: Vec[str], lib_flags: Vec[str],
@@ -1466,7 +1489,7 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
                     print(c_red("error") + ": compiling " + tpath + " reported success but " + topath + " was not written (lost atomic-rename race?)")
                     trc = 1
             if trc != 0:
-                print(c_red("error") + ": compiling " + tpath + " failed (exit code " + str(trc) + ")")
+                if _tr_getenv("TAURARO_ICE_PRINTED") != "1": print(c_red("error") + ": compiling " + tpath + " failed (exit code " + str(trc) + ")")
                 # A failed module's new .c is already on disk; drop its object so the next
                 # build does not mistake "same .c as last time" for "object up to date".
                 delete_file(topath)
@@ -2821,7 +2844,7 @@ pub def main(args: Vec[str]):
     else:
         rc = compile_all_c_incremental(all_c_files, needs_recompile, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot, debug_mode, lib_mode, has_cpp, use_lto, cov_mode, pend_shims)
     if rc != 0:
-        print(c_red("error") + ": compilation failed (exit code " + str(rc) + ")")
+        if _tr_getenv("TAURARO_ICE_PRINTED") != "1": print(c_red("error") + ": compilation failed (exit code " + str(rc) + ")")
         _tr_exit(rc)
 
     if verbose: print("Done: " + exe_path)
