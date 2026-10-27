@@ -237,6 +237,7 @@ pub class Sema:
     pub current_file:        str             # path of source file currently being analysed
     pub current_func_name:  str
     pub current_class_name: str
+    pub extern_defs: Map[str, FunctionDef]   # extern "C" declarations (name -> signature) for call checks
     pub ambiguous_classes: Map[str, bool]   # class names declared more than once (different modules); member checks skip them
     pub current_scope_depth: int
     pub in_async_fn:        bool
@@ -398,6 +399,7 @@ extend Sema:
         s.current_func_ret_borrow_str = false
         s.current_func_ret_family = ""
         s.ambiguous_classes = Map[str, bool].init(8)
+        s.extern_defs = Map[str, FunctionDef].init(16)
         s.current_func_ret_regions = Vec[str].init(0)
         s.current_func_outlives_a = Vec[str].init(0)
         s.current_func_outlives_b = Vec[str].init(0)
@@ -769,6 +771,25 @@ extend Sema:
         if n == "Thread" or n == "Atomic" or n == "Mutex" or n == "RwLock" or n == "Chan" or n == "Channel" or n == "Shared" or n == "Weak" or n == "StringBuilder" or n == "ThreadPool" or n == "ThreadLocal": return "class"
         return ""
 
+    # Record what a variable is CERTAIN to hold (see firm_family); works for locals and globals.
+    pub def set_symbol_firm(self, name: str, fam: str, cls: str):
+        if fam == "": return
+        mut si = self.scopes.len - 1
+        while si >= 0:
+            mut sc = self.scopes.get(si)
+            if sc.variables.contains(name):
+                mut sy = sc.variables.get(name)
+                sy.firm = fam
+                sy.firm_cls = cls
+                sc.variables.insert(name, sy)
+                return
+            si = si - 1
+        if self.globals.contains(name):
+            mut gs = self.globals.get(name)
+            gs.firm = fam
+            gs.firm_cls = cls
+            self.globals.insert(name, gs)
+
     # The single (non-overloaded) method `m` of user class `cls` (searching base classes), or an
     # empty FunctionDef (name == "") when absent / overloaded / the class is generic or ambiguous.
     pub def find_unique_method(self, cls: str, m: str) -> FunctionDef:
@@ -930,6 +951,7 @@ extend Sema:
         if (exp == "List" and act == "Dict") or (exp == "Dict" and act == "List"): return true
         if exp == "class" and (act == "List" or act == "Dict"): return true
         if (exp == "Pointer" or exp == "Result") and (act == "List" or act == "Dict" or act == "Tuple" or act == "float" or act == "bool" or (exp == "Result" and (act == "int" or act == "str"))): return true
+        if act == "None" and (exp_scalar or exp == "List" or exp == "Dict" or exp == "Tuple"): return true
         if act == "class" and (exp_scalar or exp == "List" or exp == "Dict" or exp == "Tuple"): return true
         if act == "Option" and (exp_scalar or exp == "List" or exp == "Dict" or exp == "class"): return true
         if exp == "Tuple" and act != "Tuple": return act_scalar or act == "List" or act == "Dict"
@@ -939,6 +961,7 @@ extend Sema:
     pub def family_word(self, fam: str) -> str:
         if fam == "class": return "a class/enum value"
         if fam == "Option": return "an Option (maybe-empty) value"
+        if fam == "None": return "None"
         if fam == "Pointer": return "a Pointer"
         if fam == "Result": return "a Result"
         return "a " + fam
@@ -3320,6 +3343,8 @@ extend Sema:
                                     case _: pass
                             if g_ty as usize != 0 as usize:
                                 self.declare(g_name, SymbolKind.SVariable, g_ty, g_is_mut)
+                                mut g_fam = self.decl_family(g_ty.read())
+                                if g_fam != "class" and g_fam != "Pointer" and g_fam != "Result" and g_fam != "Option": self.set_symbol_firm(g_name, g_fam, "")
                         case _: pass
                 case _: pass
             gpi = gpi + 1
@@ -4518,6 +4543,7 @@ extend Sema:
                     if f.ret_ty as usize != 0 as usize: _e_ret = f.ret_ty
                     self.declare(f.name, SymbolKind.SFunction, _e_ret, false)
                     self.extern_names.insert(f.name, true)   # [N-3] allowlist
+                    self.extern_defs.insert(f.name, f)
                     ei = ei + 1
             case Decl.DDecoratorDef(f):
                 self.decorator_names.insert(f.name, true)
@@ -4680,6 +4706,9 @@ extend Sema:
                     mut pb_sym = pb_scope.variables.get(p.name)
                     pb_sym.is_param = true
                     pb_sym.ptr_region = 2  # PARAM region
+                    if p.name == "self" and self.current_class_name != "" and self.classes.contains(self.current_class_name) and self.decl_family(AstType.init(self.current_class_name)) == "class":
+                        pb_sym.firm = "class"
+                        pb_sym.firm_cls = self.current_class_name
                     if p.ty as usize != 0 as usize and not p.is_variadic and f.generics.len == 0:
                         pb_sym.firm = self.decl_family(p_ty)
                         if pb_sym.firm == "class" and self.classes.contains(p_ty.name): pb_sym.firm_cls = p_ty.name
@@ -6688,6 +6717,8 @@ extend Sema:
                             # A generic fn returning its type param (-> T) yields the
                             # CONCRETE type of the first argument declared as that T
                             # (otherwise `mut a = largest(1, 2)` emits a `T*` local).
+                            if self.extern_defs.contains(n) and not self.fn_defs.contains(n) and self.resolve(n).kind != SymbolKind.SVariable:
+                                self.check_call_args(self.extern_defs.get(n), hl, 0, "'" + n + "()'")
                             if self.fn_defs.contains(n):
                                 mut _gfd = self.fn_defs.get(n)
                                 # A generic parameter no argument pins down can't be inferred; say so
@@ -6986,6 +7017,11 @@ extend Sema:
                     self.check_builtin_class_method(hir_expr_type(hobj).name, method, hl)
                     self.check_collection_arg_types(hir_expr_type(hobj), method, hl)
                     if method == "get" or method == "pop" or method == "get_or": self.check_user_method_call(hir_expr_type(hobj).name, obj, method, hl)
+                    if hir_expr_type(hobj).name == "void" or hir_expr_type(hobj).name == "":
+                        match obj.read():
+                            case Expr.EIdent(_sb_t):
+                                if self.classes.contains(_sb_t) and self.resolve(_sb_t).kind != SymbolKind.SVariable and method != "init" and method != "new" and method != "spawn": self.check_static_call(_sb_t, method, hl)
+                            case _: pass
                     if method == "spawn":
                         match obj.read():
                             case Expr.EIdent(_sp_t):
