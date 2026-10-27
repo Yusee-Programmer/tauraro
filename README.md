@@ -6,7 +6,7 @@
 
   <p>
     <img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache%202.0-blue?style=flat-square" alt="License"/>
-    <img src="https://img.shields.io/badge/version-v0.0.9-brightgreen?style=flat-square" alt="Version"/>
+    <img src="https://img.shields.io/badge/version-v0.1.0-brightgreen?style=flat-square" alt="Version"/>
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Android(termux)-lightgrey?style=flat-square" alt="Platform"/>
     <img src="https://img.shields.io/badge/backends-C%20%C2%B7%20LLVM%20%C2%B7%20WASM%20%C2%B7%20bare--metal-red?style=flat-square" alt="Backends"/>
     <img src="https://img.shields.io/badge/self--hosted-yes-purple?style=flat-square" alt="Self-hosted"/>
@@ -67,7 +67,7 @@ Verify your installation:
 
 ```sh
 tauraroc --version
-# tauraroc v0.0.9
+# tauraroc v0.1.0
 ```
 
 ---

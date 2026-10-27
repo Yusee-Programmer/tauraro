@@ -2718,6 +2718,7 @@ typedef struct Symbol {
     long long decl_block_id;
     bool str_escaped;
     bool coll_escaped;
+    TrStr firm_cls;
     TrStr firm;
     TrStr borrows_region;
 } Symbol;
@@ -2725,6 +2726,7 @@ static void _trdrop_Symbol(void* vp) {
     Symbol* self = (Symbol*)vp; (void)self;
     _tr_str_release(self->name);
     List_TrStr_free(self->borrowed_by);
+    _tr_str_release(self->firm_cls);
     _tr_str_release(self->firm);
     _tr_str_release(self->borrows_region);
 }
@@ -2762,6 +2764,8 @@ typedef struct Sema {
     TrStr current_file;
     TrStr current_func_name;
     TrStr current_class_name;
+    TrMap* global_firm;
+    TrMap* extern_defs;
     TrMap* ambiguous_classes;
     long long current_scope_depth;
     bool in_async_fn;
@@ -2845,6 +2849,8 @@ static void _trdrop_Sema(void* vp) {
     _tr_str_release(self->current_file);
     _tr_str_release(self->current_func_name);
     _tr_str_release(self->current_class_name);
+    Dict_free_strval(self->global_firm);
+    Dict_free_objval(self->extern_defs, _trdrop_FunctionDef);
     Dict_free(self->ambiguous_classes);
     Dict_free(self->assign_froms);
     Dict_free(self->fn_sigs);
@@ -3971,6 +3977,12 @@ __attribute__((hot)) void Sema_error(Sema* self, TrStr msg);
 __attribute__((hot)) bool Sema_is_sendable_type(Sema* self, TrStr ty_name);
 __attribute__((hot)) bool Sema_is_sendable_ty(Sema* self, AstType* ty);
 __attribute__((hot)) TrStr Sema_decl_family(Sema* self, AstType* ty);
+__attribute__((hot)) void Sema_set_symbol_firm(Sema* self, TrStr name, TrStr fam, TrStr cls);
+__attribute__((hot)) bool Sema_is_global_symbol(Sema* self, TrStr name);
+__attribute__((hot)) FunctionDef* Sema_find_unique_method(Sema* self, TrStr cls, TrStr m);
+__attribute__((hot)) AstType* Sema_find_field_type(Sema* self, TrStr cls, TrStr f);
+__attribute__((hot)) TrStr Sema_firm_class(Sema* self, HirExpr* e);
+__attribute__((hot)) TrStr Sema_method_receiver_class(Sema* self, HirExpr* mo);
 __attribute__((hot)) TrStr Sema_firm_family(Sema* self, HirExpr* e);
 __attribute__((hot)) bool Sema_family_mismatch(Sema* self, TrStr exp, TrStr act);
 __attribute__((hot)) TrStr Sema_family_word(Sema* self, TrStr fam);
@@ -4812,6 +4824,7 @@ __attribute__((hot)) TrStr text_hash(TrStr s);
 __attribute__((hot)) bool prepare_pch(TrStr cc, TrStr common, TrStr inc_dir, long long ncompile, TrStr target, bool verbose);
 __attribute__((hot)) void print_ice(TrStr cpath, TrStr log);
 __attribute__((hot)) TrStr c_msg_to_tauraro(TrStr msg);
+__attribute__((hot)) TrStr c_hint_for(TrStr msg);
 __attribute__((hot)) long long compile_all_c_incremental(List_TrStr* c_files, List_bool* needs, TrStr exe_path, TrStr inc_dir, List_TrStr* link_paths, List_TrStr* lib_flags, TrStr opt_level, bool verbose, bool static_link, TrStr target, TrStr sysroot, bool debug_mode, bool build_shared, bool link_cxx, bool use_lto, bool coverage, PendingShims* pend);
 __attribute__((hot)) long long compile_wasm_incremental(List_TrStr* c_files, List_bool* needs, TrStr exe_path, TrStr inc_dir, TrStr opt_level, bool verbose, long long memory_mb);
 __attribute__((hot)) long long compile_c_to_exe(TrStr c_path, TrStr exe_path, TrStr opt_level, bool verbose);

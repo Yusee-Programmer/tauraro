@@ -920,6 +920,15 @@ extend Sema:
                         return "int"
                 return ""
             case HirExpr.EMethodCall(mo, mm, margs, _):
+                if mm == "init" or mm == "new":
+                    match mo.read():
+                        case HirExpr.EIndex(cb, _, _):
+                            match cb.read():
+                                case HirExpr.EIdent(cbn, _, _):
+                                    if (cbn == "List" or cbn == "Vec") and not self.classes.contains(cbn): return "List"
+                                    if (cbn == "Dict" or cbn == "Map") and not self.classes.contains(cbn): return "Dict"
+                                case _: pass
+                        case _: pass
                 mut mrc = self.method_receiver_class(mo)
                 if mrc != "":
                     mut mmd = self.find_unique_method(mrc, mm)
@@ -1195,6 +1204,8 @@ extend Sema:
             mut bty = hir_expr_type(base)
             if (bty.name == "Dict" or bty.name == "Map") and bty.args.len > 0 and self.family_mismatch(self.decl_family(bty.args.get(0).read()), xf):
                 self.error("[E-5] Type mismatch: a " + bty.name + "[" + bty.args.get(0).read().name + ", ...] is indexed with " + self.family_word(xf) + ".\n      FIX: use a '" + bty.args.get(0).read().name + "' key.")
+            if bf == "None" or bf == "int" or bf == "float" or bf == "bool":
+                self.error("[E-5] Type mismatch: " + self.family_word(bf) + " cannot be indexed.\n      FIX: check that the variable holds the list / string / dict you meant (it holds " + self.family_word(bf) + " here).")
             if (bf == "List" or bf == "str") and xf == "float":
                 self.error("[E-5] Type mismatch: a " + bf + " is indexed with a float, but the index must be an int.\n      FIX: convert it: int(x).")
             if (bf == "List" or bf == "str") and (xf == "str" or xf == "List" or xf == "Dict"):
@@ -6476,12 +6487,20 @@ extend Sema:
                     if _bo_lf == "str" or _bo_lf == "List" or _bo_lf == "Dict": _bo_bad = _bo_lf
                     if (op == "|" or op == "&" or op == "^" or op == "<<" or op == ">>") and (_bo_lf == "str" or _bo_rf == "str" or _bo_lf == "List" or _bo_rf == "List" or _bo_lf == "Dict" or _bo_rf == "Dict"):
                         self.error("[E-5] Type mismatch: '" + op + "' needs integer operands, but one side is " + self.family_word(_bo_bad) + ".\n      FIX: convert it to an int first.")
+                    if (_bo_lf == "Tuple" or _bo_rf == "Tuple" or _bo_lf == "Dict" or _bo_rf == "Dict") and (op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**") and not ((_bo_lf == "Tuple" and _bo_rf == "Tuple") and op == "+"):
+                        mut _bo_t = _bo_lf
+                        if not (_bo_lf == "Tuple" or _bo_lf == "Dict"): _bo_t = _bo_rf
+                        self.error("[E-5] Type mismatch: '" + op + "' cannot be applied to " + self.family_word(_bo_t) + ".\n      FIX: check that the variable holds the number you meant (it holds " + self.family_word(_bo_t) + " here).")
                     if (_bo_lf == "None" or _bo_rf == "None") and (op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**" or op == "<" or op == ">" or op == "<=" or op == ">="):
                         self.error("[E-5] Type mismatch: '" + op + "' cannot be applied to None.\n      FIX: the value here is None; give the variable a real value before using it in arithmetic or comparisons.")
                     if (_bo_lf == "Option" or _bo_rf == "Option") and (op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**" or op == "<" or op == ">" or op == "<=" or op == ">="):
                         self.error("[E-5] Type mismatch: '" + op + "' cannot be applied to an Option value directly.\n      FIX: unwrap it first: `x.unwrap()`, `x.unwrap_or(default)`, or check `x.is_some()`.")
                     if (_bo_lf == "str" or _bo_rf == "str") and (op == "-" or op == "/" or op == "//" or op == "%" or op == "**"):
                         self.error("[E-5] Type mismatch: '" + op + "' is not defined for strings.\n      FIX: only '+' (concatenate), comparisons, 'str * int' (repeat) and 'in' work on strings; build text with f-strings or str(x).")
+                    if (op == "in" or op == "not in") and _bo_lf != "":
+                        mut _in_t = hir_expr_type(hright)
+                        if (_in_t.name == "List" or _in_t.name == "Vec" or _in_t.name == "Set") and _in_t.args.len > 0 and (_bo_rf == "List" or _bo_rf == "" ) and self.family_mismatch(self.decl_family(_in_t.args.get(0).read()), _bo_lf):
+                            self.error("[E-5] Type mismatch: testing " + self.family_word(_bo_lf) + " for membership in a " + _in_t.name + "[" + _in_t.args.get(0).read().name + "].\n      FIX: look for a '" + _in_t.args.get(0).read().name + "' value.")
                     if op == "is" and _bo_rf != "":
                         self.error("[E-5] Type mismatch: the right-hand side of 'is' must be an enum variant or a type, not " + self.family_word(_bo_rf) + ".\n      FIX: compare values with '==' (e.g. `x == 3`); use `is` only as `shape is Shape.Circle`.")
                     if (op == "in" or op == "not in") and (_bo_rf == "int" or _bo_rf == "float" or _bo_rf == "bool") and not (_bo_lf == "int" or _bo_lf == "float" or _bo_lf == "bool" or _bo_lf == "str"):
@@ -7027,7 +7046,14 @@ extend Sema:
                         case _: pass
                 mut hobj_ty = hir_expr_type(hobj)
                 if true:
-                    self.check_builtin_method_arity(self.firm_family(hobj), method, hl.len)
+                    mut _ba_fam = self.firm_family(hobj)
+                    if _ba_fam == "":
+                        mut _ba_n = hir_expr_type(hobj).name
+                        if not self.classes.contains(_ba_n) or _ba_n == "Map" or _ba_n == "Vec":
+                            if _ba_n == "List" or _ba_n == "Vec": _ba_fam = "List"
+                            elif _ba_n == "Dict" or _ba_n == "Map": _ba_fam = "Dict"
+                            elif _ba_n == "str": _ba_fam = "str"
+                    self.check_builtin_method_arity(_ba_fam, method, hl.len)
                     self.check_scalar_method(self.firm_family(hobj), method, hir_expr_type(hobj).name)
                     self.check_builtin_class_method(hir_expr_type(hobj).name, method, hl)
                     self.check_collection_arg_types(hir_expr_type(hobj), method, hl)

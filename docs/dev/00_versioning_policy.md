@@ -10,32 +10,33 @@ The single source of truth for the compiler's version string is
 
 ```tauraro
 pub def print_version():
-    print("tauraroc v0.0.5")
+    print("tauraroc v0.1.0")
 ```
 
 `README.md` carries a matching version badge. Both must be updated together
 when the version is bumped (the `chore: update version to vX.Y.Z` commits in
 git history are the precedent for this).
 
-## Pre-0.1 policy (current)
+## Pre-1.0 policy (current)
 
-Tauraro is **pre-0.1** — still in the earliest `0.0.x` phase (currently
-`v0.0.9`). Per common pre-1.0 convention (and explicitly *not* full SemVer yet,
+Tauraro is **pre-1.0** — currently `v0.1.0`, the first soft stability
+checkpoint after the `0.0.x` series. Per common pre-1.0 convention (and explicitly *not* full SemVer yet,
 since SemVer reserves `0.x` for "anything may change"):
 
 - **Any version bump may contain breaking changes** to the language grammar,
   standard library APIs, generated-code ABI (`TrStr`, runtime helpers in
   `runtime/tauraro_rt.h`), CLI flags, or `taupkg` manifest format. There is
-  **no deprecation period** in the `0.0.x` series.
-- In the current `0.0.x` scheme the third number is the release counter:
-  - **`0.0.z` bump (e.g. 0.0.7 → 0.0.8)**: a body of related work landed (a
+  **no deprecation period** in the `0.x` series.
+- In the `0.y.z` scheme the last number is the release counter:
+  - **`0.y.z` bump (e.g. 0.0.7 → 0.0.8, 0.1.0 → 0.1.1)**: a body of related work landed (a
     memory-model migration, a new backend, a subsystem, a stdlib area). Expect
     breaking changes.
-  - Tags (`v0.0.1`, `v0.0.2`, ...) mark points where the bootstrap/self-host
+  - Tags (`v0.0.1`, ..., `v0.1.0`, ...) mark points where the bootstrap/self-host
     fixpoint was verified and a release binary was built — see
     `docs/dev/02_contributing.md` for the blessing checklist.
-- **`0.1`** will be the first *soft* stability checkpoint (see below); **`1.0`**
-  is the eventual full-SemVer milestone.
+- **`0.1.0`** is the first *soft* stability checkpoint: the compiler is hardened by
+  differential fuzzing, sanitizer sweeps and an invalid-program fuzzer, but breaking
+  changes remain allowed. **`1.0`** is the eventual full-SemVer milestone.
 - Generated C / runtime ABI (`TrStr`, `_tr_*` helpers) is considered
   **internal** and may change in any `0.x` release. External FFI code that
   pokes at `TrStr` internals directly (rather than going through `extern "C":`

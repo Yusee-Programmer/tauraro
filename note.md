@@ -1,4 +1,34 @@
-# Tauraro v0.0.9 — Release Notes
+# Tauraro v0.1.0 — Release Notes
+
+**Focus of this release: a trustworthy compiler.** v0.1.0 is the first soft stability
+checkpoint: the compiler was hardened against whole classes of bugs found by differential
+fuzzing (random programs run against a Python oracle), sanitizer sweeps (ASan / UBSan / TSan)
+and a mutation fuzzer that feeds it deliberately invalid programs.
+
+## Highlights
+
+- **Correct semantics, verified by oracle.** Left-to-right evaluation order and single
+  evaluation of every operand, shortest-round-trip float printing, unsigned `u64` printing,
+  defined integer wrap-around, checked division (a zero divisor panics with a message),
+  `Option` / `Result` / `None` typing, closures, shadowing, loop-variable aliasing,
+  exhaustive `match`, `class Dog(Animal):` inheritance, generic inference from `List[T]`.
+- **Linear string building.** `s = s + x` / `s += x` on a string you own appends in place
+  (200,000 appends: 52 s -> 0.03 s).
+- **A real type checker for the common mistakes.** Wrong argument counts `[E-4]`, wrong-typed
+  arguments, returns, initialisers, assignments and operands `[E-5]`, unknown methods `[E-6]`
+  and fields `[E-7]`, unknown types `[N-4]`, undefined names `[N-3]`, uninferable generics
+  `[G-2]`, and extra tokens after a statement. See `docs/lang/19_compiler_errors.md`.
+- **No raw C errors.** If a mistake still slips past the checker and the C compiler rejects the
+  generated code, `tauraroc` reports it as an ordinary diagnostic (`[C-1]`) with the Tauraro
+  source line and a hint; a compiler crash is reported as an `[ICE]` naming the file.
+- **Tooling.** `tests/fuzz/` now holds the differential fuzzers, the invalid-program fuzzer and
+  the sanitizer sweeps; the concurrency corpus runs clean under TSan and ASan.
+
+`tauraroc --version` reports **v0.1.0**. The full change list is in `CHANGELOG.md`.
+
+---
+
+# Previous release: Tauraro v0.0.9 — Release Notes
 
 **Focus of this release: correctness and reliability hardening across concurrency, generics, and the standard library, plus a new profiling module and a substantially more trustworthy CI pipeline.**
 
@@ -432,4 +462,4 @@ matrix-leg noise.
 - Rebuild from the release SDK as usual; the bundled zig toolchain is
   unchanged in this release.
 
-_`tauraroc --version` reports **v0.0.9**._
+_(In v0.0.9, `tauraroc --version` reported **v0.0.9**.)_

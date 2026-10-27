@@ -4,12 +4,20 @@ All notable changes to the Tauraro language and compiler (`tauraroc`) are
 documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Versioning follows the pre-0.1 policy described in
-[docs/dev/00_versioning_policy.md](docs/dev/00_versioning_policy.md): in the
-current `0.0.x` phase, **any** version bump may contain breaking changes, and
+Versioning follows the pre-1.0 policy described in
+[docs/dev/00_versioning_policy.md](docs/dev/00_versioning_policy.md): while the major
+version is `0`, **any** version bump may contain breaking changes, and
 there is no deprecation period.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-10-27
+
+First soft stability checkpoint: a compiler-hardening release. Evaluation order, integer and
+float semantics, string building, generics, inheritance and the type checker were reworked or
+added after differential fuzzing against Python, ASan / UBSan / TSan sweeps and an
+invalid-program fuzzer; mistakes in a user program now get Tauraro diagnostics (with a source
+line and a hint) instead of C compiler errors. `tauraroc --version` reports `v0.1.0`.
 
 Work in progress on the production-readiness roadmap (formal ownership/safety
 spec, automated regression suite + CI, incremental compilation, and a batch of
@@ -1103,7 +1111,8 @@ trustworthy CI pipeline.** Full notes in [`note.md`](note.md).
 
 - Initial tagged bootstrap milestone (see `git tag v0.0.1`).
 
-[Unreleased]: https://github.com/Yusee-Programmer/tauraro/compare/v0.0.2...HEAD
+[Unreleased]: https://github.com/Yusee-Programmer/tauraro/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Yusee-Programmer/tauraro/releases/tag/v0.1.0
 [0.0.5]: https://github.com/Yusee-Programmer/tauraro/compare/v0.0.2...HEAD
 [0.0.2]: https://github.com/Yusee-Programmer/tauraro/releases/tag/v0.0.2
 [0.0.1]: https://github.com/Yusee-Programmer/tauraro/releases/tag/v0.0.1

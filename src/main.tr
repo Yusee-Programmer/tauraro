@@ -74,7 +74,7 @@ pub def gpu_blob_c(bin_path: str) -> str:
     return sb.to_owned()
 
 pub def print_version():
-    print("tauraroc v0.0.9")
+    print("tauraroc v0.1.0")
 
 pub def print_usage():
     print("Usage: tauraroc <file.tr> [options]")
