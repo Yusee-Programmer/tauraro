@@ -1,0 +1,16 @@
+# Regression: an `extern "C"` declaration that reuses a libc function name with a different
+# (Tauraro-typed) signature used to fail with a raw C "conflicting types" error. It is now bound to
+# the real symbol under a private C identifier.
+from std.test import TestRunner
+
+extern "C":
+    def getpid() -> int
+    def labs(x: int) -> int
+    def sqrt(x: float) -> float
+
+def main():
+    mut t = TestRunner.init("extern_libc_name_redecl")
+    t.assert_true(getpid() > 0, "getpid with int result")
+    t.assert_eq_int(labs(-5), 5, "labs")
+    t.assert_true(sqrt(9.0) == 3.0, "sqrt")
+    t.summary()

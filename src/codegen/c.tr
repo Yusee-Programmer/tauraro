@@ -2578,6 +2578,33 @@ pub class CGenerator:
     # escaped with `_tr_fn_`; names that the libc/POSIX headers already declare (brk,
     # index, send, div, ...) get the same escape instead of failing with "conflicting
     # types". `extern "C"` and `@export` functions keep their exact name (FFI / ABI).
+    # Prototype text for an `extern "C"` function. A name that the libc headers (already included
+    # by the generated C) declare differently, e.g. `def strlen(s: int) -> int`, would fail with
+    # "conflicting types"; such names are declared under a private C identifier bound to the real
+    # symbol with an asm label, and a macro makes later references use it.
+    pub def extern_proto(self, ef: HirFunction) -> str:
+        mut ef_name = ef.name
+        mut ef_pre = ""
+        mut ef_post = ""
+        if libc_fn_names().contains(" " + ef.name + " "):
+            ef_pre = "#define " + ef.name + " _tr_ext_" + ef.name + "\n"
+            ef_name = "_tr_ext_" + ef.name
+            ef_post = " __asm__(\"" + ef.name + "\")"
+        mut ef_s = ef_pre + "extern " + self.type_to_c(ef.ret_ty) + " " + ef_name + "("
+        mut ef_first = true
+        mut epi = 0
+        while epi < ef.params.len:
+            mut ep = ef.params.get(epi)
+            if ep.name != "self":
+                if not ef_first: ef_s = ef_s + ", "
+                ef_s = ef_s + self.type_to_c(ep.ty) + " " + ep.name
+                ef_first = false
+            epi = epi + 1
+        if ef.is_variadic:
+            if not ef_first: ef_s = ef_s + ", "
+            ef_s = ef_s + "..."
+        return ef_s + ")" + ef_post + ";\n"
+
     pub def fn_cname(self, n: str) -> str:
         if self.functions.contains(n):
             mut ff = self.functions.get(n)
@@ -11721,23 +11748,8 @@ pub class CGenerator:
         i = 0
         while i < prog.extern_funcs.len:
             mut ef = prog.extern_funcs.get(i)
-            mut ef_ret = self.type_to_c(ef.ret_ty)
-            mut ef_name = ef.name
-            if not _starts_with_tr(ef_name):
-                self.w("extern " + ef_ret + " " + ef_name + "(")
-                mut ef_first = true
-                mut epi = 0
-                while epi < ef.params.len:
-                    mut ep = ef.params.get(epi)
-                    if ep.name != "self":
-                        if not ef_first: self.w(", ")
-                        self.w(self.type_to_c(ep.ty) + " " + ep.name)
-                        ef_first = false
-                    epi = epi + 1
-                if ef.is_variadic:
-                    if not ef_first: self.w(", ")
-                    self.w("...")
-                self.w(");\n")
+            if not _starts_with_tr(ef.name):
+                self.w(self.extern_proto(ef))
             i = i + 1
         if prog.extern_funcs.len > 0: self.w("\n")
 
@@ -12248,20 +12260,7 @@ pub class CGenerator:
                 mut ef = prog.extern_funcs.get(i)
                 if not _is_invalid_ptr(ef as usize):
                     if not _starts_with_tr(ef.name):
-                        mut ef_s = "extern " + self.type_to_c(ef.ret_ty) + " " + ef.name + "("
-                        mut ef_first = true
-                        mut epi = 0
-                        while epi < ef.params.len:
-                            mut ep = ef.params.get(epi)
-                            if ep.name != "self":
-                                if not ef_first: ef_s = ef_s + ", "
-                                ef_s = ef_s + self.type_to_c(ep.ty) + " " + ep.name
-                                ef_first = false
-                            epi = epi + 1
-                        if ef.is_variadic:
-                            if not ef_first: ef_s = ef_s + ", "
-                            ef_s = ef_s + "..."
-                        out.append(ef_s + ");\n")
+                        out.append(self.extern_proto(ef))
                 i = i + 1
             if prog.extern_funcs.len > 0: out.append("\n")
 
