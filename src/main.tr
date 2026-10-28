@@ -2123,6 +2123,20 @@ pub def main(args: Vec[str]):
     # zero-heap guarantee honest (see [H-1] in sema.check_no_heap / the ETuple case).
     sema.heap_boxes_tuples = (backend != "c")
     sema.current_file = input_path   # track source file for error messages
+    # Which file each declaration came from, so an error inside an imported module names that module's
+    # file (the declarations of every module are merged into one program).
+    if resolver.all_decl_modules.len == prog.decls.len:
+        mut df_k = 0
+        while df_k < prog.decls.len:
+            mut df_file = input_path
+            mut df_mod = resolver.all_decl_modules.get(df_k)
+            if df_mod != "":
+                mut df_mi = 0
+                while df_mi < resolver.mod_dot_paths.len:
+                    if resolver.mod_dot_paths.get(df_mi) == df_mod and df_mi < resolver.mod_file_paths.len: df_file = resolver.mod_file_paths.get(df_mi)
+                    df_mi = df_mi + 1
+            sema.decl_files.push(df_file)
+            df_k = df_k + 1
     _tr_set_ice_ctx("type-checking " + input_path)
     mut hir = sema.analyze(prog)
     _tr_set_ice_ctx("generating C for " + input_path)
