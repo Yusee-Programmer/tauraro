@@ -173,6 +173,24 @@ extend Parser:
                             break
                         case _: self.pos = self.pos + 1
 
+    # Consume the ')' that closes a parameter list; anything else is a diagnostic (previously
+    # `def f(self] -> int:` was silently accepted).
+    pub def close_params(self):
+        if self.peek() == Token.RParen:
+            self.pos = self.pos + 1
+        else:
+            self.emit_diag("expected ')' to close the parameter list", "check for a missing ')' or a stray character in the parameters (a parameter is written 'name: Type').")
+
+    # Like emit_diag but anchored on the token BEFORE the cursor (a missing item is reported at the
+    # end of the line that lacks it, not on the next line).
+    pub def emit_diag_prev(self, msg: str, hint: str):
+        if self.pos > 0:
+            self.pos = self.pos - 1
+            self.emit_diag(msg, hint)
+            self.pos = self.pos + 1
+        else:
+            self.emit_diag(msg, hint)
+
     pub def at_end(self) -> bool:
         match self.peek():
             case Token.Eof:
@@ -581,6 +599,7 @@ extend Parser:
                 name = self.consume_ident()
 
         if name == "":
+            self.emit_diag_prev("expected a type here", "write a type name such as 'int', 'str', 'List[int]' or a class name.")
             return AstType.init("void")
 
         # "ref T" - immutable (shared) borrow / region view. ERASES to the inner
@@ -627,7 +646,7 @@ extend Parser:
                     case Token.RBracket:
                         self.pos = self.pos + 1
                     case _:
-                        pass
+                        self.emit_diag("unclosed '[' in the type '" + name + "[...]'", "add the matching ']' after the type arguments.")
                 return t
             case _:
                 pass
@@ -1223,6 +1242,8 @@ extend Parser:
                 val_ptr = self.parse_expr()
             case _:
                 pass
+        if ty_ptr as usize == 0 as usize and val_ptr as usize == 0 as usize:
+            self.emit_diag_prev("variable '" + name + "' has neither a type nor an initial value", "write 'mut " + name + ": Type' or 'mut " + name + " = value'.")
         self.expect_newline()
         return box_stmt(Stmt.SLet(name, Ownership.Own, is_mut, false, false, ty_ptr, val_ptr))
 
@@ -2347,8 +2368,7 @@ extend Parser:
                     case _:
                         pass
                 mut params = self.parse_param_list()
-                if self.peek() == Token.RParen:
-                    self.pos = self.pos + 1
+                self.close_params()
                 mut return_type = Pointer[AstType](0)
                 mut clo_throws = Pointer[AstType](0)
                 if self.peek() == Token.KwThrows:
@@ -2602,8 +2622,43 @@ extend Parser:
 
         return box_expr(Expr.EFString(fl))
 
+    # Reject absurdly deep nesting (brackets, indentation blocks, runs of prefix operators) BEFORE
+    # the recursive-descent parser and the later passes recurse on it and overflow the stack.
+    # Returns the token index of the offending token, or -1 when the nesting is reasonable.
+    pub def nesting_too_deep(self) -> int:
+        mut depth = 0
+        mut indent = 0
+        mut run = 0
+        mut i = 0
+        while i < self.tokens.len:
+            mut is_prefix = False
+            match self.tokens.get(i):
+                case Token.LParen | Token.LBracket | Token.LBrace:
+                    depth = depth + 1
+                case Token.RParen | Token.RBracket | Token.RBrace:
+                    if depth > 0: depth = depth - 1
+                case Token.Indent:
+                    indent = indent + 1
+                case Token.Dedent:
+                    if indent > 0: indent = indent - 1
+                case Token.Minus | Token.Tilde | Token.KwNot | Token.KwAwait | Token.Bang:
+                    is_prefix = True
+                case _:
+                    pass
+            if is_prefix: run = run + 1
+            else: run = 0
+            if depth > 120 or indent > 100 or run > 120: return i
+            i = i + 1
+        return -1
+
     pub def parse_program(self) -> Program:
         mut prog = Program.init()
+        mut deep_at = self.nesting_too_deep()
+        if deep_at >= 0:
+            self.pos = deep_at
+            self.emit_diag("this construct is nested too deeply", "the compiler supports at most 120 nested brackets, 100 nested blocks or 120 chained prefix operators - split the expression or move the inner part into a helper function.")
+            self.pos = self.tokens.len
+            return prog
         self.skip_newlines_and_indent()
         while not self.at_end():
             # Skip blank lines and block-closing dedents between top-level items.
@@ -2889,23 +2944,32 @@ extend Parser:
 
     pub def parse_function_def(self, is_method: bool) -> FunctionDef:
         self.pos = self.pos + 1
+        if not is_method:
+            match self.peek():
+                case Token.Ident(_): pass
+                case _:
+                    self.emit_diag("expected a function name after 'def'", "write 'def name(params) -> Type:' - the name must be an identifier, not a keyword or symbol.")
         mut name = if is_method: self.consume_method_ident() else: self.consume_ident()
         mut f = FunctionDef.init(name)
         if self.peek() == Token.LBracket:
             self.pos = self.pos + 1
-            while self.peek() != Token.RBracket:
+            while self.peek() != Token.RBracket and self.peek() != Token.Eof and self.peek() != Token.Newline and self.peek() != Token.LParen:
                 mut _gpn = self.consume_ident()
+                if _gpn == "":
+                    self.emit_diag("expected a generic parameter name", "write generics as 'def f[T](...)'.")
+                    break
                 f.generics.push(_gpn)
                 self.parse_generic_bound(_gpn, f.constraints)
                 if self.peek() == Token.Comma:
                     self.pos = self.pos + 1
             if self.peek() == Token.RBracket:
                 self.pos = self.pos + 1
+            else:
+                self.emit_diag("unclosed '[' in the generic parameter list of '" + name + "'", "add the matching ']'.")
         if self.peek() == Token.LParen:
             self.pos = self.pos + 1
             f.params = self.parse_param_list()
-            if self.peek() == Token.RParen:
-                self.pos = self.pos + 1
+            self.close_params()
         match self.peek():
             case Token.KwThrows:
                 self.pos = self.pos + 1
@@ -3230,8 +3294,7 @@ extend Parser:
                         if self.peek() == Token.LParen:
                             self.pos = self.pos + 1
                             evd.fields = self.parse_param_list()
-                            if self.peek() == Token.RParen:
-                                self.pos = self.pos + 1
+                            self.close_params()
                         e.variants.push(evd)
                     case _:
                         einl = False
@@ -3279,8 +3342,7 @@ extend Parser:
                     if self.peek() == Token.LParen:
                         self.pos = self.pos + 1
                         vd.fields = self.parse_param_list()
-                        if self.peek() == Token.RParen:
-                            self.pos = self.pos + 1
+                        self.close_params()
                     e.variants.push(vd)
                     self.expect_newline()
                 case Token.KwDef:

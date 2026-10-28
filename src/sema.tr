@@ -1308,6 +1308,8 @@ extend Sema:
 
     # `Type.method(args)` on a user class: argument count and (for a single overload) argument types.
     pub def check_static_call(self, type_name: str, variant: str, hl: Vec[Pointer[HirExpr]]):
+        if type_name == "Thread" and variant == "spawn" and hl.len == 0:
+            self.error("[E-4] 'Thread.spawn()' takes at least 1 argument (the function to run) but 0 were given.\n      FIX: Thread.spawn(worker_fn, arg1, ...) - pass the function, then its arguments.")
         if type_name == "Thread" and variant == "spawn" and hl.len >= 1:
             mut spf = self.firm_family(hl.get(0))
             if spf == "int" or spf == "float" or spf == "bool" or spf == "str" or spf == "List" or spf == "Dict" or spf == "Tuple" or spf == "class" or spf == "None":
@@ -5639,6 +5641,10 @@ extend Sema:
                                     if ret_sym.ty.read().name == "Pointer":
                                         self.error("[L-1] '" + ret_name + "' is a local Pointer that may not outlive this function call. Returning it is unsafe.\n      FIX: Annotate the return type with 'from <param>' if the pointer borrows from a parameter, or wrap the allocation in 'unsafe:' if it is heap-allocated.")
                         case _: pass
+                if e as usize == 0 as usize and self.current_func_ret_family != "" and self.current_func_ret_family != "Option" and self.current_func_ret_family != "Result" and self.current_func_ret_family != "Pointer":
+                    mut _br_who = "'" + self.current_func_name + "'"
+                    if self.closure_depth > 0: _br_who = "this closure"
+                    self.error("[E-5] Type mismatch: " + _br_who + " is declared to return " + self.family_word(self.current_func_ret_family) + " but this 'return' has no value.\n      FIX: return a value of the declared type, or remove the return type if the function returns nothing.")
                 mut _ret_h = self.lower_expr(e)
                 if e as usize != 0 as usize and self.current_func_ret_family != "":
                     mut _rf = self.firm_family(_ret_h)
@@ -6337,6 +6343,7 @@ extend Sema:
                                     case _: pass
                                 ex_oi = ex_oi + 1
                         case _: pass
+                    self.check_pattern_subject(arm.pat, hsubj)
                     self.enter_scope()
                     # Use the subject's type for PBind so `case x if x.method():` works.
                     mut _subj_ty = hir_expr_type(hsubj)
@@ -6652,6 +6659,49 @@ extend Sema:
 
     # A match EXPRESSION must produce a value on every path, so a missing variant is always an error
     # (the statement form reports the same condition). Guarded arms do not count as covering.
+    # Pattern/subject agreement, only when the subject's kind is CERTAIN: a literal pattern of the
+    # wrong kind, a variant pattern of another enum, or a payload binding count that does not match
+    # the variant's declared payload (previously these reached the C compiler as [C-1]).
+    pub def check_pattern_subject(self, pat: Pattern, hsubj: Pointer[HirExpr]):
+        mut fam = self.firm_family(hsubj)
+        match pat:
+            case Pattern.PLitInt(_):
+                if fam == "str" or fam == "bool" or fam == "List" or fam == "Dict" or fam == "Tuple" or fam == "float":
+                    self.error("[E-5] Type mismatch: this 'case' pattern is an int literal but the matched value is " + self.family_word(fam) + ".\n      FIX: match against a literal of the matched value's type, or convert the value first.")
+            case Pattern.PLitStr(_, _):
+                if fam == "int" or fam == "bool" or fam == "List" or fam == "Dict" or fam == "Tuple" or fam == "float":
+                    self.error("[E-5] Type mismatch: this 'case' pattern is a str literal but the matched value is " + self.family_word(fam) + ".\n      FIX: match against a literal of the matched value's type, or convert the value first.")
+            case Pattern.PLitBool(_):
+                if fam == "int" or fam == "str" or fam == "List" or fam == "Dict" or fam == "Tuple" or fam == "float":
+                    self.error("[E-5] Type mismatch: this 'case' pattern is a bool literal but the matched value is " + self.family_word(fam) + ".\n      FIX: match against a literal of the matched value's type, or convert the value first.")
+            case Pattern.PVariantBind(pt, pv, _):
+                self.check_variant_pattern(pt, pv, 1, hsubj)
+            case Pattern.PVariantBindMany(pt2, pv2, pfs):
+                self.check_variant_pattern(pt2, pv2, pfs.len, hsubj)
+            case Pattern.POr(pors):
+                mut poi = 0
+                while poi < pors.len:
+                    self.check_pattern_subject(pors.get(poi), hsubj)
+                    poi = poi + 1
+            case _: pass
+
+    pub def check_variant_pattern(self, tname: str, vname: str, nbinds: int, hsubj: Pointer[HirExpr]):
+        if not self.enums.contains(tname) or tname == "Option" or tname == "Result": return
+        mut edef = self.enums.get(tname)
+        mut vi = 0
+        while vi < edef.variants.len:
+            if edef.variants.get(vi).name == vname:
+                mut nf = edef.variants.get(vi).fields.len
+                if nf != nbinds:
+                    mut plural = "s"
+                    if nf == 1: plural = ""
+                    mut bplural = "s"
+                    if nbinds == 1: bplural = ""
+                    self.error("[E-4] Pattern '" + tname + "." + vname + "(..)' binds " + str(nbinds) + " value" + bplural + " but variant '" + vname + "' has " + str(nf) + " payload field" + plural + ".\n      FIX: bind exactly one name per payload field.")
+                return
+            vi = vi + 1
+        self.error("[E-7] Enum '" + tname + "' has no variant '" + vname + "'.\n      FIX: check the spelling of the variant name in this 'case'.")
+
     pub def check_match_expr_exhaustive(self, ty_name: str, arms: Vec[MatchArm]):
         if not self.enums.contains(ty_name): return
         mut covered = Vec[str].init(8)
@@ -8496,6 +8546,7 @@ extend Sema:
                 return box_hirexpr(HirExpr.ESizeOf(ty.read(), AstType.init("int")))
             case Expr.ECast(expr, ty):
                 if ty as usize == 0 as usize: return self.lower_expr(expr)
+                self.check_type_known(ty, "this 'as' cast")
                 return box_hirexpr(HirExpr.ECast(self.lower_expr(expr), ty.read()))
             case Expr.EFString(parts):
                 self.check_no_heap("an f-string", "build output in a fixed byte buffer, or print the parts separately; plain string literals are fine (they live in rodata)")
@@ -8693,6 +8744,7 @@ extend Sema:
                 mut hm_k = 0
                 while hm_k < m_arms.len:
                     mut hm_arm = m_arms.get(hm_k)
+                    self.check_pattern_subject(hm_arm.pat, hm_subj)
                     self.enter_scope()
                     self.declare_pattern_binds_typed(hm_arm.pat, hm_subj_ty)
                     mut hm_edo = self.lower_do_value(hm_arm.body.read())
