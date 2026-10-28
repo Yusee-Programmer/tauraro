@@ -17,6 +17,15 @@ pub enum SymbolKind:
     SVariable
     SInterface
 
+def _is_neg_int_lit(e: Pointer[Expr]) -> bool:
+    match e.read():
+        case Expr.EUnaryOp(uop, x):
+            if uop != "-": return false
+            match x.read():
+                case Expr.ELitInt(_): return true
+                case _: return false
+        case _: return false
+
 pub def _is_builtin_type_word(n: str) -> bool:
     if n.len() > 2 and n.slice(0, 2) == "c_": return true   # C scalar types (c_int, c_char, ...) in FFI signatures
     if n == "int" or n == "float" or n == "bool" or n == "char" or n == "str" or n == "i8" or n == "i16" or n == "i32" or n == "i64" or n == "u8" or n == "u16" or n == "u32" or n == "u64" or n == "usize" or n == "isize" or n == "f32" or n == "f64": return true
@@ -6697,7 +6706,9 @@ extend Sema:
                     bin_ty = AstType.init("bool")
                 elif op == "*" and (hir_expr_type(hleft).name == "str" or hir_expr_type(hleft).name == "String" or hir_expr_type(hright).name == "str" or hir_expr_type(hright).name == "String"):
                     bin_ty = AstType.init("str")
-                elif (op == "+" or op == "-" or op == "*" or op == "/") and (_binop_is_float_name(hir_expr_type(hleft).name) or _binop_is_float_name(hir_expr_type(hright).name)):
+                elif op == "**" and _is_neg_int_lit(right):
+                    bin_ty = AstType.init("float")   # int ** -n is a float, as in Python (2 ** -1 == 0.5)
+                elif (op == "+" or op == "-" or op == "*" or op == "/" or op == "**" or op == "%") and (_binop_is_float_name(hir_expr_type(hleft).name) or _binop_is_float_name(hir_expr_type(hright).name)):
                     bin_ty = AstType.init("float")   # int+float etc. promotes to float
                 return box_hirexpr(HirExpr.EBinOp(op, hleft, hright, bin_ty))
             case Expr.EUnaryOp(op, expr):

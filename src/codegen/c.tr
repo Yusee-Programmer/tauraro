@@ -58,6 +58,16 @@ pub def _is_int_type(n: str) -> bool:
     if n == "usize" or n == "isize" or n == "long long": return true
     return _is_c_int_scalar(n)
 
+def _hir_neg_int_lit(e: Pointer[HirExpr]) -> bool:
+    match e.read():
+        case HirExpr.EUnaryOp(uop, x, _):
+            if uop != "-": return false
+            match x.read():
+                case HirExpr.ELitInt(_, _): return true
+                case _: return false
+        case HirExpr.ELitInt(v, _): return v < 0
+        case _: return false
+
 pub def _is_float_type(n: str) -> bool:
     if n == "float" or n == "f64" or n == "f32" or n == "double": return true
     return n == "c_float" or n == "c_double" or n == "c_ldouble"
@@ -4665,7 +4675,10 @@ pub class CGenerator:
             mut mono_l = self.mono_cls_name_for(hir_expr_type(l))
             if self.has_method(mono_l, dunder):
                 return self.cls_method_c_call(mono_l, dunder, ls, rs)
-        if op == "**": return "((long long)pow((double)(" + ls + "), (double)(" + rs + ")))"
+        if op == "**":
+            if _is_float_type(lt_n) or _is_float_type(rt_n) or _hir_neg_int_lit(r): return "pow((double)(" + ls + "), (double)(" + rs + "))"
+            if _is_int_type(lt_n) and _is_int_type(rt_n): return "_tr_ipow((long long)(" + ls + "), (long long)(" + rs + "))"
+            return "((long long)pow((double)(" + ls + "), (double)(" + rs + ")))"
         if op == "//" or op == "/" or op == "%":
             # Integer division / remainder: a zero divisor panics with a message and
             # INT_MIN / -1 wraps, instead of the hardware trap (SIGFPE / SIGILL) C gives.

@@ -11,6 +11,13 @@ there is no deprecation period.
 
 ## [Unreleased]
 
+### Fixed
+
+- `**` now behaves like Python: `-2 ** 2` is `-4` (the unary minus used to bind first), a float
+  operand gives a float (`2.0 ** 0.5` used to be truncated to an `int`), `int ** int` is exact
+  instead of going through `pow()` on doubles, and `2 ** -1` is `0.5`. A negative non-literal
+  integer exponent panics with a message.
+
 ## [0.1.0] - 2026-10-27
 
 First soft stability checkpoint: a compiler-hardening release. Evaluation order, integer and

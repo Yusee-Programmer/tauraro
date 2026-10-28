@@ -1867,29 +1867,30 @@ extend Parser:
         return left
 
     pub def parse_multiplicative(self) -> Pointer[Expr]:
-        mut left = self.parse_power()
+        mut left = self.parse_unary()
         while True:
             match self.peek():
                 case Token.Star:
                     self.pos = self.pos + 1
-                    left = box_expr(Expr.EBinOp("*", left, self.parse_power()))
+                    left = box_expr(Expr.EBinOp("*", left, self.parse_unary()))
                 case Token.Slash:
                     self.pos = self.pos + 1
-                    left = box_expr(Expr.EBinOp("/", left, self.parse_power()))
+                    left = box_expr(Expr.EBinOp("/", left, self.parse_unary()))
                 case Token.Percent:
                     self.pos = self.pos + 1
-                    left = box_expr(Expr.EBinOp("%", left, self.parse_power()))
+                    left = box_expr(Expr.EBinOp("%", left, self.parse_unary()))
                 case Token.FloorDiv:
                     self.pos = self.pos + 1
-                    left = box_expr(Expr.EBinOp("//", left, self.parse_power()))
+                    left = box_expr(Expr.EBinOp("//", left, self.parse_unary()))
                 case _: break
         return left
 
     pub def parse_power(self) -> Pointer[Expr]:
-        mut base = self.parse_unary()
+        mut base = self.parse_postfix()
         if self.peek() == Token.StarStar:
             self.pos = self.pos + 1
-            mut exp = self.parse_power()
+            # right-associative; the exponent may carry a sign: 2 ** -1, 2 ** 3 ** 2
+            mut exp = self.parse_unary()
             return box_expr(Expr.EBinOp("**", base, exp))
         return base
 
@@ -1909,7 +1910,7 @@ extend Parser:
                 return box_expr(Expr.EUnaryOp("*", self.parse_unary()))
             case _:
                 pass
-        return self.parse_postfix()
+        return self.parse_power()
 
     pub def parse_postfix(self) -> Pointer[Expr]:
         mut e = self.parse_primary()

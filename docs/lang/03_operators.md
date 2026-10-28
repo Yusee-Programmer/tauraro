@@ -60,9 +60,18 @@ The `%` operator's sign follows the dividend (left operand), identical to C beha
 **Exponentiation:**
 
 ```python
-x = 2 ** 10    # 1024 — integer exponentiation
-y = 2.0 ** 0.5 # square root via exponentiation
+x = 2 ** 10     # 1024 — exact integer exponentiation (wraps on overflow like `*`)
+y = 2.0 ** 0.5  # 1.414… — a float operand gives a float
+z = 2 ** 3 ** 2 # 512 — right associative, as in Python
+n = -2 ** 2     # -4 — `**` binds tighter than a unary minus on its left
+h = 2 ** -1     # 0.5 — an integer base with a negative *literal* exponent is a float
+x **= 3         # augmented form
 ```
+
+Same as Python, except that the result type is fixed at compile time: `int ** int` is an `int`,
+so a negative exponent that is not a literal (`2 ** k` with `k = -1`) panics at run time with
+`negative exponent in integer power`; write `2.0 ** k` to get a float. A class can overload `**`
+with `__pow__`.
 
 ### Common Mistakes
 
@@ -448,9 +457,9 @@ operators.
 | Level | Operators | Associativity |
 |-------|-----------|---------------|
 | 1 (highest) | `()` grouping, `.` field access, `[]` index, function call | left |
-| 2 | Unary: `-`, `not`, `~` | right |
-| 3 | `as` (cast) | left |
-| 4 | `**` (power) | right |
+| 2 | `**` (power; the exponent may carry a sign: `2 ** -1`) | right |
+| 3 | Unary: `-`, `not`, `~` (so `-2 ** 2` is `-4`) | right |
+| 4 | `as` (cast) | left |
 | 5 | `*`, `/`, `//`, `%` | left |
 | 6 | `+`, `-` | left |
 | 7 | `<<`, `>>` | left |

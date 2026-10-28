@@ -6324,6 +6324,18 @@ static inline void _tr_panic(const char* msg) {
 
 /* Integer division: a zero divisor panics; INT_MIN / -1 wraps (the quotient is -INT_MIN == INT_MIN)
  * and INT_MIN % -1 is 0, instead of the hardware trap C gives for both. */
+/* Integer power by squaring, wrapping like the other integer ops (exact, unlike pow()). A negative
+ * exponent has no integer result: it panics (use a float base: 2.0 ** -1). */
+static inline long long _tr_ipow(long long b, long long e) {
+    if (__builtin_expect(e < 0, 0)) {
+        if (b == 1) return 1;
+        if (b == -1) return (e & 1) ? -1 : 1;
+        _tr_panic("negative exponent in integer power (use a float base, e.g. 2.0 ** -1)");
+    }
+    unsigned long long r = 1, x = (unsigned long long)b;
+    while (e > 0) { if (e & 1) r *= x; x *= x; e >>= 1; }
+    return (long long)r;
+}
 static inline long long _tr_idiv(long long a, long long b) {
     if (__builtin_expect(b == 0, 0)) _tr_panic("integer division by zero");
     if (__builtin_expect(b == -1, 0)) return (long long)(0ULL - (unsigned long long)a);
@@ -7606,9 +7618,18 @@ static inline void _tr_init_console(void) {
 #endif
 /* POSIX: a write()/send() to a peer-closed socket or pipe must surface as an error
  * return (EPIPE), not kill the whole process with SIGPIPE (bug log #13). */
+#if !defined(TAURARO_BARE) && !defined(__wasi__) && !defined(TAURARO_KERNEL) && !defined(TAURARO_NO_OS)
+/* Flush stdout before the sanitizers' exit hooks run: under --debug, a leak report ends the process
+ * with _exit() and would otherwise drop buffered program output. atexit handlers run last-in-first-out,
+ * so registering here (after the sanitizer's own hook) makes this one run first. */
+static void _tr_flush_stdout_at_exit(void) { fflush(stdout); }
+#endif
 static inline void _tr_init_console(void) {
 #if !defined(TAURARO_BARE) && !defined(__wasi__) && defined(SIGPIPE)
     signal(SIGPIPE, SIG_IGN);
+#endif
+#if !defined(TAURARO_BARE) && !defined(__wasi__) && !defined(TAURARO_KERNEL) && !defined(TAURARO_NO_OS)
+    atexit(_tr_flush_stdout_at_exit);
 #endif
 }
 #endif

@@ -1,0 +1,53 @@
+# tests/lang/156_power.tr
+# `**` follows Python: right-associative, binds tighter than a unary minus on its left but
+# accepts a signed exponent, int ** int is exact (wrapping), a float operand gives a float,
+# and `int ** -n` with a literal exponent is a float.
+
+from std.test import TestRunner
+
+class V:
+    pub n: int
+
+extend V:
+    pub def init(n: int) -> V:
+        mut v = V()
+        v.n = n
+        return v
+
+    pub def __pow__(self, k: int) -> int:
+        return self.n * 100 + k
+
+def main():
+    mut t = TestRunner.init("156_power")
+
+    t.section("integers")
+    t.assert_eq_int(2 ** 10, 1024, "2 ** 10")
+    t.assert_eq_int(2 ** 3 ** 2, 512, "right associative")
+    t.assert_eq_int(-2 ** 2, -4, "-2 ** 2 is -(2 ** 2)")
+    t.assert_eq_int((-2) ** 2, 4, "(-2) ** 2")
+    t.assert_eq_int(2 ** 62, 4611686018427387904, "2 ** 62 is exact")
+    t.assert_eq_int(3 ** 39, 4052555153018976267, "3 ** 39 is exact (pow() through doubles is not)")
+    t.assert_eq_int(10 ** 0, 1, "x ** 0")
+    t.assert_eq_int(7 ** 2 % 5, 4, "** binds tighter than %")
+    t.assert_eq_int(2 * 3 ** 2, 18, "** binds tighter than *")
+    mut b = 5
+    mut e = 3
+    t.assert_eq_int(b ** e, 125, "variable operands")
+    mut x = 3
+    x **= 4
+    t.assert_eq_int(x, 81, "**= on an int")
+
+    t.section("floats")
+    t.assert_eq_float(2.0 ** 0.5, 1.4142135623730951, 0.000000001, "float ** float")
+    t.assert_eq_float(2.5 ** 2, 6.25, 0.000000001, "float ** int")
+    t.assert_eq_float(2 ** 0.5 ** 2, 1.189207115002721, 0.000000001, "int ** float, right associative")
+    t.assert_eq_float(2 ** -1, 0.5, 0.000000001, "int ** negative literal is a float")
+    t.assert_eq_float(10 ** -2, 0.01, 0.000000001, "10 ** -2")
+    mut f = 1.5
+    f **= 2
+    t.assert_eq_float(f, 2.25, 0.000000001, "**= on a float")
+
+    t.section("classes")
+    mut v = V.init(3)
+    t.assert_eq_int(v ** 7, 307, "__pow__")
+    t.summary()

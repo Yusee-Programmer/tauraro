@@ -164,7 +164,12 @@ void _tr_rt_write_nl(void) { fputc('\n', stdout); }
 long long _tr_rt_abs_i64(long long x) { return x < 0 ? -x : x; }
 long long _tr_rt_min_i64(long long a, long long b) { return a < b ? a : b; }
 long long _tr_rt_max_i64(long long a, long long b) { return a > b ? a : b; }
-long long _tr_rt_int_pow(long long b, long long e) { return (long long)pow((double)b, (double)e); }
+long long _tr_rt_int_pow(long long b, long long e) {
+    if (e < 0) return b == 1 ? 1 : (b == -1 ? ((e & 1) ? -1 : 1) : 0);
+    unsigned long long r = 1, x = (unsigned long long)b;
+    while (e > 0) { if (e & 1) r *= x; x *= x; e >>= 1; }
+    return (long long)r;
+}
 double _tr_rt_min_f64(double a, double b) { return a < b ? a : b; }
 double _tr_rt_max_f64(double a, double b) { return a > b ? a : b; }
 

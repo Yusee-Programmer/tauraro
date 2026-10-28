@@ -10,7 +10,7 @@ __attribute__((hot)) long long _index_of(List_TrStr* names, TrStr s) {
 #line 24 "src/codegen/native/elf.tr"
     while ((i < names->len)) {
 #line 25 "src/codegen/native/elf.tr"
-        if (({ TrStr _cmpa_t6588 = (List_TrStr_get(names, i)); TrStr _cmpb_t6589 = (s); _Bool _cmpr_t6590 = _tr_str_eqv(_cmpa_t6588, _cmpb_t6589); _tr_str_release(_cmpa_t6588); _cmpr_t6590; })) {
+        if (({ TrStr _cmpa_t6622 = (List_TrStr_get(names, i)); TrStr _cmpb_t6623 = (s); _Bool _cmpr_t6624 = _tr_str_eqv(_cmpa_t6622, _cmpb_t6623); _tr_str_release(_cmpa_t6622); _cmpr_t6624; })) {
 #line 25 "src/codegen/native/elf.tr"
             return i;
         }
@@ -111,7 +111,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
 #line 74 "src/codegen/native/elf.tr"
         List_i64_append(str_off, rodata->len);
 #line 75 "src/codegen/native/elf.tr"
-        ({ TrStr _ord_t6591 = (List_TrStr_get(strings, sxi)); __auto_type _ord_t6592 = (List_i64_get(string_lens, sxi)); ByteBuf_cstr_len(rodata, _ord_t6591, _ord_t6592); _tr_str_release(_ord_t6591); });
+        ({ TrStr _ord_t6625 = (List_TrStr_get(strings, sxi)); __auto_type _ord_t6626 = (List_i64_get(string_lens, sxi)); ByteBuf_cstr_len(rodata, _ord_t6625, _ord_t6626); _tr_str_release(_ord_t6625); });
 #line 76 "src/codegen/native/elf.tr"
         sxi = (sxi + 1LL);
     }
@@ -392,7 +392,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
 #line 238 "src/codegen/native/elf.tr"
     _shdr(out, n_shstr, 3LL, 0LL, 0LL, shstr_off, shstr->len, 0LL, 0LL, 1LL, 0LL);
 #line 240 "src/codegen/native/elf.tr"
-    bool _trret1821 = ByteBuf_write_file(out, out_path);
+    bool _trret1826 = ByteBuf_write_file(out, out_path);
     _tr_obj_release(text, _trdrop_ByteBuf);
     List_ptr_free_obj(trelocs, _trdrop_TextReloc);
     List_i64_free(func_base);
@@ -403,6 +403,6 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     _tr_obj_release(rela, _trdrop_ByteBuf);
     _tr_obj_release(shstr, _trdrop_ByteBuf);
     _tr_obj_release(out, _trdrop_ByteBuf);
-    return _trret1821;
+    return _trret1826;
 }
 
