@@ -3577,6 +3577,8 @@ extend Sema:
                 case _: pass
             gpi = gpi + 1
 
+        # [N-5] must run before register_decl, which appends `extend` methods to their class.
+        self.check_duplicate_decls(prog)
         mut i = 0
         mut root_file = self.current_file
         while i < prog.decls.len:
@@ -3589,6 +3591,7 @@ extend Sema:
         # (`Pair[int]` for `Pair[A, B]`): previously accepted and only surfaced as a
         # baffling "'B' undeclared" error in the generated C.
         self.check_type_arities(prog)
+        self.check_base_classes(prog)
 
         # [S-2] (--strict): the leak-freedom GUARANTEE. Reject strong-ownership CYCLES
         # among refcounted classes (the one thing plain ARC cannot reclaim). Combined
@@ -4671,6 +4674,147 @@ extend Sema:
                             self._check_ty_arity(e.variants.get(vi).fields.get(vfi).ty, "enum " + e.name + "." + e.variants.get(vi).name, e.line)
                             vfi = vfi + 1
                         vi = vi + 1
+                case _: pass
+            di = di + 1
+        self.current_file = root_file
+
+    # [N-5] Duplicate declarations: two top-level functions / types / globals with the same
+    # name in one file, a function sharing a name with a class, duplicate fields, methods of the
+    # same arity, enum variants or parameters. All of these used to reach the C compiler as a
+    # redefinition error. Cross-file name sharing is the module system's business and untouched.
+    pub def _dup_err(self, line: int, msg: str):
+        mut saved_line = self.current_line
+        if line > 0: self.current_line = line
+        self.error(msg)
+        self.current_line = saved_line
+
+    pub def _check_dup_params(self, f: FunctionDef, owner: str):
+        mut seen = Map[str, bool].init(8)
+        mut pi = 0
+        while pi < f.params.len:
+            mut pn = f.params.get(pi).name
+            if pn != "" and pn != "self":
+                if seen.contains(pn):
+                    self._dup_err(f.line, "[N-5] Parameter '" + pn + "' of '" + owner + f.name + "()' is declared twice.\n      FIX: give each parameter a distinct name.")
+                seen.insert(pn, true)
+            pi = pi + 1
+
+    pub def _check_method_dups(self, seen: Map[str, bool], file: str, owner: str, methods: Vec[FunctionDef]):
+        mut mi = 0
+        while mi < methods.len:
+            mut m = methods.get(mi)
+            mut argc = 0
+            mut pi = 0
+            while pi < m.params.len:
+                if m.params.get(pi).name != "self": argc = argc + 1
+                pi = pi + 1
+            mut key = file + "|" + owner + "." + m.name + "/" + argc.to_str()
+            if seen.contains(key):
+                self._dup_err(m.line, "[N-5] Method '" + owner + "." + m.name + "' is defined twice with " + argc.to_str() + " parameter(s).\n      FIX: remove or rename one of the definitions (overloads must differ in parameter count).")
+            seen.insert(key, true)
+            self._check_dup_params(m, owner + ".")
+            mi = mi + 1
+
+    pub def check_duplicate_decls(self, prog: Program):
+        mut root_file = self.current_file
+        mut types = Map[str, str].init(32)
+        mut fns = Map[str, bool].init(32)
+        mut globs = Map[str, bool].init(32)
+        mut meths = Map[str, bool].init(32)
+        mut di = 0
+        while di < prog.decls.len:
+            if self.decl_files.len == prog.decls.len: self.current_file = self.decl_files.get(di)
+            mut file = self.current_file
+            match prog.decls.get(di).read():
+                case Decl.DFunction(f):
+                    mut fk = file + "|" + f.name
+                    if fns.contains(fk):
+                        self._dup_err(f.line, "[N-5] Function '" + f.name + "' is defined twice.\n      FIX: remove or rename one of the definitions (top-level functions cannot be overloaded).")
+                    fns.insert(fk, true)
+                    if types.contains(fk):
+                        self._dup_err(f.line, "[N-5] '" + f.name + "' is both a function and a " + types.get(fk) + ".\n      FIX: rename one of them.")
+                    self._check_dup_params(f, "")
+                case Decl.DClass(c):
+                    self._check_type_name_dup(types, fns, file, c.name, "class", c.line)
+                    mut seen_f = Map[str, bool].init(8)
+                    mut cfi = 0
+                    while cfi < c.fields.len:
+                        mut fnm = c.fields.get(cfi).name
+                        if seen_f.contains(fnm):
+                            self._dup_err(c.line, "[N-5] Field '" + fnm + "' is declared twice in '" + c.name + "'.\n      FIX: remove or rename one of the fields.")
+                        seen_f.insert(fnm, true)
+                        cfi = cfi + 1
+                    self._check_method_dups(meths, file, c.name, c.methods)
+                case Decl.DActor(c):
+                    self._check_type_name_dup(types, fns, file, c.name, "actor", c.line)
+                    self._check_method_dups(meths, file, c.name, c.methods)
+                case Decl.DEnum(e):
+                    self._check_type_name_dup(types, fns, file, e.name, "enum", e.line)
+                    mut seen_v = Map[str, bool].init(8)
+                    mut vi = 0
+                    while vi < e.variants.len:
+                        mut vn = e.variants.get(vi).name
+                        if seen_v.contains(vn):
+                            self._dup_err(e.line, "[N-5] Variant '" + vn + "' is declared twice in enum '" + e.name + "'.\n      FIX: remove or rename one of the variants.")
+                        seen_v.insert(vn, true)
+                        vi = vi + 1
+                    self._check_method_dups(meths, file, e.name, e.methods)
+                case Decl.DInterface(i):
+                    self._check_type_name_dup(types, fns, file, i.name, "interface", i.line)
+                case Decl.DExtend(target, methods):
+                    self._check_method_dups(meths, file, target, methods)
+                case Decl.DTopLevelStmt(gs):
+                    match gs.read():
+                        case Stmt.SLet(g_name, _, _, _, _, _, _):
+                            mut gk = file + "|" + g_name
+                            if globs.contains(gk):
+                                self.error("[N-5] Global '" + g_name + "' is declared twice.\n      FIX: assign to it (`" + g_name + " = ...`) or pick a different name.")
+                            globs.insert(gk, true)
+                        case _: pass
+                case _: pass
+            di = di + 1
+        self.current_file = root_file
+
+    pub def _check_type_name_dup(self, types: Map[str, str], fns: Map[str, bool], file: str, name: str, kind: str, line: int):
+        mut k = file + "|" + name
+        if types.contains(k):
+            self._dup_err(line, "[N-5] '" + name + "' is declared twice (as a " + types.get(k) + " and as a " + kind + ").\n      FIX: rename or remove one of the declarations.")
+        elif fns.contains(k):
+            self._dup_err(line, "[N-5] '" + name + "' is both a function and a " + kind + ".\n      FIX: rename one of them.")
+        types.insert(k, kind)
+
+    # [N-6] Base-class sanity: the base must be a defined class (not itself, not an enum,
+    # not an interface, not part of an inheritance cycle). These used to reach C as
+    # duplicate-member / incomplete-type errors.
+    pub def check_base_classes(self, prog: Program):
+        mut root_file = self.current_file
+        mut di = 0
+        while di < prog.decls.len:
+            if self.decl_files.len == prog.decls.len: self.current_file = self.decl_files.get(di)
+            match prog.decls.get(di).read():
+                case Decl.DClass(c):
+                    mut bi = 0
+                    while bi < c.base_classes.len:
+                        mut b = c.base_classes.get(bi)
+                        if b == c.name:
+                            self._dup_err(c.line, "[N-6] Class '" + c.name + "' cannot inherit from itself.\n      FIX: remove '" + b + "' from the base-class list.")
+                        elif self.classes.contains(b):
+                            mut cur = b
+                            mut steps = 0
+                            mut cyc = false
+                            while steps < 64 and self.classes.contains(cur) and self.classes.get(cur).base_classes.len > 0:
+                                cur = self.classes.get(cur).base_classes.get(0)
+                                if cur == c.name: cyc = true
+                                steps = steps + 1
+                            if cyc:
+                                self._dup_err(c.line, "[N-6] Class '" + c.name + "' inherits from '" + b + "', which (indirectly) inherits from '" + c.name + "' again.\n      FIX: break the inheritance cycle.")
+                        elif self.enums.contains(b):
+                            self._dup_err(c.line, "[N-6] Class '" + c.name + "' cannot inherit from enum '" + b + "'.\n      FIX: use a field of type '" + b + "' instead.")
+                        elif self.interfaces.contains(b):
+                            self._dup_err(c.line, "[N-6] '" + b + "' is an interface; class '" + c.name + "' must use `implements " + b + "` instead of inheriting from it.\n      FIX: write `class " + c.name + " implements " + b + ":`.")
+                        elif self.resolve(b).name == "" and not self._is_known_type_name(b):
+                            self._dup_err(c.line, "[N-6] Unknown base class '" + b + "' of class '" + c.name + "'.\n      FIX: check the spelling, or import/define '" + b + "'.")
+                        bi = bi + 1
                 case _: pass
             di = di + 1
         self.current_file = root_file
@@ -7341,6 +7485,16 @@ extend Sema:
                         _recv_name = _rn
                         mut _rsym = self.resolve(_rn)
                         if _rsym.name != "" and _rsym.is_shared: _recv_is_shared = true
+                    case Expr.EIndex(_gobj, _gidx):
+                        # `Name[T].method(...)` with an undefined generic type `Name`
+                        match _gobj.read():
+                            case Expr.EIdent(_gn):
+                                match _gidx.read():
+                                    case Expr.EIdent(_gin):
+                                        if (self._is_known_type_name(_gin) or _gin == "int" or _gin == "str" or _gin == "float" or _gin == "bool") and not self.is_local_var(_gn) and not self._is_known_type_name(_gn) and self.resolve(_gn).name == "":
+                                            self.error("[E-1] '" + _gn + "' is not a defined type, so '" + _gn + "[" + _gin + "]." + method + "(...)' cannot be resolved.\n      FIX: check the spelling of the generic type, import it, or define it.")
+                                    case _: pass
+                            case _: pass
                     case _: pass
                 # [E-1] Method call on an UNDEFINED receiver: `Foo.bar(...)` where the
                 # bare identifier `Foo` resolves to NOTHING (not a local/param/global/

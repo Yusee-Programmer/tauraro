@@ -40,6 +40,8 @@ category, with its cause, a triggering example, and the fix.
 | [E-6] | Existence | A method that the receiver type does not have |
 | [E-7] | Existence | A field that the type does not have |
 | [N-3] | Name | Name is not defined |
+| [N-6] | Name | Unknown, self, enum, interface or cyclic base class |
+| [N-5] | Name | Duplicate declaration (function, type, field, method, variant, parameter, global) |
 | [N-4] | Name | Unknown type in an annotation |
 | [G-2] | Generics | A type parameter cannot be inferred from the arguments |
 | [S-1] | Shared | `Shared[Self]` field creates a reference cycle |
@@ -664,6 +666,22 @@ that the type does not declare.
 **FIX:** Check the spelling, or declare `pub z: int` in the class.
 
 ---
+
+### [N-5] Duplicate Declaration
+
+**Message:** `Function 'f' is defined twice.` (also: type declared twice, function and class sharing a name, duplicate field, duplicate enum variant, duplicate method of the same arity, duplicate parameter, duplicate global)
+
+**Cause:** Two declarations of the same name in the same file. Top-level functions cannot be overloaded; methods may be overloaded only by parameter count.
+
+**FIX:** Remove or rename one of the declarations.
+
+### [N-6] Bad Base Class
+
+**Message:** `Unknown base class 'Nope' of class 'A'.` (also: class inherits from itself, from an enum, from an interface, or through an inheritance cycle)
+
+**Cause:** The base-class list of a class names something that is not a usable class.
+
+**FIX:** Define or import the base class, use `implements` for interfaces, use a field for enums, and remove cycles.
 
 ### [N-3] Name Not Defined
 
