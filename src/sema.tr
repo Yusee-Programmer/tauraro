@@ -1360,6 +1360,11 @@ extend Sema:
             if hl.len == 1: vb = "was"
             self.error("[E-4] '" + type_name + "." + variant + "()' takes " + want.to_str() + " argument" + pl + " but " + hl.len.to_str() + " " + vb + " given.\n      FIX: call it with exactly " + want.to_str() + " argument" + pl + " (see its definition).")
         elif named == 1 and cdef.generics.len == 0 and one.generics.len == 0 and one.params.len == hl.len:
+            if hl.len > 0 and one.params.get(0).name == "self":
+                # `Type.method(inst, ...)`: the first argument is the instance
+                mut sfam = self.firm_family(hl.get(0))
+                if sfam == "int" or sfam == "float" or sfam == "bool" or sfam == "str" or sfam == "List" or sfam == "Dict" or sfam == "Tuple" or sfam == "None":
+                    self.error("[E-5] Type mismatch: '" + type_name + "." + variant + "()' called through the type needs a '" + type_name + "' instance as its first argument but is given " + self.family_word(sfam) + ".\n      FIX: " + type_name + "." + variant + "(instance, ...) - or call it on the instance: instance." + variant + "(...).")
             mut ti = 0
             while ti < hl.len:
                 if one.params.get(ti).ty as usize != 0 as usize:
@@ -6938,6 +6943,8 @@ extend Sema:
                         # [G-1] generic bounds: verify the inferred type args satisfy them.
                         self.check_call_bounds(n, hl)
                         self.check_call_fn_args(n, hl)
+                        # `A(args)` is the same call as `A.init(args)`: check it against the declared init
+                        if hl.len > 0 and self.classes.contains(n) and self.resolve(n).kind != SymbolKind.SVariable and not self.fn_defs.contains(n): self.check_static_call(n, "init", hl)
                         if n == "main":
                             self.error("[E-1] Explicit call to 'main()' is forbidden. The compiler automatically invokes main() as the program entry point. Remove the 'main()' call from your source.")
                             return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))
@@ -7445,7 +7452,18 @@ extend Sema:
                             # `Box[str, int].init(...)`: a generic class's constructor takes the declared parameters too
                             match _ig_b.read():
                                 case Expr.EIdent(_ig_n):
-                                    if self.classes.contains(_ig_n) and self.classes.get(_ig_n).generics.len > 0 and self.resolve(_ig_n).kind != SymbolKind.SVariable: self.check_static_call(_ig_n, method, hl)
+                                    if self.classes.contains(_ig_n) and self.classes.get(_ig_n).generics.len > 0 and self.resolve(_ig_n).kind != SymbolKind.SVariable:
+                                        mut _ig_ng = 1
+                                        match obj.read():
+                                            case Expr.EIndex(_, _ig_ix):
+                                                match _ig_ix.read():
+                                                    case Expr.ETuple(_ig_ts): _ig_ng = _ig_ts.len
+                                                    case _: pass
+                                            case _: pass
+                                        mut _ig_want = self.classes.get(_ig_n).generics.len
+                                        if _ig_ng != _ig_want and not self.ambiguous_classes.contains(_ig_n):
+                                            self.error("[E-4] '" + _ig_n + "' takes " + _ig_want.to_str() + " type argument(s) but " + _ig_ng.to_str() + " given.\n      FIX: write " + _ig_n + "[...] with exactly " + _ig_want.to_str() + " type argument(s), as in its declaration.")
+                                        self.check_static_call(_ig_n, method, hl)
                                 case _: pass
                         case _: pass
                     # Preserve generic args so Vec[T].init(n) keeps the T info.

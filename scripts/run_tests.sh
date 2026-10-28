@@ -211,6 +211,10 @@ expect_diag "atomic arity" 'def main():\n    mut a: Atomic[int] = Atomic.new(0)\
 expect_diag "spawn arity" 'def w(a: int, b: int) -> void:\n    pass\ndef main():\n    mut t = Thread.spawn(w, 1)\n' "[E-4] 'Thread.spawn(w, ...)'"
 expect_diag "closure var arity" 'def main():\n    mut c = lambda x: x + 1\n    print(c(1, 2))\n' "[E-4] the function value 'c' takes 1 argument"
 expect_diag "closure var arg kind" 'def main():\n    mut f = def(x: int) -> int:\n        return x\n    print(f("a"))\n' "[E-5] Type mismatch: argument 1 of 'f()'"
+expect_diag "ctor call arity" 'class A:\n    pub v: int\nextend A:\n    pub def init(v: int) -> A:\n        mut a = A()\n        a.v = v\n        return a\n    pub def get(self) -> int:\n        return self.v\ndef main():\n    mut a = A(1, 2)\n' "[E-4] 'A.init()' takes 1 argument but 2 were given"
+expect_diag "ctor call arg kind" 'class A:\n    pub v: int\nextend A:\n    pub def init(v: int) -> A:\n        mut a = A()\n        a.v = v\n        return a\n    pub def get(self) -> int:\n        return self.v\ndef main():\n    mut a = A("s")\n' "[E-5] Type mismatch: argument 1 of 'A.init()'"
+expect_diag "UFCS non-instance" 'class A:\n    pub v: int\nextend A:\n    pub def init(v: int) -> A:\n        mut a = A()\n        a.v = v\n        return a\n    pub def get(self) -> int:\n        return self.v\ndef main():\n    print(A.get(5))\n' "called through the type needs a 'A' instance"
+expect_diag "generic type arg count" 'class Box[T]:\n    pub v: T\nextend Box:\n    pub def init(v: T) -> Box[T]:\n        mut b = Box[T]()\n        b.v = v\n        return b\ndef main():\n    mut b = Box[str,int].init("a")\n' "[E-4] 'Box' takes 1 type argument(s) but 2 given"
 if [ -n "$diagfail" ]; then
     echo "  FAILED:$diagfail"
     failed=$((failed + 1))
