@@ -254,6 +254,12 @@ expect_diag "pattern literal kind" 'def main():\n    mut x = 1\n    match x:\n  
 expect_diag "spawn no args" 'def main():\n    mut t = Thread.spawn()\n' "'Thread.spawn()' takes at least 1 argument"
 expect_diag "cast unknown type" 'def main():\n    mut x = 1\n    mut y = x as Nope\n' "Unknown type 'Nope' (in this 'as' cast)"
 expect_diag "nesting too deep" "def main():\n    mut x = $(printf '(%.0s' $(seq 1 200))1$(printf ')%.0s' $(seq 1 200))\n" "nested too deeply"
+expect_diag "class header bracket" 'class Box]K, V]:\n    pub a: int\ndef main():\n    print(1)\n' "expected ':' after the header of class 'Box'"
+expect_diag "try without except" 'def main():\n    try:\n        print(1)\n' "'try' block has no 'except' or 'finally' clause"
+expect_diag "enum payload type" 'enum E:\n    A(int)\ndef main():\n    mut e = E.A("s")\n' "payload 1 of 'E.A'"
+expect_diag "spawn arg type" 'def w(x: int):\n    pass\ndef main():\n    mut t = Thread.spawn(w, "s")\n    t.join()\n' "passed through Thread.spawn to 'w()'"
+expect_diag "cast int to str" 'def main():\n    mut x = 5\n    mut y = x as str\n    print(y)\n' "cannot be cast to str with 'as'"
+expect_diag "cast str to float" 'def main():\n    mut s = "a"\n    mut y = s as float\n    print(y)\n' "cannot be cast to float with 'as'"
 # No C compiler warning may ever reach the user for a valid program (float formatting used to leak -Wformat-truncation).
 printf 'def main():\n    x = 5\n    y = x * 2.5\n    print(x, y)\n    print(1.5e300 * 3.0)\n' > "$diagdir/warn.tr"
 wtr="$(cd "$(dirname "$TAURAROC")" && pwd)/$(basename "$TAURAROC")"

@@ -1322,6 +1322,12 @@ extend Sema:
                         while sk < sfd.params.len:
                             if sfd.params.get(sk).is_variadic: return
                             sk = sk + 1
+                        if sfd.params.len == hl.len - 1 and sfd.generics.len == 0:
+                            mut spk = 0
+                            while spk < sfd.params.len:
+                                if sfd.params.get(spk).ty as usize != 0 as usize:
+                                    self.check_expr_assignable(sfd.params.get(spk).ty.read(), hl.get(spk + 1), "argument " + (spk + 1).to_str() + " passed through Thread.spawn to '" + sfn + "()'")
+                                spk = spk + 1
                         if sfd.params.len != hl.len - 1:
                             self.error("[E-4] 'Thread.spawn(" + sfn + ", ...)' passes " + (hl.len - 1).to_str() + " argument(s) to '" + sfn + "()', which takes " + sfd.params.len.to_str() + ".\n      FIX: Thread.spawn(f, arg1, arg2, ...) passes exactly the arguments f declares.")
                 case _: pass
@@ -1333,6 +1339,23 @@ extend Sema:
                 if af == "str" or af == "List" or af == "Dict":
                     self.error("[E-5] Type mismatch: Atomic needs a number as its initial value but is given " + self.family_word(af) + ".\n      FIX: Atomic.new(0).")
         if self.ambiguous_classes.contains(type_name) or self.is_rt_builtin_class(type_name): return
+        if self.enums.contains(type_name) and type_name != "Option" and type_name != "Result" and not self.classes.contains(type_name):
+            # `E.A(v)`: the payload values must fit the declared payload types.
+            mut edef = self.enums.get(type_name)
+            if edef.generics.len == 0:
+                mut evi = 0
+                while evi < edef.variants.len:
+                    mut ev = edef.variants.get(evi)
+                    if ev.name == variant and ev.fields.len == hl.len:
+                        mut efi = 0
+                        while efi < hl.len:
+                            mut efp = ev.fields.get(efi)
+                            mut efty = AstType.init(efp.name)
+                            if efp.ty as usize != 0 as usize: efty = efp.ty.read()
+                            if efty.args.len == 0 and self.type_name_known(efty.name):
+                                self.check_expr_assignable(efty, hl.get(efi), "payload " + (efi + 1).to_str() + " of '" + type_name + "." + variant + "'")
+                            efi = efi + 1
+                    evi = evi + 1
         if not self.classes.contains(type_name): return
         mut cdef = self.classes.get(type_name)
         mut named = 0
@@ -7546,6 +7569,8 @@ extend Sema:
                         if self.classes.contains(_sc_t) and self.resolve(_sc_t).kind != SymbolKind.SVariable and method != "init" and method != "new" and method != "spawn" and method != "auto":
                             self.check_static_call(_sc_t, method, hl)
                             _sc_done = true
+                        elif self.enums.contains(_sc_t) and not self.classes.contains(_sc_t) and self.resolve(_sc_t).kind != SymbolKind.SVariable and not self.is_local_var(_sc_t) and not self.ambiguous_classes.contains(_sc_t):
+                            self.check_static_call(_sc_t, method, hl)
                     case _: pass
                 # Auto-drop: an explicit manual `.free()` call marks the variable as
                 # freed so the compiler doesn't also auto-drop it (would double-free).
@@ -8526,7 +8551,14 @@ extend Sema:
             case Expr.ECast(expr, ty):
                 if ty as usize == 0 as usize: return self.lower_expr(expr)
                 self.check_type_known(ty, "this 'as' cast")
-                return box_hirexpr(HirExpr.ECast(self.lower_expr(expr), ty.read()))
+                mut cast_in = self.lower_expr(expr)
+                mut cast_from = self.firm_family(cast_in)
+                mut cast_to = ty.read().name
+                if (cast_from == "int" or cast_from == "float" or cast_from == "bool") and cast_to == "str":
+                    self.error("[E-5] Type mismatch: " + self.family_word(cast_from) + " cannot be cast to str with 'as'.\n      FIX: convert it with str(x) or x.to_str().")
+                if cast_from == "str" and (cast_to == "int" or cast_to == "float" or cast_to == "bool"):
+                    self.error("[E-5] Type mismatch: a str cannot be cast to " + cast_to + " with 'as'.\n      FIX: parse it with int(s) / float(s) instead.")
+                return box_hirexpr(HirExpr.ECast(cast_in, ty.read()))
             case Expr.EFString(parts):
                 self.check_no_heap("an f-string", "build output in a fixed byte buffer, or print the parts separately; plain string literals are fine (they live in rodata)")
                 mut hparts = Vec[HirFStringPart].init(4)

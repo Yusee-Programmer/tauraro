@@ -1007,6 +1007,8 @@ extend Parser:
                 case _:
                     pass
             finally_b = self.parse_block()
+        elif catches.len == 0:
+            self.emit_diag("'try' block has no 'except' or 'finally' clause", "add 'except:' (or 'except Type as e:') after the try block, or a 'finally:' block.")
         return box_stmt(Stmt.STry(try_body, catches, finally_b))
 
     pub def parse_assert_stmt(self) -> Pointer[Stmt]:
@@ -3060,17 +3062,23 @@ extend Parser:
     pub def parse_class_decl(self) -> Pointer[Decl]:
         self.pos = self.pos + 1
         mut name = self.consume_ident()
+        if name == "": self.emit_diag("expected a class name after 'class'", "write 'class Name:'.")
         mut c = ClassDef.init(name)
         if self.peek() == Token.LBracket:
             self.pos = self.pos + 1
-            while self.peek() != Token.RBracket:
+            while self.peek() != Token.RBracket and self.peek() != Token.Eof and self.peek() != Token.Newline and self.peek() != Token.Colon:
                 mut _cgpn = self.consume_ident()
+                if _cgpn == "":
+                    self.emit_diag("expected a generic parameter name", "write generics as 'class Box[T]:'.")
+                    break
                 c.generics.push(_cgpn)
                 self.parse_generic_bound(_cgpn, c.constraints)
                 if self.peek() == Token.Comma:
                     self.pos = self.pos + 1
             if self.peek() == Token.RBracket:
                 self.pos = self.pos + 1
+            else:
+                self.emit_diag("unclosed '[' in the generic parameter list of class '" + name + "'", "add the matching ']'.")
         # Region (lifetime) parameters: `class Parser from src:` — names the region
         # this type's `ref`-typed fields borrow for. Parsed and accepted; field-level
         # borrows + the M-2 move-while-borrowed check provide conservative enforcement.
@@ -3123,6 +3131,12 @@ extend Parser:
                     pass
                 case _:
                     inline_body = True
+        else:
+            self.emit_diag("expected ':' after the header of class '" + name + "'", "a class header is 'class Name[T]:' (optionally followed by '(Base)'), with the members indented on the following lines.")
+            while True:
+                match self.peek():
+                    case Token.Newline | Token.Eof | Token.Colon: break
+                    case _: self.pos = self.pos + 1
         if inline_body:
             mut inl = True
             while inl:
