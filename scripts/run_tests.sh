@@ -254,6 +254,11 @@ expect_diag "pattern literal kind" 'def main():\n    mut x = 1\n    match x:\n  
 expect_diag "spawn no args" 'def main():\n    mut t = Thread.spawn()\n' "'Thread.spawn()' takes at least 1 argument"
 expect_diag "cast unknown type" 'def main():\n    mut x = 1\n    mut y = x as Nope\n' "Unknown type 'Nope' (in this 'as' cast)"
 expect_diag "nesting too deep" "def main():\n    mut x = $(printf '(%.0s' $(seq 1 200))1$(printf ')%.0s' $(seq 1 200))\n" "nested too deeply"
+# No C compiler warning may ever reach the user for a valid program (float formatting used to leak -Wformat-truncation).
+printf 'def main():\n    x = 5\n    y = x * 2.5\n    print(x, y)\n    print(1.5e300 * 3.0)\n' > "$diagdir/warn.tr"
+wtr="$(cd "$(dirname "$TAURAROC")" && pwd)/$(basename "$TAURAROC")"
+wout=$(cd "$diagdir" && rm -rf build && "$wtr" warn.tr -o warn 2>&1)
+if [ -n "$wout" ]; then diagfail="$diagfail [C compiler output leaked for a valid program: $(echo "$wout" | head -2 | tr '\n' ' ')]"; fi
 if [ -n "$diagfail" ]; then
     echo "  FAILED:$diagfail"
     failed=$((failed + 1))

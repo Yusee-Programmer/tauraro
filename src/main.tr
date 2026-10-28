@@ -1145,7 +1145,7 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
     # clang(-cl), or with plain gcc + this flag alone added, runs clean;
     # unmodified gcc -O2 without it crashes ~100% of the time under any
     # workload exercising more than a trivial amount of the runtime.
-    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
+    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -w -Wno-comment -Wno-attributes -Wno-unused-value"
     # Clang-only: suppress warnings that are Clang-specific or have no GCC equivalent.
     if is_clang_compiler(cc):
         warn_flags = warn_flags + " -Wno-unknown-attributes -Wno-parentheses-equality"
@@ -1384,7 +1384,7 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
     # clang(-cl), or with plain gcc + this flag alone added, runs clean;
     # unmodified gcc -O2 without it crashes ~100% of the time under any
     # workload exercising more than a trivial amount of the runtime.
-    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
+    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -w -Wno-comment -Wno-attributes -Wno-unused-value"
     if is_clang_compiler(cc):
         warn_flags = warn_flags + " -Wno-unknown-attributes -Wno-parentheses-equality"
     mut native_flags = ""
@@ -1575,7 +1575,7 @@ pub def compile_wasm_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: 
     mut cc = "zig cc -target wasm32-freestanding"
     # -fno-strict-aliasing: see the identical comment on the native/cross
     # compile_incremental warn_flags above - same generated C, same UB.
-    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-unknown-attributes -Wno-parentheses-equality"
+    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -w -Wno-comment -Wno-attributes -Wno-unused-value -Wno-unknown-attributes -Wno-parentheses-equality"
     # Same target_extra_flags("wasm32-unknown-unknown") flags the generic cross
     # path would apply, inlined here since this function bypasses that path.
     # -fno-sanitize=undefined: zig cc enables UBSan by default for freestanding
@@ -1653,7 +1653,7 @@ pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bo
     # clang(-cl), or with plain gcc + this flag alone added, runs clean;
     # unmodified gcc -O2 without it crashes ~100% of the time under any
     # workload exercising more than a trivial amount of the runtime.
-    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value"
+    mut warn_flags = " -fno-strict-aliasing -Wno-string-compare -w -Wno-comment -Wno-attributes -Wno-unused-value"
     if is_clang_compiler(cc):
         warn_flags = warn_flags + " -Wno-unknown-attributes -Wno-parentheses-equality"
     mut cmd = cc + " " + opt_flag + warn_flags + " \"-I" + out_dir + "\" -o \"" + exe_path + "\" \"" + c_path + "\" -lm"
