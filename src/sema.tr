@@ -1027,6 +1027,19 @@ extend Sema:
                 return self.decl_family(self.firm_type(e))
             case HirExpr.ECast(_, _):
                 return self.decl_family(self.firm_type(e))
+            case HirExpr.ETryExpr(tin, _):
+                # `f(..)?` on a plain (non-generic) `throws` function: its declared success type
+                match tin.read():
+                    case HirExpr.ECall(tc, _, _):
+                        match tc.read():
+                            case HirExpr.EIdent(tfn, _, _):
+                                if self.fn_defs.contains(tfn) and self.resolve(tfn).kind == SymbolKind.SFunction:
+                                    mut tfd = self.fn_defs.get(tfn)
+                                    if tfd.generics.len == 0 and not tfd.is_extern and tfd.ret_ty as usize != 0 as usize and tfd.throws_ty as usize != 0 as usize and tfd.throws_ty.read().name != "":
+                                        return self.decl_family(tfd.ret_ty.read())
+                            case _: pass
+                    case _: pass
+                return ""
             case HirExpr.ELitInt(_, _): return "int"
             case HirExpr.ELitFloat(_, _): return "float"
             case HirExpr.ELitStr(_, _, _): return "str"
@@ -1209,6 +1222,19 @@ extend Sema:
                 self.check_expr_assignable(pp.read(), hl.get(ai), "argument " + (ai + 1).to_str() + " of '" + name + "()'")
             ai = ai + 1
 
+    # Argument kinds of the built-in str methods whose arguments are all strings (or all ints).
+    pub def check_str_method_arg_kinds(self, method: str, hl: Vec[Pointer[HirExpr]]):
+        mut want = ""
+        if method == "split" or method == "starts_with" or method == "ends_with" or method == "strip_prefix" or method == "strip_suffix" or method == "replace": want = "str"
+        if method == "repeat": want = "int"
+        if want == "": return
+        mut ai = 0
+        while ai < hl.len:
+            mut af = self.firm_family(hl.get(ai))
+            if af != "" and af != "class" and af != "Option" and af != "Pointer" and af != "Result" and ((want == "str" and af != "str") or (want == "int" and af != "int")):
+                self.error("[E-5] Type mismatch: argument " + (ai + 1).to_str() + " of 'str." + method + "()' must be a " + want + " but is given " + self.family_word(af) + ".\n      FIX: pass a " + want + " (convert it explicitly, e.g. str(x) / int(x), if that is what you mean).")
+            ai = ai + 1
+
     # Argument-count range of the built-in methods of str / List / Dict, keyed "family.method".
     # Only methods listed here are checked; anything else is left to the normal lookup.
     pub def builtin_method_range(self, fam: str, method: str) -> int:
@@ -1379,6 +1405,9 @@ extend Sema:
                 if cnt == hl.len or (has_self and cnt + 1 == hl.len): ok = true
                 one = m
             i = i + 1
+        if named == 0 and not variadic and cdef.base_classes.len == 0 and cdef.iface_names.len == 0 and not self.is_universal_method(variant) and variant != "auto" and variant != "spawn" and variant != "from" and variant != "default":
+            self.error("[E-1] No method '" + variant + "' found on type '" + type_name + "'.\n      FIX: check the spelling, or define 'pub def " + variant + "(...)' in '" + type_name + "' (or an 'extend " + type_name + ":' block).")
+            return
         if named == 0 or variadic: return
         if not ok:
             mut pl = "s"
@@ -7593,9 +7622,12 @@ extend Sema:
                             elif _ba_n == "str": _ba_fam = "str"
                     self.check_builtin_method_arity(_ba_fam, method, hl.len)
                     self.check_scalar_method(self.firm_family(hobj), method, hir_expr_type(hobj).name)
+                    if _ba_fam == "str" and not self.classes.contains("str"): self.check_str_method_arg_kinds(method, hl)
                     self.check_builtin_class_method(hir_expr_type(hobj).name, method, hl)
                     self.check_collection_arg_types(hir_expr_type(hobj), method, hl)
-                    if method == "get" or method == "pop" or method == "get_or": self.check_user_method_call(hir_expr_type(hobj).name, obj, method, hl)
+                    if hir_expr_type(hobj).name == "Set" and not self.classes.contains("Set") and not self.is_universal_method(method) and not self.known_collection_method("List", method):
+                        self.error("[E-6] a Set has no method '" + method + "()'.\n      FIX: check the spelling, or that the receiver is the collection you meant.")
+                    if method == "get" or method == "pop" or method == "get_or" or self.is_universal_method(method): self.check_user_method_call(hir_expr_type(hobj).name, obj, method, hl)
                     if hir_expr_type(hobj).name == "void" or hir_expr_type(hobj).name == "":
                         match obj.read():
                             case Expr.EIdent(_sb_t):

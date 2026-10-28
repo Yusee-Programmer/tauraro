@@ -265,6 +265,11 @@ printf 'def main():\n    x = 5\n    y = x * 2.5\n    print(x, y)\n    print(1.5e
 wtr="$(cd "$(dirname "$TAURAROC")" && pwd)/$(basename "$TAURAROC")"
 wout=$(cd "$diagdir" && rm -rf build && "$wtr" warn.tr -o warn 2>&1)
 if [ -n "$wout" ]; then diagfail="$diagfail [C compiler output leaked for a valid program: $(echo "$wout" | head -2 | tr '\n' ' ')]"; fi
+expect_diag "set unknown method" 'def main():\n    mut s: Set[int] = Set[int].init()\n    s.nope()\n' "[E-6] a Set has no method 'nope()'"
+expect_diag "universal-named user method arity" 'class A:\n    pub v: int\nextend A:\n    pub def as_str(self) -> str:\n        return "a"\ndef main():\n    mut a = A()\n    print(a.as_str(1))\n' "[E-4] 'A.as_str()' takes 0 arguments"
+expect_diag "str method arg kind" 'def main():\n    mut p = "a,b".split(42)\n' "[E-5] Type mismatch: argument 1 of 'str.split()'"
+expect_diag "try-call element kind" 'def pn(s: str) throws str -> int:\n    return 1\ndef fl(xs: List[str], s: str) throws str -> int:\n    xs[1] = pn(s)?\n    return 1\ndef main():\n    pass\n' "[E-5] Type mismatch: an element of this List[str]"
+expect_diag "static call unknown method" 'class A:\n    pub v: int\ndef main():\n    mut a = A.nope(1)\n' "[E-1] No method 'nope' found on type 'A'"
 if [ -n "$diagfail" ]; then
     echo "  FAILED:$diagfail"
     failed=$((failed + 1))
