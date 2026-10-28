@@ -5688,6 +5688,9 @@ extend Sema:
                     match htgt.read():
                         case HirExpr.EPropAccess(_fo, _fname, _):
                             mut _fo_ty = hir_expr_type(_fo)
+                            mut _fo_fam = self.firm_family(_fo)
+                            if _fo_fam == "None" or _fo_fam == "int" or _fo_fam == "float" or _fo_fam == "bool" or _fo_fam == "str":
+                                self.error("[E-7] cannot assign the field '" + _fname + "': the value holds " + self.family_word(_fo_fam) + ", not an object.\n      FIX: give the variable a real object first (e.g. `mut p = Point()`) before setting its fields.")
                             if self.classes.contains(_fo_ty.name) and not self.ambiguous_classes.contains(_fo_ty.name) and not self.is_builtin_dispatch_class(_fo_ty.name):
                                 mut _fo_cd = self.classes.get(_fo_ty.name)
                                 if _fo_cd.generics.len == 0:
@@ -7661,6 +7664,8 @@ extend Sema:
                         if hl.len > 0: ret_ty = hir_expr_type(hl.get(0))
                         elif hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                         else: ret_ty = AstType.init("int")
+                    elif not (method == "and_then" or method == "map" or method == "ok_or" or method == "or" or method == "or_else" or method == "Some" or method == "None" or method == "some" or method == "none" or self.is_universal_method(method) or self.class_method_exists("Option", method)):
+                        self.error("[E-6] an Option has no method '" + method + "()'.\n      FIX: Option supports is_some(), is_none(), unwrap(), expect(msg), unwrap_or(default), map, and_then, ok_or, or and or_else.")
                 # Result[T,E] built-in method return types
                 elif hobj_ty.name == "Result":
                     # Static ctors carry the payload's concrete type positionally (unknown
@@ -7683,6 +7688,8 @@ extend Sema:
                     elif method == "unwrap_err" or method == "err":
                         if hobj_ty.args.len > 1: ret_ty = hobj_ty.args.get(1).read()
                         else: ret_ty = AstType.init("str")
+                    elif not (method == "unwrap_or" or method == "expect" or method == "and_then" or method == "map" or method == "map_err" or method == "Ok" or method == "Err" or method == "ok" or method == "err" or self.is_universal_method(method) or self.class_method_exists("Result", method)):
+                        self.error("[E-6] a Result has no method '" + method + "()'.\n      FIX: Result supports is_ok(), is_err(), unwrap(), unwrap_err(), expect(msg), unwrap_or(default), map, map_err and and_then.")
                 # Thread built-in method return types. Key on the RECEIVER NAME
                 # being `Thread` (not on hobj_ty resolving to void) so sibling
                 # `X.spawn` methods - notably `Coro.spawn`, which takes raw

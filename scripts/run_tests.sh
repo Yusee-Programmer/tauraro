@@ -215,6 +215,9 @@ expect_diag "ctor call arity" 'class A:\n    pub v: int\nextend A:\n    pub def 
 expect_diag "ctor call arg kind" 'class A:\n    pub v: int\nextend A:\n    pub def init(v: int) -> A:\n        mut a = A()\n        a.v = v\n        return a\n    pub def get(self) -> int:\n        return self.v\ndef main():\n    mut a = A("s")\n' "[E-5] Type mismatch: argument 1 of 'A.init()'"
 expect_diag "UFCS non-instance" 'class A:\n    pub v: int\nextend A:\n    pub def init(v: int) -> A:\n        mut a = A()\n        a.v = v\n        return a\n    pub def get(self) -> int:\n        return self.v\ndef main():\n    print(A.get(5))\n' "called through the type needs a 'A' instance"
 expect_diag "generic type arg count" 'class Box[T]:\n    pub v: T\nextend Box:\n    pub def init(v: T) -> Box[T]:\n        mut b = Box[T]()\n        b.v = v\n        return b\ndef main():\n    mut b = Box[str,int].init("a")\n' "[E-4] 'Box' takes 1 type argument(s) but 2 given"
+expect_diag "result unknown method" 'def main():\n    mut r = Result.ok(3)\n    print(r.unwrap_zz())\n' "[E-6] a Result has no method 'unwrap_zz()'"
+expect_diag "option unknown method" 'def main():\n    mut o = Option.some(3)\n    print(o.unwrap_zz())\n' "[E-6] an Option has no method 'unwrap_zz()'"
+expect_diag "field assign on None" 'class P:\n    pub x: int\ndef main():\n    mut p = None\n    p.x = 1\n' "[E-7] cannot assign the field 'x'"
 if [ -n "$diagfail" ]; then
     echo "  FAILED:$diagfail"
     failed=$((failed + 1))
