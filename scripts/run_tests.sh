@@ -166,6 +166,9 @@ expect_diag() {
     esac
 }
 CLS='class Th:\n    pub v: int\nextend Th:\n    pub def mk(a: int) -> Th:\n        mut t = Th()\n        t.v = a\n        return t\n    pub def val(self) -> int:\n        return self.v\n'
+expect_diag "str to Pointer" 'def main():\n    mut p: Pointer[int] = "s"\n' "[E-5] Type mismatch"
+expect_diag "list get str index" 'def main():\n    mut v: List[int] = [1]\n    print(v.get("a"))\n' "must be an int"
+expect_diag "vec slice str" 'def main():\n    mut v: Vec[int] = Vec[int].init(2)\n    mut w = v.slice("a", 1)\n' "must be an int"
 expect_diag "fn arity" 'def f(x: int, y: str) -> int:\n    return x\ndef main():\n    f(1)\n' "[E-4] 'f()' takes 2 arguments but 1 was given"
 expect_diag "fn arg type" 'def f(x: int) -> int:\n    return x\ndef main():\n    f("a")\n' "[E-5] Type mismatch: argument 1 of 'f()'"
 expect_diag "method arity" "${CLS}"'def main():\n    mut t = Th()\n    t.val(5)\n' "[E-4] 'Th.val()' takes 0 arguments"

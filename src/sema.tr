@@ -1118,6 +1118,7 @@ extend Sema:
         if act_scalar and (exp == "List" or exp == "Dict" or exp == "class"): return true
         if (exp == "List" and act == "Dict") or (exp == "Dict" and act == "List"): return true
         if exp == "class" and (act == "List" or act == "Dict"): return true
+        if exp == "Pointer" and act == "str": return true
         if (exp == "Pointer" or exp == "Result") and (act == "List" or act == "Dict" or act == "Tuple" or act == "float" or act == "bool" or (exp == "Result" and (act == "int" or act == "str"))): return true
         if act == "None" and (exp_scalar or exp == "List" or exp == "Dict" or exp == "Tuple"): return true
         if act == "class" and (exp_scalar or exp == "List" or exp == "Dict" or exp == "Tuple"): return true
@@ -1518,6 +1519,14 @@ extend Sema:
                 if xf == "str" or xf == "List" or xf == "Dict":
                     self.error("[E-5] Type mismatch: the index of " + ty.name + "." + method + "() must be an int but is " + self.family_word(xf) + ".\n      FIX: pass an integer position.")
             if ty.name == "Set" and method == "remove": vi = 0
+            if ty.name != "Set" and (method == "get" or method == "swap" or method == "truncate" or method == "reserve" or method == "slice" or (ty.name == "Vec" and method == "remove")):
+                mut ii = 0
+                while ii < hl.len:
+                    mut iaf = self.firm_family(hl.get(ii))
+                    if iaf == "str" or iaf == "List" or iaf == "Dict":
+                        self.error("[E-5] Type mismatch: argument " + (ii + 1).to_str() + " of " + ty.name + "." + method + "() must be an int but is " + self.family_word(iaf) + ".\n      FIX: pass an integer position / count.")
+                        break
+                    ii = ii + 1
             if vi >= 0 and vi < hl.len and self.family_mismatch(ef, self.firm_family(hl.get(vi))):
                 self.error("[E-5] Type mismatch: " + ty.name + "[" + ty.args.get(0).read().name + "]." + method + "() is given " + self.family_word(self.firm_family(hl.get(vi))) + ".\n      FIX: pass a '" + ty.args.get(0).read().name + "' (convert it first if needed).")
         elif (ty.name == "Dict" or ty.name == "Map") and ty.args.len > 1:
