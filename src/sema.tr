@@ -309,6 +309,7 @@ pub class Sema:
     pub clo_let_scopes: Vec[int]
     pub loop_blk_floor: Vec[int]   # auto-drop: parallel to loop_scope_base; for an SWhile (whose body shares the enclosing scope) the block_stack depth just before its body block opened, else -1
     pub loop_blk_scope: Vec[int]   # auto-drop: parallel to loop_scope_base; for an SWhile the index of the scope its body locals live in, else -1
+    pub fu_nest: int               # depth of enclosing `for a, b in` loops (they do not push loop_scope_base)
     pub loop_scope_base: Vec[int]  # auto-drop: scope-stack depth marking the start of each enclosing loop's scopes
     pub fn_scope_base: Vec[int]    # auto-drop: scope-stack depth marking the start of each enclosing CLOSURE's scopes — a `return` inside a closure must only drop the closure's own locals, NOT the enclosing function's (else they double-free: released when the closure runs AND at the real function exit)
     pub block_depth: int  # auto-drop: nested-C-block depth (if/while bodies sharing a Scope); 0 = directly in the owning scope's top-level block
@@ -433,6 +434,7 @@ extend Sema:
         s.variadic_elem_ty       = Map[str, Pointer[AstType]].init(8)
         s.fn_defs                = Map[str, FunctionDef].init(32)
         s.loop_scope_base        = Vec[int].init(8)
+        s.fu_nest                = 0
         s.loop_blk_floor         = Vec[int].init(8)
         s.clo_let_names          = Vec[str].init(4)
         s.clo_let_ptrs           = Vec[Pointer[HirExpr]].init(4)
@@ -3426,7 +3428,9 @@ extend Sema:
             # block (an if/while body) stays legal, as in C.
             if kind == SymbolKind.SVariable and decl_scope.variables.contains(name) and not name.starts_with("_"):
                 mut prev = decl_scope.variables.get(name)
-                if prev.kind == SymbolKind.SVariable and prev.decl_block_id == sym.decl_block_id and not prev.is_param:
+                if prev.kind == SymbolKind.SVariable and prev.decl_block_id == sym.decl_block_id and prev.is_param and name != "self" and self.current_func_name != "" and self.closure_depth == 0:
+                    self.error("[N-2] '" + name + "' is a parameter of this function and cannot be declared again with `mut`. Assign to it (`" + name + " = ...`), or pick a different name.")
+                elif prev.kind == SymbolKind.SVariable and prev.decl_block_id == sym.decl_block_id and not prev.is_param:
                     self.error("[N-2] '" + name + "' is already declared in this block. Assign to it without `mut` (`" + name + " = ...`), or pick a different name.")
             if not decl_scope.variables.contains(name): decl_scope.decl_order.push(name)
             elif kind == SymbolKind.SVariable and not name.starts_with("_") and sym.decl_block_id != 0:
@@ -4812,12 +4816,48 @@ extend Sema:
                             self._dup_err(c.line, "[N-6] Class '" + c.name + "' cannot inherit from enum '" + b + "'.\n      FIX: use a field of type '" + b + "' instead.")
                         elif self.interfaces.contains(b):
                             self._dup_err(c.line, "[N-6] '" + b + "' is an interface; class '" + c.name + "' must use `implements " + b + "` instead of inheriting from it.\n      FIX: write `class " + c.name + " implements " + b + ":`.")
+                        elif self.resolve(b).name != "" and (self.resolve(b).kind == SymbolKind.SFunction or self.resolve(b).kind == SymbolKind.SVariable):
+                            self._dup_err(c.line, "[N-6] Base '" + b + "' of class '" + c.name + "' is not a class.\n      FIX: a base class must be a class defined or imported in this program.")
                         elif self.resolve(b).name == "" and not self._is_known_type_name(b):
                             self._dup_err(c.line, "[N-6] Unknown base class '" + b + "' of class '" + c.name + "'.\n      FIX: check the spelling, or import/define '" + b + "'.")
                         bi = bi + 1
                 case _: pass
             di = di + 1
         self.current_file = root_file
+
+    # [E-9] A class / enum / interface name used as a value (`mut y = Point`): there is no such
+    # runtime value; the generated C used to be `expected expression before 'Point'`.
+    pub def check_not_type_value(self, e: Pointer[Expr]):
+        if _is_invalid_ptr(e as usize): return
+        match e.read():
+            case Expr.EIdent(n):
+                if self.is_local_var(n): return
+                mut sy = self.resolve(n)
+                if sy.name != "" and (sy.kind == SymbolKind.SClass or sy.kind == SymbolKind.SEnum or sy.kind == SymbolKind.SInterface) and (self.classes.contains(n) or self.enums.contains(n) or self.interfaces.contains(n)):
+                    self.error("[E-9] '" + n + "' is a type, not a value.\n      FIX: create a value with `" + n + "(...)` (or a static constructor such as `" + n + ".init(...)`), or use the type only in annotations.")
+            case Expr.EPropAccess(_bo, _bp):
+                match _bo.read():
+                    case Expr.EIdent(_bn):
+                        if self.enums.contains(_bn) and _bn != "Option" and _bn != "Result" and not self.is_local_var(_bn) and not self.ambiguous_classes.contains(_bn):
+                            mut _bd = self.enums.get(_bn)
+                            mut _bi = 0
+                            while _bi < _bd.variants.len:
+                                if _bd.variants.get(_bi).name == _bp and _bd.variants.get(_bi).fields.len > 0 and not self.enum_has_method(_bd, _bp):
+                                    self.error("[E-4] Variant '" + _bn + "." + _bp + "' carries " + _bd.variants.get(_bi).fields.len.to_str() + " value(s); it must be called like `" + _bn + "." + _bp + "(...)`.\n      FIX: pass the payload values.")
+                                _bi = _bi + 1
+                    case _: pass
+            case _: pass
+
+    # [E-9] A function name (not a call) used as an arithmetic operand: `f + 1`.
+    pub def check_not_fn_operand(self, e: Pointer[Expr], op: str):
+        if _is_invalid_ptr(e as usize): return
+        match e.read():
+            case Expr.EIdent(n):
+                if self.is_local_var(n): return
+                mut sy = self.resolve(n)
+                if sy.name != "" and sy.kind == SymbolKind.SFunction and self.fn_defs.contains(n):
+                    self.error("[E-9] '" + n + "' is a function, not a number: it cannot be used with '" + op + "'.\n      FIX: call it (`" + n + "(...)`) to use its result.")
+            case _: pass
 
     pub def register_decl(self, d: Pointer[Decl]):
         match d.read():
@@ -5541,6 +5581,9 @@ extend Sema:
                         case _: pass
                 return h_s_expr
             case Stmt.SReturn(e):
+                self.check_not_type_value(e)
+                if self.current_func_name == "" and self.closure_depth == 0 and self.current_class_name == "":
+                    self.error("[N-8] `return` outside a function.\n      FIX: `return` is only valid inside a `def`; remove it or move the code into a function.")
                 # [L-3] (outlives, opt-in --strict): a borrow-returning function
                 # `-> ref str from r` that returns a freshly-built concat is returning
                 # OWNED data, not a borrow of region r — under zero-copy elision that
@@ -5605,6 +5648,7 @@ extend Sema:
                         self.error("[E-5] Type mismatch: " + _rf_who + " is declared to return " + self.family_word(self.current_func_ret_family) + " but this returns " + self.family_word(_rf) + ".\n      FIX: return a value of the declared type, or change the function's return type.")
                 return box_hirstmt(HirStmt.SReturn(_ret_h))
             case Stmt.SLet(name, ownership, is_mut, is_const, is_shared, ty_ptr, val_ptr):
+                self.check_not_type_value(val_ptr)
                 # Rule M-7: none must not be assigned to a non-Optional type
                 if ty_ptr as usize != 0 as usize and val_ptr as usize != 0 as usize:
                     match val_ptr.read():
@@ -5805,6 +5849,7 @@ extend Sema:
                 hval = self.retype_none(hval, ty)
                 return box_hirstmt(HirStmt.SLet(name, ownership, is_mut, is_const, is_shared, ty, hval))
             case Stmt.SAssign(target, val):
+                self.check_not_type_value(val)
                 # `name = <closure literal>` (first assignment, no `mut`) declares an immutable
                 # local exactly like `let`: route it through the SLet path so the closure gets
                 # the stack env / escape analysis / ownership handling instead of an always-
@@ -6246,7 +6291,9 @@ extend Sema:
                 while vi_fu < vars.len:
                     self.declare(vars.get(vi_fu), SymbolKind.SVariable, box_asttype(fu_tys.get(vi_fu)), false)
                     vi_fu = vi_fu + 1
+                self.fu_nest = self.fu_nest + 1
                 mut hblk_fu = self.lower_block(body)
+                self.fu_nest = self.fu_nest - 1
                 self.finalize_scope_drops(hblk_fu)
                 self.exit_scope()
                 return box_hirstmt(HirStmt.SForUnpack(vars, h_iter_fu, hblk_fu))
@@ -6434,10 +6481,15 @@ extend Sema:
                 self.close_block()
                 return box_hirstmt(HirStmt.SGpuBlock(h_gpu_body))
             case Stmt.SBreak(bv):
+                if self.loop_scope_base.len == 0 and self.fu_nest == 0:
+                    self.error("[N-8] `break` outside a loop.\n      FIX: `break` is only valid inside `while` or `for`; use `return` to leave a function.")
                 mut hbv = Pointer[HirExpr](0)
                 if bv as usize != 0 as usize: hbv = self.lower_expr(bv)
                 return box_hirstmt(HirStmt.SBreak(hbv))
-            case Stmt.SContinue: return box_hirstmt(HirStmt.SContinue)
+            case Stmt.SContinue:
+                if self.loop_scope_base.len == 0 and self.fu_nest == 0:
+                    self.error("[N-8] `continue` outside a loop.\n      FIX: `continue` is only valid inside `while` or `for`.")
+                return box_hirstmt(HirStmt.SContinue)
             case Stmt.SPass: return box_hirstmt(HirStmt.SPass)
             case Stmt.SLocalDecl(ldecl):
                 if self.current_func_name != "main":
@@ -6534,7 +6586,37 @@ extend Sema:
         self.declare_pattern_binds_typed(pat, AstType.init("int"))
 
     # Like declare_pattern_binds but uses subj_ty for PBind so `case x if x.method():` works.
+    pub def enum_has_method(self, e: EnumDef, name: str) -> bool:
+        mut mi = 0
+        while mi < e.methods.len:
+            if e.methods.get(mi).name == name: return true
+            mi = mi + 1
+        return false
+
+    # [E-7] A `case E.V(...)` pattern must name an existing variant, and cannot bind more values
+    # than the variant carries.
+    pub def check_variant_pattern(self, type_name: str, variant: str, nbinds: int):
+        if not self.enums.contains(type_name) or type_name == "Option" or type_name == "Result" or self.ambiguous_classes.contains(type_name): return
+        mut ed = self.enums.get(type_name)
+        mut vi = 0
+        while vi < ed.variants.len:
+            mut v = ed.variants.get(vi)
+            if v.name == variant:
+                if nbinds > v.fields.len:
+                    self.error("[E-7] Pattern '" + type_name + "." + variant + "' binds " + nbinds.to_str() + " value(s) but the variant carries " + v.fields.len.to_str() + ".\n      FIX: bind at most " + v.fields.len.to_str() + " name(s), or use `_`.")
+                return
+            vi = vi + 1
+        if variant == "" or self.enum_has_method(ed, variant): return
+        self.error("[E-7] Enum '" + type_name + "' has no variant '" + variant + "' (in a match pattern).\n      FIX: check the spelling of the variant name.")
+
     pub def declare_pattern_binds_typed(self, pat: Pattern, subj_ty: AstType):
+        match pat:
+            case Pattern.PVariant(pt_n, pt_v): self.check_variant_pattern(pt_n, pt_v, 0)
+            case _: pass
+        match pat:
+            case Pattern.PVariantBind(pt_n1, pt_v1, _): self.check_variant_pattern(pt_n1, pt_v1, 1)
+            case Pattern.PVariantBindMany(pt_n2, pt_v2, pt_f2): self.check_variant_pattern(pt_n2, pt_v2, pt_f2.len)
+            case _: pass
         match pat:
             case Pattern.PBind(name): self.declare(name, SymbolKind.SVariable, box_asttype(subj_ty), false)
             case Pattern.PVariantBind(type_name, variant_name, field):
@@ -6863,6 +6945,11 @@ extend Sema:
             case Expr.EBinOp(op, left, right):
                 mut hleft = self.lower_expr(left)
                 mut hright = self.lower_expr(right)
+                if op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**":
+                    self.check_not_type_value(left)
+                    self.check_not_type_value(right)
+                    self.check_not_fn_operand(left, op)
+                    self.check_not_fn_operand(right, op)
                 if true:
                     mut _bo_lf = self.firm_family(hleft)
                     mut _bo_rf = self.firm_family(hright)
@@ -7496,6 +7583,21 @@ extend Sema:
                                     case _: pass
                             case _: pass
                     case _: pass
+                # [E-4] Enum variant constructor `E.A(...)` with the wrong number of payload values.
+                if _recv_name != "" and self.enums.contains(_recv_name) and _recv_name != "Option" and _recv_name != "Result" and not self.is_local_var(_recv_name) and not self.ambiguous_classes.contains(_recv_name):
+                    mut _vc_def = self.enums.get(_recv_name)
+                    mut _vc_i = 0
+                    while _vc_i < _vc_def.variants.len:
+                        mut _vc_v = _vc_def.variants.get(_vc_i)
+                        if _vc_v.name == method and args.len != _vc_v.fields.len:
+                            mut _vc_isfn = false
+                            mut _vc_m = 0
+                            while _vc_m < _vc_def.methods.len:
+                                if _vc_def.methods.get(_vc_m).name == method: _vc_isfn = true
+                                _vc_m = _vc_m + 1
+                            if not _vc_isfn:
+                                self.error("[E-4] Variant '" + _recv_name + "." + method + "' takes " + _vc_v.fields.len.to_str() + " value(s) but " + args.len.to_str() + " were given.\n      FIX: pass exactly the payload values declared in the enum.")
+                        _vc_i = _vc_i + 1
                 # [E-1] Method call on an UNDEFINED receiver: `Foo.bar(...)` where the
                 # bare identifier `Foo` resolves to NOTHING (not a local/param/global/
                 # function, not an imported symbol, not any known type). Without this the

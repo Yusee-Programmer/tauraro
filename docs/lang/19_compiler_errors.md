@@ -41,6 +41,9 @@ category, with its cause, a triggering example, and the fix.
 | [E-7] | Existence | A field that the type does not have |
 | [N-3] | Name | Name is not defined |
 | [N-6] | Name | Unknown, self, enum, interface or cyclic base class |
+| [N-7] | Name | Missing module or imported symbol |
+| [N-8] | Name | `break`/`continue` outside a loop, `return` outside a function |
+| [E-9] | Existence | A type or function name used as a value |
 | [N-5] | Name | Duplicate declaration (function, type, field, method, variant, parameter, global) |
 | [N-4] | Name | Unknown type in an annotation |
 | [G-2] | Generics | A type parameter cannot be inferred from the arguments |
@@ -682,6 +685,26 @@ that the type does not declare.
 **Cause:** The base-class list of a class names something that is not a usable class.
 
 **FIX:** Define or import the base class, use `implements` for interfaces, use a field for enums, and remove cycles.
+
+### [N-7] Missing Module or Symbol
+
+**Message:** `Module 'x' was not found.` / `Module 'm' has no symbol 'name'.`
+
+**Cause:** An `import` names a module that is not on the search path, or `from m import name` names something declared nowhere in the program.
+
+**FIX:** Check the spelling and module path; add the directory to `TAURARO_PATH`.
+
+### [N-8] Statement Outside Its Context
+
+**Message:** `` `break` outside a loop. `` (also `continue`, and `return` outside a function)
+
+**FIX:** Use them only inside `while`/`for` (break, continue) or a `def` (return).
+
+### [E-9] Type or Function Used as a Value
+
+**Message:** `'A' is a type, not a value.` / `'f' is a function, not a number.`
+
+**FIX:** Construct a value with `A(...)`, or call the function: `f(...)`.
 
 ### [N-3] Name Not Defined
 

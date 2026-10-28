@@ -68,6 +68,9 @@ pub class ModuleResolver:
     # Unity build merges every module into one flat namespace, so a later module's
     # private helper with the same name would silently resolve to the first one's.
     pub fn_owner:         Map[str, str]
+    pub import_errors:    Vec[str]   # "file:line: [N-7] ..." for unresolved imports
+    pub pending_syms:     Vec[str]   # "file|line|module|name" for `from m import name`, checked once everything is loaded
+    pub last_found:       bool       # set by resolve_module_path
 
 extend ModuleResolver:
     pub def init() -> ModuleResolver:
@@ -81,6 +84,9 @@ extend ModuleResolver:
         r.current_mod      = ""
         r.parse_errors     = 0
         r.fn_owner         = Map[str, str].init(256)
+        r.import_errors    = Vec[str].init(0)
+        r.pending_syms     = Vec[str].init(0)
+        r.last_found       = true
         r.search_paths.push(".")
         r.search_paths.push("tauraro")
         r.search_paths.push("..")
@@ -202,6 +208,78 @@ extend ModuleResolver:
             i = i + 1
         return p
 
+    # 1-based line of the `import`/`from` statement naming mod_path (0 if not found).
+    pub def _import_line(self, source: str, mod_path: str) -> int:
+        mut n = source.len()
+        mut start = 0
+        mut line_no = 1
+        mut i = 0
+        while i <= n:
+            if i == n or source.slice(i, i + 1) == "\n":
+                mut l = source.slice(start, i).trim()
+                if (l.starts_with("import ") or l.starts_with("from ")) and l.index_of(mod_path) >= 0: return line_no
+                start = i + 1
+                line_no = line_no + 1
+            i = i + 1
+        return 0
+
+    # Names declared anywhere in the loaded program (functions, types, globals, externs, aliases).
+    pub def _program_declares(self, name: str) -> bool:
+        mut k = 0
+        while k < self.all_decls.len:
+            match self.all_decls.get(k).read():
+                case Decl.DFunction(f):
+                    if f.name == name: return true
+                case Decl.DClass(c):
+                    if c.name == name: return true
+                case Decl.DActor(c):
+                    if c.name == name: return true
+                case Decl.DEnum(e):
+                    if e.name == name: return true
+                case Decl.DInterface(i):
+                    if i.name == name: return true
+                case Decl.DTypeAlias(an, _):
+                    if an == name: return true
+                case Decl.DDecoratorDef(f):
+                    if f.name == name: return true
+                case Decl.DExtern(_, fns):
+                    mut ei = 0
+                    while ei < fns.len:
+                        if fns.get(ei).name == name: return true
+                        ei = ei + 1
+                case Decl.DTopLevelStmt(gs):
+                    match gs.read():
+                        case Stmt.SLet(gn, _, _, _, _, _, _):
+                            if gn == name: return true
+                        case _: pass
+                case _: pass
+            k = k + 1
+        return false
+
+    # Names the compiler itself provides (builtin types), importable by convention from std modules.
+    pub def _import_builtin_word(self, n: str) -> bool:
+        if n == "int" or n == "float" or n == "bool" or n == "char" or n == "str" or n == "List" or n == "Vec" or n == "Dict" or n == "Map" or n == "Set" or n == "Option" or n == "Result" or n == "Tuple" or n == "Array" or n == "Pointer": return true
+        if n == "Shared" or n == "Weak" or n == "Chan" or n == "Channel" or n == "Atomic" or n == "Mutex" or n == "RwLock" or n == "Thread" or n == "ThreadPool" or n == "ThreadLocal" or n == "StringBuilder" or n == "StringObj" or n == "Bytes" or n == "String" or n == "Any" or n == "Future" or n == "Task" or n == "AsyncTask" or n == "AsyncPool": return true
+        return false
+
+    # [N-7] `from m import name` where `name` is declared nowhere in the loaded program.
+    pub def check_imported_symbols(self):
+        mut k = 0
+        while k < self.pending_syms.len:
+            mut parts = self.pending_syms.get(k).split("|")
+            if parts.len == 4:
+                mut nm = parts.get(3)
+                if nm != "*" and nm != "" and not self._import_builtin_word(nm) and not self._program_declares(nm):
+                    mut sub = parts.get(2).replace(".", "/") + "/" + nm
+                    mut found_sub = false
+                    mut si = 0
+                    while si < self.search_paths.len:
+                        if file_exists(self.search_paths.get(si) + "/" + sub + ".tr") or file_exists(self.search_paths.get(si) + "/" + sub + "/mod.tr"): found_sub = true
+                        si = si + 1
+                    if not found_sub:
+                        self.import_errors.push(parts.get(0) + ":" + parts.get(1) + ": [N-7] Module '" + parts.get(2) + "' has no symbol '" + nm + "'.\n      FIX: check the spelling of '" + nm + "', or the module it is imported from.")
+            k = k + 1
+
     # Resolve a file from disk.
     # is_root = true  -> include all declarations (the user's entry file)
     # is_root = false -> include only pub declarations (imported dependency)
@@ -251,8 +329,17 @@ extend ModuleResolver:
             match decl_ptr.read():
                 case Decl.DImport(mod_path, alias):
                     self.resolve_module_path(mod_path)
+                    if not self.last_found:
+                        self.import_errors.push(path + ":" + self._import_line(source, mod_path).to_str() + ": [N-7] Module '" + mod_path + "' was not found.\n      FIX: check the module path (dots for directories), or add its directory to TAURARO_PATH.")
                 case Decl.DFromImport(mod_path, items):
                     self.resolve_module_path(mod_path)
+                    if not self.last_found:
+                        self.import_errors.push(path + ":" + self._import_line(source, mod_path).to_str() + ": [N-7] Module '" + mod_path + "' was not found.\n      FIX: check the module path (dots for directories), or add its directory to TAURARO_PATH.")
+                    else:
+                        mut ii = 0
+                        while ii < items.len:
+                            self.pending_syms.push(path + "|" + self._import_line(source, mod_path).to_str() + "|" + mod_path + "|" + items.get(ii).name)
+                            ii = ii + 1
                 case _:
                     # Always collect ALL declarations from a module - including private
                     # helpers (def without pub). Private functions are only called within
@@ -450,6 +537,7 @@ extend ModuleResolver:
                     self.mod_dot_paths.push(mod_path)
                     self.mod_file_paths.push(pkg_path)
                 self.current_mod = saved_mod
+                self.last_found = true
                 return
  
             # 2. Single-file module: <base>/<dir>.tr
@@ -461,6 +549,7 @@ extend ModuleResolver:
                     self.mod_dot_paths.push(mod_path)
                     self.mod_file_paths.push(flat_path)
                 self.current_mod = saved_mod
+                self.last_found = true
                 return
 
             # 3. taupkg package layout (no mod.tr): <base>/<dir>/src/<pkg>.tr,
@@ -483,10 +572,12 @@ extend ModuleResolver:
                     self.mod_dot_paths.push(mod_path)
                     self.mod_file_paths.push(pkg_src_path)
                 self.current_mod = saved_mod
+                self.last_found = true
                 return
 
             sidx = sidx + 1
 
         self.current_mod = saved_mod
+        self.last_found = false
         # Module not found on any search path - silently skip.
         # (The sema will emit an "unknown symbol" error if the import is used.)

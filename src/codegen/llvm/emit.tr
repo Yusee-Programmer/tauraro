@@ -12,7 +12,7 @@ from core.string import StringBuilder
 from core.map import Map
 from core.vec import Vec
 from taumir.ir import LModule, LFunc, LBlock, LInst, LTerm
-from codegen.llvm.lltype import _ll_ty, _ll_hexpad16, _ll_str_escape, _ll_str_bytelen
+from codegen.llvm.lltype import _ll_ty, _ll_hexpad16, _ll_str_escape
 
 pub class LlvmEmitter:
     pub out:     StringBuilder

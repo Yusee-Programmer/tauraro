@@ -2095,6 +2095,14 @@ pub def main(args: Vec[str]):
             resolver.add_search_path(get_path_env_entry(tauraro_path_env, epi))
             epi = epi + 1
     mut prog = resolver.resolve_main(input_path)
+    resolver.check_imported_symbols()
+    if resolver.import_errors.len > 0 and resolver.parse_errors == 0:
+        mut ie = 0
+        while ie < resolver.import_errors.len:
+            _print_diag("error", resolver.import_errors.get(ie))
+            ie = ie + 1
+        print(c_red("error") + ": " + resolver.import_errors.len.to_str() + " import error(s); aborting compilation.")
+        _tr_exit(1)
     # Parser errors are fatal: a malformed parse cannot be safely compiled.
     if resolver.parse_errors > 0:
         print(c_red("error") + ": " + resolver.parse_errors.to_str() + " parse error(s); aborting compilation.")
