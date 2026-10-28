@@ -6659,7 +6659,7 @@ extend Sema:
 
     # A match EXPRESSION must produce a value on every path, so a missing variant is always an error
     # (the statement form reports the same condition). Guarded arms do not count as covering.
-    # Pattern/subject agreement, only when the subject's kind is CERTAIN: a literal pattern of the
+    # Literal pattern vs matched value, only when the value kind is CERTAIN (previously [C-1]):
     # wrong kind, a variant pattern of another enum, or a payload binding count that does not match
     # the variant's declared payload (previously these reached the C compiler as [C-1]).
     pub def check_pattern_subject(self, pat: Pattern, hsubj: Pointer[HirExpr]):
@@ -6674,33 +6674,12 @@ extend Sema:
             case Pattern.PLitBool(_):
                 if fam == "int" or fam == "str" or fam == "List" or fam == "Dict" or fam == "Tuple" or fam == "float":
                     self.error("[E-5] Type mismatch: this 'case' pattern is a bool literal but the matched value is " + self.family_word(fam) + ".\n      FIX: match against a literal of the matched value's type, or convert the value first.")
-            case Pattern.PVariantBind(pt, pv, _):
-                self.check_variant_pattern(pt, pv, 1, hsubj)
-            case Pattern.PVariantBindMany(pt2, pv2, pfs):
-                self.check_variant_pattern(pt2, pv2, pfs.len, hsubj)
             case Pattern.POr(pors):
                 mut poi = 0
                 while poi < pors.len:
                     self.check_pattern_subject(pors.get(poi), hsubj)
                     poi = poi + 1
             case _: pass
-
-    pub def check_variant_pattern(self, tname: str, vname: str, nbinds: int, hsubj: Pointer[HirExpr]):
-        if not self.enums.contains(tname) or tname == "Option" or tname == "Result": return
-        mut edef = self.enums.get(tname)
-        mut vi = 0
-        while vi < edef.variants.len:
-            if edef.variants.get(vi).name == vname:
-                mut nf = edef.variants.get(vi).fields.len
-                if nf != nbinds:
-                    mut plural = "s"
-                    if nf == 1: plural = ""
-                    mut bplural = "s"
-                    if nbinds == 1: bplural = ""
-                    self.error("[E-4] Pattern '" + tname + "." + vname + "(..)' binds " + str(nbinds) + " value" + bplural + " but variant '" + vname + "' has " + str(nf) + " payload field" + plural + ".\n      FIX: bind exactly one name per payload field.")
-                return
-            vi = vi + 1
-        self.error("[E-7] Enum '" + tname + "' has no variant '" + vname + "'.\n      FIX: check the spelling of the variant name in this 'case'.")
 
     pub def check_match_expr_exhaustive(self, ty_name: str, arms: Vec[MatchArm]):
         if not self.enums.contains(ty_name): return

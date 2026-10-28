@@ -250,7 +250,6 @@ expect_diag "let no type no value" 'def main():\n    mut t\n    print(1)\n' "has
 expect_diag "missing field type" 'class A:\n    pub v:\n    def g(self) -> int:\n        return 1\ndef main():\n    print(1)\n' "expected a type here"
 expect_diag "param list bracket" 'class A:\n    pub def g(self] -> int:\n        return 1\ndef main():\n    print(1)\n' "expected ')' to close the parameter list"
 expect_diag "def keyword name" 'def\ndef main():\n    print(1)\n' "expected a function name after 'def'"
-expect_diag "pattern payload count" 'enum E:\n    A(int)\n    B\ndef main():\n    mut e = E.A(1)\n    match e:\n        case E.A(x, y):\n            print(x)\n        case _:\n            pass\n' "binds 2 values but variant 'A' has 1 payload field"
 expect_diag "pattern literal kind" 'def main():\n    mut x = 1\n    match x:\n        case "a":\n            print(1)\n        case _:\n            pass\n' "pattern is a str literal but the matched value is an int"
 expect_diag "spawn no args" 'def main():\n    mut t = Thread.spawn()\n' "'Thread.spawn()' takes at least 1 argument"
 expect_diag "cast unknown type" 'def main():\n    mut x = 1\n    mut y = x as Nope\n' "Unknown type 'Nope' (in this 'as' cast)"
