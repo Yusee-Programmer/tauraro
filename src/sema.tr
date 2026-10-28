@@ -1189,6 +1189,24 @@ extend Sema:
                 self.check_expr_assignable(pty.read(), args.get(ai), "argument " + (ai + 1).to_str() + " of " + what)
             ai = ai + 1
 
+    # `f(a, b)` where `f` is a variable holding a closure / function pointer `def(P1, P2) -> R`:
+    # the argument count (and, for declared int/str/... parameters, the kinds) must match.
+    pub def check_callable_value_args(self, name: str, fty: AstType, hl: Vec[Pointer[HirExpr]]):
+        mut want = fty.args.len - 1
+        if want != hl.len:
+            mut plural = "s"
+            if want == 1: plural = ""
+            mut verb = "were"
+            if hl.len == 1: verb = "was"
+            self.error("[E-4] the function value '" + name + "' takes " + want.to_str() + " argument" + plural + " but " + hl.len.to_str() + " " + verb + " given.\n      FIX: call it with exactly " + want.to_str() + " argument" + plural + " (see where '" + name + "' is defined).")
+            return
+        mut ai = 0
+        while ai < hl.len:
+            mut pp = fty.args.get(ai)
+            if pp as usize != 0 as usize:
+                self.check_expr_assignable(pp.read(), hl.get(ai), "argument " + (ai + 1).to_str() + " of '" + name + "()'")
+            ai = ai + 1
+
     # Argument-count range of the built-in methods of str / List / Dict, keyed "family.method".
     # Only methods listed here are checked; anything else is left to the normal lookup.
     pub def builtin_method_range(self, fam: str, method: str) -> int:
@@ -6954,6 +6972,7 @@ extend Sema:
                             # Calling through a function-pointer value (def(...)->R):
                             # the call result is the signature's return type (last arg).
                             if ret_ty.name == "def" and ret_ty.args.len > 0:
+                                if _fsym.kind == SymbolKind.SVariable: self.check_callable_value_args(n, ret_ty, hl)
                                 ret_ty = ret_ty.args.get(ret_ty.args.len - 1).read()
                             # Calling a closure value (type `lambda`): the result is the closure's
                             # recorded return type, or `int` for a bare `lambda` (documented default).

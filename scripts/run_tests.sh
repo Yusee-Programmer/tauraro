@@ -209,6 +209,8 @@ expect_diag "string minus" 'def main():\n    mut s = "a" - "b"\n' "[E-5] Type mi
 expect_diag "None arithmetic" 'def main():\n    mut x = None\n    mut y = x + 1\n' "[E-5] Type mismatch: '+' cannot be applied to None"
 expect_diag "atomic arity" 'def main():\n    mut a: Atomic[int] = Atomic.new(0)\n    a.add()\n' "[E-4] 'Atomic.add()' takes 1 argument"
 expect_diag "spawn arity" 'def w(a: int, b: int) -> void:\n    pass\ndef main():\n    mut t = Thread.spawn(w, 1)\n' "[E-4] 'Thread.spawn(w, ...)'"
+expect_diag "closure var arity" 'def main():\n    mut c = lambda x: x + 1\n    print(c(1, 2))\n' "[E-4] the function value 'c' takes 1 argument"
+expect_diag "closure var arg kind" 'def main():\n    mut f = def(x: int) -> int:\n        return x\n    print(f("a"))\n' "[E-5] Type mismatch: argument 1 of 'f()'"
 if [ -n "$diagfail" ]; then
     echo "  FAILED:$diagfail"
     failed=$((failed + 1))
