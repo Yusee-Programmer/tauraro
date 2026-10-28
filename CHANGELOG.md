@@ -16,7 +16,7 @@ there is no deprecation period.
 - `**` now behaves like Python: `-2 ** 2` is `-4` (the unary minus used to bind first), a float
   operand gives a float (`2.0 ** 0.5` used to be truncated to an `int`), `int ** int` is exact
   instead of going through `pow()` on doubles, and `2 ** -1` is `0.5`. A negative non-literal
-  integer exponent panics with a message.
+  integer exponent panics with a message. Float `//` (`2 // 1.5`) is now a float and no longer divides by zero on a fractional divisor.
 
 ## [0.1.0] - 2026-10-27
 

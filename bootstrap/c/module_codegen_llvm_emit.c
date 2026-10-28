@@ -49,9 +49,9 @@ __attribute__((hot)) TrStr LlvmEmitter_load_vreg(LlvmEmitter* self, long long v)
 #line 49 "src/codegen/llvm/emit.tr"
     ({ __auto_type _ord_t6502 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("  ", 2LL)), (t))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = load ", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (LlvmEmitter_vty(self, v)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ptr %v", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t6503 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t6502); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(v)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); LlvmEmitter_w(self, _at_t6503); _tr_str_release(_at_t6503); });
 #line 50 "src/codegen/llvm/emit.tr"
-    TrStr _trret1816 = _tr_str_retain(t);
+    TrStr _trret1817 = _tr_str_retain(t);
     _tr_str_release(t);
-    return _trret1816;
+    return _trret1817;
 }
 
 __attribute__((hot)) TrStr LlvmEmitter_load_vreg_as(LlvmEmitter* self, long long v, TrStr ty) {
@@ -60,9 +60,9 @@ __attribute__((hot)) TrStr LlvmEmitter_load_vreg_as(LlvmEmitter* self, long long
 #line 55 "src/codegen/llvm/emit.tr"
     ({ TrStr _at_t6504 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("  ", 2LL)), (t))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = load ", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ty)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ptr %v", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(v)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); LlvmEmitter_w(self, _at_t6504); _tr_str_release(_at_t6504); });
 #line 56 "src/codegen/llvm/emit.tr"
-    TrStr _trret1817 = _tr_str_retain(t);
+    TrStr _trret1818 = _tr_str_retain(t);
     _tr_str_release(t);
-    return _trret1817;
+    return _trret1818;
 }
 
 __attribute__((hot)) void LlvmEmitter_store_vreg(LlvmEmitter* self, long long v, TrStr ty, TrStr val) {
@@ -83,10 +83,10 @@ __attribute__((hot)) TrStr LlvmEmitter_addr_of_base(LlvmEmitter* self, long long
 #line 68 "src/codegen/llvm/emit.tr"
     ({ TrStr _at_t6509 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("  ", 2LL)), (bp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = inttoptr i64 ", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (bi)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" to ptr\n", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); LlvmEmitter_w(self, _at_t6509); _tr_str_release(_at_t6509); });
 #line 69 "src/codegen/llvm/emit.tr"
-    TrStr _trret1818 = _tr_str_retain(bp);
+    TrStr _trret1819 = _tr_str_retain(bp);
     _tr_str_release(bi);
     _tr_str_release(bp);
-    return _trret1818;
+    return _trret1819;
 }
 
 __attribute__((hot)) TrStr LlvmEmitter_user_ret_ty(LlvmEmitter* self, TrStr name) {
@@ -1101,9 +1101,9 @@ __attribute__((hot)) TrStr LlvmEmitter_emit_module(LlvmEmitter* self) {
 #line 503 "src/codegen/llvm/emit.tr"
     LlvmEmitter_w(self, _tr_str_lit_len("!6 = !{!3, !3, i64 0}\n", 22LL));
 #line 504 "src/codegen/llvm/emit.tr"
-    TrStr _trret1819 = StringObj_as_str(StringBuilder_to_string(self->out));
+    TrStr _trret1820 = StringObj_as_str(StringBuilder_to_string(self->out));
     List_TrStr_free(emitted);
-    return _trret1819;
+    return _trret1820;
 }
 
 __attribute__((hot)) TrStr _tbaa_suffix(long long aclass) {

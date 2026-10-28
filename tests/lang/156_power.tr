@@ -47,6 +47,10 @@ def main():
     f **= 2
     t.assert_eq_float(f, 2.25, 0.000000001, "**= on a float")
 
+    t.section("float floor division")
+    t.assert_eq_float(2 // 1.5, 1.0, 0.000000001, "int // float is a float")
+    t.assert_eq_float(1.0 // 0.3, 3.0, 0.000000001, "no integer divide-by-zero on a fractional divisor")
+
     t.section("classes")
     mut v = V.init(3)
     t.assert_eq_int(v ** 7, 307, "__pow__")

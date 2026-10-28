@@ -392,7 +392,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
 #line 238 "src/codegen/native/elf.tr"
     _shdr(out, n_shstr, 3LL, 0LL, 0LL, shstr_off, shstr->len, 0LL, 0LL, 1LL, 0LL);
 #line 240 "src/codegen/native/elf.tr"
-    bool _trret1826 = ByteBuf_write_file(out, out_path);
+    bool _trret1827 = ByteBuf_write_file(out, out_path);
     _tr_obj_release(text, _trdrop_ByteBuf);
     List_ptr_free_obj(trelocs, _trdrop_TextReloc);
     List_i64_free(func_base);
@@ -403,6 +403,6 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     _tr_obj_release(rela, _trdrop_ByteBuf);
     _tr_obj_release(shstr, _trdrop_ByteBuf);
     _tr_obj_release(out, _trdrop_ByteBuf);
-    return _trret1826;
+    return _trret1827;
 }
 

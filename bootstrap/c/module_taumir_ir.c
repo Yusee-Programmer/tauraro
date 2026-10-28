@@ -523,10 +523,10 @@ __attribute__((hot)) TrStr LModule_resolve_method_ov(LModule* self, TrStr cls, T
 #line 433 "src/taumir/ir.tr"
             if (LModule_is_user_fn(self, mm)) {
 #line 433 "src/taumir/ir.tr"
-                TrStr _trret1488 = _tr_str_retain(mm);
+                TrStr _trret1489 = _tr_str_retain(mm);
                 _tr_str_release(cur);
                 _tr_str_release(mm);
-                return _trret1488;
+                return _trret1489;
             }
         }
 #line 434 "src/taumir/ir.tr"
@@ -534,10 +534,10 @@ __attribute__((hot)) TrStr LModule_resolve_method_ov(LModule* self, TrStr cls, T
 #line 435 "src/taumir/ir.tr"
         if (LModule_is_user_fn(self, mangled)) {
 #line 435 "src/taumir/ir.tr"
-            TrStr _trret1489 = _tr_str_retain(mangled);
+            TrStr _trret1490 = _tr_str_retain(mangled);
             _tr_str_release(cur);
             _tr_str_release(mangled);
-            return _trret1489;
+            return _trret1490;
         }
 #line 436 "src/taumir/ir.tr"
         TrStr _strtmp_t6093 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
@@ -919,10 +919,10 @@ __attribute__((hot)) TrStr LModule_resolve_method(LModule* self, TrStr cls, TrSt
 #line 611 "src/taumir/ir.tr"
         if (LModule_is_user_fn(self, mangled)) {
 #line 611 "src/taumir/ir.tr"
-            TrStr _trret1490 = _tr_str_retain(mangled);
+            TrStr _trret1491 = _tr_str_retain(mangled);
             _tr_str_release(cur);
             _tr_str_release(mangled);
-            return _trret1490;
+            return _trret1491;
         }
 #line 612 "src/taumir/ir.tr"
         TrStr _strtmp_t6125 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);

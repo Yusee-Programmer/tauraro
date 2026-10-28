@@ -205,9 +205,9 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
         }
     }
 #line 129 "src/codegen/gpu/mod.tr"
-    TrStr _trret1853 = StringObj_as_str(StringBuilder_to_string(sb));
+    TrStr _trret1854 = StringObj_as_str(StringBuilder_to_string(sb));
     _tr_str_release(tgt);
     StringBuilder__tr_fn_free(sb);
-    return _trret1853;
+    return _trret1854;
 }
 

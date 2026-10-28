@@ -87,9 +87,9 @@ __attribute__((hot)) bool CppExporter__cpp_list_ok(CppExporter* self, AstType* t
 #line 65 "src/codegen/cpp_export.tr"
     TrStr ek = CppExporter__cpp_ty_kind(self, (*((AstType**)List_ptr_get(ty->args, 0LL))));
 #line 66 "src/codegen/cpp_export.tr"
-    bool _trret1451 = ((_tr_str_eqv((ek), (_tr_str_lit_len("scalar", 6LL))) || _tr_str_eqv((ek), (_tr_str_lit_len("str", 3LL)))) || _tr_str_eqv((ek), (_tr_str_lit_len("class", 5LL))));
+    bool _trret1452 = ((_tr_str_eqv((ek), (_tr_str_lit_len("scalar", 6LL))) || _tr_str_eqv((ek), (_tr_str_lit_len("str", 3LL)))) || _tr_str_eqv((ek), (_tr_str_lit_len("class", 5LL))));
     _tr_str_release(ek);
-    return _trret1451;
+    return _trret1452;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_list_elem_kind(CppExporter* self, AstType* ty) {
@@ -111,8 +111,8 @@ __attribute__((hot)) TrStr CppExporter__cpp_list_elem_c(CppExporter* self, AstTy
         return _tr_str_lit_len("TrStr", 5LL);
     }
 #line 74 "src/codegen/cpp_export.tr"
-    TrStr _trret1452 = CGenerator_type_to_c(self->gen, elem);
-    return _trret1452;
+    TrStr _trret1453 = CGenerator_type_to_c(self->gen, elem);
+    return _trret1453;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_list_elem_cpp(CppExporter* self, AstType* ty) {
@@ -126,12 +126,12 @@ __attribute__((hot)) TrStr CppExporter__cpp_list_elem_cpp(CppExporter* self, Ast
 #line 78 "src/codegen/cpp_export.tr"
     if (_tr_dict_contains(self->cls_set, _tr_strz(elem->name))) {
 #line 78 "src/codegen/cpp_export.tr"
-        TrStr _trret1453 = _tr_str_retain(elem->name);
-        return _trret1453;
+        TrStr _trret1454 = _tr_str_retain(elem->name);
+        return _trret1454;
     }
 #line 79 "src/codegen/cpp_export.tr"
-    TrStr _trret1454 = CGenerator_type_to_c(self->gen, elem);
-    return _trret1454;
+    TrStr _trret1455 = CGenerator_type_to_c(self->gen, elem);
+    return _trret1455;
 }
 
 __attribute__((hot)) bool CppExporter__cpp_slot_ok(CppExporter* self, TrStr name) {
@@ -199,9 +199,9 @@ __attribute__((hot)) bool CppExporter__cpp_dict_ok(CppExporter* self, AstType* t
         return false;
     }
 #line 105 "src/codegen/cpp_export.tr"
-    bool _trret1455 = CppExporter__cpp_slot_ok(self, (*((AstType**)List_ptr_get(ty->args, 1LL)))->name);
+    bool _trret1456 = CppExporter__cpp_slot_ok(self, (*((AstType**)List_ptr_get(ty->args, 1LL)))->name);
     _tr_str_release(kn);
-    return _trret1455;
+    return _trret1456;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_dict_kkind(CppExporter* self, AstType* ty) {
@@ -476,9 +476,9 @@ __attribute__((hot)) bool CppExporter__cpp_method_ok(CppExporter* self, HirFunct
         _tr_str_release(k);
     }
 #line 220 "src/codegen/cpp_export.tr"
-    bool _trret1456 = has_self;
+    bool _trret1457 = has_self;
     _tr_str_release(rk);
-    return _trret1456;
+    return _trret1457;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_tuple_type_cpp(CppExporter* self, AstType* ty) {
@@ -503,9 +503,9 @@ __attribute__((hot)) TrStr CppExporter__cpp_tuple_type_cpp(CppExporter* self, As
         i = (i + 1LL);
     }
 #line 230 "src/codegen/cpp_export.tr"
-    TrStr _trret1457 = _tr_strx_concatv((s), (_tr_str_lit_len(">", 1LL)));
+    TrStr _trret1458 = _tr_strx_concatv((s), (_tr_str_lit_len(">", 1LL)));
     _tr_str_release(s);
-    return _trret1457;
+    return _trret1458;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_c_ty(CppExporter* self, AstType* ty) {
@@ -536,9 +536,9 @@ __attribute__((hot)) TrStr CppExporter__cpp_c_ty(CppExporter* self, AstType* ty)
         return _tr_str_lit_len("void", 4LL);
     }
 #line 241 "src/codegen/cpp_export.tr"
-    TrStr _trret1458 = CGenerator_type_to_c(self->gen, ty);
+    TrStr _trret1459 = CGenerator_type_to_c(self->gen, ty);
     _tr_str_release(k);
-    return _trret1458;
+    return _trret1459;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_c_arg(CppExporter* self, AstType* ty, TrStr name) {
@@ -547,28 +547,28 @@ __attribute__((hot)) TrStr CppExporter__cpp_c_arg(CppExporter* self, AstType* ty
 #line 245 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("class", 5LL)))) {
 #line 245 "src/codegen/cpp_export.tr"
-        TrStr _trret1459 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("(", 1LL)), (ty->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1460 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("(", 1LL)), (ty->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1459;
+        return _trret1460;
     }
 #line 246 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("list", 4LL)))) {
 #line 246 "src/codegen/cpp_export.tr"
-        TrStr _trret1460 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_list_sfx(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("(List_", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1461 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_list_sfx(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("(List_", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1460;
+        return _trret1461;
     }
 #line 247 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("dict", 4LL)))) {
 #line 247 "src/codegen/cpp_export.tr"
-        TrStr _trret1461 = _tr_strx_concatv((_tr_str_lit_len("(TrMap*)", 8LL)), (name));
+        TrStr _trret1462 = _tr_strx_concatv((_tr_str_lit_len("(TrMap*)", 8LL)), (name));
         _tr_str_release(k);
-        return _trret1461;
+        return _trret1462;
     }
 #line 248 "src/codegen/cpp_export.tr"
-    TrStr _trret1462 = _tr_str_retain(name);
+    TrStr _trret1463 = _tr_str_retain(name);
     _tr_str_release(k);
-    return _trret1462;
+    return _trret1463;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_param_decl(CppExporter* self, AstType* ty, TrStr name) {
@@ -577,42 +577,42 @@ __attribute__((hot)) TrStr CppExporter__cpp_param_decl(CppExporter* self, AstTyp
 #line 252 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("str", 3LL)))) {
 #line 252 "src/codegen/cpp_export.tr"
-        TrStr _trret1463 = _tr_strx_concatv((_tr_str_lit_len("const std::string& ", 19LL)), (name));
+        TrStr _trret1464 = _tr_strx_concatv((_tr_str_lit_len("const std::string& ", 19LL)), (name));
         _tr_str_release(k);
-        return _trret1463;
+        return _trret1464;
     }
 #line 253 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("class", 5LL)))) {
 #line 253 "src/codegen/cpp_export.tr"
-        TrStr _trret1464 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), (ty->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1465 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), (ty->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1464;
+        return _trret1465;
     }
 #line 254 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("list", 4LL)))) {
 #line 254 "src/codegen/cpp_export.tr"
-        TrStr _trret1465 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_list_elem_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("const std::vector<", 18LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">& ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1466 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_list_elem_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("const std::vector<", 18LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">& ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1465;
+        return _trret1466;
     }
 #line 255 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("dict", 4LL)))) {
 #line 255 "src/codegen/cpp_export.tr"
-        TrStr _trret1466 = ({ __auto_type _ord_t5896 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_dict_key_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("const std::map<", 15LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t5896); TrStr _tr_cr = (CppExporter__cpp_dict_v_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">& ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+        TrStr _trret1467 = ({ __auto_type _ord_t5896 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_dict_key_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("const std::map<", 15LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t5896); TrStr _tr_cr = (CppExporter__cpp_dict_v_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">& ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
         _tr_str_release(k);
-        return _trret1466;
+        return _trret1467;
     }
 #line 256 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("tuple", 5LL)))) {
 #line 256 "src/codegen/cpp_export.tr"
-        TrStr _trret1467 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_tuple_type_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1468 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_tuple_type_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1467;
+        return _trret1468;
     }
 #line 257 "src/codegen/cpp_export.tr"
-    TrStr _trret1468 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (CGenerator_type_to_c(self->gen, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
+    TrStr _trret1469 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (CGenerator_type_to_c(self->gen, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
     _tr_str_release(k);
-    return _trret1468;
+    return _trret1469;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_call_arg(CppExporter* self, AstType* ty, TrStr name) {
@@ -621,21 +621,21 @@ __attribute__((hot)) TrStr CppExporter__cpp_call_arg(CppExporter* self, AstType*
 #line 261 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("str", 3LL)))) {
 #line 261 "src/codegen/cpp_export.tr"
-        TrStr _trret1469 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TrStr{ (char*)", 14LL)), (name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".c_str(), (long*)0 }", 20LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1470 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TrStr{ (char*)", 14LL)), (name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".c_str(), (long*)0 }", 20LL))); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1469;
+        return _trret1470;
     }
 #line 262 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("class", 5LL)))) {
 #line 262 "src/codegen/cpp_export.tr"
-        TrStr _trret1470 = _tr_strx_concatv((name), (_tr_str_lit_len(".raw()", 6LL)));
+        TrStr _trret1471 = _tr_strx_concatv((name), (_tr_str_lit_len(".raw()", 6LL)));
         _tr_str_release(k);
-        return _trret1470;
+        return _trret1471;
     }
 #line 263 "src/codegen/cpp_export.tr"
-    TrStr _trret1471 = _tr_str_retain(name);
+    TrStr _trret1472 = _tr_str_retain(name);
     _tr_str_release(k);
-    return _trret1471;
+    return _trret1472;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_ret_type(CppExporter* self, AstType* ty) {
@@ -650,30 +650,30 @@ __attribute__((hot)) TrStr CppExporter__cpp_ret_type(CppExporter* self, AstType*
 #line 267 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("class", 5LL)))) {
 #line 267 "src/codegen/cpp_export.tr"
-        TrStr _trret1472 = _tr_str_retain(ty->name);
+        TrStr _trret1473 = _tr_str_retain(ty->name);
         _tr_str_release(k);
-        return _trret1472;
+        return _trret1473;
     }
 #line 268 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("list", 4LL)))) {
 #line 268 "src/codegen/cpp_export.tr"
-        TrStr _trret1473 = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_list_elem_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("std::vector<", 12LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1474 = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_list_elem_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("std::vector<", 12LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1473;
+        return _trret1474;
     }
 #line 269 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("dict", 4LL)))) {
 #line 269 "src/codegen/cpp_export.tr"
-        TrStr _trret1474 = ({ __auto_type _ord_t5897 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_dict_key_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("std::map<", 9LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t5897); TrStr _tr_cr = (CppExporter__cpp_dict_v_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+        TrStr _trret1475 = ({ __auto_type _ord_t5897 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_dict_key_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("std::map<", 9LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t5897); TrStr _tr_cr = (CppExporter__cpp_dict_v_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
         _tr_str_release(k);
-        return _trret1474;
+        return _trret1475;
     }
 #line 270 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("tuple", 5LL)))) {
 #line 270 "src/codegen/cpp_export.tr"
-        TrStr _trret1475 = CppExporter__cpp_tuple_type_cpp(self, ty);
+        TrStr _trret1476 = CppExporter__cpp_tuple_type_cpp(self, ty);
         _tr_str_release(k);
-        return _trret1475;
+        return _trret1476;
     }
 #line 271 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("void", 4LL)))) {
@@ -682,9 +682,9 @@ __attribute__((hot)) TrStr CppExporter__cpp_ret_type(CppExporter* self, AstType*
         return _tr_str_lit_len("void", 4LL);
     }
 #line 272 "src/codegen/cpp_export.tr"
-    TrStr _trret1476 = CGenerator_type_to_c(self->gen, ty);
+    TrStr _trret1477 = CGenerator_type_to_c(self->gen, ty);
     _tr_str_release(k);
-    return _trret1476;
+    return _trret1477;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_ret_stmt(CppExporter* self, AstType* ty, TrStr call) {
@@ -693,28 +693,28 @@ __attribute__((hot)) TrStr CppExporter__cpp_ret_stmt(CppExporter* self, AstType*
 #line 277 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("void", 4LL)))) {
 #line 277 "src/codegen/cpp_export.tr"
-        TrStr _trret1477 = _tr_strx_concatv((call), (_tr_str_lit_len(";", 1LL)));
+        TrStr _trret1478 = _tr_strx_concatv((call), (_tr_str_lit_len(";", 1LL)));
         _tr_str_release(k);
-        return _trret1477;
+        return _trret1478;
     }
 #line 278 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("str", 3LL)))) {
 #line 278 "src/codegen/cpp_export.tr"
-        TrStr _trret1478 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TrStr _r = ", 11LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; return std::string(_r.data ? _r.data : \"\");", 45LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1479 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TrStr _r = ", 11LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; return std::string(_r.data ? _r.data : \"\");", 45LL))); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1478;
+        return _trret1479;
     }
 #line 279 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("class", 5LL)))) {
 #line 279 "src/codegen/cpp_export.tr"
-        TrStr _trret1479 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (ty->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("::_wrap(", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1480 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (ty->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("::_wrap(", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1479;
+        return _trret1480;
     }
 #line 280 "src/codegen/cpp_export.tr"
-    TrStr _trret1480 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+    TrStr _trret1481 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
     _tr_str_release(k);
-    return _trret1480;
+    return _trret1481;
 }
 
 __attribute__((hot)) bool CppExporter__cpp_kind_marshal(CppExporter* self, TrStr k) {
@@ -817,10 +817,10 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
 #line 320 "src/codegen/cpp_export.tr"
         ({ __auto_type _ord_t5909 = (f->ret_ty); TrStr _at_t5908 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((target), (_tr_str_lit_len("(", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call_args)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t5910 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_ret_stmt(self, _ord_t5909, _at_t5908)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len(") { ", 4LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t5910); _tr_str_release(_at_t5908); _tr_str_release(_sbt_t5910); });
 #line 321 "src/codegen/cpp_export.tr"
-        TrStr _trret1481 = StringObj_as_str(StringBuilder_to_string(wb));
+        TrStr _trret1482 = StringObj_as_str(StringBuilder_to_string(wb));
         _tr_str_release(target);
         _tr_str_release(call_args);
-        return _trret1481;
+        return _trret1482;
     }
 #line 323 "src/codegen/cpp_export.tr"
     StringBuilder_append(wb, _tr_str_lit_len(") {\n", 4LL));
@@ -1097,14 +1097,14 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
 #line 438 "src/codegen/cpp_export.tr"
     StringBuilder_append(wb, _tr_str_lit_len("    }\n", 6LL));
 #line 439 "src/codegen/cpp_export.tr"
-    TrStr _trret1482 = StringObj_as_str(StringBuilder_to_string(wb));
+    TrStr _trret1483 = StringObj_as_str(StringBuilder_to_string(wb));
     _tr_str_release(target);
     _tr_str_release(call_args);
     _tr_str_release(frees);
     _tr_str_release(call_expr);
     _tr_str_release(rk);
     StringBuilder__tr_fn_free(wb);
-    return _trret1482;
+    return _trret1483;
 }
 
 __attribute__((hot)) bool CppExporter__cpp_init_ok(CppExporter* self, HirFunction* m) {
@@ -1155,8 +1155,8 @@ __attribute__((hot)) long long CppExporter__cpp_init_idx(CppExporter* self, HirC
 #line 461 "src/codegen/cpp_export.tr"
         if ((((!_is_invalid_ptr(((unsigned long long)(m)))) && _tr_str_eqv((m->name), (_tr_str_lit_len("init", 4LL)))) && CppExporter__cpp_init_ok(self, m))) {
 #line 462 "src/codegen/cpp_export.tr"
-            long long _trret1483 = i;
-            return _trret1483;
+            long long _trret1484 = i;
+            return _trret1484;
         }
 #line 463 "src/codegen/cpp_export.tr"
         i = (i + 1LL);
@@ -1296,10 +1296,10 @@ __attribute__((hot)) TrStr CppExporter__cpp_class_decl(CppExporter* self, HirCla
 #line 523 "src/codegen/cpp_export.tr"
     StringBuilder_append(wb, _tr_str_lit_len("    };\n", 7LL));
 #line 524 "src/codegen/cpp_export.tr"
-    TrStr _trret1484 = StringObj_as_str(StringBuilder_to_string(wb));
+    TrStr _trret1485 = StringObj_as_str(StringBuilder_to_string(wb));
     _tr_str_release(C);
     StringBuilder__tr_fn_free(wb);
-    return _trret1484;
+    return _trret1485;
 }
 
 __attribute__((hot)) TrStr CppExporter_generate_cpp_class_bridges(CppExporter* self, HirProgram* prog) {
@@ -1701,11 +1701,11 @@ __attribute__((hot)) TrStr CppExporter__cpp_list_bridges(CppExporter* self) {
         StringBuilder_append(b, _tr_str_lit_len("TR_EXPORT double tr__unbox_f64(long long p){ return _tr_ptr_to_f64((void*)(uintptr_t)p); }\n", 91LL));
     }
 #line 686 "src/codegen/cpp_export.tr"
-    TrStr _trret1485 = StringObj_as_str(StringBuilder_to_string(b));
+    TrStr _trret1486 = StringObj_as_str(StringBuilder_to_string(b));
     List_TrStr_free(keys);
     List_TrStr_free(dk);
     StringBuilder__tr_fn_free(b);
-    return _trret1485;
+    return _trret1486;
 }
 
 __attribute__((hot)) TrStr CppExporter_generate_export_cpp_header(CppExporter* self, HirProgram* prog, TrStr ns) {
@@ -1912,11 +1912,11 @@ __attribute__((hot)) TrStr CppExporter_generate_export_cpp_header(CppExporter* s
 #line 775 "src/codegen/cpp_export.tr"
     ({ TrStr _sbt_t6064 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("}  // namespace ", 16LL)), (ns))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n\n#endif\n", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t6064); _tr_str_release(_sbt_t6064); });
 #line 776 "src/codegen/cpp_export.tr"
-    TrStr _trret1486 = StringObj_as_str(StringBuilder_to_string(sb));
+    TrStr _trret1487 = StringObj_as_str(StringBuilder_to_string(sb));
     List_TrStr_free(lk);
     List_TrStr_free(dkk);
     StringBuilder__tr_fn_free(sb);
-    return _trret1486;
+    return _trret1487;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_class_bridge_protos(CppExporter* self, HirClass* c) {
@@ -2012,10 +2012,10 @@ __attribute__((hot)) TrStr CppExporter__cpp_class_bridge_protos(CppExporter* sel
         StringBuilder_append(b, _tr_str_lit_len(");\n", 3LL));
     }
 #line 813 "src/codegen/cpp_export.tr"
-    TrStr _trret1487 = StringObj_as_str(StringBuilder_to_string(b));
+    TrStr _trret1488 = StringObj_as_str(StringBuilder_to_string(b));
     _tr_str_release(C);
     StringBuilder__tr_fn_free(b);
-    return _trret1487;
+    return _trret1488;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_free_fn_bridge_proto(CppExporter* self, HirFunction* f) {

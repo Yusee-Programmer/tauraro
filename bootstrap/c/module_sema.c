@@ -14186,7 +14186,7 @@ __auto_type right = _t1670.data.EBinOp.right;
         } else if ((_tr_str_eqv((op), (_tr_str_lit_len("**", 2LL))) && _is_neg_int_lit(right))) {
 #line 6710 "src/sema.tr"
             bin_ty = AstType_init(_tr_str_lit_len("float", 5LL));
-        } else if (((((((_tr_str_eqv((op), (_tr_str_lit_len("+", 1LL))) || _tr_str_eqv((op), (_tr_str_lit_len("-", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("*", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("/", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("**", 2LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("%", 1LL)))) && (_binop_is_float_name(hir_expr_type(hleft)->name) || _binop_is_float_name(hir_expr_type(hright)->name)))) {
+        } else if ((((((((_tr_str_eqv((op), (_tr_str_lit_len("+", 1LL))) || _tr_str_eqv((op), (_tr_str_lit_len("-", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("*", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("/", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("**", 2LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("%", 1LL)))) || _tr_str_eqv((op), (_tr_str_lit_len("//", 2LL)))) && (_binop_is_float_name(hir_expr_type(hleft)->name) || _binop_is_float_name(hir_expr_type(hright)->name)))) {
 #line 6712 "src/sema.tr"
             bin_ty = AstType_init(_tr_str_lit_len("float", 5LL));
         }

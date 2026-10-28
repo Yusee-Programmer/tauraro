@@ -6708,7 +6708,7 @@ extend Sema:
                     bin_ty = AstType.init("str")
                 elif op == "**" and _is_neg_int_lit(right):
                     bin_ty = AstType.init("float")   # int ** -n is a float, as in Python (2 ** -1 == 0.5)
-                elif (op == "+" or op == "-" or op == "*" or op == "/" or op == "**" or op == "%") and (_binop_is_float_name(hir_expr_type(hleft).name) or _binop_is_float_name(hir_expr_type(hright).name)):
+                elif (op == "+" or op == "-" or op == "*" or op == "/" or op == "**" or op == "%" or op == "//") and (_binop_is_float_name(hir_expr_type(hleft).name) or _binop_is_float_name(hir_expr_type(hright).name)):
                     bin_ty = AstType.init("float")   # int+float etc. promotes to float
                 return box_hirexpr(HirExpr.EBinOp(op, hleft, hright, bin_ty))
             case Expr.EUnaryOp(op, expr):
