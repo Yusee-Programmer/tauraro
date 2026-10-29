@@ -41,6 +41,7 @@ foreach ($f in $Files) {
     if ($status -ne 0 -or $out -match "FAILED") {
         $failed++
         $failedFiles += $f
+        Write-Host ("  FAILED: exit status {0} (0x{1:X})" -f $status, $status)
     }
 }
 
