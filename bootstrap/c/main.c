@@ -3414,7 +3414,7 @@ __attribute__((hot)) long long compile_all_c_incremental(List_TrStr* c_files, Li
 #line 1526 "src/main.tr"
     if (out_is_windows(target, triple)) {
 #line 1531 "src/main.tr"
-        ({ TrStr _ap_t7687 = (_tr_str_lit_len(" -lws2_32 -lbcrypt -mconsole", 28LL)); _tr_str_append(&cmd, _ap_t7687); });
+        ({ TrStr _ap_t7687 = (_tr_str_lit_len(" -lws2_32 -lbcrypt -mconsole -Wl,--stack,16777216", 49LL)); _tr_str_append(&cmd, _ap_t7687); });
 #line 1537 "src/main.tr"
         bool need_systre2 = false;
 #line 1538 "src/main.tr"

@@ -1528,7 +1528,7 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
         # (select/FD_ISSET on Windows). It is a standard system import library,
         # so always link it; -mconsole keeps console apps as console subsystem.
         # Gated on the TARGET, not the host — a Windows->Linux cross has no ws2_32.
-        cmd = cmd + " -lws2_32 -lbcrypt -mconsole"
+        cmd = cmd + " -lws2_32 -lbcrypt -mconsole -Wl,--stack,16777216"
         # std.regex on MinGW may need libsystre/libtre -- see mingw_regex_libs_link()'s
         # own comment (only added once a real test-link confirms they exist and are
         # needed, not just guessed from the .o filename); this is the
