@@ -334,6 +334,17 @@ expect_diag "malformed fn type" 'def f(n: int) -> def(int{ -> int:\n    return 1
 expect_diag "unknown extern abi" 'extern "Rust":\n    def foo(x: int) -> int\ndef main():\n    print(1)\n' "unknown extern ABI"
 expect_diag "undefined extern symbol at link" 'extern "C":\n    def tr_no_such_symbol_zz(x: int) -> int\ndef main():\n    print(tr_no_such_symbol_zz(1))\n' "[LNK-1] link failed: undefined symbol 'tr_no_such_symbol_zz'"
 expect_diag "method read as field" 'class A:\n    pub v: int\n    pub def get(self) -> int:\n        return self.v\ndef main():\n    mut a = A()\n    a.get\n' "is a method of 'A', not a field"
+expect_diag "generic method arg kind" 'class Box[T]:\n    pub v: T\nextend Box:\n    pub def init(v: T) -> Box[T]:\n        mut b = Box[T]()\n        b.v = v\n        return b\n    pub def put(self, x: T):\n        self.v = x\ndef main():\n    mut b: Box[str] = Box[str].init("a")\n    b.put(5)\n' "[E-5] Type mismatch: argument 1 of 'Box.put()'"
+expect_diag "type args on non-generic class" 'class Box:\n    pub v: int\ndef main():\n    mut b = Box[int, str]()\n' "[E-4] class 'Box' is not generic"
+expect_diag "generic fn type arg count" 'def idf[T](x: T) -> T:\n    return x\ndef main():\n    print(idf[int, str](1))\n' "[E-4] function 'idf' takes 1 type argument(s) but 2 given"
+expect_diag "generic class no params" 'class Box[T]:\n    pub v: T\nextend Box:\n    pub def init(v: T) -> Box[T]:\n        mut b = Box[T]()\n        b.v = v\n        return b\n    pub def put(self, x: T):\n        self.v = x\ndef main():\n    mut b = Box()\n' "[G-2] Cannot infer the type parameters of generic class 'Box'"
+expect_diag "Chan.new" 'def main():\n    mut c = Chan[int].new(1)\n' "[E-1] No method 'new' found on type 'Chan'"
+expect_diag "tuple get arity" 'def main():\n    mut t = (1, 2)\n    print(t.get())\n' "[E-4] 'Tuple.get()' takes 1 argument(s)"
+expect_diag "init with self" 'class A:\n    pub v: int\nextend A:\n    pub def init(self, v: int) -> A:\n        self.v = v\n        return self\ndef main():\n    mut a = A(7)\n' "[E-4] 'A.init' must not take 'self'"
+expect_diag "unknown decorator" '@nosuchdecorator\ndef f(x: int) -> int:\n    return x\ndef main():\n    print(f(1))\n' "[N-9] Unknown decorator '@nosuchdecorator'"
+expect_diag "unknown generic bound" 'def f[T: Nope](x: T) -> T:\n    return x\ndef main():\n    print(f(1))\n' "[G-1] Unknown bound 'Nope'"
+expect_diag "duplicate extern decl" 'extern "C":\n    def getpid() -> int\n    def getpid() -> int\ndef main():\n    print(getpid())\n' "[N-5] extern function 'getpid' is declared twice"
+expect_diag "missing colon def" 'def main()\n    print(1)\n' "missing ':' at the end of this function header"
 if [ -n "$diagfail" ]; then
     echo "  FAILED:$diagfail"
     failed=$((failed + 1))

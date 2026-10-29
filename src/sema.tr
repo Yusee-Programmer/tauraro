@@ -1370,6 +1370,66 @@ extend Sema:
                 self.check_expr_assignable(pp.read(), hl.get(ai), "argument " + (ai + 1).to_str() + " of '" + name + "()'")
             ai = ai + 1
 
+    # `b.put(5)` where `b: Box[str]`: a parameter declared as the class's type parameter `T` takes
+    # the receiver's concrete type argument.
+    pub def check_generic_method_args(self, rty: AstType, method: str, hl: Vec[Pointer[HirExpr]]):
+        if rty.args.len == 0 or not self.classes.contains(rty.name) or self.ambiguous_classes.contains(rty.name) or self.is_builtin_dispatch_class(rty.name): return
+        if rty.name == "Map" or rty.name == "Vec" or rty.name == "List" or rty.name == "Dict" or rty.name == "Set" or rty.name == "Option" or rty.name == "Result": return
+        mut cd = self.classes.get(rty.name)
+        if cd.generics.len != rty.args.len: return
+        mut md = FunctionDef.init("")
+        mut mcnt = 0
+        mut mi = 0
+        while mi < cd.methods.len:
+            if cd.methods.get(mi).name == method:
+                md = cd.methods.get(mi)
+                mcnt = mcnt + 1
+            mi = mi + 1
+        if mcnt != 1 or md.generics.len > 0: return
+        mut sk = 0
+        if md.params.len > 0 and md.params.get(0).name == "self": sk = 1
+        if md.params.len - sk != hl.len: return
+        mut ti = 0
+        while ti < hl.len:
+            mut pty = md.params.get(sk + ti).ty
+            if pty as usize != 0 as usize and pty.read().args.len == 0:
+                mut gj = 0
+                while gj < cd.generics.len:
+                    if cd.generics.get(gj) == pty.read().name:
+                        mut conc = rty.args.get(gj).read()
+                        if conc.args.len == 0 and conc.name != "" and self.decl_family(conc) != "" and not self.classes.contains(conc.name):
+                            self.check_expr_assignable(conc, hl.get(ti), "argument " + (ti + 1).to_str() + " of '" + rty.name + "." + method + "()' (T = " + conc.name + ")")
+                    gj = gj + 1
+            ti = ti + 1
+
+    pub def is_builtin_decorator(self, n: str) -> bool:
+        return n == "inline" or n == "noinline" or n == "hot" or n == "cold" or n == "staticmethod" or n == "property" or n == "kernel" or n == "device" or n == "entry" or n == "section" or n == "naked" or n == "interrupt" or n == "aligned" or n == "packed" or n == "union" or n == "value_type" or n == "allocator" or n == "calloc" or n == "realloc" or n == "free" or n == "copy" or n == "derive_eq" or n == "derive_clone" or n == "fast" or n == "unsafe_sendable" or n == "weak" or n == "used" or n == "noreturn" or n == "deprecated" or n == "test" or n == "export"
+
+    # `Name[A, B](...)`: the number of explicit type arguments must match the generic parameters
+    # declared by the class / function `Name`.
+    pub def check_explicit_type_arg_count(self, gn: str, idx: Pointer[Expr]):
+        if gn == "alloc" or gn == "dealloc" or gn == "Pointer" or gn == "List" or gn == "Vec" or gn == "Map" or gn == "Dict" or gn == "Set" or gn == "Option" or gn == "Result": return
+        if self.resolve(gn).kind == SymbolKind.SVariable: return
+        mut given = 1
+        match idx.read():
+            case Expr.ETuple(its): given = its.len
+            case _: pass
+        mut want = 0
+        mut found = false
+        if self.classes.contains(gn) and not self.ambiguous_classes.contains(gn) and not self.is_rt_builtin_class(gn):
+            want = self.classes.get(gn).generics.len
+            found = true
+        elif self.fn_defs.contains(gn) and self.resolve(gn).kind == SymbolKind.SFunction:
+            want = self.fn_defs.get(gn).generics.len
+            found = true
+        if not found or want == given: return
+        mut what = "function"
+        if self.classes.contains(gn): what = "class"
+        if want == 0:
+            self.error("[E-4] " + what + " '" + gn + "' is not generic but is given " + given.to_str() + " type argument(s).\n      FIX: drop the [...] after '" + gn + "'.")
+        else:
+            self.error("[E-4] " + what + " '" + gn + "' takes " + want.to_str() + " type argument(s) but " + given.to_str() + " given.\n      FIX: write " + gn + "[...] with exactly " + want.to_str() + " type argument(s), as in its declaration.")
+
     # Argument kinds of the built-in str methods whose arguments are all strings (or all ints).
     pub def check_str_method_arg_kinds(self, method: str, hl: Vec[Pointer[HirExpr]]):
         mut want = ""
@@ -5271,6 +5331,13 @@ extend Sema:
                 mut ei = 0
                 while ei < functions.len:
                     mut f = functions.get(ei)
+                    mut _edj = 0
+                    while _edj < ei:
+                        if functions.get(_edj).name == f.name:
+                            self.current_line = f.line
+                            self.error("[N-5] extern function '" + f.name + "' is declared twice in this extern block.\n      FIX: remove one of the declarations.")
+                            break
+                        _edj = _edj + 1
                     mut _e_ret = box_asttype(AstType.init("void"))
                     if f.ret_ty as usize != 0 as usize: _e_ret = f.ret_ty
                     self.declare(f.name, SymbolKind.SFunction, _e_ret, false)
@@ -5592,6 +5659,28 @@ extend Sema:
         # program entry point `main` — `main` is the entry point whose return is
         # always optional (C's main implicitly returns 0), so it needs no
         # explicit `return` even when written `-> int`.
+        if f.name == "init" and self.current_class_name != "" and f.params.len > 0 and f.params.get(0).name == "self" and not f.is_extern:
+            self.current_line = f.line
+            self.error("[E-4] '" + self.current_class_name + ".init' must not take 'self': init is a static factory that builds and returns the instance, so `" + self.current_class_name + "(args)` would silently ignore the arguments.\n      FIX: write `pub def init(" + "x: int) -> " + self.current_class_name + ":` that creates `mut obj = " + self.current_class_name + "()`, sets its fields and returns it.")
+        if not f.is_extern:
+            mut _dci = 0
+            while _dci < f.decorators.len:
+                mut _dn = f.decorators.get(_dci).name
+                if not self.decorator_names.contains(_dn) and not self.is_builtin_decorator(_dn):
+                    self.current_line = f.line
+                    self.error("[N-9] Unknown decorator '@" + _dn + "' on '" + f.name + "'.\n      FIX: check the spelling, or define it with `decorator " + _dn + "(...)`. Built-in decorators: @inline, @noinline, @hot, @cold, @staticmethod, @property, @kernel, @device, @entry, @section, @naked, @interrupt, @aligned, @packed.")
+                _dci = _dci + 1
+            mut _gci = 0
+            while _gci < f.constraints.len:
+                mut _gb = f.constraints.get(_gci).bounds
+                mut _gbi = 0
+                while _gbi < _gb.len:
+                    mut _gbn = _gb.get(_gbi).read().name
+                    if _gbn != "Sendable" and _gbn != "Copy" and not self.type_name_known(_gbn):
+                        self.current_line = f.line
+                        self.error("[G-1] Unknown bound '" + _gbn + "' on type parameter '" + f.constraints.get(_gci).target + "' of '" + f.name + "'.\n      FIX: the bound must be an interface (declare it with `interface " + _gbn + ":`) or an existing class.")
+                    _gbi = _gbi + 1
+                _gci = _gci + 1
         mut _is_entry_main = f.name == "main" and self.current_class_name == ""
         if not f.is_extern and f.body.stmts.len > 0 and f.ret_ty as usize != 0 as usize:
             mut ret_nm = f.ret_ty.read().name
@@ -6147,6 +6236,15 @@ extend Sema:
                     self._check_ty_arity(ty_ptr, "'" + name + "' declaration", 0)
                     self.check_type_known(ty_ptr, "the declaration of '" + name + "'")
                 if ty.name == "def" and val_ptr as usize != 0 as usize and self._closure_untyped(val_ptr): self.closure_hint = ty_ptr
+                if ty_ptr as usize == 0 as usize and val_ptr as usize != 0 as usize:
+                    match val_ptr.read():
+                        case Expr.ECall(_bg_c, _bg_a):
+                            match _bg_c.read():
+                                case Expr.EIdent(_bg_n):
+                                    if _bg_a.len == 0 and self.classes.contains(_bg_n) and not self.ambiguous_classes.contains(_bg_n) and self.resolve(_bg_n).kind != SymbolKind.SVariable and self.classes.get(_bg_n).generics.len > 0 and self.current_func_generics.len == 0 and self.current_class_name != _bg_n:
+                                        self.error("[G-2] Cannot infer the type parameters of generic class '" + _bg_n + "' for '" + name + "'.\n      FIX: name them: `mut " + name + " = " + _bg_n + "[Type].init(...)`, or annotate the variable: `mut " + name + ": " + _bg_n + "[Type] = ...`.")
+                                case _: pass
+                        case _: pass
                 mut hval = self.lower_expr(val_ptr)
                 self.check_not_void_call(hval, "the initializer of '" + name + "'")
                 self.closure_hint = Pointer[AstType](0)
@@ -8363,6 +8461,7 @@ extend Sema:
                     case Expr.EIndex(base, idx):
                         match base.read():
                             case Expr.EIdent(gn):
+                                self.check_explicit_type_arg_count(gn, idx)
                                 if gn == "alloc" or gn == "dealloc":
                                     match idx.read():
                                         case Expr.EIdent(tn):
@@ -8656,6 +8755,12 @@ extend Sema:
                     self.check_collection_arg_types(hir_expr_type(hobj), method, hl)
                     if hir_expr_type(hobj).name == "Set" and not self.classes.contains("Set") and not self.is_universal_method(method) and not self.known_collection_method("List", method):
                         self.error("[E-6] a Set has no method '" + method + "()'.\n      FIX: check the spelling, or that the receiver is the collection you meant.")
+                    if self.firm_family(hobj) == "Tuple" and not self.class_method_exists("Tuple", method):
+                        mut _tw = -1
+                        if method == "get": _tw = 1
+                        if method == "first" or method == "last" or method == "count": _tw = 0
+                        if _tw >= 0 and _tw != hl.len:
+                            self.error("[E-4] 'Tuple." + method + "()' takes " + _tw.to_str() + " argument(s) but " + hl.len.to_str() + " given.\n      FIX: tuple.get(index), tuple.first(), tuple.last(), tuple.count().")
                     if method == "get" or method == "pop" or method == "get_or" or self.is_universal_method(method): self.check_user_method_call(hir_expr_type(hobj).name, obj, method, hl)
                     if hir_expr_type(hobj).name == "void" or hir_expr_type(hobj).name == "":
                         match obj.read():
@@ -8818,6 +8923,17 @@ extend Sema:
                         if _af_m.name == "auto" and _af_m.ret_ty as usize != 0 as usize:
                             if _af_m.ret_ty.read().name != hobj_ty.name: _auto_is_self_factory = false
                         _af_i = _af_i + 1
+                if method == "new":
+                    mut _nw_n = ""
+                    match obj.read():
+                        case Expr.EIdent(_nw_a): _nw_n = _nw_a
+                        case Expr.EIndex(_nw_b, _):
+                            match _nw_b.read():
+                                case Expr.EIdent(_nw_c): _nw_n = _nw_c
+                                case _: pass
+                        case _: pass
+                    if (_nw_n == "Chan" or _nw_n == "Channel" or _nw_n == "Mutex" or _nw_n == "RwLock" or _nw_n == "Shared" or _nw_n == "Weak") and self.resolve(_nw_n).kind != SymbolKind.SVariable and not self.class_method_exists(_nw_n, "new"):
+                        self.error("[E-1] No method 'new' found on type '" + _nw_n + "'.\n      FIX: construct it with `" + _nw_n + "[T].init(...)`.")
                 if method == "init" or method == "new" or (method == "auto" and _auto_is_self_factory):
                     match obj.read():
                         case Expr.EIdent(_ic_n):
@@ -9317,6 +9433,7 @@ extend Sema:
                     # args — including nested (`of() -> Box[T]` on Box[Cat] -> Box[Cat]).
                     if _cls.generics.len > 0 and hobj_ty.args.len > 0:
                         ret_ty = self._subst_ret_generics(ret_ty, _cls.generics, hobj_ty.args)
+                        if not _m_recv_is_type: self.check_generic_method_args(hobj_ty, method, hl)
                 return box_hirexpr(HirExpr.EMethodCall(hobj, method, hl, ret_ty))
             case Expr.EPropAccess(obj, prop):
                 if obj as usize != 0 as usize:

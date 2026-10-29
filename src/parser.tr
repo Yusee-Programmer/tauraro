@@ -3188,6 +3188,8 @@ extend Parser:
             self.pos = self.pos + 1
             f.body = self.parse_block()
         else:
+            if self.peek() == Token.Newline and self.pos + 1 < self.tokens.len and self.tokens.get(self.pos + 1) == Token.Indent:
+                self.emit_diag_prev("missing ':' at the end of this function header", "add ':' after the parameter list / return type, e.g. `def " + f.name + "(...) -> int:`.")
             self.expect_newline()
             f.body = Block.init()
         return f
