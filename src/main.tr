@@ -12,6 +12,7 @@ from lexer import Lexer
 from parser import Parser, _nth_source_line
 from diag import c_red, c_yellow, c_green, c_cyan, c_dim, c_bold, spaces, repeat_char, first_quoted, col_of, loc_file, loc_line
 from sema import Sema
+from infer import infer_return_types
 from ast import Decl
 from fmt import Formatter
 from doc import run_doc
@@ -2146,6 +2147,11 @@ pub def main(args: Vec[str]):
             sema.decl_files.push(df_file)
             df_k = df_k + 1
     _tr_set_ice_ctx("type-checking " + input_path)
+    mut infer_msgs = infer_return_types(prog, sema.decl_files, strict_mode, no_heap, backend != "c", input_path)
+    mut infer_mi = 0
+    while infer_mi < infer_msgs.len:
+        sema.errors.push(infer_msgs.get(infer_mi))
+        infer_mi = infer_mi + 1
     mut hir = sema.analyze(prog)
     _tr_set_ice_ctx("generating C for " + input_path)
 

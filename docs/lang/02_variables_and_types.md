@@ -406,9 +406,13 @@ return type annotation implicitly returns `void`.
 
 ### When to annotate explicitly
 
-The compiler infers types from initializers. Explicit annotations are optional for locals but
-required when the default inference is not what you want, when the variable is declared without
-an initializer, and for all function parameters.
+Tauraro infers types the way Rust does: **inside a function body you rarely write a type, but
+a function's signature is always written.** Parameter types are mandatory (`def f(a: int)`).
+A return type may be omitted: it is inferred from the function's `return` statements. Locals,
+empty collections, tuples, closures and the results of builtins are inferred from how they are
+built and used. Annotate when you want a different type than the default (`i32`, `f32`), when a
+variable has no initializer, or when the compiler tells you it cannot infer a type (`[R-n]`
+diagnostics, each with a FIX line).
 
 ### How it works
 
@@ -420,6 +424,65 @@ flag = true         # bool
 items = [1, 2, 3]   # List[int]
 ch = 'A'            # char
 ```
+
+**Return types are inferred from `return`:**
+
+```python
+def square(x: int):          # -> int
+    return x * x
+
+def make():                  # -> List[int]
+    return [1, 2]
+
+def pair():                  # -> (int, str)
+    return (1, "x")
+
+def fact(n: int):            # recursion: typed from the non-recursive return
+    if n <= 1:
+        return 1
+    return n * fact(n - 1)
+```
+
+All `return`s must agree (`None` joins an `Option`). A function that calls itself must have a
+`return` that does not depend on the recursion; mutual recursion between two functions without
+`-> T` is reported as `[R-2]`, with a FIX asking for one annotation.
+
+**Empty collections are typed by their first use** in the same function: `append`, `push`,
+`insert`, `add`, `extend`, index-assignment `d[k] = v`, `get(k, default)`, passing the
+collection to a parameter of known type, assigning it a typed value, or returning it from a
+function with a declared return type.
+
+```python
+xs = []                 # List[int] once the next line is seen
+xs.append(1)
+counts = {}             # Dict[str, int]
+for w in words:
+    counts[w] = counts.get(w, 0) + 1
+seen = set()            # Set[int]
+seen.add(3)
+```
+
+If nothing in the function ever types it, the first use that needs the element type is
+`[R-3]`: write `xs: List[int] = []`.
+
+**Tuples unpack in plain assignments**, including swaps; both `for i, x in enumerate(xs)` and
+`n, s = pair()` take their element types from the tuple:
+
+```python
+mut a = 1
+mut b = 2
+a, b = b, a             # swap
+n, s = pair()           # n: int, s: str
+```
+
+**Closures infer their parameter types** from where they are used: the parameter type of the
+function they are passed to (`map`, `filter`, your own `def(int) -> int` parameters), the
+declared type of the field/variable/return they are assigned to, or - for `f = lambda x, y: ...` -
+the first call `f(1.5, 2.0)`. A lambda parameter nothing can type is `[R-6]` (never a silent `int`).
+
+**Python-style builtins have inferred result types:** `set()`, `list(x)`, `dict()`,
+`{k: v for ...}`, `{x for ...}`, `sorted(xs)`, `reversed(xs)`, `map(f, xs)`, `filter(f, xs)`,
+`enumerate(xs)`, `zip(a, b)`, `sum`/`min`/`max`/`abs`, `any`/`all`.
 
 When the default inference is not the right type, annotate:
 
@@ -434,7 +497,7 @@ When the variable is declared without an initializer:
 mut result: List[int] = []   # needs type to know what List this is
 ```
 
-Function parameters always require annotation:
+Function parameters always require annotation (`[R-1]` if one is missing):
 ```python
 def process(data: List[int], threshold: float) -> int:
 ```
@@ -454,7 +517,7 @@ missing-initializer case is not yet assigned its own stable code.)
 ### Best Practices
 
 - Use inference for local variables — it reduces clutter and keeps the types in one place.
-- Always annotate function parameters and return types — this makes the API self-documenting.
+- Always annotate function parameters; annotate return types of public API functions (they are inferred, but written types document the contract).
 - Annotate explicitly when using a non-default numeric width to make the choice visible to
   readers.
 

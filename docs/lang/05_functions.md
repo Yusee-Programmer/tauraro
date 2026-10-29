@@ -43,12 +43,13 @@ def log(msg: str):           # void return type may be omitted
 
 ### Common Mistakes
 
-**Missing return type on non-void function:**
+**Return type omitted:**
 ```python
-def area(w: int, h: int):    # ERROR: return type missing for non-void function
+def area(w: int, h: int):    # fine: inferred as int from `return w * h`
     return w * h
 ```
-Fix: `def area(w: int, h: int) -> int:`
+The inferred type is the type of the returned expressions; they must agree. Two functions that
+return only each other's results cannot be inferred: write `-> T` on one of them (`[R-2]`).
 
 **Omitting `return` on a branch:**
 ```python
@@ -69,7 +70,7 @@ Fix: Use overloaded static methods in a class, or require the caller to pass the
 ### Best Practices
 
 - Name functions as verb phrases: `parse_input`, `build_config`, `find_user`, `render_frame`.
-- Annotate return types explicitly — even `-> void` — to make the contract readable and searchable.
+- Annotate return types of public functions — inference works, but a written type is the readable contract.
 - One function, one responsibility. If you are adding a third `elif` inside a function, consider splitting it.
 - Return values rather than mutating through side effects. The ownership system manages returned values automatically.
 
@@ -148,7 +149,7 @@ into `main()`.
 
 ### When to use
 
-Every function that operates on external data needs parameters. Every function that produces a value needs a return type annotation. Tauraro has no default parameters and no keyword arguments, so the parameter list is the complete contract.
+Every function that operates on external data needs parameters. A function that produces a value gets its return type from its `return` statements (write `-> T` to make the contract explicit, or when inference reports `[R-2]`). Tauraro has no default parameters and no keyword arguments, so the parameter list is the complete contract.
 
 ### How it works
 
@@ -159,10 +160,9 @@ def compute(x: int, y: float, label: str) -> void:
     print(f"{label}: {x as float + y}")
 ```
 
-All parameter types must be annotated. Omitting a type is a parse error (generic
-"expected ':' after parameter name" — `[F-1]` is reserved for this but not yet
-emitted as a distinct diagnostic code; see [19 — Compiler
-Errors](19_compiler_errors.md#reserved--not-yet-implemented)).
+All parameter types must be annotated. Omitting one is the compile-time error
+`[R-1] parameter 'a' of 'add' needs a type` with a FIX line (`a: int`). Only closures and
+lambdas infer their parameter types, from where they are used.
 
 > **Reserved words as parameter names.** Keywords such as `from`, `match` or `in`
 > cannot be used as parameter (or variable) names — the parser reports "expected a
@@ -199,8 +199,8 @@ def find_first(items: List[int], target: int) -> int:
     return -1    # not found
 ```
 
-**Compiler rule [F-1]** *(reserved, not yet a distinct diagnostic)*: All parameters
-must have type annotations. Omitting a type is currently a generic parse error.
+**Compiler rule [R-1]:** All parameters must have type annotations; a missing one is reported
+as `[R-1]` with a FIX line.
 
 **Compiler rule [F-2]** *(reserved, not yet implemented)*: Parameters may not be
 shadowed by local variables of the same name. The compiler does not currently
@@ -989,7 +989,7 @@ def main():
 
 | Rule | Description | Error |
 |------|-------------|-------|
-| F-1 *(reserved)* | All parameters must have type annotations | generic parse error (not yet a distinct `[F-1]` code) |
+| R-1 | All parameters must have type annotations | `[R-1] parameter 'a' of 'add' needs a type` |
 | F-2 *(reserved)* | Parameters may not be shadowed by local variables | not currently detected |
 | F-3 | Non-void function must return on all code paths | `[F-3] Missing return on code path` |
 | T-4 | Result from a `throws` call must be handled | `[T-4] Unhandled Result from throws call` |

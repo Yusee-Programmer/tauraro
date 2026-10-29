@@ -1589,8 +1589,89 @@ extend Parser:
             si = si + 1
         return box_stmt(Stmt.SIf(box_expr(Expr.ELitBool(true)), blk, Vec[ElifClause].init(0), Block.init()))
 
+    # Generator clauses of a comprehension: `for x in it [if c] ...` (shared by list/dict/set forms).
+    pub def parse_comp_generators(self) -> Vec[Pointer[Comprehension]]:
+        mut generators = Vec[Pointer[Comprehension]].init(2)
+        while self.peek() == Token.KwFor:
+            self.pos = self.pos + 1
+            mut target = self.consume_ident()
+            match self.peek():
+                case Token.KwIn:
+                    self.pos = self.pos + 1
+                case _:
+                    pass
+            mut iter = self.parse_or_expr()
+            mut ifs = Vec[Pointer[Expr]].init(2)
+            while self.peek() == Token.KwIf:
+                self.pos = self.pos + 1
+                ifs.push(self.parse_or_expr())
+            mut c = Comprehension.init(target, iter)
+            c.ifs = ifs
+            unsafe:
+                mut c_ptr = alloc[Comprehension](1)
+                c_ptr.write(c)
+                generators.push(c_ptr)
+        return generators
+
+    # `{k: v for ...}` / `{e for ...}`: a `do:` block that fills an (inferred-type) empty
+    # dict/set in nested for/if statements and yields it.
+    pub def desugar_collection_comp(self, key: Pointer[Expr], val: Pointer[Expr], gens: Vec[Pointer[Comprehension]]) -> Pointer[Expr]:
+        mut tmp = "__comp" + self.pos.to_str()
+        mut body_stmt = box_stmt(Stmt.SPass)
+        mut empty = box_expr(Expr.ESet(Vec[Pointer[Expr]].init(0)))
+        if val as usize != 0 as usize:
+            empty = box_expr(Expr.EDict(Vec[Pointer[Expr]].init(0), Vec[Pointer[Expr]].init(0)))
+            body_stmt = box_stmt(Stmt.SAssign(box_expr(Expr.EIndex(box_expr(Expr.EIdent(tmp)), key)), val))
+        else:
+            mut margs = Vec[Pointer[Expr]].init(1)
+            margs.push(key)
+            body_stmt = box_stmt(Stmt.SExpr(box_expr(Expr.EMethodCall(box_expr(Expr.EIdent(tmp)), "add", margs))))
+        mut gi = gens.len - 1
+        while gi >= 0:
+            mut g = gens.get(gi).read()
+            mut inner = Block.init()
+            inner.push(body_stmt)
+            mut cur = box_stmt(Stmt.SPass)
+            mut ci = g.ifs.len - 1
+            mut guarded = inner
+            while ci >= 0:
+                mut outer = Block.init()
+                outer.push(box_stmt(Stmt.SIf(g.ifs.get(ci), guarded, Vec[ElifClause].init(0), Block.init())))
+                guarded = outer
+                ci = ci - 1
+            cur = box_stmt(Stmt.SFor(g.target, g.iter, guarded, Vec[Decorator].init(0), false))
+            body_stmt = cur
+            gi = gi - 1
+        mut blk = Block.init()
+        blk.push(box_stmt(Stmt.SLet(tmp, Ownership.Own, True, false, false, Pointer[AstType](0), empty)))
+        blk.push(body_stmt)
+        blk.push(box_stmt(Stmt.SExpr(box_expr(Expr.EIdent(tmp)))))
+        return box_expr(Expr.EDo(blk))
+
     pub def parse_assign_or_expr_stmt(self) -> Pointer[Stmt]:
         lhs = self.parse_expr()
+        # `a, b = expr` / `a, b = b, a`: tuple unpacking / swap without `mut`.
+        if self.peek() == Token.Comma:
+            match lhs.read():
+                case Expr.EIdent(mn0):
+                    mut mnames = Vec[str].init(4)
+                    mnames.push(mn0)
+                    while self.peek() == Token.Comma:
+                        self.pos = self.pos + 1
+                        mnames.push(self.consume_ident())
+                    if self.peek() == Token.Eq:
+                        self.pos = self.pos + 1
+                        mut mrhs = self.parse_expr()
+                        if self.peek() == Token.Comma:
+                            mut mitems = Vec[Pointer[Expr]].init(4)
+                            mitems.push(mrhs)
+                            while self.peek() == Token.Comma:
+                                self.pos = self.pos + 1
+                                mitems.push(self.parse_expr())
+                            mrhs = box_expr(Expr.ETuple(mitems))
+                        self.expect_newline()
+                        return box_stmt(Stmt.SMultiLet(mnames, False, mrhs))
+                case _: pass
         match self.peek():
             case Token.Colon:
                 # Type declaration: name: type = val
@@ -2296,10 +2377,20 @@ extend Parser:
                 if self.peek() != Token.RBrace:
                     mut first = self.parse_expr()
                     self.skip_newlines()
+                    if self.peek() == Token.KwFor:
+                        mut sgens = self.parse_comp_generators()
+                        self.skip_newlines()
+                        self.expect_rbrace(br_oln, br_ocol, "this set comprehension")
+                        return self.desugar_collection_comp(first, Pointer[Expr](0), sgens)
                     if self.peek() == Token.Colon:
                         self.pos = self.pos + 1
                         self.skip_newlines()
                         mut value = self.parse_expr()
+                        if self.peek() == Token.KwFor:
+                            mut dgens = self.parse_comp_generators()
+                            self.skip_newlines()
+                            self.expect_rbrace(br_oln, br_ocol, "this dict comprehension")
+                            return self.desugar_collection_comp(first, value, dgens)
                         keys.push(first)
                         vals.push(value)
                         self.skip_newlines()

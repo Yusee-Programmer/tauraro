@@ -5,7 +5,7 @@ from core.vec import Vec
 from core.map import Map
 from core.alloc import alloc, dealloc
 from std.core.io import _tr_exit, write_file, append_file, read_file
-from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension, ChanSelectArm, GenericConstraint, unify_generic, type_mentions
+from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension, ChanSelectArm, GenericConstraint, ElifClause, unify_generic, type_mentions
 from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type, HirChanSelectArm
 from mir import mir_if_drop_plan, DropSite, mir_proven_borrows, mir_borrow_conflicts, mir_shared_ref_param_violations
 
@@ -69,6 +69,10 @@ pub class Symbol:
     pub firm_ty: AstType      # the FULL declared / inferred type this variable is certain to have (name == "" when unsure)
     pub firm_cls: str         # class name this variable is CERTAIN to hold ("" when unsure); lets field / method result kinds be known
     pub firm: str             # type family this variable is CERTAIN to have ("int"/"float"/"bool"/"str"/"List"/"Dict"/"class"), "" when unsure; drives the E-5 mismatch checks
+    pub lam_expr: Pointer[Expr]   # deferred lambda: `f = lambda x: ...` with un-annotated parameters is lowered at its first typed use
+    pub lam_ptr: Pointer[HirExpr] # placeholder HIR node of the deferred lambda's initializer, overwritten when it is lowered
+    pub open_key: str         # identity of the open declaration (name#ordinal within its function), for the retry pass
+    pub open_coll: bool       # declared from an empty `[]` / `{}` / `set()` whose element types are not known yet: the first typed use (append, index-assign, typed argument ...) fills them in
     pub borrows_region: str   # [L-3/L-4] region derivation of this str local's CURRENT value: "" = unknown (never flagged), "@owned" = freshly built (concat — owned, not a borrow), "<name>" = shares parameter/local <name>'s region (transitive). Tracks the LAST assignment.
 
 extend Symbol:
@@ -95,6 +99,10 @@ extend Symbol:
         s.str_escaped = false
         s.coll_escaped = false
         s.borrows_region = ""
+        s.open_coll = false
+        s.open_key = ""
+        s.lam_expr = Pointer[Expr](0)
+        s.lam_ptr = Pointer[HirExpr](0)
         s.firm = ""
         s.firm_cls = ""
         s.firm_ty = AstType.init("")
@@ -268,6 +276,24 @@ pub class Sema:
     pub in_async_fn:        bool
     pub fn_try_ok:          bool   # `?` allowed: the enclosing fn throws / returns Result|Option (or we are in a closure)
     pub closure_depth:      int
+    pub infer_mode:      bool                    # return-type inference dry run (see src/infer.tr)
+    pub unk_events:      int                     # count of expressions typed with the mock `__unk` type
+    pub infer_ret_all:   Vec[Pointer[AstType]]   # types of every `return v` in the function being lowered
+    pub infer_ret_clean: Vec[Pointer[AstType]]   # ... those whose expression involved no `__unk`
+    pub infer_res_fn:    Vec[FunctionDef]        # dry-run results: functions whose return type was being inferred
+    pub infer_res_state: Vec[int]                # 0 resolved, 1 candidate (recursive), 2 unresolved, 3 conflicting, 4 no value returned
+    pub infer_res_ty:    Vec[Pointer[AstType]]
+    pub self_rec_seen:   bool
+    pub open_seq:        Map[str, int]           # per-function ordinal of empty-collection declarations by name
+    pub open_hints:      Map[str, AstType]       # retry pass: resolved types of the open declarations found by the first pass
+    pub open_filled:     Map[str, AstType]       # open declarations resolved so far in the current function
+    pub open_def_keys:   Vec[str]                # reads of a still-untyped empty collection, reported only if nothing types it later
+    pub open_def_msgs:   Vec[str]
+    pub open_def_lines:  Vec[int]
+    pub open_pass2:      bool
+    pub lam_int_ok:      bool                    # the closure being lowered is a call argument / returned value: a bare `lambda` parameter defaults to int (documented)
+    pub pending_lams:    Vec[str]                # deferred lambdas declared in the function being lowered
+    pub cur_fn_ret:      Pointer[AstType]        # declared return type of the function being lowered (null = none)
     pub assign_froms:       Map[str, int] # block-local last use tracking
     pub fn_sigs:            Map[str, AstType] # top-level fn name -> def(...)->R type, for first-class function references
     pub closure_hint:       Pointer[AstType]  # expected def(...)->R type of the closure argument being lowered (null = none)
@@ -394,6 +420,24 @@ extend Sema:
         s.in_async_fn        = false
         s.fn_try_ok          = true
         s.closure_depth      = 0
+        s.infer_mode         = false
+        s.unk_events         = 0
+        s.infer_ret_all      = Vec[Pointer[AstType]].init(2)
+        s.infer_ret_clean    = Vec[Pointer[AstType]].init(2)
+        s.infer_res_fn       = Vec[FunctionDef].init(4)
+        s.infer_res_state    = Vec[int].init(4)
+        s.infer_res_ty       = Vec[Pointer[AstType]].init(4)
+        s.self_rec_seen      = false
+        s.cur_fn_ret         = Pointer[AstType](0)
+        s.pending_lams       = Vec[str].init(4)
+        s.open_seq           = Map[str, int].init(8)
+        s.open_hints         = Map[str, AstType].init(8)
+        s.open_filled        = Map[str, AstType].init(8)
+        s.open_def_keys      = Vec[str].init(2)
+        s.open_def_msgs      = Vec[str].init(2)
+        s.open_def_lines     = Vec[int].init(2)
+        s.open_pass2         = false
+        s.lam_int_ok         = false
         s.assign_froms       = Map[str, int].init(32)
         s.fn_sigs            = Map[str, AstType].init(64)
         s.closure_hint       = Pointer[AstType](0)
@@ -5231,9 +5275,89 @@ extend Sema:
                             self.type_alias_elem.insert(alias_name, ta_t.args.get(0).read().name)
             case _: pass
 
+    # Lower a function; when an empty collection was read before anything typed it but a later
+    # statement did type it, lower the function a second time with those types known up front.
     pub def lower_func(self, f: FunctionDef) -> HirFunction:
+        mut e0 = self.errors.len
+        mut w0 = self.warnings.len
+        mut nc0 = self.nested_classes.len
+        mut nf0 = self.nested_functions.len
+        mut ne0 = self.nested_enums.len
+        mut ni0 = self.nested_interfaces.len
+        mut r0 = self.infer_res_fn.len
+        mut sv_keys = self.open_def_keys
+        mut sv_msgs = self.open_def_msgs
+        mut sv_lines = self.open_def_lines
+        mut sv_filled = self.open_filled
+        mut sv_seq = self.open_seq
+        mut sv_hints = self.open_hints
+        mut sv_p2 = self.open_pass2
+        self.open_def_keys = Vec[str].init(2)
+        self.open_def_msgs = Vec[str].init(2)
+        self.open_def_lines = Vec[int].init(2)
+        self.open_filled = Map[str, AstType].init(8)
+        self.open_seq = Map[str, int].init(8)
+        mut hf = self.lower_func_once(f)
+        if self.open_def_keys.len > 0 and not self.open_pass2:
+            mut retry = false
+            mut ki = 0
+            while ki < self.open_def_keys.len:
+                if self.open_filled.contains(self.open_def_keys.get(ki)): retry = true
+                ki = ki + 1
+            if retry and nc0 == self.nested_classes.len and nf0 == self.nested_functions.len and ne0 == self.nested_enums.len and ni0 == self.nested_interfaces.len:
+                while self.errors.len > e0: self.errors.pop()
+                while self.warnings.len > w0: self.warnings.pop()
+                while self.infer_res_fn.len > r0:
+                    self.infer_res_fn.pop()
+                    self.infer_res_state.pop()
+                    self.infer_res_ty.pop()
+                self.open_hints = self.open_filled
+                self.open_filled = Map[str, AstType].init(8)
+                self.open_seq = Map[str, int].init(8)
+                self.open_def_keys = Vec[str].init(2)
+                self.open_def_msgs = Vec[str].init(2)
+                self.open_def_lines = Vec[int].init(2)
+                self.open_pass2 = true
+                hf = self.lower_func_once(f)
+            else:
+                mut sv_line = self.current_line
+                ki = 0
+                while ki < self.open_def_keys.len:
+                    if not self.open_filled.contains(self.open_def_keys.get(ki)):
+                        self.current_line = self.open_def_lines.get(ki)
+                        self.error(self.open_def_msgs.get(ki))
+                    ki = ki + 1
+                self.current_line = sv_line
+        self.open_def_keys = sv_keys
+        self.open_def_msgs = sv_msgs
+        self.open_def_lines = sv_lines
+        self.open_filled = sv_filled
+        self.open_seq = sv_seq
+        self.open_hints = sv_hints
+        self.open_pass2 = sv_p2
+        return hf
+
+    pub def lower_func_once(self, f: FunctionDef) -> HirFunction:
         self.current_line = f.line
+        mut _ir_ev0 = self.unk_events
+        mut _ir_all_saved = self.infer_ret_all
+        mut _ir_clean_saved = self.infer_ret_clean
+        mut _ir_rec_saved = self.self_rec_seen
+        mut _ir_ret_saved = self.cur_fn_ret
+        mut _lam_start = self.pending_lams.len
+        self.cur_fn_ret = f.ret_ty
+        self.infer_ret_all = Vec[Pointer[AstType]].init(2)
+        self.infer_ret_clean = Vec[Pointer[AstType]].init(2)
+        self.self_rec_seen = false
         mut _saved_fn_is_lib = self.cur_fn_is_lib
+        # Parameters must be written (Rust-style): only closures infer theirs.
+        if not f.is_extern and f.name != "":
+            mut _npi = 0
+            while _npi < f.params.len:
+                mut _np = f.params.get(_npi)
+                if _np.ty as usize == 0 as usize and _np.name != "self" and not _np.is_variadic:
+                    self.error("[R-1] parameter '" + _np.name + "' of '" + f.name + "' needs a type.\n      FIX: write the type after the name, e.g. `" + _np.name + ": int`. (Only closures/lambdas infer their parameter types.)")
+                _npi = _npi + 1
         self.cur_fn_is_lib = f.is_lib
         # Rule N-1: Function name check
         # Top-level functions cannot shadow reserved built-ins.
@@ -5453,6 +5577,8 @@ extend Sema:
                     self.current_line = f.line
                     self.error("[F-3] Function '" + f.name + "' returns '" + ret_nm + "' but is missing a return statement on at least one code path. FIX: Add a return at the end, or ensure all if/elif/else branches return.")
 
+        self._check_pending_lams(_lam_start)
+        self._infer_record(f, _ir_ev0)
         self.finalize_scope_drops(hf.body)
         # #53 HYBRID: fill the if-body fall-through leak from the MIR drop schedule
         # (HIR machinery handled top-level/while/jump drops above). BEFORE
@@ -5473,7 +5599,56 @@ extend Sema:
         self.current_func_outlives_a = saved_outlives_a
         self.current_func_outlives_b = saved_outlives_b
         self.cur_fn_is_lib = _saved_fn_is_lib
+        self.infer_ret_all = _ir_all_saved
+        self.infer_ret_clean = _ir_clean_saved
+        self.self_rec_seen = _ir_rec_saved
+        self.cur_fn_ret = _ir_ret_saved
         return hf
+
+    # Dry-run bookkeeping: remember what the returns of a function being inferred looked like.
+    # The common type of two returned types, or null when they differ: `None` joins an
+    # Option, and a bare Option / Result takes the arguments of a fuller one.
+    pub def _merge_ret(self, a: AstType, b: AstType) -> Pointer[AstType]:
+        if self.io_ty_str(a) == self.io_ty_str(b): return box_asttype(a)
+        if a.name == "None" and b.name == "Option": return box_asttype(b)
+        if b.name == "None" and a.name == "Option": return box_asttype(a)
+        if a.name == b.name and (a.name == "Option" or a.name == "Result"):
+            if a.args.len == 0: return box_asttype(b)
+            if b.args.len == 0: return box_asttype(a)
+        return Pointer[AstType](0)
+
+    pub def _infer_record(self, f: FunctionDef, ev0: int):
+        if not self.infer_mode: return
+        if f.ret_ty as usize == 0 as usize: return
+        if f.ret_ty.read().name != "__unk": return
+        mut st = 0
+        mut ty = box_asttype(AstType.init("void"))
+        mut tainted = self.unk_events != ev0
+        if self.infer_ret_all.len == 0:
+            st = 4
+        elif not tainted:
+            ty = self.infer_ret_all.get(0)
+            mut ci = 1
+            while ci < self.infer_ret_all.len and st == 0:
+                mut mg = self._merge_ret(ty.read(), self.infer_ret_all.get(ci).read())
+                if mg as usize == 0 as usize: st = 3
+                else: ty = mg
+                ci = ci + 1
+            if ty.read().name == "void" or ty.read().name == "": st = 4
+        else:
+            st = 2
+            if self.infer_ret_clean.len > 0 and self.self_rec_seen:
+                ty = self.infer_ret_clean.get(0)
+                st = 1
+                mut ci2 = 1
+                while ci2 < self.infer_ret_clean.len and st == 1:
+                    mut mg2 = self._merge_ret(ty.read(), self.infer_ret_clean.get(ci2).read())
+                    if mg2 as usize == 0 as usize: st = 2
+                    else: ty = mg2
+                    ci2 = ci2 + 1
+        self.infer_res_fn.push(f)
+        self.infer_res_state.push(st)
+        self.infer_res_ty.push(ty)
 
     pub def lower_class(self, c: ClassDef) -> HirClass:
         self.current_line = c.line
@@ -5891,7 +6066,19 @@ extend Sema:
                     mut _br_who = "'" + self.current_func_name + "'"
                     if self.closure_depth > 0: _br_who = "this closure"
                     self.error("[E-5] Type mismatch: " + _br_who + " is declared to return " + self.family_word(self.current_func_ret_family) + " but this 'return' has no value.\n      FIX: return a value of the declared type, or remove the return type if the function returns nothing.")
+                mut _ir_e0 = self.unk_events
+                if self.cur_fn_ret as usize != 0 as usize and self.closure_depth == 0 and self.cur_fn_ret.read().name == "def" and self._closure_untyped(e): self.closure_hint = self.cur_fn_ret
+                self.lam_int_ok = true
                 mut _ret_h = self.lower_expr(e)
+                self.lam_int_ok = false
+                self.closure_hint = Pointer[AstType](0)
+                if e as usize != 0 as usize and self.closure_depth == 0 and self.cur_fn_ret as usize != 0 as usize:
+                    mut _or_n = self._open_name(_ret_h)
+                    if _or_n != "" and self.cur_fn_ret.read().name == self.resolve(_or_n).ty.read().name: self._open_fill_from(_or_n, self.cur_fn_ret.read())
+                if e as usize != 0 as usize and self.closure_depth == 0:
+                    mut _ir_rt = box_asttype(hir_expr_type(_ret_h))
+                    self.infer_ret_all.push(_ir_rt)
+                    if self.unk_events == _ir_e0: self.infer_ret_clean.push(_ir_rt)
                 if e as usize != 0 as usize and self.current_func_ret_family == "void" and self.closure_depth == 0 and self.firm_family(_ret_h) != "":
                     self.error("[E-5] Type mismatch: '" + self.current_func_name + "' has no return type but this returns " + self.family_word(self.firm_family(_ret_h)) + ".\n      FIX: declare the return type (`def " + self.current_func_name + "(...) -> <type>:`) or remove the value.")
                 if e as usize != 0 as usize and self.current_func_ret_family != "":
@@ -5903,6 +6090,19 @@ extend Sema:
                 return box_hirstmt(HirStmt.SReturn(_ret_h))
             case Stmt.SLet(name, ownership, is_mut, is_const, is_shared, ty_ptr, val_ptr):
                 self.check_not_type_value(val_ptr)
+                # `f = lambda x, y: ...` with un-annotated parameters: the parameter types come
+                # from the first call (or the function type it is passed to), so lower it then.
+                if ty_ptr as usize == 0 as usize and self.current_func_name != "" and self.closure_depth == 0 and self.closure_hint as usize == 0 as usize and self._closure_untyped(val_ptr):
+                    mut lam_ty = AstType.init("lambda")
+                    mut lam_ph = box_hirexpr(HirExpr.ELitInt(0, AstType.init("int")))
+                    self.declare(name, SymbolKind.SVariable, box_asttype(lam_ty), is_mut)
+                    mut lam_si = self.scopes.len - 1
+                    mut lam_sy = self.scopes.get(lam_si).variables.get(name)
+                    lam_sy.lam_expr = val_ptr
+                    lam_sy.lam_ptr = lam_ph
+                    self.scopes.get(lam_si).variables.insert(name, lam_sy)
+                    self.pending_lams.push(name)
+                    return box_hirstmt(HirStmt.SLet(name, ownership, is_mut, is_const, is_shared, lam_ty, lam_ph))
                 # Rule M-7: none must not be assigned to a non-Optional type
                 if ty_ptr as usize != 0 as usize and val_ptr as usize != 0 as usize:
                     match val_ptr.read():
@@ -5916,8 +6116,10 @@ extend Sema:
                     ty = ty_ptr.read()
                     self._check_ty_arity(ty_ptr, "'" + name + "' declaration", 0)
                     self.check_type_known(ty_ptr, "the declaration of '" + name + "'")
+                if ty.name == "def" and val_ptr as usize != 0 as usize and self._closure_untyped(val_ptr): self.closure_hint = ty_ptr
                 mut hval = self.lower_expr(val_ptr)
                 self.check_not_void_call(hval, "the initializer of '" + name + "'")
+                self.closure_hint = Pointer[AstType](0)
                 if ty.name != "void" and ty.name != "None": hval = self._patch_empty_dict_hint(hval, ty)
                 if ty_ptr as usize != 0 as usize and val_ptr as usize != 0 as usize:
                     self.check_fn_value_throws(ty_ptr, hir_expr_type(hval), "the initializer of '" + name + "'")
@@ -5964,6 +6166,7 @@ extend Sema:
                         if _let_firm == "class": _let_cls = self.firm_class(hval)
                         if _let_firm == "class" and _let_cls == "" and _let_ty.name != "" and self.classes.contains(_let_ty.name): _let_cls = _let_ty.name
                 self.declare(name, SymbolKind.SVariable, box_asttype(ty), is_mut)
+                if ty_ptr as usize == 0 as usize and val_ptr as usize != 0 as usize: self._mark_open_if_empty(name, hval)
                 if _let_firm != "" and self.scopes.len > 0:
                     mut _fm_scope = self.scopes.get(self.scopes.len - 1)
                     if _fm_scope.variables.contains(name):
@@ -6116,6 +6319,10 @@ extend Sema:
                                 match val.read():
                                     case Expr.EClosure(_, _, _, _):
                                         return self.lower_stmt(box_astestmt(Stmt.SLet(cl_decl_name, Ownership.Own, false, false, false, Pointer[AstType](0), val)))
+                                    case Expr.EList(_): return self.lower_stmt(box_astestmt(Stmt.SLet(cl_decl_name, Ownership.Own, false, false, false, Pointer[AstType](0), val)))
+                                    case Expr.EDict(_, _): return self.lower_stmt(box_astestmt(Stmt.SLet(cl_decl_name, Ownership.Own, false, false, false, Pointer[AstType](0), val)))
+                                    case Expr.ESet(_): return self.lower_stmt(box_astestmt(Stmt.SLet(cl_decl_name, Ownership.Own, false, false, false, Pointer[AstType](0), val)))
+                                    case Expr.EDo(_): return self.lower_stmt(box_astestmt(Stmt.SLet(cl_decl_name, Ownership.Own, false, false, false, Pointer[AstType](0), val)))
                                     case _: pass
                         case _: pass
                 self.in_assign_target = true
@@ -6126,8 +6333,13 @@ extend Sema:
                 mut htgt = self.lower_expr(target)
                 self.in_assign_target = false
                 self.in_assign_target_plain = false
+                if hir_expr_type(htgt).name == "def" and self._closure_untyped(val):
+                    mut _as_ht = hir_expr_type(htgt)
+                    self.closure_hint = box_asttype(_as_ht)
                 mut hv = self.lower_expr(val)
+                self.closure_hint = Pointer[AstType](0)
                 hv = self._patch_empty_dict_hint(hv, hir_expr_type(htgt))
+                self._open_assign(htgt, hv)
                 if target as usize != 0 as usize:
                     match htgt.read():
                         case HirExpr.EPropAccess(_fo, _fname, _):
@@ -6185,6 +6397,7 @@ extend Sema:
                                 # Bare `name = expr` with no prior declaration and no `mut`:
                                 # declares an IMMUTABLE binding (Rust-like default).
                                 self.declare(sa_decl_name, SymbolKind.SVariable, box_asttype(hir_expr_type(hv)), false)
+                                self._mark_open_if_empty(sa_decl_name, hv)
                                 # The target was lowered BEFORE it was declared, so it carries no type;
                                 # give it the declared one -- codegen keys the owning-local tracking
                                 # (a `str` local is released at scope exit) on the target's type.
@@ -6823,8 +7036,35 @@ extend Sema:
                 self.in_unsafe = saved_unsafe
                 return box_hirstmt(HirStmt.SUnsafe(unsafe_hir))
             case Stmt.SMultiLet(names, is_mut, val_ptr):
+                # `a, b = b, a` on names that already exist: evaluate into temporaries, then assign.
+                mut _ml_exist = 0
+                mut _mli = 0
+                while _mli < names.len:
+                    mut _mls = self.resolve(names.get(_mli))
+                    if _mls.name != "" and _mls.kind == SymbolKind.SVariable and not self.sym_out_of_scope(_mls) and not _mls.is_param: _ml_exist = _ml_exist + 1
+                    elif _mls.name != "" and _mls.kind == SymbolKind.SVariable and _mls.is_param: _ml_exist = _ml_exist + 1
+                    _mli = _mli + 1
+                if _ml_exist > 0 and not is_mut:
+                    if _ml_exist < names.len:
+                        self.error("[R-4] cannot unpack into a mix of new and existing variables.\n      FIX: declare the new ones first, or unpack into fresh names and assign.")
+                        return box_hirstmt(HirStmt.SPass)
+                    self.do_temp_ctr = self.do_temp_ctr + 1
+                    mut _sw_tmps = Vec[str].init(names.len)
+                    mut _sw_blk = Block.init()
+                    mut _swi = 0
+                    while _swi < names.len:
+                        _sw_tmps.push("__sw" + self.do_temp_ctr.to_str() + "_" + _swi.to_str())
+                        _swi = _swi + 1
+                    _sw_blk.push(box_astestmt(Stmt.SMultiLet(_sw_tmps, true, val_ptr)))
+                    _swi = 0
+                    while _swi < names.len:
+                        _sw_blk.push(box_astestmt(Stmt.SAssign(box_astexpr(Expr.EIdent(names.get(_swi))), box_astexpr(Expr.EIdent(_sw_tmps.get(_swi))))))
+                        _swi = _swi + 1
+                    return self.lower_stmt(box_astestmt(Stmt.SIf(box_astexpr(Expr.ELitBool(true)), _sw_blk, Vec[ElifClause].init(0), Block.init())))
                 mut hval = self.lower_expr(val_ptr)
                 mut val_ty = hir_expr_type(hval)
+                if val_ty.args.len < names.len and (val_ty.name == "int" or val_ty.name == "float" or val_ty.name == "str" or val_ty.name == "bool" or val_ty.name == "char"):
+                    self.error("[R-4] cannot unpack " + self.io_ty_str(val_ty) + " into " + names.len.to_str() + " names: it is not a tuple of " + names.len.to_str() + " values.\n      FIX: unpack a tuple, e.g. `a, b = (1, 2)`.")
                 mut i = 0
                 while i < names.len:
                     mut nty = AstType.init("int")
@@ -7182,7 +7422,413 @@ extend Sema:
         if self.no_heap:
             self.error("[H-1] " + what + " allocates on the heap, which --no-heap forbids (bare-metal zero-heap build).\n      FIX: " + fix)
 
+    # -- Deferred lambdas -------------------------------------------------------------
+    pub def _closure_untyped(self, e: Pointer[Expr]) -> bool:
+        if e as usize == 0 as usize: return false
+        match e.read():
+            case Expr.EClosure(cps, _, _, _):
+                mut i = 0
+                while i < cps.len:
+                    if cps.get(i).ty as usize == 0 as usize: return true
+                    i = i + 1
+                return false
+            case _: return false
+        return false
+
+    pub def _lam_scope_of(self, name: str) -> int:
+        mut i = self.scopes.len - 1
+        while i >= 0:
+            if self.scopes.get(i).variables.contains(name): return i
+            i = i - 1
+        return 0 - 1
+
+    # Lower the deferred lambda bound to `name` now, typing its parameters from `argtys`.
+    pub def _resolve_lambda(self, name: str, argtys: Vec[AstType]):
+        mut si = self._lam_scope_of(name)
+        if si < 0: return
+        mut sy = self.scopes.get(si).variables.get(name)
+        if sy.lam_expr as usize == 0 as usize: return
+        mut lam = sy.lam_expr
+        mut ph = sy.lam_ptr
+        sy.lam_expr = Pointer[Expr](0)
+        self.scopes.get(si).variables.insert(name, sy)
+        mut nparams = 0
+        match lam.read():
+            case Expr.EClosure(lps, _, _, _): nparams = lps.len
+            case _: pass
+        if nparams != argtys.len:
+            mut pl = "s"
+            if nparams == 1: pl = ""
+            mut vb = "were"
+            if argtys.len == 1: vb = "was"
+            self.error("[E-4] the function value '" + name + "' takes " + nparams.to_str() + " argument" + pl + " but " + argtys.len.to_str() + " " + vb + " given.\n      FIX: call it with exactly " + nparams.to_str() + " argument" + pl + " (see where '" + name + "' is defined).")
+            return
+        mut ht = AstType.init("def")
+        mut ai = 0
+        while ai < argtys.len:
+            ht.args.push(box_asttype(argtys.get(ai)))
+            ai = ai + 1
+        ht.args.push(box_asttype(AstType.init("void")))
+        self.closure_hint = box_asttype(ht)
+        mut hclo = self.lower_expr(lam)
+        self.closure_hint = Pointer[AstType](0)
+        unsafe:
+            ph.write(hclo.read())
+        mut nt = hir_expr_type(hclo)
+        mut lt = sy.ty.read()
+        lt.name = nt.name
+        lt.args = nt.args
+        self.clo_let_names.push(name)
+        self.clo_let_ptrs.push(ph)
+        self.clo_let_scopes.push(si)
+
+    pub def _lam_pending_name(self, e: Pointer[Expr]) -> str:
+        if e as usize == 0 as usize: return ""
+        match e.read():
+            case Expr.EIdent(n):
+                mut sy = self.resolve(n)
+                if sy.name != "" and sy.lam_expr as usize != 0 as usize: return n
+            case _: pass
+        return ""
+
+    pub def _check_pending_lams(self, start: int):
+        mut i = start
+        while i < self.pending_lams.len:
+            mut nm = self.pending_lams.get(i)
+            mut si = self._lam_scope_of(nm)
+            if si >= 0:
+                mut sy = self.scopes.get(si).variables.get(nm)
+                if sy.lam_expr as usize != 0 as usize:
+                    self.error("[R-6] cannot infer the parameter types of the lambda '" + nm + "': it is never called, so nothing shows what they are.\n      FIX: call it, or write the types: `" + nm + " = def (x: int) -> int: ...`.")
+                    sy.lam_expr = Pointer[Expr](0)
+                    self.scopes.get(si).variables.insert(nm, sy)
+            i = i + 1
+        while self.pending_lams.len > start: self.pending_lams.pop()
+
+    # -- Empty-collection inference ------------------------------------------------
+    # `xs = []` / `d = {}` / `s = set()` start "open": their element types come from the
+    # first typed use. The AstType object is shared by the declaration, the symbol and every
+    # later identifier node, so filling its type arguments in place retypes all of them.
+
+    pub def _mark_open_if_empty(self, name: str, hv: Pointer[HirExpr]):
+        if hv as usize == 0 as usize: return
+        mut is_empty = false
+        match hv.read():
+            case HirExpr.EList(li, lt): is_empty = li.len == 0 and lt.args.len == 0
+            case HirExpr.ESet(si, st): is_empty = si.len == 0 and st.args.len == 0
+            case HirExpr.EDict(dk, _, dt): is_empty = dk.len == 0 and dt.args.len == 0
+            case _: pass
+        if not is_empty: return
+        mut seq = 0
+        if self.open_seq.contains(name): seq = self.open_seq.get(name)
+        self.open_seq.insert(name, seq + 1)
+        mut key = name + "#" + seq.to_str()
+        mut i = self.scopes.len - 1
+        while i >= 0:
+            if self.scopes.get(i).variables.contains(name):
+                mut sy = self.scopes.get(i).variables.get(name)
+                if self.open_pass2 and self.open_hints.contains(key):
+                    # retry pass: the first pass found this declaration's element types
+                    mut hint = self.open_hints.get(key)
+                    mut hty = sy.ty.read()
+                    mut hk = 0
+                    while hk < hint.args.len:
+                        hty.args.push(hint.args.get(hk))
+                        hk = hk + 1
+                    if sy.firm_ty.name != "" and sy.firm_ty.args.len == 0:
+                        hk = 0
+                        while hk < hint.args.len:
+                            sy.firm_ty.args.push(hint.args.get(hk))
+                            hk = hk + 1
+                    return
+                sy.open_coll = true
+                sy.open_key = key
+                self.scopes.get(i).variables.insert(name, sy)
+                return
+            i = i - 1
+
+    pub def _open_name(self, ho: Pointer[HirExpr]) -> str:
+        if ho as usize == 0 as usize: return ""
+        match ho.read():
+            case HirExpr.EIdent(n, ty, _):
+                if ty.args.len == 0 and (ty.name == "List" or ty.name == "Vec" or ty.name == "Set" or ty.name == "Dict" or ty.name == "Map"):
+                    mut sy = self.resolve(n)
+                    if sy.name != "" and sy.open_coll: return n
+            case _: pass
+        return ""
+
+    pub def _ty_usable(self, t: AstType) -> bool:
+        if t.name == "" or t.name == "void" or t.name == "None" or t.name == "__unk": return false
+        if (t.name == "List" or t.name == "Vec" or t.name == "Set" or t.name == "Dict" or t.name == "Map") and t.args.len == 0: return false
+        return true
+
+    # Fill in the type arguments of the open collection `nm`.
+    pub def _open_fill(self, nm: str, t1: AstType, t2: AstType, two: bool):
+        if not self._ty_usable(t1): return
+        if two and not self._ty_usable(t2): return
+        mut sy = self.resolve(nm)
+        if sy.name == "" or not sy.open_coll: return
+        mut ty = sy.ty.read()
+        if ty.args.len != 0: return
+        ty.args.push(box_asttype(t1))
+        if two: ty.args.push(box_asttype(t2))
+        if sy.open_key != "": self.open_filled.insert(sy.open_key, ty)
+        if sy.firm_ty.name != "" and sy.firm_ty.args.len == 0:
+            sy.firm_ty.args.push(box_asttype(t1))
+            if two: sy.firm_ty.args.push(box_asttype(t2))
+        mut i = self.scopes.len - 1
+        while i >= 0:
+            if self.scopes.get(i).variables.contains(nm):
+                mut sy2 = self.scopes.get(i).variables.get(nm)
+                sy2.open_coll = false
+                self.scopes.get(i).variables.insert(nm, sy2)
+                return
+            i = i - 1
+
+    pub def _open_fill_from(self, nm: str, src: AstType):
+        if not self._ty_usable(src): return
+        if src.args.len == 1: self._open_fill(nm, src.args.get(0).read(), AstType.init(""), false)
+        elif src.args.len == 2: self._open_fill(nm, src.args.get(0).read(), src.args.get(1).read(), true)
+
+    pub def _open_err(self, nm: str, what: str):
+        mut sy = self.resolve(nm)
+        if not self.open_pass2 and self.current_func_name != "" and sy.open_key != "":
+            self.open_def_keys.push(sy.open_key)
+            self.open_def_msgs.push(self._open_msg(nm, what))
+            self.open_def_lines.push(self.current_line)
+            return
+        self.error(self._open_msg(nm, what))
+        self._open_close(nm)
+
+    pub def _open_close(self, nm: str):
+        mut i = self.scopes.len - 1
+        while i >= 0:
+            if self.scopes.get(i).variables.contains(nm):
+                mut sy2 = self.scopes.get(i).variables.get(nm)
+                sy2.open_coll = false
+                self.scopes.get(i).variables.insert(nm, sy2)
+                return
+            i = i - 1
+
+    pub def _open_msg(self, nm: str, what: str) -> str:
+        mut sy = self.resolve(nm)
+        mut kind = sy.ty.read().name
+        mut ex = "List[int] = []"
+        if kind == "Set": ex = "Set[int] = set()"
+        if kind == "Dict" or kind == "Map": ex = "Dict[str, int] = {}"
+        return "[R-3] cannot infer the element type of '" + nm + "': it was created empty and " + what + " comes before anything shows its type.\n      FIX: annotate it, e.g. `" + nm + ": " + ex + "`, or add an element (append/insert/index-assign) before this use."
+
+    pub def _open_uses(self, h: Pointer[HirExpr]):
+        match h.read():
+            case HirExpr.EMethodCall(ho, m, hargs, _):
+                mut nm = self._open_name(ho)
+                if nm == "": return
+                mut kind = self.resolve(nm).ty.read().name
+                if m == "get_index":
+                    if not self.in_assign_target: self._open_err(nm, "reading an element")
+                    return
+                if kind == "Dict" or kind == "Map":
+                    if (m == "insert" or m == "set" or m == "put") and hargs.len == 2:
+                        self._open_fill(nm, hir_expr_type(hargs.get(0)), hir_expr_type(hargs.get(1)), true)
+                    elif m == "update" and hargs.len == 1:
+                        self._open_fill_from(nm, hir_expr_type(hargs.get(0)))
+                    elif (m == "get" or m == "get_or") and hargs.len == 2:
+                        self._open_fill(nm, hir_expr_type(hargs.get(0)), hir_expr_type(hargs.get(1)), true)
+                    elif m == "get" or m == "keys" or m == "values" or m == "items" or m == "pop":
+                        self._open_err(nm, "`." + m + "()`")
+                elif kind == "Set":
+                    if (m == "add" or m == "insert" or m == "push") and hargs.len == 1:
+                        self._open_fill(nm, hir_expr_type(hargs.get(0)), AstType.init(""), false)
+                    elif (m == "update" or m == "extend") and hargs.len == 1:
+                        self._open_fill_from(nm, hir_expr_type(hargs.get(0)))
+                else:
+                    if (m == "append" or m == "push" or m == "push_back" or m == "add") and hargs.len == 1:
+                        self._open_fill(nm, hir_expr_type(hargs.get(0)), AstType.init(""), false)
+                    elif m == "insert" and hargs.len == 2:
+                        self._open_fill(nm, hir_expr_type(hargs.get(1)), AstType.init(""), false)
+                    elif m == "extend" and hargs.len == 1:
+                        self._open_fill_from(nm, hir_expr_type(hargs.get(0)))
+                    elif m == "pop" or m == "get" or m == "first" or m == "last" or m == "peek":
+                        self._open_err(nm, "`." + m + "()`")
+            case HirExpr.EIndex(ho2, _, _):
+                if self.in_assign_target: return
+                mut nm2 = self._open_name(ho2)
+                if nm2 != "": self._open_err(nm2, "reading an element")
+            case HirExpr.ECall(hc, hargs2, _):
+                match hc.read():
+                    case HirExpr.EIdent(fn_n, _, _):
+                        if self.fn_defs.contains(fn_n):
+                            mut fd = self.fn_defs.get(fn_n)
+                            if fd.generics.len == 0:
+                                mut pi = 0
+                                while pi < hargs2.len and pi < fd.params.len:
+                                    mut pty = fd.params.get(pi).ty
+                                    if pty as usize != 0 as usize:
+                                        mut an = self._open_name(hargs2.get(pi))
+                                        if an != "" and pty.read().name == self.resolve(an).ty.read().name: self._open_fill_from(an, pty.read())
+                                    pi = pi + 1
+                    case _: pass
+            case _: pass
+
+    # `target = value` / `return value`: an open side takes its types from the other side.
+    pub def _open_assign(self, htgt: Pointer[HirExpr], hv: Pointer[HirExpr]):
+        if htgt as usize == 0 as usize or hv as usize == 0 as usize: return
+        match htgt.read():
+            case HirExpr.EMethodCall(ho3, m3, ia3, _):
+                if m3 == "get_index" and ia3.len == 1:
+                    mut nm3 = self._open_name(ho3)
+                    if nm3 != "":
+                        mut kind3 = self.resolve(nm3).ty.read().name
+                        if kind3 == "Dict" or kind3 == "Map": self._open_fill(nm3, hir_expr_type(ia3.get(0)), hir_expr_type(hv), true)
+                        elif kind3 == "List" or kind3 == "Vec": self._open_fill(nm3, hir_expr_type(hv), AstType.init(""), false)
+                    return
+            case HirExpr.EIndex(ho, hi, _):
+                mut nm = self._open_name(ho)
+                if nm != "":
+                    mut kind = self.resolve(nm).ty.read().name
+                    if kind == "Dict" or kind == "Map": self._open_fill(nm, hir_expr_type(hi), hir_expr_type(hv), true)
+                    elif kind == "List" or kind == "Vec": self._open_fill(nm, hir_expr_type(hv), AstType.init(""), false)
+                return
+            case _: pass
+        mut tn = self._open_name(htgt)
+        mut vn = self._open_name(hv)
+        if tn != "" and vn == "": self._open_fill_from(tn, hir_expr_type(hv))
+        if vn != "" and tn == "": self._open_fill_from(vn, hir_expr_type(htgt))
+
+    # `map(f, xs)` / `xs.map(f)` / `filter(f, xs)` / `xs.filter(f)` on a List: a loop that
+    # appends into a fresh list whose element type is inferred; the element type of `xs`
+    # types an un-annotated lambda parameter.
+    pub def _lower_map_filter(self, kind: str, f: Pointer[Expr], xs: Pointer[Expr]) -> Pointer[HirExpr]:
+        mut e0 = self.errors.len
+        mut hx = self.lower_expr(xs)
+        while self.errors.len > e0: self.errors.pop()
+        mut xt = hir_expr_type(hx)
+        self.do_temp_ctr = self.do_temp_ctr + 1
+        mut sfx = self.do_temp_ctr.to_str()
+        mut mf = "__mf" + sfx
+        mut out = "__mo" + sfx
+        mut it = "__mi" + sfx
+        mut cargs = Vec[Pointer[Expr]].init(1)
+        cargs.push(box_astexpr(Expr.EIdent(it)))
+        mut call = box_astexpr(Expr.ECall(box_astexpr(Expr.EIdent(mf)), cargs))
+        mut aargs = Vec[Pointer[Expr]].init(1)
+        mut fb = Block.init()
+        if kind == "map":
+            aargs.push(call)
+            fb.push(box_astestmt(Stmt.SExpr(box_astexpr(Expr.EMethodCall(box_astexpr(Expr.EIdent(out)), "append", aargs)))))
+        else:
+            aargs.push(box_astexpr(Expr.EIdent(it)))
+            mut ib = Block.init()
+            ib.push(box_astestmt(Stmt.SExpr(box_astexpr(Expr.EMethodCall(box_astexpr(Expr.EIdent(out)), "append", aargs)))))
+            fb.push(box_astestmt(Stmt.SIf(call, ib, Vec[ElifClause].init(0), Block.init())))
+        mut blk = Block.init()
+        blk.push(box_astestmt(Stmt.SLet(mf, Ownership.Own, false, false, false, Pointer[AstType](0), f)))
+        blk.push(box_astestmt(Stmt.SLet(out, Ownership.Own, true, false, false, Pointer[AstType](0), box_astexpr(Expr.EList(Vec[Pointer[Expr]].init(0))))))
+        blk.push(box_astestmt(Stmt.SFor(it, xs, fb, Vec[Decorator].init(0), false)))
+        blk.push(box_astestmt(Stmt.SExpr(box_astexpr(Expr.EIdent(out)))))
+        self.closure_hint = Pointer[AstType](0)
+        match f.read():
+            case Expr.EClosure(_, _, _, _):
+                if (xt.name == "List" or xt.name == "Vec") and xt.args.len == 1:
+                    mut ht = AstType.init("def")
+                    ht.args.push(xt.args.get(0))
+                    ht.args.push(box_asttype(AstType.init("void")))
+                    self.closure_hint = box_asttype(ht)
+            case _: pass
+        return self.lower_expr(box_astexpr(Expr.EDo(blk)))
+
+    # sorted(xs) / reversed(xs) on a List or Set: a fresh sorted / reversed list.
+    # Returns null for any other argument type (the caller keeps the old behaviour).
+    pub def _lower_sorted(self, kind: str, x: Pointer[Expr]) -> Pointer[HirExpr]:
+        mut e0 = self.errors.len
+        mut hx = self.lower_expr(x)
+        while self.errors.len > e0: self.errors.pop()
+        mut xt = hir_expr_type(hx)
+        mut is_list = xt.name == "List" or xt.name == "Vec"
+        if not is_list and xt.name != "Set": return Pointer[HirExpr](0)
+        mut noargs = Vec[Pointer[Expr]].init(0)
+        if kind == "reversed" and not is_list: return Pointer[HirExpr](0)
+        self.do_temp_ctr = self.do_temp_ctr + 1
+        mut tmp = "__srt" + self.do_temp_ctr.to_str()
+        mut largs = Vec[Pointer[Expr]].init(1)
+        largs.push(x)
+        mut init = box_astexpr(Expr.ECall(box_astexpr(Expr.EIdent("list")), largs))
+        mut blk = Block.init()
+        blk.push(box_astestmt(Stmt.SLet(tmp, Ownership.Own, true, false, false, Pointer[AstType](0), init)))
+        mut srt_m = "sort"
+        if kind == "reversed": srt_m = "reverse"
+        blk.push(box_astestmt(Stmt.SExpr(box_astexpr(Expr.EMethodCall(box_astexpr(Expr.EIdent(tmp)), srt_m, noargs)))))
+        blk.push(box_astestmt(Stmt.SExpr(box_astexpr(Expr.EIdent(tmp)))))
+        return self.lower_expr(box_astexpr(Expr.EDo(blk)))
+
+    pub def _lower_conv_builtin(self, n: str, args: Vec[Pointer[Expr]]) -> Pointer[HirExpr]:
+        if args.len == 0:
+            if n == "set": return self.lower_expr(box_astexpr(Expr.ESet(Vec[Pointer[Expr]].init(0))))
+            if n == "dict": return self.lower_expr(box_astexpr(Expr.EDict(Vec[Pointer[Expr]].init(0), Vec[Pointer[Expr]].init(0))))
+            if n == "list": return self.lower_expr(box_astexpr(Expr.EList(Vec[Pointer[Expr]].init(0))))
+            self.error("[R-5] tuple() with no argument has no elements to infer a type from.\n      FIX: write the tuple literal, e.g. `(1, \"a\")`.")
+            return box_hirexpr(HirExpr.ELitInt(0, AstType.init("int")))
+        if args.len == 1:
+            if n == "list" or n == "set":
+                mut cv_e0 = self.errors.len
+                mut cv_hx = self.lower_expr(args.get(0))
+                while self.errors.len > cv_e0: self.errors.pop()
+                if n == "list" and hir_expr_type(cv_hx).name == "Set":
+                    return self.lower_expr(box_astexpr(Expr.EMethodCall(args.get(0), "to_list", Vec[Pointer[Expr]].init(0))))
+                unsafe:
+                    mut cp = alloc[Comprehension](1)
+                    cp.write(Comprehension.init("__it", args.get(0)))
+                    mut gens = Vec[Pointer[Comprehension]].init(1)
+                    gens.push(cp)
+                    if n == "list":
+                        self.do_temp_ctr = self.do_temp_ctr + 1
+                        mut ltmp = "__lstc" + self.do_temp_ctr.to_str()
+                        mut largs = Vec[Pointer[Expr]].init(1)
+                        largs.push(box_astexpr(Expr.EIdent("__it")))
+                        mut lfb = Block.init()
+                        lfb.push(box_astestmt(Stmt.SExpr(box_astexpr(Expr.EMethodCall(box_astexpr(Expr.EIdent(ltmp)), "append", largs)))))
+                        mut lblk = Block.init()
+                        lblk.push(box_astestmt(Stmt.SLet(ltmp, Ownership.Own, true, false, false, Pointer[AstType](0), box_astexpr(Expr.EList(Vec[Pointer[Expr]].init(0))))))
+                        lblk.push(box_astestmt(Stmt.SFor("__it", args.get(0), lfb, Vec[Decorator].init(0), false)))
+                        lblk.push(box_astestmt(Stmt.SExpr(box_astexpr(Expr.EIdent(ltmp)))))
+                        return self.lower_expr(box_astexpr(Expr.EDo(lblk)))
+                    self.do_temp_ctr = self.do_temp_ctr + 1
+                    mut tmp = "__setc" + self.do_temp_ctr.to_str()
+                    mut margs = Vec[Pointer[Expr]].init(1)
+                    margs.push(box_astexpr(Expr.EIdent("__it")))
+                    mut fb = Block.init()
+                    fb.push(box_astestmt(Stmt.SExpr(box_astexpr(Expr.EMethodCall(box_astexpr(Expr.EIdent(tmp)), "add", margs)))))
+                    mut blk = Block.init()
+                    blk.push(box_astestmt(Stmt.SLet(tmp, Ownership.Own, true, false, false, Pointer[AstType](0), box_astexpr(Expr.ESet(Vec[Pointer[Expr]].init(0))))))
+                    blk.push(box_astestmt(Stmt.SFor("__it", args.get(0), fb, Vec[Decorator].init(0), false)))
+                    blk.push(box_astestmt(Stmt.SExpr(box_astexpr(Expr.EIdent(tmp)))))
+                    return self.lower_expr(box_astexpr(Expr.EDo(blk)))
+            if n == "tuple":
+                mut th = self.lower_expr(args.get(0))
+                if hir_expr_type(th).name == "List" or hir_expr_type(th).name == "Set" or hir_expr_type(th).name == "Vec":
+                    self.error("[R-5] tuple(" + self.io_ty_str(hir_expr_type(th)) + ") cannot be typed: a tuple has a fixed number of elements known at compile time.\n      FIX: write the tuple literal `(a, b)`, or keep the List.")
+                return th
+        self.error("[R-5] " + n + "(...) with this argument is not supported.\n      FIX: use a comprehension, e.g. `{k: v for k in keys}`, or build it with a loop.")
+        return box_hirexpr(HirExpr.ELitInt(0, AstType.init("int")))
+
     pub def lower_expr(self, e_ptr: Pointer[Expr]) -> Pointer[HirExpr]:
+        mut _lr = self.lower_expr_inner(e_ptr)
+        if _lr as usize != 0 as usize: self._open_uses(_lr)
+        if _lr as usize != 0 as usize and self.infer_mode:
+            if hir_expr_type(_lr).name == "__unk":
+                self.unk_events = self.unk_events + 1
+                match e_ptr.read():
+                    case Expr.ECall(_uc, _ua):
+                        match _uc.read():
+                            case Expr.EIdent(_un):
+                                if _un == self.current_func_name: self.self_rec_seen = true
+                            case _: pass
+                    case Expr.EMethodCall(_uo, _um, _uma):
+                        if _um == self.current_func_name: self.self_rec_seen = true
+                    case _: pass
+        return _lr
+
+    pub def lower_expr_inner(self, e_ptr: Pointer[Expr]) -> Pointer[HirExpr]:
         if e_ptr as usize == 0 as usize: return Pointer[HirExpr](0)
         e = e_ptr.read()
         match e:
@@ -7351,6 +7997,14 @@ extend Sema:
                 if callee as usize != 0 as usize:
                     match callee.read():
                         case Expr.EIdent(ato_n):
+                            # Python-style conversions `set()` `list(x)` `dict()` `tuple(x)` (types are inferred).
+                            if (ato_n == "sorted" or ato_n == "reversed") and args.len == 1 and not self.fn_defs.contains(ato_n) and self.resolve(ato_n).kind == SymbolKind.SFunction:
+                                mut _sr = self._lower_sorted(ato_n, args.get(0))
+                                if _sr as usize != 0 as usize: return _sr
+                            if (ato_n == "map" or ato_n == "filter") and args.len == 2 and self.resolve(ato_n).kind == SymbolKind.SFunction and not self.fn_defs.contains(ato_n) and not self.classes.contains(ato_n):
+                                return self._lower_map_filter(ato_n, args.get(0), args.get(1))
+                            if (ato_n == "set" or ato_n == "list" or ato_n == "dict" or ato_n == "tuple") and self.resolve(ato_n).name == "" and not self.fn_defs.contains(ato_n) and not self.classes.contains(ato_n):
+                                return self._lower_conv_builtin(ato_n, args)
                             # [H-1] `ClassName(...)` on a refcounted heap class allocates + ARC-tracks it.
                             if self.no_heap and self._is_rc_class(ato_n):
                                 self.check_no_heap("constructing heap class '" + ato_n + "'", "mark the class '@value_type' (stack; all-scalar fields), or place the instance in caller-owned memory via a Pointer[T]")
@@ -7434,7 +8088,19 @@ extend Sema:
                     self.closure_hint = Pointer[AstType](0)
                     if _ch_fname != "":
                         match args.get(k).read():
-                            case Expr.EClosure(_, _, _, _): self.closure_hint = self.closure_hint_for_fn(_ch_fname, k)
+                            case Expr.EClosure(_, _, _, _):
+                                self.closure_hint = self.closure_hint_for_fn(_ch_fname, k)
+                                self.lam_int_ok = true
+                            case Expr.EIdent(_lh_an):
+                                if self._lam_pending_name(args.get(k)) != "":
+                                    mut _lh_h = self.closure_hint_for_fn(_ch_fname, k)
+                                    if _lh_h as usize != 0 as usize:
+                                        mut _lh_tys = Vec[AstType].init(2)
+                                        mut _lh_i = 0
+                                        while _lh_i < _lh_h.read().args.len - 1:
+                                            _lh_tys.push(_lh_h.read().args.get(_lh_i).read())
+                                            _lh_i = _lh_i + 1
+                                        self._resolve_lambda(_lh_an, _lh_tys)
                             case Expr.EList(_lh_items):
                                 if _lh_items.len == 0: self.list_hint = self.list_hint_for_fn(_ch_fname, k)
                             case _: pass
@@ -7479,6 +8145,17 @@ extend Sema:
                                     vnew_hl.push(box_hirexpr(HirExpr.EList(vargs, vlist_ty)))
                                     hl = vnew_hl
                         case _: pass
+                if callee as usize != 0 as usize:
+                    match callee.read():
+                        case Expr.EIdent(_lc_n):
+                            if self._lam_pending_name(callee) != "":
+                                mut _lc_tys = Vec[AstType].init(hl.len)
+                                mut _lc_i = 0
+                                while _lc_i < hl.len:
+                                    _lc_tys.push(hir_expr_type(hl.get(_lc_i)))
+                                    _lc_i = _lc_i + 1
+                                self._resolve_lambda(_lc_n, _lc_tys)
+                        case _: pass
                 mut hcallee = self.lower_expr(callee)
                 mut ret_ty = AstType.init("void")
                 if callee as usize == 0 as usize: return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))
@@ -7507,6 +8184,26 @@ extend Sema:
                         # is known, the same mechanism already used for `T.static_method()`.
                         elif self.resolve(n).name == "" and self._is_type_param_in_scope(n):
                             ret_ty = AstType.init(n)
+                        elif n == "Some" and hl.len == 1 and self.resolve(n).kind == SymbolKind.SFunction and self._ty_usable(hir_expr_type(hl.get(0))):
+                            ret_ty = AstType.init("Option")
+                            ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
+                        elif (n == "sorted" or n == "reversed") and hl.len == 1 and (hir_expr_type(hl.get(0)).name == "List" or hir_expr_type(hl.get(0)).name == "Vec" or hir_expr_type(hl.get(0)).name == "Set") and hir_expr_type(hl.get(0)).args.len == 1 and self.resolve(n).kind == SymbolKind.SFunction:
+                            ret_ty = AstType.init("List")
+                            ret_ty.args.push(hir_expr_type(hl.get(0)).args.get(0))
+                        elif n == "enumerate" and hl.len == 1 and (hir_expr_type(hl.get(0)).name == "List" or hir_expr_type(hl.get(0)).name == "Vec") and hir_expr_type(hl.get(0)).args.len == 1 and self.resolve(n).kind == SymbolKind.SFunction:
+                            mut en_tup = AstType.init("Tuple")
+                            en_tup.args.push(box_asttype(AstType.init("int")))
+                            en_tup.args.push(hir_expr_type(hl.get(0)).args.get(0))
+                            ret_ty = AstType.init("List")
+                            ret_ty.args.push(box_asttype(en_tup))
+                        elif n == "zip" and hl.len == 2 and hir_expr_type(hl.get(0)).args.len == 1 and hir_expr_type(hl.get(1)).args.len == 1 and (hir_expr_type(hl.get(0)).name == "List" or hir_expr_type(hl.get(0)).name == "Vec") and (hir_expr_type(hl.get(1)).name == "List" or hir_expr_type(hl.get(1)).name == "Vec") and self.resolve(n).kind == SymbolKind.SFunction:
+                            mut zp_tup = AstType.init("Tuple")
+                            zp_tup.args.push(hir_expr_type(hl.get(0)).args.get(0))
+                            zp_tup.args.push(hir_expr_type(hl.get(1)).args.get(0))
+                            ret_ty = AstType.init("List")
+                            ret_ty.args.push(box_asttype(zp_tup))
+                        elif (n == "any" or n == "all") and hl.len == 1 and self.resolve(n).kind == SymbolKind.SFunction:
+                            ret_ty = AstType.init("bool")
                         elif (n == "min" or n == "max" or n == "sum") and hl.len == 1 and hir_expr_type(hl.get(0)).args.len > 0 and (hir_expr_type(hl.get(0)).name == "List" or hir_expr_type(hl.get(0)).name == "Vec"):
                             ret_ty = hir_expr_type(hl.get(0)).args.get(0).read()   # max(xs) / sum(xs): the element type
                         elif (n == "abs" or n == "min" or n == "max") and _hl_has_float(hl):
@@ -7797,6 +8494,22 @@ extend Sema:
                         case _: pass
                 return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))
             case Expr.EMethodCall(obj, method, args):
+                if (method == "map" or method == "filter") and args.len == 1 and obj as usize != 0 as usize:
+                    mut _mf_simple = false
+                    match obj.read():
+                        case Expr.EIdent(_): _mf_simple = true
+                        case Expr.EPropAccess(_, _): _mf_simple = true
+                        case Expr.EList(_): _mf_simple = true
+                        case Expr.EListComp(_, _): _mf_simple = true
+                        case Expr.ECall(_, _): _mf_simple = true
+                        case Expr.EMethodCall(_, _, _): _mf_simple = true
+                        case _: pass
+                    if _mf_simple:
+                        mut _mf_e0 = self.errors.len
+                        mut _mf_ho = self.lower_expr(obj)
+                        while self.errors.len > _mf_e0: self.errors.pop()
+                        mut _mf_tn = hir_expr_type(_mf_ho).name
+                        if _mf_tn == "List" or _mf_tn == "Vec": return self._lower_map_filter(method, args.get(0), obj)
                 if method == "__index__" and args.len > 0:
                     return self.lower_expr(box_expr(Expr.EIndex(obj, args.get(0))))
                 # [H-1] heap-collection constructor: `List.init(..)`, `Vec[T].init(..)`,
@@ -7818,7 +8531,9 @@ extend Sema:
                 while k < args.len:
                     self.closure_hint = Pointer[AstType](0)
                     match args.get(k).read():
-                        case Expr.EClosure(_, _, _, _): self.closure_hint = self.closure_hint_for_method(method, k)
+                        case Expr.EClosure(_, _, _, _):
+                            self.closure_hint = self.closure_hint_for_method(method, k)
+                            self.lam_int_ok = true
                         case Expr.EList(_lhm_items):
                             if _lhm_items.len == 0: self.list_hint = self.list_hint_for_method(method, k)
                         case _: pass
@@ -8929,6 +9644,8 @@ extend Sema:
                 return box_hirexpr(HirExpr.ESet(sitems, set_ty))
             case Expr.EClosure(params, ret_ty, body, is_async):
                 self.closure_depth = self.closure_depth + 1
+                mut _cl_int_ok = self.lam_int_ok
+                self.lam_int_ok = false
                 # Untyped parameters take their types from the expected `def(...) -> R`
                 # parameter type of the call this closure is passed to (else `int`).
                 mut _cl_hint = self.closure_hint
@@ -8945,6 +9662,8 @@ extend Sema:
                         pa_ty = pa.ty.read()
                     elif _cl_hint_ok and _cl_hint.read().args.get(l) as usize != 0 as usize:
                         pa_ty = _cl_hint.read().args.get(l).read()
+                    elif self.current_func_name != "" and not self.infer_mode and not _cl_int_ok:
+                        self.error("[R-6] cannot infer the type of the lambda parameter '" + pa.name + "': nothing here shows what it is.\n      FIX: write the parameter types, e.g. `def (" + pa.name + ": int) -> int: ...`, or use it where its type is known (call it, or pass it to a `def(int) -> int` parameter).")
                     self.declare(pa.name, SymbolKind.SVariable, box_asttype(pa_ty), false)
                     mut hpa = HirParam()
                     hpa.name = pa.name
@@ -9443,6 +10162,12 @@ pub def throws_result_type(ret: AstType, err: Pointer[AstType]) -> AstType:
     rt.args.push(err)
     rt.is_throws = true
     return rt
+
+pub def box_astexpr(e: Expr) -> Pointer[Expr]:
+    unsafe:
+        mut p = alloc[Expr](1)
+        p.write(e)
+        return p
 
 pub def box_astestmt(t: Stmt) -> Pointer[Stmt]:
     unsafe:

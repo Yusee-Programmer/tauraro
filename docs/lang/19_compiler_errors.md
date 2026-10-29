@@ -29,6 +29,12 @@ category, with its cause, a triggering example, and the fix.
 | [T-5] | Type | Numeric value used as an `if`/`while` condition |
 | [T-6] | Concurrency | A borrow (`ref`/`mut ref`) passed across a thread boundary |
 | [T-7] | Concurrency | A plain reference-counted class crosses a thread boundary — its refcount is non-atomic (`!Send`, exactly like Rust's `Rc`). Checked **transitively** (through `Mutex`/`Vec`/fields). Use `Shared[T]` (atomic `Arc`) instead |
+| [R-1] | Inference | A function parameter has no type (`def add(a, b)`); only closures infer parameters |
+| [R-2] | Inference | A function's return type cannot be inferred (mutual recursion) or its `return`s differ in type |
+| [R-3] | Inference | An empty `[]` / `{}` / `set()` is read before anything shows its element type |
+| [R-4] | Inference | Tuple unpacking of a non-tuple, or a mix of new and existing names |
+| [R-5] | Inference | `tuple(list)` / `dict(x)` and similar conversions that cannot be typed |
+| [R-6] | Inference | A lambda parameter that nothing types, or a lambda that is never called |
 | [N-1] | Name | Reserved/keyword name used as a declaration |
 | [F-3] | Function | Missing `return` on a code path |
 | [F-4] | Function | A `throws` function value was passed where a plain `def(...) -> R` is expected, or the reverse |

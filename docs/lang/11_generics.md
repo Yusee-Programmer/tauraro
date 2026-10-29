@@ -10,6 +10,11 @@ The result: **zero-cost generics**. `identity[int]` compiles to the exact same C
 
 ---
 
+> Type parameters (`[T]`) are separate from ordinary parameters: every function parameter,
+> generic or not, is written with a type (`x: T`); an un-annotated parameter is `[R-1]`. Only
+> the return type may be omitted - it is inferred from the `return` statements (a `-> T` that
+> mentions a type parameter is inferred per call as before).
+
 ## Generic Functions
 
 ### When to Use

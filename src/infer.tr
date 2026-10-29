@@ -1,0 +1,196 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
+# src/infer.tr - return-type inference pre-pass.
+#
+# A function written without `-> T` whose body has `return <value>` gets its return type
+# from those returns. The type of a returned expression needs the full type checker, so the
+# pass runs the semantic analysis as a DRY RUN (errors discarded) with every still-unknown
+# return type mocked as `__unk`. A function whose lowering never touched an `__unk` value is
+# "clean": its return type is committed into the AST, and the next round resolves the
+# functions that call it. A self-recursive function takes its type from its non-recursive
+# returns. What is still unknown at the fixpoint becomes a clear diagnostic.
+
+from core.vec import Vec
+from core.alloc import alloc
+from ast import Program, Decl, Stmt, Block, FunctionDef, AstType, ClassDef
+from sema import Sema
+
+def _ib_has_value_return(b: Block) -> bool:
+    mut i = 0
+    while i < b.stmts.len:
+        if _is_has_value_return(b.stmts.get(i)): return true
+        i = i + 1
+    return false
+
+def _ipb_has_value_return(pb: Pointer[Block]) -> bool:
+    if pb as usize == 0 as usize: return false
+    return _ib_has_value_return(pb.read())
+
+def _is_has_value_return(sp: Pointer[Stmt]) -> bool:
+    if sp as usize == 0 as usize: return false
+    match sp.read():
+        case Stmt.SReturn(v):
+            return v as usize != 0 as usize
+        case Stmt.SIf(_, tb, elifs, eb):
+            if _ib_has_value_return(tb) or _ib_has_value_return(eb): return true
+            mut ei = 0
+            while ei < elifs.len:
+                if _ipb_has_value_return(elifs.get(ei).body): return true
+                ei = ei + 1
+            return false
+        case Stmt.SWhile(_, wb, _): return _ib_has_value_return(wb)
+        case Stmt.SFor(_, _, fb, _, _): return _ib_has_value_return(fb)
+        case Stmt.SForUnpack(_, _, fub): return _ib_has_value_return(fub)
+        case Stmt.SUnsafe(ub): return _ib_has_value_return(ub)
+        case Stmt.SWith(_, _, wb2): return _ib_has_value_return(wb2)
+        case Stmt.STaskGroup(tg): return _ib_has_value_return(tg)
+        case Stmt.SDefer(ds): return _is_has_value_return(ds)
+        case Stmt.SMatch(_, arms):
+            mut ai = 0
+            while ai < arms.len:
+                if _ipb_has_value_return(arms.get(ai).body): return true
+                ai = ai + 1
+            return false
+        case Stmt.STry(tb2, catches, fb2):
+            if _ib_has_value_return(tb2) or _ib_has_value_return(fb2): return true
+            mut ci = 0
+            while ci < catches.len:
+                if _ipb_has_value_return(catches.get(ci).read().body): return true
+                ci = ci + 1
+            return false
+        case _: return false
+    return false
+
+def _i_candidate(f: FunctionDef) -> bool:
+    if f.ret_ty as usize != 0 as usize: return false
+    if f.is_extern or f.is_macro: return false
+    if f.throws_ty as usize != 0 as usize and f.throws_ty.read().name != "": return false
+    return _ib_has_value_return(f.body)
+
+def _i_collect(prog: Program, fns: Vec[FunctionDef], files: Vec[str], decl_files: Vec[str], input_path: str):
+    mut i = 0
+    while i < prog.decls.len:
+        mut df = input_path
+        if decl_files.len == prog.decls.len: df = decl_files.get(i)
+        match prog.decls.get(i).read():
+            case Decl.DFunction(f):
+                if _i_candidate(f):
+                    fns.push(f)
+                    files.push(df)
+            case Decl.DClass(c):
+                mut mi = 0
+                while mi < c.methods.len:
+                    if _i_candidate(c.methods.get(mi)):
+                        fns.push(c.methods.get(mi))
+                        files.push(df)
+                    mi = mi + 1
+            case Decl.DActor(c2):
+                mut mi2 = 0
+                while mi2 < c2.methods.len:
+                    if _i_candidate(c2.methods.get(mi2)):
+                        fns.push(c2.methods.get(mi2))
+                        files.push(df)
+                    mi2 = mi2 + 1
+            case Decl.DExtend(_, methods):
+                mut mi3 = 0
+                while mi3 < methods.len:
+                    if _i_candidate(methods.get(mi3)):
+                        fns.push(methods.get(mi3))
+                        files.push(df)
+                    mi3 = mi3 + 1
+            case _: pass
+        i = i + 1
+
+def _i_box(t: AstType) -> Pointer[AstType]:
+    unsafe:
+        mut p = alloc[AstType](1)
+        p.write(t)
+        return p
+
+# Returns the diagnostics for return types that cannot be inferred (empty when all is well).
+pub def infer_return_types(prog: Program, decl_files: Vec[str], strict_mode: bool, no_heap: bool, boxes: bool, input_path: str) -> Vec[str]:
+    mut msgs = Vec[str].init(0)
+    mut fns = Vec[FunctionDef].init(4)
+    mut files = Vec[str].init(4)
+    _i_collect(prog, fns, files, decl_files, input_path)
+    if fns.len == 0: return msgs
+    mut done = Vec[int].init(4)       # 0 pending, 1 resolved, 2 conflicting
+    mut tentative = Vec[bool].init(4)
+    mut k = 0
+    while k < fns.len:
+        done.push(0)
+        tentative.push(false)
+        k = k + 1
+    mut round = 0
+    mut changed = true
+    while changed and round < 16:
+        changed = false
+        round = round + 1
+        # mock the unresolved return types
+        mut m = 0
+        while m < fns.len:
+            if done.get(m) == 0 and fns.get(m).ret_ty as usize == 0 as usize:
+                fns.get(m).ret_ty = _i_box(AstType.init("__unk"))
+            m = m + 1
+        # analyze() appends `extend` methods to their ClassDef; remember the sizes to undo that
+        mut cls_defs = Vec[ClassDef].init(8)
+        mut cls_lens = Vec[int].init(8)
+        mut ci = 0
+        while ci < prog.decls.len:
+            match prog.decls.get(ci).read():
+                case Decl.DClass(cd):
+                    cls_defs.push(cd)
+                    cls_lens.push(cd.methods.len)
+                case Decl.DActor(cd2):
+                    cls_defs.push(cd2)
+                    cls_lens.push(cd2.methods.len)
+                case _: pass
+            ci = ci + 1
+        mut sema = Sema.init()
+        sema.strict_mode = strict_mode
+        sema.no_heap = no_heap
+        sema.heap_boxes_tuples = boxes
+        sema.current_file = input_path
+        sema.infer_mode = true
+        mut dfi = 0
+        while dfi < decl_files.len:
+            sema.decl_files.push(decl_files.get(dfi))
+            dfi = dfi + 1
+        sema.analyze(prog)
+        ci = 0
+        while ci < cls_defs.len:
+            while cls_defs.get(ci).methods.len > cls_lens.get(ci): cls_defs.get(ci).methods.pop()
+            ci = ci + 1
+        # restore, then commit
+        m = 0
+        while m < fns.len:
+            if fns.get(m).ret_ty as usize != 0 as usize and fns.get(m).ret_ty.read().name == "__unk":
+                fns.get(m).ret_ty = Pointer[AstType](0)
+            m = m + 1
+        mut r = 0
+        while r < sema.infer_res_fn.len:
+            mut rf = sema.infer_res_fn.get(r)
+            mut st = sema.infer_res_state.get(r)
+            mut idx = 0 - 1
+            mut q = 0
+            while q < fns.len:
+                if (fns.get(q) as usize) == (rf as usize): idx = q
+                q = q + 1
+            if idx >= 0 and done.get(idx) == 0:
+                if st == 0 or st == 1:
+                    fns.get(idx).ret_ty = sema.infer_res_ty.get(r)
+                    done.set(idx, 1)
+                    changed = true
+                elif st == 4:
+                    done.set(idx, 1)      # returns nothing useful: stays void
+                    changed = true
+                elif st == 3:
+                    done.set(idx, 2)
+                    changed = true
+                    msgs.push(files.get(idx) + ":" + fns.get(idx).line.to_str() + ": [R-2] the returns of '" + rf.name + "' have different types.\n      FIX: make every `return` yield the same type, or write the return type: `def " + rf.name + "(...) -> T:`")
+            r = r + 1
+    mut u = 0
+    while u < fns.len:
+        if done.get(u) == 0:
+            msgs.push(files.get(u) + ":" + fns.get(u).line.to_str() + ": [R-2] cannot infer the return type of '" + fns.get(u).name + "' (it depends on itself or on a value whose type is not known).\n      FIX: write the return type: `def " + fns.get(u).name + "(...) -> T:`")
+        u = u + 1
+    return msgs

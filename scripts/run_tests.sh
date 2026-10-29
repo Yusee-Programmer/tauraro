@@ -165,6 +165,15 @@ expect_diag() {
         *) diagfail="$diagfail [$1: expected '$3']";;
     esac
 }
+expect_diag "param needs a type" 'def add(a, b):\n    return a + b\ndef main():\n    print(add(1, 2))\n' "[R-1] parameter 'a' of 'add' needs a type"
+expect_diag "return type not inferable" 'def f(n: int):\n    if n > 0:\n        return g(n - 1)\n    return 1\ndef g(n: int):\n    return f(n)\ndef main():\n    print(f(3))\n' "[R-2] cannot infer the return type"
+expect_diag "return types differ" 'def f(n: int):\n    if n > 0:\n        return 1\n    return "no"\ndef main():\n    print(f(3))\n' "[R-2] the returns of 'f' have different types"
+expect_diag "empty list never typed" 'def main():\n    xs = []\n    print(xs[0])\n' "[R-3] cannot infer the element type of 'xs'"
+expect_diag "empty dict never typed" 'def main():\n    d = {}\n    print(d.get("a"))\n' "[R-3] cannot infer the element type of 'd'"
+expect_diag "lambda never called" 'def main():\n    f = lambda x: x + 1\n    print(1)\n' "[R-6] cannot infer the parameter types of the lambda 'f'"
+expect_diag "lambda without context" 'def main():\n    fs = [lambda x: x + 1]\n    print(len(fs))\n' "[R-6] cannot infer the type of the lambda parameter 'x'"
+expect_diag "unpack a non-tuple" 'def main():\n    a, b = 5\n' "[R-4] cannot unpack int"
+expect_diag "inferred type seen by the checker" 'def sq(x: int):\n    return x * x\ndef main():\n    mut r = sq(2)\n    s: str = r\n' "[E-5]"
 CLS='class Th:\n    pub v: int\nextend Th:\n    pub def mk(a: int) -> Th:\n        mut t = Th()\n        t.v = a\n        return t\n    pub def val(self) -> int:\n        return self.v\n'
 expect_diag "str to Pointer" 'def main():\n    mut p: Pointer[int] = "s"\n' "[E-5] Type mismatch"
 expect_diag "list get str index" 'def main():\n    mut v: List[int] = [1]\n    print(v.get("a"))\n' "must be an int"
@@ -181,7 +190,7 @@ expect_diag "bitnot str" 'def main():\n    mut s = "a"\n    mut x = ~s\n' "'~' n
 expect_diag "range str" 'def main():\n    for i in range("a"):\n        print(i)\n' "of range() must be an int"
 expect_diag "for over int" 'def main():\n    mut n = 5\n    for i in n:\n        print(i)\n' "cannot loop over an int"
 expect_diag "comp over int" 'def main():\n    mut l = [x for x in 5]\n' "cannot loop over an int"
-expect_diag "return value void" 'def f():\n    return 1\ndef main():\n    f()\n' "has no return type but this returns"
+expect_diag "return value void" 'def f() -> void:\n    return 1\ndef main():\n    f()\n' "has no return type but this returns"
 expect_diag "return no value" 'def f() -> int:\n    return\ndef main():\n    f()\n' "this 'return' has no value"
 expect_diag "let void call" 'def f():\n    print(1)\ndef main():\n    mut x = f()\n' "returns no value"
 expect_diag "print void call" 'def f():\n    print(1)\ndef main():\n    print(f())\n' "returns no value"

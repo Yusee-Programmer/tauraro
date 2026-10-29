@@ -1,0 +1,160 @@
+# tests/lang/157_inference.tr
+# Type inference: omitted return types, empty collections typed by their first use, tuple
+# unpacking and swaps, set()/list()/dict(), dict/set comprehensions, sorted/reversed/map/filter,
+# and lambdas whose parameters take their types from the first call.
+
+from std.test import TestRunner
+
+class P:
+    pub x: int
+    pub y: int
+
+extend P:
+    pub def init(px: int, py: int) -> P:
+        mut p = P()
+        p.x = px
+        p.y = py
+        return p
+
+    pub def norm2(self):
+        return self.x * self.x + self.y * self.y
+
+    pub def scaled(self, k: int):
+        return P.init(self.x * k, self.y * k)
+
+def sq(x: int):
+    return x * x
+
+def mk():
+    return [1, 2]
+
+def fact(n: int):
+    if n <= 1:
+        return 1
+    return n * fact(n - 1)
+
+def via(x: int):
+    return sq(x) + 1
+
+def half(x: float):
+    return x / 2.0
+
+def pair():
+    return (7, "seven")
+
+def label(n: int):
+    if n > 0:
+        return "pos"
+    return "non-pos"
+
+def first_even(xs: List[int]):
+    for x in xs:
+        if x % 2 == 0:
+            return Some(x)
+    return None
+
+def build(n: int):
+    pts = []
+    for i in range(n):
+        pts.append(P.init(i, i + 1))
+    return pts
+
+def counts(words: List[str]):
+    m = {}
+    for w in words:
+        m[w] = m.get(w, 0) + 1
+    return m
+
+def main():
+    mut t = TestRunner.init("157_inference")
+
+    t.section("return types")
+    t.assert_eq_int(sq(6), 36, "int return")
+    t.assert_eq_int(len(mk()), 2, "list return")
+    t.assert_eq_int(fact(5), 120, "recursive return")
+    t.assert_eq_int(via(3), 10, "return through another inferred function")
+    t.assert_eq_float(half(5.0), 2.5, 0.000001, "float return")
+    t.assert_eq_str(label(2), "pos", "str return")
+    t.assert_eq_int(P.init(3, 4).norm2(), 25, "method return")
+    t.assert_eq_int(P.init(1, 2).scaled(3).y, 6, "method returning an object")
+    n, s = pair()
+    t.assert_eq_int(n, 7, "tuple return: int")
+    t.assert_eq_str(s, "seven", "tuple return: str")
+    t.assert_true(first_even([1, 3, 4]).is_some(), "Option return")
+    t.assert_true(first_even([1, 3]).is_none(), "Option return none")
+
+    t.section("empty collections")
+    xs = []
+    xs.append(1)
+    xs.append(2)
+    t.assert_eq_int(xs[1] + 1, 3, "list typed by append")
+    fs = []
+    fs.append(1.5)
+    t.assert_eq_float(fs[0] * 2.0, 3.0, 0.000001, "list of float")
+    d = {}
+    d["k"] = 3
+    t.assert_eq_int(d["k"] + 1, 4, "dict typed by index assignment")
+    st = set()
+    st.add(5)
+    t.assert_eq_int(len(st), 1, "set typed by add")
+    grid = []
+    for i in range(3):
+        row = []
+        for j in range(3):
+            row.append(i * j)
+        grid.append(row)
+    t.assert_eq_int(grid[2][2], 4, "nested lists")
+    ps = build(4)
+    t.assert_eq_int(len(ps), 4, "list of objects returned")
+    t.assert_eq_int(ps[3].y, 4, "object field of an inferred list")
+    c = counts(["a", "b", "a"])
+    t.assert_eq_int(c["a"], 2, "dict counted with get(k, 0)")
+    seen = {}
+    for w in ["a", "b", "a"]:
+        if w in seen:
+            seen[w] = seen[w] + 1
+        else:
+            seen[w] = 1
+    t.assert_eq_int(seen["a"], 2, "dict read before the assignment that types it")
+
+    t.section("unpacking")
+    mut a = 1
+    mut b = 2
+    a, b = b, a
+    t.assert_eq_int(a, 2, "swap a")
+    t.assert_eq_int(b, 1, "swap b")
+    p, q = (10, 20)
+    t.assert_eq_int(p + q, 30, "unpack a tuple literal")
+    for i, v in enumerate([5, 6]):
+        t.assert_eq_int(i + v, 5 + 2 * i, "for i, v in enumerate")
+
+    t.section("builtins and comprehensions")
+    sq2 = {k: k * k for k in range(4)}
+    t.assert_eq_int(sq2[3], 9, "dict comprehension")
+    ev = {x for x in range(6) if x % 2 == 0}
+    t.assert_eq_int(len(ev), 3, "set comprehension")
+    t.assert_eq_int(len(list([1, 2, 3])), 3, "list(list)")
+    t.assert_eq_int(len(set([1, 1, 2])), 2, "set(list)")
+    srt = sorted([3, 1, 2])
+    t.assert_eq_int(srt[0], 1, "sorted: first")
+    t.assert_eq_int(srt[2], 3, "sorted: last")
+    rv = list(reversed([1, 2, 3]))
+    t.assert_eq_int(rv[0], 3, "reversed")
+    dbl = list(map(lambda x: x * 2, [1, 2, 3]))
+    t.assert_eq_int(dbl[2], 6, "map with an inferred lambda")
+    big = list(filter(lambda x: x > 1, [1, 2, 3]))
+    t.assert_eq_int(len(big), 2, "filter with an inferred lambda")
+    fl = map(lambda v: v * 0.5, [1.0, 3.0])
+    t.assert_eq_float(fl[1], 1.5, 0.000001, "map over floats")
+    dd = dict()
+    dd["z"] = 1
+    t.assert_eq_int(dd["z"], 1, "dict()")
+
+    t.section("lambdas")
+    f = lambda x, y: x * y
+    t.assert_eq_float(f(1.5, 2.0), 3.0, 0.000001, "lambda typed by its first call (float)")
+    g = lambda s: s + "!"
+    t.assert_eq_str(g("hi"), "hi!", "lambda typed by its first call (str)")
+    h = lambda n: n + 1
+    t.assert_eq_int(h(41), 42, "lambda typed by its first call (int)")
+    t.summary()
