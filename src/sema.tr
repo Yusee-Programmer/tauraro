@@ -1403,7 +1403,7 @@ extend Sema:
             ti = ti + 1
 
     pub def is_builtin_decorator(self, n: str) -> bool:
-        return n == "inline" or n == "noinline" or n == "hot" or n == "cold" or n == "staticmethod" or n == "property" or n == "kernel" or n == "device" or n == "entry" or n == "section" or n == "naked" or n == "interrupt" or n == "aligned" or n == "packed" or n == "union" or n == "value_type" or n == "allocator" or n == "calloc" or n == "realloc" or n == "free" or n == "copy" or n == "derive_eq" or n == "derive_clone" or n == "fast" or n == "unsafe_sendable" or n == "weak" or n == "used" or n == "noreturn" or n == "deprecated" or n == "test" or n == "export"
+        return n == "inline" or n == "noinline" or n == "hot" or n == "cold" or n == "staticmethod" or n == "property" or n == "kernel" or n == "device" or n == "entry" or n == "section" or n == "naked" or n == "interrupt" or n == "aligned" or n == "packed" or n == "union" or n == "value_type" or n == "allocator" or n == "calloc" or n == "realloc" or n == "free" or n == "copy" or n == "derive_eq" or n == "derive_clone" or n == "fast" or n == "unsafe_sendable" or n == "weak" or n == "used" or n == "noreturn" or n == "deprecated" or n == "test" or n == "export" or n == "output"
 
     # `Name[A, B](...)`: the number of explicit type arguments must match the generic parameters
     # declared by the class / function `Name`.
