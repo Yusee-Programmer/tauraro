@@ -600,6 +600,10 @@ extend Parser:
 
         if name == "":
             self.emit_diag_prev("expected a type here", "write a type name such as 'int', 'str', 'List[int]' or a class name.")
+            # always make progress: the callers loop until a closing bracket and would spin forever
+            match self.peek():
+                case Token.Eof | Token.RParen | Token.RBracket: pass
+                case _: self.pos = self.pos + 1
             return AstType.init("void")
 
         # "ref T" - immutable (shared) borrow / region view. ERASES to the inner

@@ -99,7 +99,7 @@ def m_crlf(t, r):
 MUTS = [m_delete] * 4 + [m_dup] * 2 + [m_swap] * 3 + [m_replace] * 3 + [m_insert] * 3 + [m_unbalance] * 3 + [m_unterminated] * 2 + \
        [m_indent] * 3 + [m_truncate] + [m_nest, m_nest_blocks, m_longtok, m_crlf]
 
-RAWC = re.compile(r"\[ICE\]|\[C-1\]|build/\S+\.[ch]:\d+:\d+|\.c:\d+:\d+: (?:warning|error)|In function '|undefined reference|cc1:|collect2|\bld: |gcc: |clang: |warning: .*\[-W|note: in expansion|AddressSanitizer|runtime error:|Segmentation|Aborted|core dumped|Traceback|panicked at|RUST_BACKTRACE|stack overflow|Stack overflow", re.I)
+RAWC = re.compile(r"\[ICE\]|\[C-1\]|build/\S+\.[ch]:\d+:\d+|\.c:\d+:\d+: (?:warning|error)|In function '|undefined reference|cc1:|collect2|/ld[.a-z]*: |gcc: |clang: |warning: .*\[-W|note: in expansion|AddressSanitizer|runtime error:|Segmentation|Aborted|core dumped|Traceback|panicked at|RUST_BACKTRACE|stack overflow|Stack overflow", re.I)
 
 
 def classify(rc, text):

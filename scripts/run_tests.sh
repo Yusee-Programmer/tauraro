@@ -288,6 +288,7 @@ expect_diag "universal-named user method arity" 'class A:\n    pub v: int\nexten
 expect_diag "str method arg kind" 'def main():\n    mut p = "a,b".split(42)\n' "[E-5] Type mismatch: argument 1 of 'str.split()'"
 expect_diag "try-call element kind" 'def pn(s: str) throws str -> int:\n    return 1\ndef fl(xs: List[str], s: str) throws str -> int:\n    xs[1] = pn(s)?\n    return 1\ndef main():\n    pass\n' "[E-5] Type mismatch: an element of this List[str]"
 expect_diag "static call unknown method" 'class A:\n    pub v: int\ndef main():\n    mut a = A.nope(1)\n' "[E-1] No method 'nope' found on type 'A'"
+expect_diag "malformed fn type" 'def f(n: int) -> def(int{ -> int:\n    return 1\ndef main():\n    print(1)\n' "expected a type here"
 if [ -n "$diagfail" ]; then
     echo "  FAILED:$diagfail"
     failed=$((failed + 1))
