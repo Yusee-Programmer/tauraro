@@ -2312,6 +2312,28 @@ pub def main(args: Vec[str]):
         _print_diag("error", "[N-10] The program has no `main` function, so there is nothing to run.\n      FIX: add `def main():` to your program (use --lib to build a library of `export def`s, or --check to only check the code).")
         _tr_exit(1)
 
+    # [TIER-1] --freestanding has no libc allocator: the runtime needs the four allocator hooks
+    # (@allocator/@free/@realloc/@calloc) or macros supplied from the command line / a header.
+    if emit_mode == "exe" and tier_define == "TAURARO_KERNEL":
+        mut hooks_seen = 0
+        mut hfi = 0
+        while hfi < hir.functions.len:
+            mut hff = hir.functions.get(hfi)
+            mut hdi = 0
+            while hdi < hff.decorators.len:
+                mut hdn = hff.decorators.get(hdi).name
+                if hdn == "allocator" or hdn == "free" or hdn == "realloc" or hdn == "calloc": hooks_seen = hooks_seen + 1
+                hdi = hdi + 1
+            hfi = hfi + 1
+        mut hdr_given = false
+        mut hai = 0
+        while hai < args.len:
+            if _tr_str_contains(args.get(hai), "TAURARO_ALLOC") or str_starts_with(args.get(hai), "-include"): hdr_given = true
+            hai = hai + 1
+        if hooks_seen < 4 and not hdr_given:
+            _print_diag("error", "[TIER-1] --freestanding needs an allocator: the program defines " + str(hooks_seen) + " of the 4 allocator hooks.\n      FIX: mark one function each with @allocator, @free, @realloc and @calloc (see examples/freestanding/mps2_pure.tr), or pass the TAURARO_ALLOC/FREE/REALLOC/CALLOC macros with -D / -include.")
+            _tr_exit(1)
+
     if emit_mode == "mir":
         mut mir_prog = lower_program(hir)
         print(dump_mir(mir_prog))

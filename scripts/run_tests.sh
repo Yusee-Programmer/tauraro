@@ -323,6 +323,10 @@ expect_diag "cast int to str" 'def main():\n    mut x = 5\n    mut y = x as str\
 expect_diag "cast str to float" 'def main():\n    mut s = "a"\n    mut y = s as float\n    print(y)\n' "cannot be cast to float with 'as'"
 expect_diag "undefined property receiver" 'def main():\n    mut x = Foo.Bar\n' "'Foo' is not a defined type or value, so 'Foo.Bar' cannot be resolved"
 expect_diag "lambda chain too deep" "def main():\n    mut x = $(printf 'lambda: %.0s' $(seq 1 300))1\n" "nested too deeply"
+# --freestanding without the allocator hooks used to die in the C preprocessor (#error)
+printf 'def main():\n    print(1)\n' > "$diagdir/fsnoalloc.tr"
+dout=$("$TAURAROC" --freestanding "$diagdir/fsnoalloc.tr" -o "$diagdir/fsnoalloc" 2>&1)
+case "$dout" in *"[TIER-1] --freestanding needs an allocator"*) ;; *) diagfail="$diagfail [freestanding without allocator hooks]";; esac
 # No C compiler warning may ever reach the user for a valid program (float formatting used to leak -Wformat-truncation).
 printf 'def main():\n    x = 5\n    y = x * 2.5\n    print(x, y)\n    print(1.5e300 * 3.0)\n' > "$diagdir/warn.tr"
 wtr="$(cd "$(dirname "$TAURAROC")" && pwd)/$(basename "$TAURAROC")"
@@ -348,6 +352,7 @@ expect_diag "unknown decorator" '@nosuchdecorator\ndef f(x: int) -> int:\n    re
 expect_diag "unknown generic bound" 'def f[T: Nope](x: T) -> T:\n    return x\ndef main():\n    print(f(1))\n' "[G-1] Unknown bound 'Nope'"
 expect_diag "duplicate extern decl" 'extern "C":\n    def getpid() -> int\n    def getpid() -> int\ndef main():\n    print(getpid())\n' "[N-5] extern function 'getpid' is declared twice"
 expect_diag "missing colon def" 'def main()\n    print(1)\n' "missing ':' at the end of this function header"
+expect_diag "const field assign" 'class Cell:\n    pub v: str\ndef main():\n    const c = Cell()\n    c.v = "x"\n' "because 'c' is a constant"
 if [ -n "$diagfail" ]; then
     echo "  FAILED:$diagfail"
     failed=$((failed + 1))

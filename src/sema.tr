@@ -6300,6 +6300,12 @@ extend Sema:
                         if _let_firm == "class": _let_cls = self.firm_class(hval)
                         if _let_firm == "class" and _let_cls == "" and _let_ty.name != "" and self.classes.contains(_let_ty.name): _let_cls = _let_ty.name
                 self.declare(name, SymbolKind.SVariable, box_asttype(ty), is_mut)
+                if is_const and self.scopes.len > 0:
+                    mut _cst_scope = self.scopes.get(self.scopes.len - 1)
+                    if _cst_scope.variables.contains(name):
+                        mut _cst_sym = _cst_scope.variables.get(name)
+                        _cst_sym.is_const = true
+                        _cst_scope.variables.insert(name, _cst_sym)
                 if ty_ptr as usize == 0 as usize and val_ptr as usize != 0 as usize: self._mark_open_if_empty(name, hval)
                 if _let_firm != "" and self.scopes.len > 0:
                     mut _fm_scope = self.scopes.get(self.scopes.len - 1)
@@ -6477,6 +6483,11 @@ extend Sema:
                 if target as usize != 0 as usize:
                     match htgt.read():
                         case HirExpr.EPropAccess(_fo, _fname, _):
+                            match _fo.read():
+                                case HirExpr.EIdent(_cst_n, _, _):
+                                    if self.resolve(_cst_n).is_const:
+                                        self.error("[M-8] Cannot assign the field '" + _fname + "' of '" + _cst_n + "' because '" + _cst_n + "' is a constant.\n      FIX: declare it with 'mut " + _cst_n + " = ...' if it needs to change.")
+                                case _: pass
                             mut _fo_ty = hir_expr_type(_fo)
                             mut _fo_fam = self.firm_family(_fo)
                             if _fo_fam == "None" or _fo_fam == "int" or _fo_fam == "float" or _fo_fam == "bool" or _fo_fam == "str":
