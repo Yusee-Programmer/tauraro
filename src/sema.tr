@@ -1500,7 +1500,8 @@ extend Sema:
 
     # [N-4] A type annotation must name a type that exists.
     pub def type_name_known(self, n: str) -> bool:
-        if n == "" or n == "void" or n == "None" or n == "Self": return true
+        if n == "" or n == "void" or n == "None" or n == "Self" or n == "Bits" or n == "Simd" or n == "CFile" or n == "CString" or n == "RawPtr": return true
+        if n.len() > 0 and n >= "0" and n <= "9": return true   # array/bitfield length such as `Bits[u32; 2]`
         if _is_builtin_type_word(n): return true
         if _tr_strlen(n) == 1 and n >= "a" and n <= "z":
             mut gi = 0
