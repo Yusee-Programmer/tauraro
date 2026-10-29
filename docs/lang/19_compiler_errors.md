@@ -43,6 +43,9 @@ category, with its cause, a triggering example, and the fix.
 | [N-6] | Name | Unknown, self, enum, interface or cyclic base class |
 | [N-7] | Name | Missing module or imported symbol |
 | [N-8] | Name | `break`/`continue` outside a loop, `return` outside a function |
+| [N-9] | Name | An interface instantiated like a class (`I()`) |
+| [N-10] | Name | An executable program without a `main` function |
+| [N-11] | Name | An override whose signature differs from the inherited method |
 | [E-9] | Existence | A type or function name used as a value |
 | [N-5] | Name | Duplicate declaration (function, type, field, method, variant, parameter, global) |
 | [N-4] | Name | Unknown type in an annotation |
@@ -699,6 +702,35 @@ that the type does not declare.
 **Message:** `` `break` outside a loop. `` (also `continue`, and `return` outside a function)
 
 **FIX:** Use them only inside `while`/`for` (break, continue) or a `def` (return).
+
+### [N-9] Interface Instantiated
+
+**Message:** `'I' is an interface and cannot be instantiated.`
+
+**FIX:** Create a class that `implements I` and instantiate that class.
+
+### [N-10] No `main`
+
+**Message:** `The program has no `main` function, so there is nothing to run.`
+
+**Cause:** An executable build (not `--lib`, `--check`, `--freestanding`, `--target`, `--emit`) has no `def main():`.
+
+**FIX:** Add `def main():`, or build a library with `--lib`.
+
+### [N-11] Override With a Different Signature
+
+**Message:** `'D.f' overrides 'B.f' with a different signature: parameter 'a' is str but 'B.f' declares int.`
+
+**Cause:** A subclass method has the name and parameter count of an inherited method, but a parameter or return type of a clearly different kind (`int` vs `str`, ...).
+
+**FIX:** Keep the inherited signature, or rename the new method.
+
+### Using a variable, a method or a C name where it does not fit
+
+- `mut y: count = 4` where `count` is a variable reports **[N-4]** `'count' is a variable, not a type`.
+- `A.m()` where `m` takes `self` reports **[E-4]** `is an instance method` (call `obj.m()` or `A.m(obj)`).
+- `obj.make()` where `make` has no `self` reports **[E-4]** `is a static method` (call `A.make()`).
+- Top-level classes, enums, interfaces and globals named like a C keyword / libc function / macro (`sin`, `printf`, `INT_MAX`, `size_t`, `unix`, ...) report **[N-1]**. Locals, parameters, loop variables, lambda parameters and fields with such names are renamed automatically in the generated C.
 
 ### [E-9] Type or Function Used as a Value
 

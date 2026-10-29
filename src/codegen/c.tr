@@ -97,6 +97,9 @@ pub def _is_c_macro_name(n: str) -> bool:
     if n == "stdin" or n == "stdout" or n == "stderr" or n == "errno": return true
     if n == "unix" or n == "linux" or n == "i386" or n == "near" or n == "far": return true
     if n == "NULL" or n == "EOF": return true
+    if n == "INT_MAX" or n == "INT_MIN" or n == "UINT_MAX" or n == "LONG_MAX" or n == "LONG_MIN" or n == "ULONG_MAX" or n == "LLONG_MAX" or n == "LLONG_MIN" or n == "SHRT_MAX" or n == "SHRT_MIN" or n == "CHAR_BIT" or n == "CHAR_MAX" or n == "CHAR_MIN" or n == "SCHAR_MAX" or n == "UCHAR_MAX" or n == "USHRT_MAX" or n == "ULLONG_MAX": return true
+    if n == "SIZE_MAX" or n == "BUFSIZ" or n == "RAND_MAX" or n == "EXIT_SUCCESS" or n == "EXIT_FAILURE" or n == "NAN" or n == "INFINITY" or n == "HUGE_VAL" or n == "M_PI" or n == "M_E" or n == "FILENAME_MAX" or n == "PATH_MAX" or n == "CLOCKS_PER_SEC" or n == "SEEK_SET" or n == "SEEK_CUR" or n == "SEEK_END": return true
+    if n == "bool" or n == "_Bool" or n == "assert" or n == "offsetof" or n == "alloca" or n == "setjmp" or n == "va_list" or n == "va_start" or n == "va_end" or n == "va_arg" or n == "complex" or n == "imaginary": return true
     # <windows.h> (rpcndr.h / combaseapi.h)
     if n == "small" or n == "interface": return true
     return false
@@ -10677,6 +10680,8 @@ pub class CGenerator:
         self.restore_name(fl_snap)
 
     pub def gen_for_loop_impl(self, var: str, iter: Pointer[HirExpr], body: HirBlock, indent: int):
+        mut cvar = _safe_c_varname(var)
+        if cvar != var: self.decl_vars.insert(var, true)
         pad = _indent_str(indent)
         mut iter_s = ""
 
@@ -10709,7 +10714,7 @@ pub class CGenerator:
                             mut end_f = self.flush_wraps(end_s, false)
                             mut step_f = self.flush_wraps(step_s, false)
                             self.w(pad + "{ long long _rs" + rb + " = (long long)(" + start_f + "); long long _re" + rb + " = (long long)(" + end_f + "); long long _rt" + rb + " = (long long)(" + step_f + ");\n")
-                            self.w(pad + "for (long long " + var + " = _rs" + rb + "; _rt" + rb + " > 0 ? " + var + " < _re" + rb + " : " + var + " > _re" + rb + "; " + var + " += _rt" + rb + ") {\n")
+                            self.w(pad + "for (long long " + cvar + " = _rs" + rb + "; _rt" + rb + " > 0 ? " + cvar + " < _re" + rb + " : " + cvar + " > _re" + rb + "; " + cvar + " += _rt" + rb + ") {\n")
                             self.gen_block(body, indent + 1)
                             self.w(pad + "}\n")
                             self.w(pad + "}\n")
@@ -10736,7 +10741,7 @@ pub class CGenerator:
                             self.w(pad + "{ TrMap* " + bw + "d = " + d_s + ";\n")
                             self.w(pad + "  if (" + bw + "d) for (size_t " + bw + "b = 0; " + bw + "b < " + bw + "d->cap; " + bw + "b++)\n")
                             self.w(pad + "  for (_DictNode* " + bw + "n = " + bw + "d->buckets[" + bw + "b]; " + bw + "n; " + bw + "n = " + bw + "n->next) {\n")
-                            self.w(pad + "    TrStr " + var + " = _tr_str_lit(" + bw + "n->key);\n")
+                            self.w(pad + "    TrStr " + cvar + " = _tr_str_lit(" + bw + "n->key);\n")
                             self.gen_block(body, indent + 2)
                             self.w(pad + "  }\n")
                             self.w(pad + "}\n")
@@ -10765,7 +10770,7 @@ pub class CGenerator:
                 self.w(pad + "  while (1) {\n")
                 self.w(pad + "    __auto_type " + tmp + "_nx = " + self.cls_method_c_call(it_cls, "__next__", tmp + "_it", "") + ";\n")
                 self.w(pad + "    if (" + tmp + "_nx.tag == Option_None) break;\n")
-                self.w(pad + "    " + elem_ct + " " + var + " = " + self.unwrap_voidp_as(tmp + "_nx.data.Some.val", elem_ty) + ";\n")
+                self.w(pad + "    " + elem_ct + " " + cvar + " = " + self.unwrap_voidp_as(tmp + "_nx.data.Some.val", elem_ty) + ";\n")
                 self.gen_block(body, indent + 2)
                 self.w(pad + "  }\n")
                 self.w(pad + "}\n")
@@ -10777,7 +10782,7 @@ pub class CGenerator:
             self.w(pad + "{ __auto_type " + col_tmp + " = " + iter_s + ";\n")
             self.w(pad + "  long long " + tmp + "_len = (long long)" + self.cls_method_c_call(iter_ty_n, "__len__", col_tmp, "") + ";\n")
             self.w(pad + "  for (long long " + tmp + "_i = 0; " + tmp + "_i < " + tmp + "_len; " + tmp + "_i++) {\n")
-            self.w(pad + "    __auto_type " + var + " = " + self.cls_method_c_call(iter_ty_n, "__getitem__", col_tmp, tmp + "_i") + ";\n")
+            self.w(pad + "    __auto_type " + cvar + " = " + self.cls_method_c_call(iter_ty_n, "__getitem__", col_tmp, tmp + "_i") + ";\n")
             self.gen_block(body, indent + 2)
             self.w(pad + "  }\n")
             self.w(pad + "}\n")
@@ -10791,7 +10796,7 @@ pub class CGenerator:
             mut ch_ok_v = self.next_temp()
             self.w(pad + "{ int " + ch_ok_v + " = 1;\n")
             self.w(pad + "  while (" + ch_ok_v + ") {\n")
-            self.w(pad + "    " + ch_elem_c + " " + var + " = (" + ch_elem_c + ")_tr_chan_recv_ok(" + iter_s + ", &" + ch_ok_v + ");\n")
+            self.w(pad + "    " + ch_elem_c + " " + cvar + " = (" + ch_elem_c + ")_tr_chan_recv_ok(" + iter_s + ", &" + ch_ok_v + ");\n")
             self.w(pad + "    if (!" + ch_ok_v + ") break;\n")
             self.gen_block(body, indent + 2)
             self.w(pad + "  }\n")
@@ -10808,14 +10813,14 @@ pub class CGenerator:
         self.w(pad + "{ __auto_type " + tmp + "_col = " + iter_s + ";\n")
         self.w(pad + "  for (long long " + tmp + "_i = 0; " + tmp + "_i < " + tmp + "_col->len; " + tmp + "_i++) {\n")
         if elem_c == "TrStr":
-            self.w(pad + "    TrStr " + var + " = _tr_str_lit(" + tmp + "_col->data[" + tmp + "_i]);\n")
+            self.w(pad + "    TrStr " + cvar + " = _tr_str_lit(" + tmp + "_col->data[" + tmp + "_i]);\n")
         elif elem_c == "__auto_type":
-            self.w(pad + "    __auto_type " + var + " = " + tmp + "_col->data[" + tmp + "_i];\n")
+            self.w(pad + "    __auto_type " + cvar + " = " + tmp + "_col->data[" + tmp + "_i];\n")
         elif (iter_ty.name == "List" or iter_ty.name == "Vec") and iter_ty.args.len > 0 and self.interfaces.contains(iter_ty.args.get(0).read().name):
             # List[Interface]: slots hold heap-boxed fat pointers.
-            self.w(pad + "    " + elem_c + " " + var + " = *(" + elem_c + "*)" + tmp + "_col->data[" + tmp + "_i];\n")
+            self.w(pad + "    " + elem_c + " " + cvar + " = *(" + elem_c + "*)" + tmp + "_col->data[" + tmp + "_i];\n")
         else:
-            self.w(pad + "    " + elem_c + " " + var + " = (" + elem_c + ")" + tmp + "_col->data[" + tmp + "_i];\n")
+            self.w(pad + "    " + elem_c + " " + cvar + " = (" + elem_c + ")" + tmp + "_col->data[" + tmp + "_i];\n")
         self.gen_block(body, indent + 2)
         self.w(pad + "  }\n")
         self.w(pad + "}\n")

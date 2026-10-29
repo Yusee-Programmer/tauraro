@@ -4,7 +4,7 @@
 from core.vec import Vec
 from core.map import Map
 from core.alloc import alloc, dealloc
-from std.core.io import _tr_exit, write_file, append_file
+from std.core.io import _tr_exit, write_file, append_file, read_file
 from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension, ChanSelectArm, GenericConstraint, unify_generic, type_mentions
 from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type, HirChanSelectArm
 from mir import mir_if_drop_plan, DropSite, mir_proven_borrows, mir_borrow_conflicts, mir_shared_ref_param_violations
@@ -31,6 +31,18 @@ pub def _is_builtin_type_word(n: str) -> bool:
     if n == "int" or n == "float" or n == "bool" or n == "char" or n == "str" or n == "i8" or n == "i16" or n == "i32" or n == "i64" or n == "u8" or n == "u16" or n == "u32" or n == "u64" or n == "usize" or n == "isize" or n == "f32" or n == "f64": return true
     if n == "List" or n == "Vec" or n == "Dict" or n == "Map" or n == "Set" or n == "Option" or n == "Result" or n == "Tuple" or n == "tuple" or n == "Array" or n == "Pointer" or n == "ref" or n == "mut_ref" or n == "def" or n == "lambda": return true
     if n == "Shared" or n == "Weak" or n == "Chan" or n == "Channel" or n == "Atomic" or n == "Mutex" or n == "RwLock" or n == "Thread" or n == "ThreadPool" or n == "ThreadLocal" or n == "StringBuilder" or n == "StringObj" or n == "Bytes" or n == "String" or n == "Any" or n == "any" or n == "object" or n == "Future" or n == "Task" or n == "AsyncTask" or n == "AsyncPool": return true
+    return false
+
+# Names a top-level class / enum / interface / global would share with a C keyword or a C library
+# function / typedef: they are emitted as plain C identifiers, so the C compiler would reject them.
+pub def _is_c_top_collision(n: str) -> bool:
+    if n == "double" or n == "char" or n == "long" or n == "short" or n == "void" or n == "unsigned" or n == "signed" or n == "register" or n == "inline" or n == "auto" or n == "volatile" or n == "typedef" or n == "union" or n == "restrict" or n == "int" or n == "float" or n == "struct" or n == "static" or n == "extern" or n == "goto" or n == "switch" or n == "default" or n == "do" or n == "sizeof": return true
+    if n == "abs" or n == "labs" or n == "llabs" or n == "div" or n == "ldiv" or n == "sin" or n == "cos" or n == "tan" or n == "asin" or n == "acos" or n == "atan" or n == "atan2" or n == "sinh" or n == "cosh" or n == "tanh" or n == "sqrt" or n == "cbrt" or n == "pow" or n == "exp" or n == "exp2" or n == "log" or n == "log2" or n == "log10" or n == "floor" or n == "ceil" or n == "round" or n == "trunc" or n == "fabs" or n == "fmod" or n == "hypot" or n == "gamma" or n == "y0" or n == "y1" or n == "j0" or n == "j1" or n == "jn" or n == "yn": return true
+    if n == "printf" or n == "fprintf" or n == "sprintf" or n == "snprintf" or n == "scanf" or n == "sscanf" or n == "puts" or n == "putchar" or n == "getchar" or n == "gets" or n == "fgets" or n == "fputs" or n == "fopen" or n == "fclose" or n == "fread" or n == "fwrite" or n == "fseek" or n == "ftell" or n == "fflush" or n == "perror" or n == "remove" or n == "rename" or n == "tmpfile": return true
+    if n == "malloc" or n == "calloc" or n == "realloc" or n == "free" or n == "exit" or n == "abort" or n == "atexit" or n == "system" or n == "getenv" or n == "setenv" or n == "putenv" or n == "atoi" or n == "atol" or n == "atof" or n == "strtol" or n == "strtod" or n == "rand" or n == "srand" or n == "qsort" or n == "bsearch" or n == "setjmp" or n == "longjmp" or n == "alloca": return true
+    if n == "strlen" or n == "strcpy" or n == "strncpy" or n == "strcat" or n == "strncat" or n == "strcmp" or n == "strncmp" or n == "strchr" or n == "strrchr" or n == "strstr" or n == "strtok" or n == "strdup" or n == "memcpy" or n == "memmove" or n == "memset" or n == "memcmp" or n == "memchr" or n == "index" or n == "rindex": return true
+    if n == "time" or n == "clock" or n == "difftime" or n == "mktime" or n == "localtime" or n == "gmtime" or n == "strftime" or n == "sleep" or n == "usleep" or n == "read" or n == "write" or n == "open" or n == "close" or n == "pipe" or n == "fork" or n == "wait" or n == "kill" or n == "signal" or n == "raise" or n == "select" or n == "poll" or n == "socket" or n == "bind" or n == "listen" or n == "accept" or n == "connect" or n == "send" or n == "recv" or n == "getpid" or n == "getcwd" or n == "chdir" or n == "mkdir" or n == "rmdir" or n == "unlink" or n == "stat" or n == "fstat" or n == "isatty" or n == "dup" or n == "dup2" or n == "access" or n == "link": return true
+    if n == "tolower" or n == "toupper" or n == "isdigit" or n == "isalpha" or n == "isalnum" or n == "isspace" or n == "isupper" or n == "islower" or n == "ispunct" or n == "isprint" or n == "optind" or n == "getline" or n == "true" or n == "false" or n == "bool" or n == "tm" or n == "timespec" or n == "timeval" or n == "div_t" or n == "ldiv_t" or n == "fd_set" or n == "sigset_t" or n == "pthread_t" or n == "pthread_mutex_t" or n == "jmp_buf": return true
     return false
 
 pub class Symbol:
@@ -1294,14 +1306,28 @@ extend Sema:
     pub def type_name_known(self, n: str) -> bool:
         if n == "" or n == "void" or n == "None" or n == "Self": return true
         if _is_builtin_type_word(n): return true
+        if _tr_strlen(n) == 1 and n >= "a" and n <= "z":
+            mut gi = 0
+            mut in_gen = false
+            while gi < self.current_func_generics.len:
+                if self.current_func_generics.get(gi) == n: in_gen = true
+                gi = gi + 1
+            if not in_gen and self.resolve(n).name != "" and self.resolve(n).kind == SymbolKind.SVariable: return false
+        if self._is_type_param_in_scope(n) or self.classes.contains(n) or self.enums.contains(n) or self.interfaces.contains(n) or self.type_aliases.contains(n) or self.is_type_name(n) or self.extern_names.contains(n): return true
+        # A local variable / parameter (or a plain function) is a value, not a type: `mut y: x = 1`.
+        mut rs = self.resolve(n)
+        if rs.name != "" and rs.kind == SymbolKind.SVariable: return false
         if self.is_known_name(n): return true
-        if self.resolve(n).name != "": return true
+        if rs.name != "": return true
         return false
 
     pub def check_type_known(self, tp: Pointer[AstType], where_: str):
         if _is_invalid_ptr(tp as usize): return
         mut t = tp.read()
         if not self.type_name_known(t.name):
+            if self.resolve(t.name).name != "" and self.resolve(t.name).kind == SymbolKind.SVariable:
+                self.error("[N-4] '" + t.name + "' is a variable, not a type (in " + where_ + ").\n      FIX: write the type itself here (e.g. `int`, `str`, a class name), not the name of a variable.")
+                return
             self.error("[N-4] Unknown type '" + t.name + "' (in " + where_ + ").\n      FIX: check the spelling, or import it (e.g. `from std.x import " + t.name + "`).")
             return
         if _is_invalid_ptr(t.args as usize): return
@@ -1388,6 +1414,7 @@ extend Sema:
         mut ok = false
         mut want = 0
         mut variadic = false
+        mut inst_miss = false
         mut one = FunctionDef.init("")
         mut i = 0
         while i < cdef.methods.len:
@@ -1402,14 +1429,17 @@ extend Sema:
                     pj = pj + 1
                 if named == 0: want = cnt
                 named = named + 1
-                if cnt == hl.len or (has_self and cnt + 1 == hl.len): ok = true
+                if (cnt == hl.len and (not has_self or variant == "init")) or (has_self and cnt + 1 == hl.len): ok = true
+                if has_self and cnt == hl.len and variant != "init": inst_miss = true
                 one = m
             i = i + 1
         if named == 0 and not variadic and cdef.base_classes.len == 0 and cdef.iface_names.len == 0 and not self.is_universal_method(variant) and variant != "auto" and variant != "spawn" and variant != "from" and variant != "default":
             self.error("[E-1] No method '" + variant + "' found on type '" + type_name + "'.\n      FIX: check the spelling, or define 'pub def " + variant + "(...)' in '" + type_name + "' (or an 'extend " + type_name + ":' block).")
             return
         if named == 0 or variadic: return
-        if not ok:
+        if not ok and inst_miss:
+            self.error("[E-4] '" + type_name + "." + variant + "()' is an instance method: calling it through the type needs an instance as the first argument.\n      FIX: call it on a value (`obj." + variant + "(...)`) or pass the instance: `" + type_name + "." + variant + "(obj, ...)`.")
+        elif not ok:
             mut pl = "s"
             if want == 1: pl = ""
             mut vb = "were"
@@ -3460,6 +3490,8 @@ extend Sema:
                 # Local variables (SVariable) are also exempt - local shadowing is intentional.
                 # Only top-level function/type declarations are checked.
                 mut is_toplevel_decl = self.current_class_name == "" and kind != SymbolKind.SVariable
+                if is_toplevel_decl and kind != SymbolKind.SFunction and _is_c_top_collision(name):
+                    self.error("[N-1] '" + name + "' is also a C keyword or C library name, and types are emitted under their own name. Choose a different name (e.g. 'my_" + name + "').")
                 if is_toplevel_decl:
                     mut kcat = self.is_reserved_keyword(name)
                     if kcat != "":
@@ -4740,6 +4772,40 @@ extend Sema:
     # name in one file, a function sharing a name with a class, duplicate fields, methods of the
     # same arity, enum variants or parameters. All of these used to reach the C compiler as a
     # redefinition error. Cross-file name sharing is the module system's business and untouched.
+    # Exact source line of the nth declaration (2 = the duplicate) of `name` (a field, variant or module-level global that is declared
+    # twice), found by scanning the file text from line `start`. `top` = true: only unindented lines (globals);
+    # false: only indented lines (members). Falls back to `start` when nothing matches.
+    pub def _second_decl_line(self, start: int, name: str, top: bool, nth: int) -> int:
+        if self.current_file == "": return start
+        mut src = read_file(self.current_file)
+        mut n = src.len()
+        mut ln = 1
+        mut pos = 0
+        mut seen = 0
+        while pos <= n:
+            mut eol = pos
+            while eol < n and src.slice(eol, eol + 1) != "\n": eol = eol + 1
+            if ln >= start:
+                mut ind = 0
+                while pos + ind < eol and src.slice(pos + ind, pos + ind + 1) == " ": ind = ind + 1
+                mut rest = src.slice(pos + ind, eol)
+                mut again = true
+                while again:
+                    again = false
+                    if rest.len() > 4 and rest.slice(0, 4) == "pub ": rest = rest.slice(4, rest.len()); again = true
+                    elif rest.len() > 4 and rest.slice(0, 4) == "mut ": rest = rest.slice(4, rest.len()); again = true
+                    elif rest.len() > 4 and rest.slice(0, 4) == "let ": rest = rest.slice(4, rest.len()); again = true
+                    elif rest.len() > 6 and rest.slice(0, 6) == "const ": rest = rest.slice(6, rest.len()); again = true
+                if rest.len() >= name.len() and rest.slice(0, name.len()) == name and ((top and ind == 0) or (not top and ind > 0)):
+                    mut nc = ""
+                    if rest.len() > name.len(): nc = rest.slice(name.len(), name.len() + 1)
+                    if nc == "" or nc == ":" or nc == " " or nc == "(" or nc == "=":
+                        seen = seen + 1
+                        if seen == nth: return ln
+            ln = ln + 1
+            pos = eol + 1
+        return start
+
     pub def _dup_err(self, line: int, msg: str):
         mut saved_line = self.current_line
         if line > 0: self.current_line = line
@@ -4799,7 +4865,7 @@ extend Sema:
                     while cfi < c.fields.len:
                         mut fnm = c.fields.get(cfi).name
                         if seen_f.contains(fnm):
-                            self._dup_err(c.line, "[N-5] Field '" + fnm + "' is declared twice in '" + c.name + "'.\n      FIX: remove or rename one of the fields.")
+                            self._dup_err(self._second_decl_line(c.line, fnm, false, 2), "[N-5] Field '" + fnm + "' is declared twice in '" + c.name + "'.\n      FIX: remove or rename one of the fields.")
                         seen_f.insert(fnm, true)
                         cfi = cfi + 1
                     self._check_method_dups(meths, file, c.name, c.methods)
@@ -4813,7 +4879,7 @@ extend Sema:
                     while vi < e.variants.len:
                         mut vn = e.variants.get(vi).name
                         if seen_v.contains(vn):
-                            self._dup_err(e.line, "[N-5] Variant '" + vn + "' is declared twice in enum '" + e.name + "'.\n      FIX: remove or rename one of the variants.")
+                            self._dup_err(self._second_decl_line(e.line, vn, false, 2), "[N-5] Variant '" + vn + "' is declared twice in enum '" + e.name + "'.\n      FIX: remove or rename one of the variants.")
                         seen_v.insert(vn, true)
                         vi = vi + 1
                     self._check_method_dups(meths, file, e.name, e.methods)
@@ -4825,8 +4891,10 @@ extend Sema:
                     match gs.read():
                         case Stmt.SLet(g_name, _, _, _, _, _, _):
                             mut gk = file + "|" + g_name
+                            if _is_c_top_collision(g_name) or g_name == "main" or self.is_reserved_keyword(g_name).starts_with("C"):
+                                self._dup_err(self._second_decl_line(1, g_name, true, 1), "[N-1] Global '" + g_name + "' is also a C keyword or C library name.\n      FIX: choose a different name (e.g. 'my_" + g_name + "').")
                             if globs.contains(gk):
-                                self.error("[N-5] Global '" + g_name + "' is declared twice.\n      FIX: assign to it (`" + g_name + " = ...`) or pick a different name.")
+                                self._dup_err(self._second_decl_line(1, g_name, true, 2), "[N-5] Global '" + g_name + "' is declared twice.\n      FIX: assign to it (`" + g_name + " = ...`) or pick a different name.")
                             globs.insert(gk, true)
                         case _: pass
                 case _: pass
@@ -4875,9 +4943,46 @@ extend Sema:
                         elif self.resolve(b).name == "" and not self._is_known_type_name(b):
                             self._dup_err(c.line, "[N-6] Unknown base class '" + b + "' of class '" + c.name + "'.\n      FIX: check the spelling, or import/define '" + b + "'.")
                         bi = bi + 1
+                    self._check_overrides(c)
                 case _: pass
             di = di + 1
         self.current_file = root_file
+
+    # [N-11] A method that re-defines an inherited one (same name, same parameter count) must keep its
+    # signature: a parameter or return type of a clearly different kind makes the override unusable
+    # through the base type.
+    pub def _check_overrides(self, c: ClassDef):
+        if self.ambiguous_classes.contains(c.name): return
+        mut mi = 0
+        while mi < c.methods.len:
+            mut m = c.methods.get(mi)
+            mi = mi + 1
+            if m.name == "init" or m.generics.len > 0 or m.params.len == 0 or m.params.get(0).name != "self": continue
+            mut cur = ""
+            if c.base_classes.len > 0: cur = c.base_classes.get(0)
+            mut steps = 0
+            while cur != "" and steps < 32 and self.classes.contains(cur) and not self.ambiguous_classes.contains(cur):
+                steps = steps + 1
+                mut bc = self.classes.get(cur)
+                mut bj = 0
+                while bj < bc.methods.len:
+                    mut bm = bc.methods.get(bj)
+                    bj = bj + 1
+                    if bm.name != m.name or bm.generics.len > 0 or bc.generics.len > 0 or c.generics.len > 0 or bm.params.len != m.params.len or bm.params.len == 0 or bm.params.get(0).name != "self": continue
+                    mut bad = ""
+                    mut pk = 1
+                    while pk < m.params.len:
+                        if m.params.get(pk).ty as usize != 0 as usize and bm.params.get(pk).ty as usize != 0 as usize:
+                            if self.family_mismatch(self.decl_family(bm.params.get(pk).ty.read()), self.decl_family(m.params.get(pk).ty.read())) or self.family_mismatch(self.decl_family(m.params.get(pk).ty.read()), self.decl_family(bm.params.get(pk).ty.read())):
+                                bad = "parameter '" + m.params.get(pk).name + "' is " + m.params.get(pk).ty.read().name + " but '" + cur + "." + m.name + "' declares " + bm.params.get(pk).ty.read().name
+                        pk = pk + 1
+                    if bad == "" and m.ret_ty as usize != 0 as usize and bm.ret_ty as usize != 0 as usize:
+                        if self.family_mismatch(self.decl_family(bm.ret_ty.read()), self.decl_family(m.ret_ty.read())) or self.family_mismatch(self.decl_family(m.ret_ty.read()), self.decl_family(bm.ret_ty.read())):
+                            bad = "it returns " + m.ret_ty.read().name + " but '" + cur + "." + m.name + "' returns " + bm.ret_ty.read().name
+                    if bad != "":
+                        self._dup_err(m.line, "[N-11] '" + c.name + "." + m.name + "' overrides '" + cur + "." + m.name + "' with a different signature: " + bad + ".\n      FIX: keep the inherited signature, or give the new method another name.")
+                if bc.base_classes.len > 0: cur = bc.base_classes.get(0)
+                else: cur = ""
 
     # [E-9] A class / enum / interface name used as a value (`mut y = Point`): there is no such
     # runtime value; the generated C used to be `expected expression before 'Point'`.
@@ -5637,7 +5742,7 @@ extend Sema:
             case Stmt.SReturn(e):
                 self.check_not_type_value(e)
                 if self.current_func_name == "" and self.closure_depth == 0 and self.current_class_name == "":
-                    self.error("[N-8] `return` outside a function.\n      FIX: `return` is only valid inside a `def`; remove it or move the code into a function.")
+                    self._dup_err(self._second_decl_line(1, "return", true, 1), "[N-8] `return` outside a function.\n      FIX: `return` is only valid inside a `def`; remove it or move the code into a function.")
                 # [L-3] (outlives, opt-in --strict): a borrow-returning function
                 # `-> ref str from r` that returns a freshly-built concat is returning
                 # OWNED data, not a borrow of region r — under zero-copy elision that
@@ -6234,6 +6339,8 @@ extend Sema:
                     sw_ii = sw_ii + 1
                 return box_hirstmt(HirStmt.SWhile(sw_cond, sw_body))
             case Stmt.SFor(var, iter, body, decorators, for_is_ref):
+                if var == "true" or var == "false" or var == "main":
+                    self.error("[N-1] '" + var + "' cannot be used as a loop variable.\n      FIX: choose a different name for the loop variable.")
                 self.enter_scope()
                 mut h_iter_for = self.lower_expr(iter)
                 mut var_ty_for = AstType.init("int")
@@ -7260,6 +7367,8 @@ extend Sema:
                         self.check_call_fn_args(n, hl)
                         # `A(args)` is the same call as `A.init(args)`: check it against the declared init
                         if hl.len > 0 and self.classes.contains(n) and self.resolve(n).kind != SymbolKind.SVariable and not self.fn_defs.contains(n): self.check_static_call(n, "init", hl)
+                        if self.interfaces.contains(n) and not self.classes.contains(n) and not self.fn_defs.contains(n) and not self.is_local_var(n) and self.resolve(n).kind != SymbolKind.SVariable:
+                            self.error("[N-9] '" + n + "' is an interface and cannot be instantiated.\n      FIX: create a class that `implements " + n + "` and instantiate that instead.")
                         if n == "main":
                             self.error("[E-1] Explicit call to 'main()' is forbidden. The compiler automatically invokes main() as the program entry point. Remove the 'main()' call from your source.")
                             return box_hirexpr(HirExpr.ECall(hcallee, hl, ret_ty))
@@ -8241,6 +8350,16 @@ extend Sema:
                                     ret_ty = _mdef.ret_ty.read()  # fallback: first match
                                     _mdef_throws_ty = _mdef.throws_ty
                         _mi = _mi + 1
+                    # A static method (no `self`) called on an instance: `obj.make(1)` - the instance would be passed as its first argument.
+                    if _m_named == 1 and not _m_variadic and not _m_recv_is_type and not self.is_rt_builtin_class(hobj_ty.name) and _cls.generics.len == 0 and not self.ambiguous_classes.contains(hobj_ty.name):
+                        mut _st_first = ""
+                        if _m_one.params.len > 0 and _m_one.params.get(0).ty as usize != 0 as usize: _st_first = _m_one.params.get(0).ty.read().name
+                        mut _st_local = false
+                        match obj.read():
+                            case Expr.EIdent(_st_rn): _st_local = self.is_local_var(_st_rn)
+                            case _: pass
+                        if _st_local and (_m_one.params.len == 0 or (_m_one.params.get(0).name != "self" and _st_first != "" and _st_first != hobj_ty.name and _st_first != "Self" and not self._is_type_param_in_scope(_st_first))):
+                            self.error("[E-4] '" + method + "' is a static method of '" + hobj_ty.name + "' (it has no `self`), so it cannot be called on an instance.\n      FIX: call it through the type: `" + hobj_ty.name + "." + method + "(...)`, or add a `self` parameter to make it an instance method.")
                     if _m_named == 1 and _m_arity_ok and not _m_variadic and not self.is_rt_builtin_class(hobj_ty.name) and _cls.generics.len == 0 and _m_one.generics.len == 0:
                         mut _m1_sk = 0
                         if _m_one.params.len > 0 and _m_one.params.get(0).name == "self": _m1_sk = 1
@@ -9019,6 +9138,8 @@ extend Sema:
         # keywords / libc typedefs / Windows SDK macros in the generated code.
         if name == "_Complex" or name == "_Imaginary" or name == "_Bool" or name == "_Atomic" or name == "_Generic" or name == "_Noreturn" or name == "_Alignas" or name == "_Alignof" or name == "_Static_assert" or name == "_Thread_local": return "C99/C11 keyword"
         if name == "DIR" or name == "FILE" or name == "EOF" or name == "NULL" or name == "errno" or name == "stdin" or name == "stdout" or name == "stderr": return "C library identifier"
+        if name == "INT_MAX" or name == "INT_MIN" or name == "UINT_MAX" or name == "LONG_MAX" or name == "LONG_MIN" or name == "ULONG_MAX" or name == "LLONG_MAX" or name == "LLONG_MIN" or name == "CHAR_BIT" or name == "SIZE_MAX" or name == "BUFSIZ" or name == "RAND_MAX" or name == "EXIT_SUCCESS" or name == "EXIT_FAILURE" or name == "NAN" or name == "INFINITY" or name == "HUGE_VAL" or name == "M_PI" or name == "M_E" or name == "unix" or name == "linux" or name == "i386" or name == "assert" or name == "offsetof": return "C library macro"
+        if name == "size_t" or name == "ssize_t" or name == "off_t" or name == "pid_t" or name == "uint8_t" or name == "uint16_t" or name == "uint32_t" or name == "uint64_t" or name == "int8_t" or name == "int16_t" or name == "int32_t" or name == "int64_t" or name == "uintptr_t" or name == "intptr_t" or name == "ptrdiff_t" or name == "wchar_t" or name == "va_list" or name == "jmp_buf" or name == "environ" or name == "optarg" or name == "div_t" or name == "ldiv_t" or name == "fd_set" or name == "sigset_t" or name == "pthread_t" or name == "pthread_mutex_t": return "C library identifier"
         if name == "ERROR" or name == "DELETE" or name == "IN" or name == "OUT" or name == "OPTIONAL" or name == "NEAR" or name == "FAR" or name == "VOID" or name == "CONST" or name == "TRUE" or name == "FALSE" or name == "INFINITE" or name == "SEVERITY_ERROR" or name == "SEVERITY_SUCCESS": return "Windows SDK macro"
         return ""
 

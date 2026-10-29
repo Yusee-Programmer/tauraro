@@ -187,9 +187,63 @@ def m_insert_token(ls, r):
     ls[i] = ls[i][:pos] + " " + tok + " " + ls[i][pos:]
     return "inserted token " + tok
 
+def m_rename_decl(ls, r):
+    cands = [(i, m) for i, l in enumerate(ls) for m in [re.match(r"\s*(?:pub\s+)?(?:def|class|enum|interface)\s+(\w+)", l)] if m]
+    if not cands: return None
+    i, m = r.choice(cands)
+    ls[i] = ls[i][:m.start(1)] + m.group(1) + "_rn" + ls[i][m.end(1):]
+    return "renamed a declaration"
+
+
+def m_dup_decl(ls, r):
+    cands = [i for i, l in enumerate(ls) if re.match(r"(?:pub\s+)?(?:def|class|enum|interface)\s+\w+", l)]
+    if not cands: return None
+    i = r.choice(cands)
+    j = i + 1
+    while j < len(ls) and (not ls[j].strip() or ls[j].startswith((" ", "\t"))): j += 1
+    ls[j:j] = ls[i:j]
+    return "duplicated a whole declaration"
+
+
+def m_del_import(ls, r):
+    cands = [i for i, l in enumerate(ls) if re.match(r"(from \S+ )?import ", l)]
+    if not cands: return None
+    del ls[r.choice(cands)]
+    return "deleted an import"
+
+
+def m_scope_escape(ls, r):
+    cands = [i for i, l in enumerate(ls) if l.startswith("    ") and not l.startswith("     ") and re.match(r"\s+mut \w+", l)]
+    if not cands: return None
+    i = r.choice(cands)
+    name = re.match(r"\s+mut (\w+)", ls[i]).group(1)
+    # a use of the name placed after the enclosing block ends (at function level one indent less)
+    j = i + 1
+    while j < len(ls) and (not ls[j].strip() or ls[j].startswith("    ")): j += 1
+    ls.insert(j, "    print(%s)" % name)
+    return "use of a local after its block"
+
+
+def m_change_base(ls, r):
+    cands = [(i, m) for i, l in enumerate(ls) for m in [re.match(r"(\s*class\s+\w+)(\[[^\]]*\])?(\((\w+)\))?", l)] if m]
+    if not cands: return None
+    i, m = r.choice(cands)
+    base = r.choice(["Nope_zz", "int", "main", ls[i].split()[1].split("(")[0].split("[")[0]])
+    ls[i] = ls[i][:m.end(1)] + (m.group(2) or "") + "(" + base + ")" + ls[i][m.end():]
+    return "changed a base class -> " + base
+
+
+def m_del_iface_method(ls, r):
+    cands = [i for i, l in enumerate(ls) if re.match(r"\s+def \w+\(self", l)]
+    if not cands: return None
+    del ls[r.choice(cands)]
+    return "removed a method"
+
+
 MUTS = [m_undef_name, m_wrong_literal, m_str_to_int, m_drop_arg, m_extra_arg, m_ret_type, m_param_type,
         m_method, m_field, m_delete_line, m_swap_op, m_generic_arg, m_type_confuse,
-        m_del_punct, m_dup_line, m_truncate, m_swap_lines, m_indent, m_insert_token]
+        m_del_punct, m_dup_line, m_truncate, m_swap_lines, m_indent, m_insert_token,
+        m_rename_decl, m_dup_decl, m_del_import, m_scope_escape, m_change_base, m_del_iface_method]
 
 
 def classify(rc, text):

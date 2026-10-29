@@ -1,0 +1,35 @@
+# Names that are macros / keywords / libc identifiers in C must be usable as locals,
+# parameters, loop variables, lambda parameters and fields.
+from std.test import TestRunner
+
+class Holder:
+    pub INT_MAX: int
+    pub NAN: int
+    pub EOF: int
+
+def addp(INT_MAX: int, stdout: int) -> int:
+    return INT_MAX + stdout
+
+def main():
+    mut t = TestRunner.init("c_name_collisions")
+    mut NULL = 1
+    mut errno = 2
+    mut EXIT_FAILURE = 3
+    mut M_PI = 4
+    t.assert_eq_int(NULL + errno + EXIT_FAILURE + M_PI, 10, "macro-named locals")
+    t.assert_eq_int(addp(5, 6), 11, "macro-named params")
+    mut s = 0
+    for BUFSIZ in range(4):
+        s = s + BUFSIZ
+    t.assert_eq_int(s, 6, "macro-named loop variable")
+    mut f = lambda RAND_MAX: RAND_MAX + 1
+    t.assert_eq_int(f(2), 3, "macro-named lambda parameter")
+    mut h = Holder()
+    h.INT_MAX = 1
+    h.NAN = 2
+    h.EOF = 3
+    t.assert_eq_int(h.INT_MAX + h.NAN + h.EOF, 6, "macro-named fields")
+    mut int = 7
+    mut double = 8
+    t.assert_eq_int(int + double, 15, "keyword-named locals")
+    t.summary()

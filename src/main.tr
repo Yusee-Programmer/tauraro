@@ -2166,6 +2166,12 @@ pub def main(args: Vec[str]):
         print("Check passed: no errors found.")
         return
 
+    # [N-10] An executable needs an entry point. Libraries (--lib), freestanding / no-std tiers,
+    # cross targets and the non-executable emit modes legitimately have no `main`.
+    if emit_mode == "exe" and not lib_mode and not export_cpp and tier_define == "" and target == "" and not sema.fn_defs.contains("main"):
+        _print_diag("error", "[N-10] The program has no `main` function, so there is nothing to run.\n      FIX: add `def main():` to your program (use --lib to build a library of `export def`s, or --check to only check the code).")
+        _tr_exit(1)
+
     if emit_mode == "mir":
         mut mir_prog = lower_program(hir)
         print(dump_mir(mir_prog))
