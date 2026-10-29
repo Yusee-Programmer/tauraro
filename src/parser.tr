@@ -2631,9 +2631,19 @@ extend Parser:
         mut depth = 0
         mut indent = 0
         mut run = 0
+        mut lam = 0
+        mut prev_colon = False
         mut i = 0
         while i < self.tokens.len:
             mut is_prefix = False
+            match self.tokens.get(i):
+                case Token.KwLambda:
+                    if prev_colon: lam = lam + 1
+                    else: lam = 0
+                case Token.Colon: pass
+                case Token.Newline | Token.Comma | Token.RParen | Token.RBracket | Token.RBrace: lam = 0
+                case _: pass
+            prev_colon = self.tokens.get(i) == Token.Colon
             match self.tokens.get(i):
                 case Token.LParen | Token.LBracket | Token.LBrace:
                     depth = depth + 1
@@ -2649,7 +2659,7 @@ extend Parser:
                     pass
             if is_prefix: run = run + 1
             else: run = 0
-            if depth > 120 or indent > 100 or run > 120: return i
+            if depth > 120 or indent > 100 or run > 120 or lam > 100: return i
             i = i + 1
         return -1
 

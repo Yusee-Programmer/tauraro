@@ -276,6 +276,8 @@ expect_diag "enum payload type" 'enum E:\n    A(int)\ndef main():\n    mut e = E
 expect_diag "spawn arg type" 'def w(x: int):\n    pass\ndef main():\n    mut t = Thread.spawn(w, "s")\n    t.join()\n' "passed through Thread.spawn to 'w()'"
 expect_diag "cast int to str" 'def main():\n    mut x = 5\n    mut y = x as str\n    print(y)\n' "cannot be cast to str with 'as'"
 expect_diag "cast str to float" 'def main():\n    mut s = "a"\n    mut y = s as float\n    print(y)\n' "cannot be cast to float with 'as'"
+expect_diag "undefined property receiver" 'def main():\n    mut x = Foo.Bar\n' "'Foo' is not a defined type or value, so 'Foo.Bar' cannot be resolved"
+expect_diag "lambda chain too deep" "def main():\n    mut x = $(printf 'lambda: %.0s' $(seq 1 300))1\n" "nested too deeply"
 # No C compiler warning may ever reach the user for a valid program (float formatting used to leak -Wformat-truncation).
 printf 'def main():\n    x = 5\n    y = x * 2.5\n    print(x, y)\n    print(1.5e300 * 3.0)\n' > "$diagdir/warn.tr"
 wtr="$(cd "$(dirname "$TAURAROC")" && pwd)/$(basename "$TAURAROC")"

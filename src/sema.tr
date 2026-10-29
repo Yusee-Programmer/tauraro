@@ -8399,6 +8399,12 @@ extend Sema:
                         ret_ty = self._subst_ret_generics(ret_ty, _cls.generics, hobj_ty.args)
                 return box_hirexpr(HirExpr.EMethodCall(hobj, method, hl, ret_ty))
             case Expr.EPropAccess(obj, prop):
+                if obj as usize != 0 as usize:
+                    match obj.read():
+                        case Expr.EIdent(_pa_n):
+                            if _pa_n != "" and not self.is_local_var(_pa_n) and not self._is_known_type_name(_pa_n) and self.resolve(_pa_n).name == "" and not self.classes.contains(_pa_n) and not self.enums.contains(_pa_n):
+                                self.error("[E-1] '" + _pa_n + "' is not a defined type or value, so '" + _pa_n + "." + prop + "' cannot be resolved.\n      FIX: check the spelling, import the type, or define it.")
+                        case _: pass
                 # A bare class-name property access naming one of the class's own
                 # STATIC methods (`Foo.make`, no immediate call after it) is a
                 # reference to that method as a first-class `def(...)->R` VALUE --
