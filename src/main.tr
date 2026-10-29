@@ -1177,6 +1177,9 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
     # Windows OUTPUT: link Winsock2 when any networking module is present.
     # Target-gated so a Windows->Linux/wasm cross does not request ws2_32.
     if out_is_windows(target, triple):
+        # Windows' default 1 MB main-thread stack is 8x smaller than Linux/macOS; give the program
+        # (the compiler itself is a Tauraro program) the same headroom for deep recursion.
+        cmd = cmd + " -Wl,--stack,16777216"
         mut need_wsa: bool = false
         mut need_systre: bool = false
         mut need_psapi: bool = false

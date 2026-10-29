@@ -50,7 +50,7 @@ jobs:
           if [ -f "bootstrap/c/main.c" ]; then
             echo "==> Building stage0 from portable C (bootstrap/c/)"
             case "$RUNNER_OS" in
-              Windows) CC=gcc; LIBS="-lm -lws2_32"; CFLAGS="-D_GNU_SOURCE" ;;
+              Windows) CC=gcc; LIBS="-lm -lws2_32 -Wl,--stack,16777216"; CFLAGS="-D_GNU_SOURCE" ;;
               macOS)   CC=cc;  LIBS="-lm"; CFLAGS="" ;;
               *)       CC=gcc; LIBS="-lm -lpthread -lrt"; CFLAGS="-std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700" ;;
             esac
