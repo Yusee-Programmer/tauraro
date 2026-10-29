@@ -65,6 +65,28 @@ pub def _nth_source_line(src: str, n: int) -> str:
         i = i + 1
     return sb.to_string().as_str()
 
+# Very long source lines (minified or generated code) are clipped to a window around the caret column
+# so a diagnostic stays readable; _clip_col maps the caret column into the clipped text.
+pub def _clip_start(line: str, col: int) -> int:
+    if line.len() <= 160: return 0
+    if col > 100: return col - 61
+    return 0
+
+pub def _clip_line(line: str, col: int) -> str:
+    if line.len() <= 160: return line
+    mut st = _clip_start(line, col)
+    mut en = st + 150
+    if en > line.len(): en = line.len()
+    mut out = line.slice(st, en)
+    if st > 0: out = "..." + out
+    if en < line.len(): out = out + "..."
+    return out
+
+pub def _clip_col(line: str, col: int) -> int:
+    mut st = _clip_start(line, col)
+    if st > 0: return col - st + 3
+    return col
+
 # A string of `n` spaces (for aligning a caret under a source column).
 pub def _spaces(n: int) -> str:
     mut sb = StringBuilder.init(n + 1)
@@ -237,11 +259,14 @@ extend Parser:
         # Source snippet + caret, when we have both the text and a column.
         if self.src_text.len() > 0 and ln > 0:
             mut srcline = _nth_source_line(self.src_text, ln)
+            mut full_col = col
+            mut col1 = _clip_col(srcline, full_col)
+            srcline = _clip_line(srcline, full_col)
             if srcline.len() > 0:
                 mut gnum = "   " + str(ln) + " | "       # plain — used for width math
                 mut gbar = _spaces(gnum.len() - 2) + "| "
                 print(c_dim(gnum) + srcline)
-                if col > 0:
+                if col1 > 0:
                     # Underline a span as wide as the offending token (distance to
                     # the next token on the same line), falling back to a single ^.
                     mut width = 1
@@ -250,7 +275,7 @@ extend Parser:
                             mut d = self.cols.get(self.pos + 1) - col
                             if d > 0 and d < 200:
                                 width = d
-                    print(c_dim(gbar) + _spaces(col - 1) + c_red(repeat_char("^", width)))
+                    print(c_dim(gbar) + _spaces(col1 - 1) + c_red(repeat_char("^", width)))
         if hint.len() > 0:
             print("  " + c_green("= help") + ": " + hint)
         self.error_count = self.error_count + 1
@@ -2109,12 +2134,15 @@ extend Parser:
         print("  " + c_cyan("-->") + " " + head)
         if self.src_text.len() > 0 and ln > 0:
             mut srcline = _nth_source_line(self.src_text, ln)
+            mut full_col2 = col
+            mut col2 = _clip_col(srcline, full_col2)
+            srcline = _clip_line(srcline, full_col2)
             if srcline.len() > 0:
                 mut gnum = "   " + str(ln) + " | "
                 mut gbar = _spaces(gnum.len() - 2) + "| "
                 print(c_dim(gnum) + srcline)
                 if col > 0:
-                    print(c_dim(gbar) + _spaces(col - 1) + c_red("^"))
+                    print(c_dim(gbar) + _spaces(col2 - 1) + c_red("^"))
         if hint.len() > 0:
             print("  " + c_green("= help") + ": " + hint)
         self.error_count = self.error_count + 1
@@ -3655,8 +3683,10 @@ extend Parser:
         mut abi = "C"
         match self.peek():
             case Token.StrLit(s, _):
-                self.pos = self.pos + 1
                 abi = s
+                if abi != "C" and abi != "C++" and abi != "CPP" and abi != "c" and abi != "cpp":
+                    self.emit_diag("unknown extern ABI \"" + abi + "\"", "only extern \"C\" (and \"C++\"/\"CPP\", which also bind through C) are supported - expose the function with a C ABI.")
+                self.pos = self.pos + 1
             case _:
                 pass
         if self.peek() == Token.Colon:

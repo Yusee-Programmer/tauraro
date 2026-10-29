@@ -13,7 +13,7 @@ tabs, CRLF, very long lines/identifiers), then compiles and classifies:
   CRASH  signal, timeout or sanitizer report                                        (bug)
 
 Failures are kept under <out>/<class>/<seed>/{prog.tr,note.txt}.
-Env: TAURAROC (default ./tauraroc), TOK_OUT (default ./tok_out), TOK_TIMEOUT (seconds, default 60).
+Env: TAURAROC (default ./tauraroc), TOK_FLAGSETS (';'-separated option sets), TOK_OUT (default ./tok_out), TOK_TIMEOUT (seconds, default 60).
 """
 import os, re, sys, random, subprocess, shutil, tempfile, concurrent.futures as cf
 
@@ -21,6 +21,9 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 TAURAROC = os.environ.get("TAURAROC", os.path.join(ROOT, "tauraroc"))
 OUT = os.path.abspath(os.environ.get("TOK_OUT", "tok_out"))
 TIMEOUT = int(os.environ.get("TOK_TIMEOUT", "60"))
+# TOK_FLAGSETS="--no-heap;--backend llvm;--backend native;--freestanding": each seed compiles with ONE of
+# these option sets (picked from the seed), so the other targets are fuzzed for raw errors too.
+FLAGSETS = [f.split() for f in os.environ.get("TOK_FLAGSETS", "").split(";") if f.strip()]
 
 TOK = re.compile(rb'"(?:[^"\\\n]|\\.)*"|\'(?:[^\'\\\n]|\\.)*\'|#[^\n]*|[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?|\n[ \t]*|[ \t]+|->|==|!=|<=|>=|\*\*|//|::|<<|>>|[+\-*/%&|^]=|.', re.S)
 
@@ -141,7 +144,8 @@ def one(task):
         open(target, "wb").write(data)
         env = dict(os.environ, TAURARO_SHOW_C_ERRORS="0")
         try:
-            p = subprocess.run([TAURAROC, name, "-o", "out"], cwd=d, capture_output=True, timeout=TIMEOUT, env=env)
+            extra = FLAGSETS[seed % len(FLAGSETS)] if FLAGSETS else []
+            p = subprocess.run([TAURAROC, name, "-o", "out"] + extra, cwd=d, capture_output=True, timeout=TIMEOUT, env=env)
             rc, text = p.returncode, (p.stdout + p.stderr).decode("utf-8", "replace")
         except subprocess.TimeoutExpired:
             rc, text = 124, "TIMEOUT"

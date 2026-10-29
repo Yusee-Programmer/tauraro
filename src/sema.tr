@@ -9411,6 +9411,8 @@ extend Sema:
                 if self.classes.contains(_pa_cn) and not self.ambiguous_classes.contains(_pa_cn) and _pa_cn != "Result" and _pa_cn != "Option" and not self.is_builtin_dispatch_class(_pa_cn):
                     if not self.class_has_field(_pa_cn, prop) and not self.class_method_exists(_pa_cn, prop) and not self.is_universal_method(prop):
                         self.error("[E-7] Type '" + _pa_cn + "' has no field '" + prop + "'.\n      FIX: check the spelling, or declare 'pub " + prop + ": <type>' in the class.")
+                    elif not self.class_has_field(_pa_cn, prop) and self.class_method_exists(_pa_cn, prop) and not self.is_universal_method(prop) and self.firm_class(hobj) == _pa_cn:
+                        self.error("[E-7] '" + prop + "' is a method of '" + _pa_cn + "', not a field, so it cannot be read without calling it.\n      FIX: call it with parentheses: ." + prop + "(...).")
                 mut _pc_f = self.firm_family(hobj)
                 if (_pc_f == "List" or _pc_f == "Dict") and not self.class_method_exists(hobj_ty_n, prop) and not self.class_has_field(hobj_ty_n, prop):
                     if not (prop == "len" or prop == "length" or prop == "capacity" or prop == "data" or prop == "keys" or prop == "values" or prop == "items"):

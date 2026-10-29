@@ -9,7 +9,7 @@ from core.string import StringObj, StringBuilder
 from resolver import ModuleResolver
 from pjobs import pjobs_run, pjobs_workers, PendingShims
 from lexer import Lexer
-from parser import Parser, _nth_source_line
+from parser import Parser, _nth_source_line, _clip_line
 from diag import c_red, c_yellow, c_green, c_cyan, c_dim, c_bold, spaces, repeat_char, first_quoted, col_of, loc_file, loc_line
 from sema import Sema
 from infer import infer_return_types
@@ -173,6 +173,116 @@ pub def detect_c_compiler() -> str:
     # gcc/clang is faster (zig cc compiles its libc from source on first use).
     if _tr_system("zig version >" + null_dev + " 2>&1") == 0: return "zig cc"
     return "gcc"
+
+# No usable C compiler: say so plainly (the generated C needs one) instead of failing later with a
+# shell "command not found" or an empty linker log.
+pub def require_c_compiler(cc: str):
+    mut null_dev = "/dev/null"
+    if _tr_is_windows(): null_dev = "nul"
+    if _tr_system(cc + " --version >" + null_dev + " 2>&1") == 0: return
+    print(c_red("error") + ": " + c_bold("[TC-1] no working C compiler was found (tried gcc, clang, cc and zig cc)."))
+    print("  " + c_green("= help") + ": install gcc or clang and make sure it is on PATH (Windows: MinGW-w64 or LLVM; macOS: xcode-select --install), or put a 'zig' next to tauraroc.")
+    _tr_exit(1)
+
+# Link-time failure: report the undefined / duplicate symbols or missing libraries as a Tauraro
+# diagnostic instead of the linker's own output (ld, lld, Apple ld and MSVC all phrase these differently).
+def print_link_error(log: str):
+    mut syms = Vec[str].init(8)
+    mut libs = Vec[str].init(2)
+    mut dups = Vec[str].init(2)
+    mut other = ""
+    mut lines = log.split("\n")
+    mut li = 0
+    while li < lines.len:
+        mut ln = lines.get(li)
+        mut p1 = ln.find("undefined reference to `")
+        if p1 >= 0:
+            mut rest = ln.slice(p1 + 24, ln.len())
+            mut q1 = rest.find("'")
+            if q1 > 0:
+                mut nm = rest.slice(0, q1)
+                if not syms.contains(nm): syms.push(nm)
+        mut p2 = ln.find("unresolved external symbol ")
+        if p2 >= 0:
+            mut rest2 = ln.slice(p2 + 27, ln.len()).trim()
+            mut q2 = rest2.find(" ")
+            if q2 > 0: rest2 = rest2.slice(0, q2)
+            q2 = rest2.find("(")
+            if q2 > 0: rest2 = rest2.slice(0, q2)
+            if not syms.contains(rest2): syms.push(rest2)
+        mut p3 = ln.find("undefined symbol: ")
+        if p3 >= 0:
+            mut rest3 = ln.slice(p3 + 18, ln.len()).trim()
+            if not syms.contains(rest3): syms.push(rest3)
+        if ln.trim().starts_with("\"_") and ln.contains("referenced from"):
+            mut t = ln.trim()
+            mut q4 = t.slice(1, t.len()).find("\"") + 1
+            if q4 > 2:
+                mut nm4 = t.slice(2, q4)
+                if not syms.contains(nm4): syms.push(nm4)
+        mut p5 = ln.find("cannot find -l")
+        if p5 >= 0:
+            mut nm5 = ln.slice(p5 + 14, ln.len()).trim()
+            mut c5 = nm5.find(":")
+            if c5 > 0: nm5 = nm5.slice(0, c5)
+            if not libs.contains(nm5): libs.push(nm5)
+        mut p6 = ln.find("library not found for -l")
+        if p6 >= 0:
+            mut nm6 = ln.slice(p6 + 24, ln.len()).trim()
+            if not libs.contains(nm6): libs.push(nm6)
+        mut p7 = ln.find("multiple definition of `")
+        if p7 >= 0:
+            mut rest7 = ln.slice(p7 + 24, ln.len())
+            mut q7 = rest7.find("'")
+            if q7 > 0 and not dups.contains(rest7.slice(0, q7)): dups.push(rest7.slice(0, q7))
+        mut p8 = ln.find("duplicate symbol ")
+        if p8 >= 0:
+            mut nm8 = ln.slice(p8 + 17, ln.len()).trim()
+            if nm8.starts_with("_"): nm8 = nm8.slice(1, nm8.len())
+            if not dups.contains(nm8): dups.push(nm8)
+        if other == "" and ln.trim().len() > 0 and (ln.contains("ld:") or ln.contains("error")) and not ln.contains("undefined") and not ln.contains("multiple definition"):
+            other = ln.trim()
+        li = li + 1
+    mut shown = 0
+    if syms.len > 0:
+        mut names = ""
+        mut si = 0
+        while si < syms.len and si < 8:
+            if si > 0: names = names + ", "
+            names = names + "'" + syms.get(si) + "'"
+            si = si + 1
+        if syms.len > 8: names = names + ", ... (" + str(syms.len) + " in all)"
+        print(c_red("error") + ": " + c_bold("[LNK-1] link failed: undefined symbol" + (if syms.len > 1: "s" else: "") + " " + names + "."))
+        print("  " + c_green("= help") + ": a function declared with extern \"C\" (or used from a C shim) has no definition. FIX: pass the C file or library that defines it with --link <file.c|lib.a> (or -l<lib>), or remove the declaration if it is not needed.")
+        shown = 1
+    if dups.len > 0:
+        print(c_red("error") + ": " + c_bold("[LNK-2] link failed: symbol '" + dups.get(0) + "' is defined more than once."))
+        print("  " + c_green("= help") + ": FIX: the same function is defined in two linked files (or in a --link file and in Tauraro code); remove one definition or rename it.")
+        shown = 1
+    if libs.len > 0:
+        print(c_red("error") + ": " + c_bold("[LNK-3] link failed: library '" + libs.get(0) + "' was not found."))
+        print("  " + c_green("= help") + ": FIX: install the library (and its development files), or give its directory with -L<dir> / a full path with --link.")
+        shown = 1
+    if shown == 0:
+        mut msg = other
+        if msg == "": msg = "the linker reported an error"
+        print(c_red("error") + ": " + c_bold("[LNK-4] link failed: " + msg))
+        print("  " + c_green("= help") + ": rerun with TAURARO_SHOW_C_ERRORS=1 to see the full linker output.")
+
+# Run a link command, capturing the linker's output; on failure print it as a Tauraro diagnostic.
+pub def run_link(cmd: str, exe_path: str, verbose: bool) -> int:
+    mut logp = exe_path + ".link.log"
+    mut rc = _tr_system(cmd + " >\"" + logp + "\" 2>&1")
+    if rc != 0:
+        mut txt = ""
+        if file_exists(logp): txt = read_file(logp)
+        if verbose or _tr_getenv("TAURARO_SHOW_C_ERRORS") == "1":
+            print(txt)
+        else:
+            print_link_error(txt)
+            _tr_setenv("TAURARO_ICE_PRINTED", "1")
+    delete_file(logp)
+    return rc
 
 # True when `cc` is Clang (clang or apple clang).  Used to gate Clang-only flags.
 pub def is_clang_compiler(cc: str) -> bool:
@@ -1123,6 +1233,7 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
                       opt_level: str, verbose: bool, static_link: bool,
                       target: str, sysroot: str, debug_mode: bool) -> int:
     mut cc = detect_c_compiler()
+    if target == "": require_c_compiler(cc)
     mut triple = ""
     mut cross_flags = ""
     if target != "":
@@ -1211,7 +1322,7 @@ pub def compile_all_c(c_files: Vec[str], exe_path: str, inc_dir: str,
         if need_psapi:
             cmd = cmd + " -lpsapi"
     if verbose: print("  [CC] " + cmd)
-    return _tr_system(cmd)
+    return run_link(cmd, exe_path, verbose)
 
 # Map a generated C file path to its object-file path (foo.c -> foo.o).
 pub def obj_path_for(c_path: str) -> str:
@@ -1323,7 +1434,7 @@ def print_ice(cpath: str, log: str):
         if cur == want:
             mut stop = start
             while stop < src_text.len() and src_text.slice(stop, stop + 1) != "\n": stop = stop + 1
-            mut srcline = src_text.slice(start, stop)
+            mut srcline = _clip_line(src_text.slice(start, stop), 0)
             mut gnum = "   " + str(src_line) + " | "
             print(c_dim(gnum) + srcline)
             # The C compiler's column refers to the GENERATED C, not this source line, so underline the
@@ -1366,6 +1477,7 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
                       target: str, sysroot: str, debug_mode: bool, build_shared: bool,
                       link_cxx: bool, use_lto: bool, coverage: bool, pend: PendingShims) -> int:
     mut cc = detect_c_compiler()
+    if target == "": require_c_compiler(cc)
     mut triple = ""
     mut cross_flags = ""
     if target != "":
@@ -1548,7 +1660,7 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
         if need_psapi2:
             cmd = cmd + " -lpsapi"
     if verbose: print("  [LINK] " + cmd)
-    return _tr_system(cmd)
+    return run_link(cmd, exe_path, verbose)
 
 # Incremental wasm32-freestanding compile + link (`--target wasm`, browser/JS-
 # embeddable modules). Kept SEPARATE from compile_all_c_incremental rather than
@@ -1710,7 +1822,7 @@ pub def _print_diag(level: str, msg: str):
         if file_path.len() > 0:
             src = read_file(file_path)
         if src.len() > 0:
-            mut srcline = _nth_source_line(src, line_no)
+            mut srcline = _clip_line(_nth_source_line(src, line_no), 0)
             if srcline.len() > 0:
                 mut gnum = "   " + str(line_no) + " | "
                 mut gbar = spaces(gnum.len() - 2) + "| "
@@ -1992,6 +2104,10 @@ pub def main(args: Vec[str]):
             out_dir = args.get(i)             # drop the executable in this directory
         elif arg == "--link" and i + 1 < args.len:
             i = i + 1
+            if not file_exists(args.get(i)):
+                print(c_red("error") + ": " + c_bold("[LNK-5] --link file '" + args.get(i) + "' does not exist."))
+                print("  " + c_green("= help") + ": check the path (relative paths are resolved from the current directory); --link takes a C/C++ source file, an object file or a static library.")
+                _tr_exit(1)
             link_paths.push(args.get(i))
         elif arg == "-l" and i + 1 < args.len:
             i = i + 1
