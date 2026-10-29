@@ -4933,7 +4933,7 @@ __attribute__((hot)) TrStr CGenerator_extern_proto(CGenerator* self, HirFunction
 #line 2592 "src/codegen/c.tr"
     if (({ __auto_type _ord_t3656 = (libc_fn_names()); TrStr _ord_t3657 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len(" ", 1LL)), (ef->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (_tr_str_containsv((_ord_t3656), (_ord_t3657))); _tr_str_release(_ord_t3657); _wr; })) {
 #line 2593 "src/codegen/c.tr"
-        TrStr _strtmp_t3658 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("#define ", 8LL)), (ef->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" _tr_ext_", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ef->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _strtmp_t3658 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("#ifndef _TR_SYM\n#ifdef __APPLE__\n#define _TR_SYM(x) \"_\" x\n#else\n#define _TR_SYM(x) x\n#endif\n#endif\n#define ", 107LL)), (ef->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" _tr_ext_", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ef->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(ef_pre);
         ef_pre = _strtmp_t3658;
 #line 2594 "src/codegen/c.tr"
@@ -4941,7 +4941,7 @@ __attribute__((hot)) TrStr CGenerator_extern_proto(CGenerator* self, HirFunction
         _tr_str_release(ef_name);
         ef_name = _strtmp_t3659;
 #line 2595 "src/codegen/c.tr"
-        TrStr _strtmp_t3660 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len(" __asm__(\"", 10LL)), (ef->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\")", 2LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _strtmp_t3660 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len(" __asm__(_TR_SYM(\"", 18LL)), (ef->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\"))", 3LL))); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(ef_post);
         ef_post = _strtmp_t3660;
     }

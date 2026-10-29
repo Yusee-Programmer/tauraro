@@ -2590,9 +2590,9 @@ pub class CGenerator:
         mut ef_pre = ""
         mut ef_post = ""
         if libc_fn_names().contains(" " + ef.name + " "):
-            ef_pre = "#define " + ef.name + " _tr_ext_" + ef.name + "\n"
+            ef_pre = "#ifndef _TR_SYM\n#ifdef __APPLE__\n#define _TR_SYM(x) \"_\" x\n#else\n#define _TR_SYM(x) x\n#endif\n#endif\n#define " + ef.name + " _tr_ext_" + ef.name + "\n"
             ef_name = "_tr_ext_" + ef.name
-            ef_post = " __asm__(\"" + ef.name + "\")"
+            ef_post = " __asm__(_TR_SYM(\"" + ef.name + "\"))"
         mut ef_s = ef_pre + "extern " + self.type_to_c(ef.ret_ty) + " " + ef_name + "("
         mut ef_first = true
         mut epi = 0
