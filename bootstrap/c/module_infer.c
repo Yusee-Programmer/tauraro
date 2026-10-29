@@ -41,15 +41,15 @@ __attribute__((hot)) bool _is_has_value_return(Stmt* sp) {
         return false;
     }
 #line 30 "src/infer.tr"
-    __auto_type _t2456 = (*sp);
-    if (_t2456.tag == Stmt_SReturn) {
-        __auto_type v = _t2456.data.SReturn.val;
+    __auto_type _t2463 = (*sp);
+    if (_t2463.tag == Stmt_SReturn) {
+        __auto_type v = _t2463.data.SReturn.val;
 #line 32 "src/infer.tr"
         return (((unsigned long long)(v)) != ((unsigned long long)(0LL)));
-    } else if (_t2456.tag == Stmt_SIf) {
-        __auto_type tb = _t2456.data.SIf.then_b;
-__auto_type elifs = _t2456.data.SIf.elifs;
-__auto_type eb = _t2456.data.SIf.else_b;
+    } else if (_t2463.tag == Stmt_SIf) {
+        __auto_type tb = _t2463.data.SIf.then_b;
+__auto_type elifs = _t2463.data.SIf.elifs;
+__auto_type eb = _t2463.data.SIf.else_b;
 #line 34 "src/infer.tr"
         if ((_ib_has_value_return(tb) || _ib_has_value_return(eb))) {
 #line 34 "src/infer.tr"
@@ -69,35 +69,35 @@ __auto_type eb = _t2456.data.SIf.else_b;
         }
 #line 39 "src/infer.tr"
         return false;
-    } else if (_t2456.tag == Stmt_SWhile) {
-        __auto_type wb = _t2456.data.SWhile.body;
+    } else if (_t2463.tag == Stmt_SWhile) {
+        __auto_type wb = _t2463.data.SWhile.body;
         bool _trret502 = _ib_has_value_return(wb);
         return _trret502;
-    } else if (_t2456.tag == Stmt_SFor) {
-        __auto_type fb = _t2456.data.SFor.body;
+    } else if (_t2463.tag == Stmt_SFor) {
+        __auto_type fb = _t2463.data.SFor.body;
         bool _trret503 = _ib_has_value_return(fb);
         return _trret503;
-    } else if (_t2456.tag == Stmt_SForUnpack) {
-        __auto_type fub = _t2456.data.SForUnpack.body;
+    } else if (_t2463.tag == Stmt_SForUnpack) {
+        __auto_type fub = _t2463.data.SForUnpack.body;
         bool _trret504 = _ib_has_value_return(fub);
         return _trret504;
-    } else if (_t2456.tag == Stmt_SUnsafe) {
-        __auto_type ub = _t2456.data.SUnsafe.body;
+    } else if (_t2463.tag == Stmt_SUnsafe) {
+        __auto_type ub = _t2463.data.SUnsafe.body;
         bool _trret505 = _ib_has_value_return(ub);
         return _trret505;
-    } else if (_t2456.tag == Stmt_SWith) {
-        __auto_type wb2 = _t2456.data.SWith.body;
+    } else if (_t2463.tag == Stmt_SWith) {
+        __auto_type wb2 = _t2463.data.SWith.body;
         bool _trret506 = _ib_has_value_return(wb2);
         return _trret506;
-    } else if (_t2456.tag == Stmt_STaskGroup) {
-        __auto_type tg = _t2456.data.STaskGroup.body;
+    } else if (_t2463.tag == Stmt_STaskGroup) {
+        __auto_type tg = _t2463.data.STaskGroup.body;
         bool _trret507 = _ib_has_value_return(tg);
         return _trret507;
-    } else if (_t2456.tag == Stmt_SDefer) {
-        __auto_type ds = _t2456.data.SDefer.stmt;
+    } else if (_t2463.tag == Stmt_SDefer) {
+        __auto_type ds = _t2463.data.SDefer.stmt;
         return _is_has_value_return(ds);
-    } else if (_t2456.tag == Stmt_SMatch) {
-        __auto_type arms = _t2456.data.SMatch.arms;
+    } else if (_t2463.tag == Stmt_SMatch) {
+        __auto_type arms = _t2463.data.SMatch.arms;
 #line 48 "src/infer.tr"
         long long ai = 0LL;
 #line 49 "src/infer.tr"
@@ -112,10 +112,10 @@ __auto_type eb = _t2456.data.SIf.else_b;
         }
 #line 52 "src/infer.tr"
         return false;
-    } else if (_t2456.tag == Stmt_STry) {
-        __auto_type tb2 = _t2456.data.STry.try_body;
-__auto_type catches = _t2456.data.STry.catches;
-__auto_type fb2 = _t2456.data.STry.finally_b;
+    } else if (_t2463.tag == Stmt_STry) {
+        __auto_type tb2 = _t2463.data.STry.try_body;
+__auto_type catches = _t2463.data.STry.catches;
+__auto_type fb2 = _t2463.data.STry.finally_b;
 #line 54 "src/infer.tr"
         if ((_ib_has_value_return(tb2) || _ib_has_value_return(fb2))) {
 #line 54 "src/infer.tr"
@@ -136,7 +136,7 @@ __auto_type fb2 = _t2456.data.STry.finally_b;
 #line 59 "src/infer.tr"
         return false;
     } else if (1) {
-        __auto_type _ = _t2456;
+        __auto_type _ = _t2463;
         return false;
     }
 #line 61 "src/infer.tr"
@@ -173,14 +173,14 @@ __attribute__((hot)) void _i_collect(Program* prog, List_ptr* fns, List_TrStr* f
 #line 73 "src/infer.tr"
         if ((decl_files->len == prog->decls->len)) {
 #line 73 "src/infer.tr"
-            TrStr _strtmp_t2457 = List_TrStr_get(decl_files, i);
+            TrStr _strtmp_t2464 = List_TrStr_get(decl_files, i);
             _tr_str_release(df);
-            df = _strtmp_t2457;
+            df = _strtmp_t2464;
         }
 #line 74 "src/infer.tr"
-        __auto_type _t2458 = (*((Decl*)List_ptr_get(prog->decls, i)));
-        if (_t2458.tag == Decl_DFunction) {
-            __auto_type f = _t2458.data.DFunction.func;
+        __auto_type _t2465 = (*((Decl*)List_ptr_get(prog->decls, i)));
+        if (_t2465.tag == Decl_DFunction) {
+            __auto_type f = _t2465.data.DFunction.func;
 #line 76 "src/infer.tr"
             if (_i_candidate(f)) {
 #line 77 "src/infer.tr"
@@ -188,8 +188,8 @@ __attribute__((hot)) void _i_collect(Program* prog, List_ptr* fns, List_TrStr* f
 #line 78 "src/infer.tr"
                 List_TrStr_append(files, df);
             }
-        } else if (_t2458.tag == Decl_DClass) {
-            __auto_type c = _t2458.data.DClass.cls;
+        } else if (_t2465.tag == Decl_DClass) {
+            __auto_type c = _t2465.data.DClass.cls;
 #line 80 "src/infer.tr"
             long long mi = 0LL;
 #line 81 "src/infer.tr"
@@ -204,8 +204,8 @@ __attribute__((hot)) void _i_collect(Program* prog, List_ptr* fns, List_TrStr* f
 #line 85 "src/infer.tr"
                 mi = (mi + 1LL);
             }
-        } else if (_t2458.tag == Decl_DActor) {
-            __auto_type c2 = _t2458.data.DActor.cls;
+        } else if (_t2465.tag == Decl_DActor) {
+            __auto_type c2 = _t2465.data.DActor.cls;
 #line 87 "src/infer.tr"
             long long mi2 = 0LL;
 #line 88 "src/infer.tr"
@@ -220,8 +220,8 @@ __attribute__((hot)) void _i_collect(Program* prog, List_ptr* fns, List_TrStr* f
 #line 92 "src/infer.tr"
                 mi2 = (mi2 + 1LL);
             }
-        } else if (_t2458.tag == Decl_DExtend) {
-            __auto_type methods = _t2458.data.DExtend.methods;
+        } else if (_t2465.tag == Decl_DExtend) {
+            __auto_type methods = _t2465.data.DExtend.methods;
 #line 94 "src/infer.tr"
             long long mi3 = 0LL;
 #line 95 "src/infer.tr"
@@ -237,7 +237,7 @@ __attribute__((hot)) void _i_collect(Program* prog, List_ptr* fns, List_TrStr* f
                 mi3 = (mi3 + 1LL);
             }
         } else if (1) {
-            __auto_type _ = _t2458;
+            __auto_type _ = _t2465;
             /* pass */
         }
 #line 101 "src/infer.tr"
@@ -303,8 +303,8 @@ __attribute__((hot)) List_TrStr* infer_return_types(Program* prog, List_TrStr* d
 #line 131 "src/infer.tr"
             if (((List_i64_get(done, m) == 0LL) && (((unsigned long long)(((FunctionDef*)List_ptr_get(fns, m))->ret_ty)) == ((unsigned long long)(0LL))))) {
 #line 132 "src/infer.tr"
-                __auto_type _asg_t2459 = _i_box(AstType_init(_tr_str_lit_len("__unk", 5LL)));
-                ((FunctionDef*)List_ptr_get(fns, m))->ret_ty = _asg_t2459;
+                __auto_type _asg_t2466 = _i_box(AstType_init(_tr_str_lit_len("__unk", 5LL)));
+                ((FunctionDef*)List_ptr_get(fns, m))->ret_ty = _asg_t2466;
             }
 #line 133 "src/infer.tr"
             m = (m + 1LL);
@@ -318,21 +318,21 @@ __attribute__((hot)) List_TrStr* infer_return_types(Program* prog, List_TrStr* d
 #line 138 "src/infer.tr"
         while ((ci < prog->decls->len)) {
 #line 139 "src/infer.tr"
-            __auto_type _t2460 = (*((Decl*)List_ptr_get(prog->decls, ci)));
-            if (_t2460.tag == Decl_DClass) {
-                __auto_type cd = _t2460.data.DClass.cls;
+            __auto_type _t2467 = (*((Decl*)List_ptr_get(prog->decls, ci)));
+            if (_t2467.tag == Decl_DClass) {
+                __auto_type cd = _t2467.data.DClass.cls;
 #line 141 "src/infer.tr"
                 List_ptr_append(cls_defs, _tr_obj_retain(cd));
 #line 142 "src/infer.tr"
                 List_i64_append(cls_lens, cd->methods->len);
-            } else if (_t2460.tag == Decl_DActor) {
-                __auto_type cd2 = _t2460.data.DActor.cls;
+            } else if (_t2467.tag == Decl_DActor) {
+                __auto_type cd2 = _t2467.data.DActor.cls;
 #line 144 "src/infer.tr"
                 List_ptr_append(cls_defs, _tr_obj_retain(cd2));
 #line 145 "src/infer.tr"
                 List_i64_append(cls_lens, cd2->methods->len);
             } else if (1) {
-                __auto_type _ = _t2460;
+                __auto_type _ = _t2467;
                 /* pass */
             }
 #line 147 "src/infer.tr"
@@ -355,7 +355,7 @@ __attribute__((hot)) List_TrStr* infer_return_types(Program* prog, List_TrStr* d
 #line 155 "src/infer.tr"
         while ((dfi < decl_files->len)) {
 #line 156 "src/infer.tr"
-            ({ TrStr _ord_t2461 = (List_TrStr_get(decl_files, dfi)); List_TrStr_append(sema->decl_files, _ord_t2461); _tr_str_release(_ord_t2461); });
+            ({ TrStr _ord_t2468 = (List_TrStr_get(decl_files, dfi)); List_TrStr_append(sema->decl_files, _ord_t2468); _tr_str_release(_ord_t2468); });
 #line 157 "src/infer.tr"
             dfi = (dfi + 1LL);
         }
@@ -366,7 +366,7 @@ __attribute__((hot)) List_TrStr* infer_return_types(Program* prog, List_TrStr* d
 #line 160 "src/infer.tr"
         while ((ci < cls_defs->len)) {
 #line 161 "src/infer.tr"
-            while (({ __auto_type _ord_t2462 = (((ClassDef*)List_ptr_get(cls_defs, ci))->methods->len); __auto_type _wr = ((_ord_t2462 > List_i64_get(cls_lens, ci))); _wr; })) {
+            while (({ __auto_type _ord_t2469 = (((ClassDef*)List_ptr_get(cls_defs, ci))->methods->len); __auto_type _wr = ((_ord_t2469 > List_i64_get(cls_lens, ci))); _wr; })) {
 #line 161 "src/infer.tr"
                 ((FunctionDef*)List_ptr_pop(((ClassDef*)List_ptr_get(cls_defs, ci))->methods));
             }
@@ -380,8 +380,8 @@ __attribute__((hot)) List_TrStr* infer_return_types(Program* prog, List_TrStr* d
 #line 166 "src/infer.tr"
             if (((((unsigned long long)(((FunctionDef*)List_ptr_get(fns, m))->ret_ty)) != ((unsigned long long)(0LL))) && _tr_str_eqv(((*((FunctionDef*)List_ptr_get(fns, m))->ret_ty)->name), (_tr_str_lit_len("__unk", 5LL))))) {
 #line 167 "src/infer.tr"
-                __auto_type _asg_t2463 = (AstType**)(0LL);
-                ((FunctionDef*)List_ptr_get(fns, m))->ret_ty = _asg_t2463;
+                __auto_type _asg_t2470 = (AstType**)(0LL);
+                ((FunctionDef*)List_ptr_get(fns, m))->ret_ty = _asg_t2470;
             }
 #line 168 "src/infer.tr"
             m = (m + 1LL);
@@ -413,8 +413,8 @@ __attribute__((hot)) List_TrStr* infer_return_types(Program* prog, List_TrStr* d
 #line 179 "src/infer.tr"
                 if (((st == 0LL) || (st == 1LL))) {
 #line 180 "src/infer.tr"
-                    __auto_type _asg_t2464 = ((AstType**)List_ptr_get(sema->infer_res_ty, r));
-                    ((FunctionDef*)List_ptr_get(fns, idx))->ret_ty = _asg_t2464;
+                    __auto_type _asg_t2471 = ((AstType**)List_ptr_get(sema->infer_res_ty, r));
+                    ((FunctionDef*)List_ptr_get(fns, idx))->ret_ty = _asg_t2471;
 #line 181 "src/infer.tr"
                     List_i64_set(done, idx, 1LL);
 #line 182 "src/infer.tr"
@@ -430,7 +430,7 @@ __attribute__((hot)) List_TrStr* infer_return_types(Program* prog, List_TrStr* d
 #line 188 "src/infer.tr"
                     changed = true;
 #line 189 "src/infer.tr"
-                    ({ __auto_type _ord_t2465 = (({ TrStr _tr_cl = (List_TrStr_get(files, idx)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2466 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2465); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(((FunctionDef*)List_ptr_get(fns, idx))->line)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": [R-2] the returns of '", 24LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2467 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2466); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (rf->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' have different types.\n      FIX: make every `return` yield the same type, or write the return type: `def ", 107LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t2468 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2467); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (rf->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(...) -> T:`", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(msgs, _at_t2468); _tr_str_release(_at_t2468); });
+                    ({ __auto_type _ord_t2472 = (({ TrStr _tr_cl = (List_TrStr_get(files, idx)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2473 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2472); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(((FunctionDef*)List_ptr_get(fns, idx))->line)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": [R-2] the returns of '", 24LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2474 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2473); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (rf->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' have different types.\n      FIX: make every `return` yield the same type, or write the return type: `def ", 107LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t2475 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2474); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (rf->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(...) -> T:`", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(msgs, _at_t2475); _tr_str_release(_at_t2475); });
                 }
             }
 #line 190 "src/infer.tr"
@@ -447,7 +447,7 @@ __attribute__((hot)) List_TrStr* infer_return_types(Program* prog, List_TrStr* d
 #line 193 "src/infer.tr"
         if ((List_i64_get(done, u) == 0LL)) {
 #line 194 "src/infer.tr"
-            ({ __auto_type _ord_t2469 = (({ TrStr _tr_cl = (List_TrStr_get(files, u)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2470 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2469); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(((FunctionDef*)List_ptr_get(fns, u))->line)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": [R-2] cannot infer the return type of '", 41LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2471 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2470); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (((FunctionDef*)List_ptr_get(fns, u))->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' (it depends on itself or on a value whose type is not known).\n      FIX: write the return type: `def ", 103LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t2472 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2471); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (((FunctionDef*)List_ptr_get(fns, u))->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(...) -> T:`", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(msgs, _at_t2472); _tr_str_release(_at_t2472); });
+            ({ __auto_type _ord_t2476 = (({ TrStr _tr_cl = (List_TrStr_get(files, u)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2477 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2476); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(((FunctionDef*)List_ptr_get(fns, u))->line)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": [R-2] cannot infer the return type of '", 41LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2478 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2477); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (((FunctionDef*)List_ptr_get(fns, u))->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' (it depends on itself or on a value whose type is not known).\n      FIX: write the return type: `def ", 103LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t2479 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2478); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (((FunctionDef*)List_ptr_get(fns, u))->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(...) -> T:`", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(msgs, _at_t2479); _tr_str_release(_at_t2479); });
         }
 #line 195 "src/infer.tr"
         u = (u + 1LL);
