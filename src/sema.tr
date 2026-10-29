@@ -1257,6 +1257,14 @@ extend Sema:
         if bad:
             self.error("[E-5] Type mismatch: this 'case' pattern is " + self.family_word(pf) + " literal but the value being matched is " + self.family_word(sf) + ".\n      FIX: use a pattern of the same type as the matched value.")
 
+    pub def num_canon(self, n: str) -> str:
+        if n == "i64": return "int"
+        if n == "f64": return "float"
+        return n
+
+    pub def is_num_prim(self, n: str) -> bool:
+        return n == "int" or n == "i8" or n == "i16" or n == "i32" or n == "i64" or n == "u8" or n == "u16" or n == "u32" or n == "u64" or n == "usize" or n == "isize" or n == "float" or n == "f32" or n == "f64"
+
     pub def family_word(self, fam: str) -> str:
         if fam == "class": return "a class/enum value"
         if fam == "Option": return "an Option (maybe-empty) value"
@@ -1268,10 +1276,18 @@ extend Sema:
     # Report an E-5 mismatch when `e` is certainly a different kind of value than `exp_ty` declares.
     pub def check_expr_assignable(self, exp_ty: AstType, e: Pointer[HirExpr], what: str):
         # `List[str] = [1, 2]`: check the literal's elements against the declared element type
+        if exp_ty.name == "char" and not _is_invalid_ptr(e as usize):
+            match e.read():
+                case HirExpr.ELitStr(cv, cb, _):
+                    if cb >= 2 and cv.slice(0, 1) >= " " and cv.slice(0, 1) <= "~" and cv.slice(1, 2) >= " " and cv.slice(1, 2) <= "~":
+                        self.error("[E-5] Type mismatch: " + what + " is a char but is given a string of " + cb.to_str() + " characters.\n      FIX: a char holds exactly one character, e.g. 'a'; use a str for longer text.")
+                case _: pass
         if (exp_ty.name == "List" or exp_ty.name == "Vec" or exp_ty.name == "Set") and exp_ty.args.len > 0 and not _is_invalid_ptr(e as usize):
             mut elt = exp_ty.args.get(0).read()
             match e.read():
-                case HirExpr.EList(items, _):
+                case HirExpr.EList(items, lty):
+                    if exp_ty.name == "List" and items.len > 0 and lty.name == "List" and lty.args.len == 1 and self.num_canon(lty.args.get(0).read().name) != self.num_canon(elt.name) and self.is_num_prim(lty.args.get(0).read().name) and self.is_num_prim(elt.name):
+                        self.error("[E-5] Type mismatch: " + what + " is a List[" + elt.name + "] but this list literal holds " + lty.args.get(0).read().name + " values.\n      FIX: build it with List[" + elt.name + "].init(...) and push(...) the elements, or cast every element: [1 as " + elt.name + ", ...].")
                     mut li = 0
                     while li < items.len:
                         if self.family_mismatch(self.decl_family(elt), self.firm_family(items.get(li))):
@@ -1674,6 +1690,8 @@ extend Sema:
                 self.error("[E-5] Type mismatch: a " + bty.name + "[" + bty.args.get(0).read().name + ", ...] is indexed with " + self.family_word(xf) + ".\n      FIX: use a '" + bty.args.get(0).read().name + "' key.")
             if bf == "None" or bf == "int" or bf == "float" or bf == "bool":
                 self.error("[E-5] Type mismatch: " + self.family_word(bf) + " cannot be indexed.\n      FIX: check that the variable holds the list / string / dict you meant (it holds " + self.family_word(bf) + " here).")
+            if bf == "Tuple" and (xf == "str" or xf == "float" or xf == "List" or xf == "Dict"):
+                self.error("[E-5] Type mismatch: a tuple is indexed with " + self.family_word(xf) + ", but the index must be an int.\n      FIX: use an integer index (tuples have no keys).")
             if (bf == "List" or bf == "str") and xf == "float":
                 self.error("[E-5] Type mismatch: a " + bf + " is indexed with a float, but the index must be an int.\n      FIX: convert it: int(x).")
             if (bf == "List" or bf == "str") and (xf == "str" or xf == "List" or xf == "Dict"):
@@ -1816,6 +1834,10 @@ extend Sema:
                 if self.family_mismatch(hf, self.firm_family(hl.get(0))):
                     self.error("[E-5] Type mismatch: " + ty.name + "[" + ty.args.get(0).read().name + "]." + method + "() is given " + self.family_word(self.firm_family(hl.get(0))) + ".\n      FIX: pass a '" + ty.args.get(0).read().name + "'.")
             return
+        if ty.name == "Pointer" and method == "write" and hl.len == 1 and ty.args.len > 0:
+            mut wf = self.firm_family(hl.get(0))
+            if self.family_mismatch(self.decl_family(ty.args.get(0).read()), wf):
+                self.error("[E-5] Type mismatch: Pointer[" + ty.args.get(0).read().name + "].write() is given " + self.family_word(wf) + ".\n      FIX: write a '" + ty.args.get(0).read().name + "' value.")
         if ty.name == "Pointer" and method == "offset" and hl.len == 1:
             mut pf = self.firm_family(hl.get(0))
             if pf == "str" or pf == "List" or pf == "Dict":
@@ -3861,6 +3883,10 @@ extend Sema:
                                     case Expr.ELitFloat(_): g_ty = box_asttype(AstType.init("float"))
                                     case Expr.ELitStr(_, _): g_ty = box_asttype(AstType.init("str"))
                                     case Expr.ELitBool(_): g_ty = box_asttype(AstType.init("bool"))
+                                    case Expr.EList(gl_items): 
+                                        if gl_items.len > 0: self.global_firm.insert(g_name, "List")
+                                    case Expr.EDict(gd_k, _):
+                                        if gd_k.len > 0: self.global_firm.insert(g_name, "Dict")
                                     case _: pass
                             if g_ty as usize != 0 as usize:
                                 self.declare(g_name, SymbolKind.SVariable, g_ty, g_is_mut)
@@ -7217,6 +7243,16 @@ extend Sema:
                     if val_ty.args.len > i: nty = val_ty.args.get(i).read()
                     self.declare(names.get(i), SymbolKind.SVariable, box_asttype(nty), is_mut)
                     i = i + 1
+                # `a, b = f()` / `a, b = (x, y)`: names bound from a certain tuple type are certain too
+                mut _ml_ft = self.firm_type(hval)
+                if (_ml_ft.name == "Tuple" or _ml_ft.name == "tuple") and _ml_ft.args.len == names.len and not self.classes.contains(_ml_ft.name):
+                    i = 0
+                    while i < names.len:
+                        mut _ml_et = _ml_ft.args.get(i).read()
+                        mut _ml_ef = self.decl_family(_ml_et)
+                        if _ml_ef != "" and _ml_ef != "class":
+                            self.set_symbol_firm_ty(names.get(i), _ml_ef, "", _ml_et)
+                        i = i + 1
                 return box_hirstmt(HirStmt.SMultiLet(names, is_mut, hval))
             case Stmt.SLine(n):
                 self.current_line = n
@@ -8062,6 +8098,8 @@ extend Sema:
                         mut _bo_t = _bo_lf
                         if not (_bo_lf == "Tuple" or _bo_lf == "Dict"): _bo_t = _bo_rf
                         self.error("[E-5] Type mismatch: '" + op + "' cannot be applied to " + self.family_word(_bo_t) + ".\n      FIX: check that the variable holds the number you meant (it holds " + self.family_word(_bo_t) + " here).")
+                    if op == "+" and ((_bo_lf == "str" and (_bo_rf == "List" or _bo_rf == "Dict" or _bo_rf == "Tuple")) or (_bo_rf == "str" and (_bo_lf == "List" or _bo_lf == "Dict" or _bo_lf == "Tuple"))):
+                        self.error("[E-5] Type mismatch: cannot apply '+' to " + self.family_word(_bo_lf) + " and " + self.family_word(_bo_rf) + ".\n      FIX: convert one side first (str(x) / a list index) so both operands have the same type.")
                     if (_bo_lf == "None" or _bo_rf == "None") and (op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**" or op == "<" or op == ">" or op == "<=" or op == ">="):
                         self.error("[E-5] Type mismatch: '" + op + "' cannot be applied to None.\n      FIX: the value here is None; give the variable a real value before using it in arithmetic or comparisons.")
                     if (_bo_lf == "Option" or _bo_rf == "Option") and (op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**" or op == "<" or op == ">" or op == "<=" or op == ">="):
@@ -8129,7 +8167,8 @@ extend Sema:
                     self.error("[E-5] Type mismatch: unary '" + op + "' cannot be applied to a str.\n      FIX: convert it first, e.g. -int(s).")
                 if op == "not":
                     mut _nf = self.firm_family(hexpr_inner)
-                    if _nf == "str" or _nf == "List" or _nf == "Dict" or _nf == "Tuple" or _nf == "Option" or _nf == "Pointer" or _nf == "Result":
+                    if hir_expr_type(hexpr_inner).name == "Set": _nf = "Set"
+                    if _nf == "str" or _nf == "List" or _nf == "Dict" or _nf == "Tuple" or _nf == "Option" or _nf == "Pointer" or _nf == "Result" or _nf == "Set":
                         self.error("[E-5] Type mismatch: 'not' cannot be applied to " + self.family_word(_nf) + ".\n      FIX: negate a bool; for emptiness / absence write an explicit test, e.g. `len(x) == 0` or `x.is_none()`.")
                 if op == "~":
                     mut _tf = self.firm_family(hexpr_inner)
@@ -8743,7 +8782,9 @@ extend Sema:
                 mut _sc_done = false
                 match obj.read():
                     case Expr.EIdent(_sc_t):
-                        if self.classes.contains(_sc_t) and self.resolve(_sc_t).kind != SymbolKind.SVariable and method != "init" and method != "new" and method != "spawn" and method != "auto":
+                        if _sc_t == "Atomic" and (method == "new" or method == "init") and not self.classes.contains("Atomic") and self.resolve("Atomic").kind != SymbolKind.SVariable:
+                            self.check_static_call("Atomic", method, hl)
+                        elif self.classes.contains(_sc_t) and self.resolve(_sc_t).kind != SymbolKind.SVariable and method != "init" and method != "new" and method != "spawn" and method != "auto":
                             self.check_static_call(_sc_t, method, hl)
                             _sc_done = true
                         elif self.enums.contains(_sc_t) and not self.classes.contains(_sc_t) and self.resolve(_sc_t).kind != SymbolKind.SVariable and not self.is_local_var(_sc_t) and not self.ambiguous_classes.contains(_sc_t):
@@ -9763,6 +9804,7 @@ extend Sema:
                 return box_hirexpr(HirExpr.EIndex(hexpr_obj, self.lower_index_operand(idx_inner, hexpr_obj), elem_ty))
             case Expr.ESizeOf(ty):
                 if ty as usize == 0 as usize: return box_hirexpr(HirExpr.ESizeOf(AstType.init("void"), AstType.init("int")))
+                self.check_type_known(ty, "this sizeof()")
                 return box_hirexpr(HirExpr.ESizeOf(ty.read(), AstType.init("int")))
             case Expr.ECast(expr, ty):
                 if ty as usize == 0 as usize: return self.lower_expr(expr)
@@ -9774,6 +9816,8 @@ extend Sema:
                     self.error("[E-5] Type mismatch: " + self.family_word(cast_from) + " cannot be cast to str with 'as'.\n      FIX: convert it with str(x) or x.to_str().")
                 if cast_from == "str" and (cast_to == "int" or cast_to == "float" or cast_to == "bool"):
                     self.error("[E-5] Type mismatch: a str cannot be cast to " + cast_to + " with 'as'.\n      FIX: parse it with int(s) / float(s) instead.")
+                if (cast_from == "List" or cast_from == "Dict" or cast_from == "Tuple" or cast_from == "Option" or cast_from == "Result" or cast_from == "None") and (self.decl_family(ty.read()) == "float" or self.decl_family(ty.read()) == "bool" or cast_to == "str" or (cast_from == "Tuple" and self.decl_family(ty.read()) == "int")):
+                    self.error("[E-5] Type mismatch: " + self.family_word(cast_from) + " cannot be cast to " + cast_to + " with 'as'.\n      FIX: 'as' converts between numbers and pointers; extract a value first (indexing, len(x), x.unwrap()).")
                 return box_hirexpr(HirExpr.ECast(cast_in, ty.read()))
             case Expr.EFString(parts):
                 self.check_no_heap("an f-string", "build output in a fixed byte buffer, or print the parts separately; plain string literals are fine (they live in rodata)")
@@ -9890,6 +9934,7 @@ extend Sema:
                     hparams.push(hpa)
                     l = l + 1
                 mut r_ty = AstType.init("void")
+                if ret_ty as usize != 0 as usize: self.check_type_known(ret_ty, "the return type of this closure")
                 if ret_ty as usize != 0 as usize: r_ty = ret_ty.read()
                 # A closure is a separate function: a `return` inside it must drop only
                 # the closure's own scopes, never the enclosing function's locals.
