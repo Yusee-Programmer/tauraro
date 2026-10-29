@@ -4047,6 +4047,8 @@ __attribute__((hot)) void Sema_check_bool_ctx(Sema* self, HirExpr* h, TrStr what
 __attribute__((hot)) void Sema_check_iterable(Sema* self, HirExpr* h);
 __attribute__((hot)) void Sema_check_not_void_call(Sema* self, HirExpr* h, TrStr what);
 __attribute__((hot)) void Sema_check_lit_pattern(Sema* self, TrStr sf, TrStr pf);
+__attribute__((hot)) TrStr Sema_num_canon(Sema* self, TrStr n);
+__attribute__((hot)) bool Sema_is_num_prim(Sema* self, TrStr n);
 __attribute__((hot)) TrStr Sema_family_word(Sema* self, TrStr fam);
 __attribute__((hot)) void Sema_check_expr_assignable(Sema* self, AstType* exp_ty, HirExpr* e, TrStr what);
 __attribute__((hot)) void Sema_check_call_args(Sema* self, FunctionDef* fd, List_ptr* args, long long sk, TrStr what);
