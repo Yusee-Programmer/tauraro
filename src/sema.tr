@@ -7620,7 +7620,7 @@ extend Sema:
 
     pub def _open_uses(self, h: Pointer[HirExpr]):
         match h.read():
-            case HirExpr.EMethodCall(ho, m, hargs, _):
+            case HirExpr.EMethodCall(ho, m, hargs, mcty):
                 mut nm = self._open_name(ho)
                 if nm == "": return
                 mut kind = self.resolve(nm).ty.read().name
@@ -7634,6 +7634,11 @@ extend Sema:
                         self._open_fill_from(nm, hir_expr_type(hargs.get(0)))
                     elif (m == "get" or m == "get_or") and hargs.len == 2:
                         self._open_fill(nm, hir_expr_type(hargs.get(0)), hir_expr_type(hargs.get(1)), true)
+                        # the call itself was typed while the dict was still open: give it the value type now
+                        mut gv = hir_expr_type(hargs.get(1))
+                        if self._ty_usable(gv):
+                            mcty.name = gv.name
+                            mcty.args = gv.args
                     elif m == "get" or m == "keys" or m == "values" or m == "items" or m == "pop":
                         self._open_err(nm, "`." + m + "()`")
                 elif kind == "Set":

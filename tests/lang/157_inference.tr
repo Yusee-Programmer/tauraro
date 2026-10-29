@@ -65,6 +65,12 @@ def counts(words: List[str]):
         m[w] = m.get(w, 0) + 1
     return m
 
+def weights(words: List[str]):
+    m = {}
+    for w in words:
+        m[w] = m.get(w, 0.0) + 1.0
+    return m
+
 def main():
     mut t = TestRunner.init("157_inference")
 
@@ -109,6 +115,8 @@ def main():
     t.assert_eq_int(ps[3].y, 4, "object field of an inferred list")
     c = counts(["a", "b", "a"])
     t.assert_eq_int(c["a"], 2, "dict counted with get(k, 0)")
+    wt = weights(["a", "a", "b"])
+    t.assert_eq_float(wt["a"], 2.0, 0.000001, "get(k, 0.0) types the dict before the arithmetic")
     seen = {}
     for w in ["a", "b", "a"]:
         if w in seen:
