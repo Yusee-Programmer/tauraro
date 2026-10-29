@@ -213,7 +213,7 @@ expect_diag "pointer write str" 'def main():\n    mut p: Pointer[int] = 0 as Poi
 expect_diag "atomic new str" 'def main():\n    mut a = Atomic.new("str")\n' "Atomic needs a number"
 expect_diag "str plus list" 'def main():\n    mut a = "x"\n    mut b = [1, 2]\n    mut c = a + b\n' "cannot apply '+' to a str and a List"
 expect_diag "tuple str index" 'def main():\n    mut t = (1, 2)\n    print(t["a"])\n' "a tuple is indexed with a str"
-expect_diag "sizeof unknown" 'def main():\n    print(sizeof(Unknwn))\n' "sizeof() of 'Unknwn'"
+expect_diag "sizeof unknown" 'def main():\n    print(sizeof(Unknwn))\n' "Unknown type 'Unknwn' (in this sizeof())"
 expect_diag "closure ret unknown type" 'def main():\n    mut f = def () -> Foo:\n        return 1\n' "Foo"
 expect_diag "global list as int" 'mut g = [1, 2]\ndef f(x: int) -> int:\n    return x\ndef main():\n    print(f(g))\n' "argument 1 of 'f()'"
 expect_diag "unpack tuple kinds" 'def two() -> Tuple[str, int]:\n    return ("a", 1)\ndef main():\n    mut a, b = two()\n    if a == 42:\n        print(1)\n' "cannot apply '==' to a str and an int"
