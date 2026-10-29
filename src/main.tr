@@ -2175,6 +2175,21 @@ pub def main(args: Vec[str]):
         print("Check passed: no errors found.")
         return
 
+    # [N-12] A call to a `_tr_*` runtime intrinsic that the runtime does not define (a misspelt name) would only
+    # fail in the C compiler. Checked against the runtime header shipped next to the compiler, when present.
+    if sema.tr_calls.len > 0 and not check_only:
+        mut rt_hdr_path = _tr_exe_dir() + "/runtime/tauraro_rt.h"
+        if file_exists(rt_hdr_path):
+            mut rt_hdr = read_file(rt_hdr_path)
+            mut rt_bad = false
+            mut rtc = 0
+            while rtc < sema.tr_calls.len:
+                if not rt_hdr.contains(sema.tr_calls.get(rtc)):
+                    _print_diag("error", sema.tr_call_where.get(rtc) + ": [N-12] '" + sema.tr_calls.get(rtc) + "' is not a function of the Tauraro runtime and is not declared by any `extern def`.\n      FIX: check the spelling; runtime intrinsics are listed in runtime/tauraro_rt.h, other C functions need an `extern def` declaration.")
+                    rt_bad = true
+                rtc = rtc + 1
+            if rt_bad: _tr_exit(1)
+
     # [N-10] An executable needs an entry point. Libraries (--lib), freestanding / no-std tiers,
     # cross targets and the non-executable emit modes legitimately have no `main`.
     if emit_mode == "exe" and not lib_mode and not export_cpp and tier_define == "" and target == "" and not sema.fn_defs.contains("main"):

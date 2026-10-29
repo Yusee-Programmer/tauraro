@@ -10,7 +10,7 @@ __attribute__((hot)) long long _index_of(List_TrStr* names, TrStr s) {
 #line 24 "src/codegen/native/elf.tr"
     while ((i < names->len)) {
 #line 25 "src/codegen/native/elf.tr"
-        if (({ TrStr _cmpa_t7093 = (List_TrStr_get(names, i)); TrStr _cmpb_t7094 = (s); _Bool _cmpr_t7095 = _tr_str_eqv(_cmpa_t7093, _cmpb_t7094); _tr_str_release(_cmpa_t7093); _cmpr_t7095; })) {
+        if (({ TrStr _cmpa_t7109 = (List_TrStr_get(names, i)); TrStr _cmpb_t7110 = (s); _Bool _cmpr_t7111 = _tr_str_eqv(_cmpa_t7109, _cmpb_t7110); _tr_str_release(_cmpa_t7109); _cmpr_t7111; })) {
 #line 25 "src/codegen/native/elf.tr"
             return i;
         }
@@ -111,7 +111,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
 #line 74 "src/codegen/native/elf.tr"
         List_i64_append(str_off, rodata->len);
 #line 75 "src/codegen/native/elf.tr"
-        ({ TrStr _ord_t7096 = (List_TrStr_get(strings, sxi)); __auto_type _ord_t7097 = (List_i64_get(string_lens, sxi)); ByteBuf_cstr_len(rodata, _ord_t7096, _ord_t7097); _tr_str_release(_ord_t7096); });
+        ({ TrStr _ord_t7112 = (List_TrStr_get(strings, sxi)); __auto_type _ord_t7113 = (List_i64_get(string_lens, sxi)); ByteBuf_cstr_len(rodata, _ord_t7112, _ord_t7113); _tr_str_release(_ord_t7112); });
 #line 76 "src/codegen/native/elf.tr"
         sxi = (sxi + 1LL);
     }

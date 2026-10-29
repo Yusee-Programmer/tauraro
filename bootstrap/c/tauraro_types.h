@@ -2773,6 +2773,8 @@ typedef struct Sema {
     TrMap* type_aliases;
     TrMap* type_alias_elem;
     TrStr current_file;
+    List_TrStr* tr_calls;
+    List_TrStr* tr_call_where;
     List_TrStr* decl_files;
     TrStr current_func_name;
     TrStr current_class_name;
@@ -2826,6 +2828,7 @@ typedef struct Sema {
     List_TrStr* branch_init_buf;
     TrMap* copy_classes;
     bool in_unsafe;
+    bool ctor_call;
     bool cur_fn_is_lib;
     TrStr current_func_ret_from;
     TrStr current_func_ret_family;
@@ -2878,6 +2881,8 @@ static void _trdrop_Sema(void* vp) {
     Dict_free_strval(self->type_aliases);
     Dict_free_strval(self->type_alias_elem);
     _tr_str_release(self->current_file);
+    List_TrStr_free(self->tr_calls);
+    List_TrStr_free(self->tr_call_where);
     List_TrStr_free(self->decl_files);
     _tr_str_release(self->current_func_name);
     _tr_str_release(self->current_class_name);
@@ -4167,6 +4172,7 @@ __attribute__((hot)) void Sema__collect_returns(Sema* self, HirBlock* b, List_pt
 __attribute__((hot)) void Sema__collect_returns_stmt(Sema* self, HirStmt* sp, List_ptr* out);
 __attribute__((hot)) bool Sema__owned_of(Sema* self, TrStr key);
 __attribute__((hot)) bool Sema__ret_yields_owned(Sema* self, HirExpr* e);
+__attribute__((hot)) bool Sema_is_known_type_name_strict(Sema* self, TrStr n);
 __attribute__((hot)) bool Sema__is_type_param_in_scope(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema__type_satisfies_bound(Sema* self, TrStr type_name, TrStr iface_name);
 __attribute__((hot)) AstType** Sema__resolve_generic_bound_method_ret(Sema* self, TrStr pname, TrStr method);

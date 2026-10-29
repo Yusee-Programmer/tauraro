@@ -266,6 +266,8 @@ pub class Sema:
     pub type_aliases:        Map[str, str]   # alias_name -> resolved base name
     pub type_alias_elem:     Map[str, str]   # alias_name -> first generic arg name (for List/Map)
     pub current_file:        str             # path of source file currently being analysed
+    pub tr_calls:            Vec[str]        # `_tr_*` runtime-intrinsic names called without a declaration (checked by the driver against the runtime header)
+    pub tr_call_where:       Vec[str]        # "file:line" of each
     pub decl_files:          Vec[str]        # source file of each prog.decls entry (parallel; empty = every decl is in current_file)
     pub current_func_name:  str
     pub current_class_name: str
@@ -320,6 +322,7 @@ pub class Sema:
     pub branch_init_buf: Vec[str]       # Fix 4: names init'd in current branch
     pub copy_classes: Map[str, bool]    # Fix 3: auto-inferred Copy classes (all-primitive fields)
     pub in_unsafe: bool                 # Gap 6: inside an unsafe: block
+    pub ctor_call: bool                 # check_static_call is checking `A(args)` (a constructor call), not `A.init(args)`
     pub cur_fn_is_lib: bool             # currently lowering a trusted std/core function (audited unsafe core) — exempt from [P-2]
     pub current_func_ret_from: str      # Gap 1: 'from' lifetime param of current function return
     pub current_func_ret_family: str        # type family of the current fn's declared return type (see decl_family); "" = unchecked
@@ -414,6 +417,8 @@ extend Sema:
         s.type_alias_elem = Map[str, str].init(32)
         s.current_file    = ""
         s.decl_files      = Vec[str].init(1)
+        s.tr_calls        = Vec[str].init(1)
+        s.tr_call_where   = Vec[str].init(1)
         s.current_func_name  = ""
         s.current_class_name = ""
         s.current_scope_depth = 0
@@ -465,6 +470,7 @@ extend Sema:
         s.branch_init_buf   = Vec[str].init(0)
         s.copy_classes           = Map[str, bool].init(32)
         s.in_unsafe              = false
+        s.ctor_call              = false
         s.cur_fn_is_lib          = false
         s.current_func_ret_from  = ""
         s.current_func_ret_borrow_str = false
@@ -1563,7 +1569,7 @@ extend Sema:
                 if has_self and cnt == hl.len and variant != "init": inst_miss = true
                 one = m
             i = i + 1
-        if named == 0 and not variadic and cdef.base_classes.len == 0 and cdef.iface_names.len == 0 and not self.is_universal_method(variant) and variant != "auto" and variant != "spawn" and variant != "from" and variant != "default":
+        if named == 0 and not variadic and cdef.base_classes.len == 0 and cdef.iface_names.len == 0 and (not self.is_universal_method(variant) or (variant == "init" and not self.ctor_call and cdef.generics.len == 0)) and variant != "auto" and variant != "spawn" and variant != "from" and variant != "default":
             self.error("[E-1] No method '" + variant + "' found on type '" + type_name + "'.\n      FIX: check the spelling, or define 'pub def " + variant + "(...)' in '" + type_name + "' (or an 'extend " + type_name + ":' block).")
             return
         if named == 0 or variadic: return
@@ -4590,6 +4596,9 @@ extend Sema:
     # A name is an abstract type parameter in the current scope (not a concrete type)
     # if it's a single-letter param (T/K/V/…) or appears in the enclosing function's
     # generics — bounds on such a name can't be checked yet, so we don't false-error.
+    pub def is_known_type_name_strict(self, n: str) -> bool:
+        return self.classes.contains(n) or self.enums.contains(n) or self.interfaces.contains(n) or self.type_aliases.contains(n) or self.fn_sigs.contains(n) or self.extern_names.contains(n)
+
     pub def _is_type_param_in_scope(self, name: str) -> bool:
         if _tr_strlen(name) == 1: return true
         mut i = 0
@@ -4957,6 +4966,8 @@ extend Sema:
         mut mi = 0
         while mi < methods.len:
             mut m = methods.get(mi)
+            if m.name == "main" or (m.name == "free" and (m.params.len > 1 or (m.ret_ty as usize != 0 as usize and m.ret_ty.read().name != "void" and m.ret_ty.read().name != "None"))):
+                self._dup_err(m.line, "[N-1] '" + m.name + "' cannot be used as a method name of '" + owner + "'.\n      FIX: " + m.name + " is reserved (`main` is the program entry point; `free()` releases an object and takes no arguments and returns nothing). Pick another name.")
             mut argc = 0
             mut pi = 0
             while pi < m.params.len:
@@ -5074,6 +5085,18 @@ extend Sema:
                             self._dup_err(c.line, "[N-6] Unknown base class '" + b + "' of class '" + c.name + "'.\n      FIX: check the spelling, or import/define '" + b + "'.")
                         bi = bi + 1
                     self._check_overrides(c)
+                    mut sv_cls = self.current_class_name
+                    self.current_class_name = c.name
+                    mut fti = 0
+                    while fti < c.fields.len:
+                        mut fld = c.fields.get(fti)
+                        fti = fti + 1
+                        if fld.ty as usize != 0 as usize and not self.ambiguous_classes.contains(c.name):
+                            mut sv_ln = self.current_line
+                            self.current_line = self._second_decl_line(c.line, fld.name, false, 1)
+                            self.check_type_known(fld.ty, "field '" + fld.name + "' of '" + c.name + "'")
+                            self.current_line = sv_ln
+                    self.current_class_name = sv_cls
                 case _: pass
             di = di + 1
         self.current_file = root_file
@@ -5989,6 +6012,13 @@ extend Sema:
         s = s_ptr.read()
         match s:
             case Stmt.SExpr(e):
+                if e as usize != 0 as usize:
+                    match e.read():
+                        case Expr.EIdent(bare_n):
+                            # a lone name as a statement: single-letter names are normally accepted as generic parameters
+                            if _tr_strlen(bare_n) == 1 and self.resolve(bare_n).name == "" and not self.is_known_type_name_strict(bare_n):
+                                self._dup_err(self._second_decl_line(self.current_line, bare_n, self.current_func_name == "", 1), "[N-3] name '" + bare_n + "' is not defined.\n      FIX: check the spelling, declare it with 'mut " + bare_n + " = ...', or remove this line.")
+                        case _: pass
                 mut h_s_expr = box_hirstmt(HirStmt.SExpr(self.lower_expr(e)))
                 # Rule T-4: Result returned by throws-function must be handled
                 if e as usize != 0 as usize:
@@ -7817,6 +7847,12 @@ extend Sema:
         return box_hirexpr(HirExpr.ELitInt(0, AstType.init("int")))
 
     pub def lower_expr(self, e_ptr: Pointer[Expr]) -> Pointer[HirExpr]:
+        if e_ptr as usize != 0 as usize and not self.infer_mode:
+            match e_ptr.read():
+                case Expr.EMacroCall(mac_n, _):
+                    # a defined macro was already expanded away before sema; one that is left has no definition
+                    self.error("[N-3] macro '" + mac_n + "!' is not defined.\n      FIX: check the spelling, or define it with `macro def " + mac_n + "(...)`.")
+                case _: pass
         mut _lr = self.lower_expr_inner(e_ptr)
         if _lr as usize != 0 as usize: self._open_uses(_lr)
         if _lr as usize != 0 as usize and self.infer_mode:
@@ -8185,8 +8221,25 @@ extend Sema:
                         # [G-1] generic bounds: verify the inferred type args satisfy them.
                         self.check_call_bounds(n, hl)
                         self.check_call_fn_args(n, hl)
+                        if (n == "print" or n == "println") and not self.is_local_var(n):
+                            mut pr_i = 0
+                            while pr_i < hl.len:
+                                mut pr_t = hir_expr_type(hl.get(pr_i))
+                                mut pr_var = false
+                                match hl.get(pr_i).read():
+                                    case HirExpr.EIdent(pr_nm, _, _): pr_var = self.is_local_var(pr_nm)
+                                    case _: pass
+                                if pr_var and (pr_t.name == "Result" or pr_t.name == "Option") and pr_t.args.len > 0:
+                                    self.error("[E-5] Type mismatch: a " + pr_t.name + " cannot be printed directly.\n      FIX: print its payload instead (e.g. `.unwrap()` after checking `.is_ok` / `.is_some`), or print a message for each case.")
+                                pr_i = pr_i + 1
+                        if n.len() > 4 and n.slice(0, 4) == "_tr_" and not self.fn_sigs.contains(n) and not self.extern_names.contains(n) and not self.is_local_var(n) and self.current_line > 0:
+                            self.tr_calls.push(n)
+                            self.tr_call_where.push(self.current_file + ":" + self.current_line.to_str())
                         # `A(args)` is the same call as `A.init(args)`: check it against the declared init
-                        if hl.len > 0 and self.classes.contains(n) and self.resolve(n).kind != SymbolKind.SVariable and not self.fn_defs.contains(n): self.check_static_call(n, "init", hl)
+                        if hl.len > 0 and self.classes.contains(n) and self.resolve(n).kind != SymbolKind.SVariable and not self.fn_defs.contains(n):
+                            self.ctor_call = true
+                            self.check_static_call(n, "init", hl)
+                            self.ctor_call = false
                         if self.interfaces.contains(n) and not self.classes.contains(n) and not self.fn_defs.contains(n) and not self.is_local_var(n) and self.resolve(n).kind != SymbolKind.SVariable:
                             self.error("[N-9] '" + n + "' is an interface and cannot be instantiated.\n      FIX: create a class that `implements " + n + "` and instantiate that instead.")
                         if n == "main":

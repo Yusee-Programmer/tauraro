@@ -51,6 +51,7 @@ category, with its cause, a triggering example, and the fix.
 | [N-8] | Name | `break`/`continue` outside a loop, `return` outside a function |
 | [N-9] | Name | An interface instantiated like a class (`I()`) |
 | [N-10] | Name | An executable program without a `main` function |
+| [N-12] | Name | A call to a `_tr_*` runtime intrinsic the runtime does not define |
 | [N-11] | Name | An override whose signature differs from the inherited method |
 | [E-9] | Existence | A type or function name used as a value |
 | [N-5] | Name | Duplicate declaration (function, type, field, method, variant, parameter, global) |
@@ -747,6 +748,14 @@ that the type does not declare.
 - `A.m()` where `m` takes `self` reports **[E-4]** `is an instance method` (call `obj.m()` or `A.m(obj)`).
 - `obj.make()` where `make` has no `self` reports **[E-4]** `is a static method` (call `A.make()`).
 - Top-level classes, enums, interfaces and globals named like a C keyword / libc function / macro (`sin`, `printf`, `INT_MAX`, `size_t`, `unix`, ...) report **[N-1]**. Locals, parameters, loop variables, lambda parameters and fields with such names are renamed automatically in the generated C.
+
+### [N-12] Unknown Runtime Intrinsic
+
+**Message:** `'_tr_x' is not a function of the Tauraro runtime and is not declared by any `extern def`.`
+
+**FIX:** Check the spelling against `runtime/tauraro_rt.h`, or declare the C function with `extern def`.
+
+Related early checks: `Type.init(...)` on a class that defines no `init` is **[E-1]**; an unknown `name!(...)` macro call and a lone undefined name used as a statement are **[N-3]**; field types of a class are checked with **[N-4]**; a method called `main` (or a value-returning `free`) is **[N-1]**; printing a `Result`/`Option` variable is **[E-5]**.
 
 ### [E-9] Type or Function Used as a Value
 
