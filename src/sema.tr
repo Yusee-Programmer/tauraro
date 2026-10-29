@@ -8101,6 +8101,22 @@ extend Sema:
                                             _lh_tys.push(_lh_h.read().args.get(_lh_i).read())
                                             _lh_i = _lh_i + 1
                                         self._resolve_lambda(_lh_an, _lh_tys)
+                                    else:
+                                        # bare `lambda` slot: documented int default for the parameters
+                                        mut _lh_si = self._lam_scope_of(_lh_an)
+                                        if _lh_si >= 0:
+                                            mut _lh_sy = self.scopes.get(_lh_si).variables.get(_lh_an)
+                                            if _lh_sy.lam_expr as usize != 0 as usize:
+                                                mut _lh_np = 0
+                                                match _lh_sy.lam_expr.read():
+                                                    case Expr.EClosure(_lh_ps, _, _, _): _lh_np = _lh_ps.len
+                                                    case _: pass
+                                                mut _lh_tys2 = Vec[AstType].init(2)
+                                                mut _lh_j = 0
+                                                while _lh_j < _lh_np:
+                                                    _lh_tys2.push(AstType.init("int"))
+                                                    _lh_j = _lh_j + 1
+                                                self._resolve_lambda(_lh_an, _lh_tys2)
                             case Expr.EList(_lh_items):
                                 if _lh_items.len == 0: self.list_hint = self.list_hint_for_fn(_ch_fname, k)
                             case _: pass
