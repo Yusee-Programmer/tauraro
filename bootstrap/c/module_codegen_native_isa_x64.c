@@ -29,9 +29,9 @@ __attribute__((malloc,returns_nonnull,hot)) EncodedFunc* EncodedFunc_init(TrStr 
 #line 36 "src/codegen/native/isa_x64.tr"
     e->is_main = false;
 #line 37 "src/codegen/native/isa_x64.tr"
-    ByteBuf* _cltmp_t6617 = ByteBuf_init();
+    ByteBuf* _cltmp_t7087 = ByteBuf_init();
     _tr_obj_release(e->code, _trdrop_ByteBuf);
-    e->code = _cltmp_t6617;
+    e->code = _cltmp_t7087;
 #line 38 "src/codegen/native/isa_x64.tr"
     e->relocs = (void*)List_ptr_new();
 #line 39 "src/codegen/native/isa_x64.tr"
@@ -441,7 +441,7 @@ __attribute__((hot)) EncodedFunc* encode_func(LFunc* lf) {
 #line 239 "src/codegen/native/isa_x64.tr"
     while ((ppi < lf->params->len)) {
 #line 240 "src/codegen/native/isa_x64.tr"
-        ({ TrStr _at_t6618 = (List_TrStr_get(lf->params, ppi)); _st_argreg(c, ppi, _var_disp(lf, _at_t6618)); _tr_str_release(_at_t6618); });
+        ({ TrStr _at_t7088 = (List_TrStr_get(lf->params, ppi)); _st_argreg(c, ppi, _var_disp(lf, _at_t7088)); _tr_str_release(_at_t7088); });
 #line 241 "src/codegen/native/isa_x64.tr"
         ppi = (ppi + 1LL);
     }
@@ -462,17 +462,17 @@ __attribute__((hot)) EncodedFunc* encode_func(LFunc* lf) {
 #line 252 "src/codegen/native/isa_x64.tr"
         while ((ii < blk->insts->len)) {
 #line 253 "src/codegen/native/isa_x64.tr"
-            __auto_type _t6619 = (*((LInst*)List_ptr_get(blk->insts, ii)));
-            if (_t6619.tag == LInst_IConst) {
-                __auto_type dst = _t6619.data.IConst.dst;
-__auto_type v = _t6619.data.IConst.v;
+            __auto_type _t7089 = (*((LInst*)List_ptr_get(blk->insts, ii)));
+            if (_t7089.tag == LInst_IConst) {
+                __auto_type dst = _t7089.data.IConst.dst;
+__auto_type v = _t7089.data.IConst.v;
 #line 255 "src/codegen/native/isa_x64.tr"
                 _mov_rax_imm64(c, v);
 #line 256 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t6619.tag == LInst_IStr) {
-                __auto_type dst = _t6619.data.IStr.dst;
-__auto_type sidx = _t6619.data.IStr.str_idx;
+            } else if (_t7089.tag == LInst_IStr) {
+                __auto_type dst = _t7089.data.IStr.dst;
+__auto_type sidx = _t7089.data.IStr.str_idx;
 #line 258 "src/codegen/native/isa_x64.tr"
                 ByteBuf_u8(c, 72LL);
 #line 259 "src/codegen/native/isa_x64.tr"
@@ -496,23 +496,23 @@ __auto_type sidx = _t6619.data.IStr.str_idx;
 #line 268 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
                 _tr_obj_release(sr, _trdrop_Reloc);
-            } else if (_t6619.tag == LInst_ILoadVar) {
-                __auto_type dst = _t6619.data.ILoadVar.dst;
-__auto_type name = _t6619.data.ILoadVar.name;
+            } else if (_t7089.tag == LInst_ILoadVar) {
+                __auto_type dst = _t7089.data.ILoadVar.dst;
+__auto_type name = _t7089.data.ILoadVar.name;
 #line 270 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _var_disp(lf, name));
 #line 271 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t6619.tag == LInst_IStoreVar) {
-                __auto_type name = _t6619.data.IStoreVar.name;
-__auto_type src = _t6619.data.IStoreVar.src;
+            } else if (_t7089.tag == LInst_IStoreVar) {
+                __auto_type name = _t7089.data.IStoreVar.name;
+__auto_type src = _t7089.data.IStoreVar.src;
 #line 273 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(src));
 #line 274 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _var_disp(lf, name));
-            } else if (_t6619.tag == LInst_ILoadGlobal) {
-                __auto_type dst = _t6619.data.ILoadGlobal.dst;
-__auto_type gidx = _t6619.data.ILoadGlobal.gidx;
+            } else if (_t7089.tag == LInst_ILoadGlobal) {
+                __auto_type dst = _t7089.data.ILoadGlobal.dst;
+__auto_type gidx = _t7089.data.ILoadGlobal.gidx;
 #line 276 "src/codegen/native/isa_x64.tr"
                 ByteBuf_u8(c, 72LL);
 #line 277 "src/codegen/native/isa_x64.tr"
@@ -536,9 +536,9 @@ __auto_type gidx = _t6619.data.ILoadGlobal.gidx;
 #line 286 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
                 _tr_obj_release(glr, _trdrop_Reloc);
-            } else if (_t6619.tag == LInst_IStoreGlobal) {
-                __auto_type gidx = _t6619.data.IStoreGlobal.gidx;
-__auto_type src = _t6619.data.IStoreGlobal.src;
+            } else if (_t7089.tag == LInst_IStoreGlobal) {
+                __auto_type gidx = _t7089.data.IStoreGlobal.gidx;
+__auto_type src = _t7089.data.IStoreGlobal.src;
 #line 288 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(src));
 #line 289 "src/codegen/native/isa_x64.tr"
@@ -562,11 +562,11 @@ __auto_type src = _t6619.data.IStoreGlobal.src;
 #line 298 "src/codegen/native/isa_x64.tr"
                 ByteBuf_u32(c, 0LL);
                 _tr_obj_release(gsr, _trdrop_Reloc);
-            } else if (_t6619.tag == LInst_IBinOp) {
-                __auto_type dst = _t6619.data.IBinOp.dst;
-__auto_type op = _t6619.data.IBinOp.op;
-__auto_type a = _t6619.data.IBinOp.a;
-__auto_type b = _t6619.data.IBinOp.b;
+            } else if (_t7089.tag == LInst_IBinOp) {
+                __auto_type dst = _t7089.data.IBinOp.dst;
+__auto_type op = _t7089.data.IBinOp.op;
+__auto_type a = _t7089.data.IBinOp.a;
+__auto_type b = _t7089.data.IBinOp.b;
 #line 300 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(a));
 #line 301 "src/codegen/native/isa_x64.tr"
@@ -599,10 +599,10 @@ __auto_type b = _t6619.data.IBinOp.b;
                 }
 #line 315 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t6619.tag == LInst_ICall) {
-                __auto_type dst = _t6619.data.ICall.dst;
-__auto_type callee = _t6619.data.ICall.callee;
-__auto_type args = _t6619.data.ICall.args;
+            } else if (_t7089.tag == LInst_ICall) {
+                __auto_type dst = _t7089.data.ICall.dst;
+__auto_type callee = _t7089.data.ICall.callee;
+__auto_type args = _t7089.data.ICall.args;
 #line 317 "src/codegen/native/isa_x64.tr"
                 long long ai = 0LL;
 #line 318 "src/codegen/native/isa_x64.tr"
@@ -634,11 +634,11 @@ __auto_type args = _t6619.data.ICall.args;
                     _st_rax(c, _vreg_disp(dst));
                 }
                 _tr_obj_release(r, _trdrop_Reloc);
-            } else if (_t6619.tag == LInst_IFBinOp) {
-                __auto_type dst = _t6619.data.IFBinOp.dst;
-__auto_type op = _t6619.data.IFBinOp.op;
-__auto_type a = _t6619.data.IFBinOp.a;
-__auto_type b = _t6619.data.IFBinOp.b;
+            } else if (_t7089.tag == LInst_IFBinOp) {
+                __auto_type dst = _t7089.data.IFBinOp.dst;
+__auto_type op = _t7089.data.IFBinOp.op;
+__auto_type a = _t7089.data.IFBinOp.a;
+__auto_type b = _t7089.data.IFBinOp.b;
 #line 332 "src/codegen/native/isa_x64.tr"
                 _ld_xmm0(c, _vreg_disp(a));
 #line 333 "src/codegen/native/isa_x64.tr"
@@ -675,9 +675,9 @@ __auto_type b = _t6619.data.IFBinOp.b;
 #line 349 "src/codegen/native/isa_x64.tr"
                     _st_xmm0(c, _vreg_disp(dst));
                 }
-            } else if (_t6619.tag == LInst_IIToF) {
-                __auto_type dst = _t6619.data.IIToF.dst;
-__auto_type src = _t6619.data.IIToF.src;
+            } else if (_t7089.tag == LInst_IIToF) {
+                __auto_type dst = _t7089.data.IIToF.dst;
+__auto_type src = _t7089.data.IIToF.src;
 #line 351 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(src));
 #line 352 "src/codegen/native/isa_x64.tr"
@@ -692,9 +692,9 @@ __auto_type src = _t6619.data.IIToF.src;
                 ByteBuf_u8(c, 192LL);
 #line 357 "src/codegen/native/isa_x64.tr"
                 _st_xmm0(c, _vreg_disp(dst));
-            } else if (_t6619.tag == LInst_IFToI) {
-                __auto_type dst = _t6619.data.IFToI.dst;
-__auto_type src = _t6619.data.IFToI.src;
+            } else if (_t7089.tag == LInst_IFToI) {
+                __auto_type dst = _t7089.data.IFToI.dst;
+__auto_type src = _t7089.data.IFToI.src;
 #line 359 "src/codegen/native/isa_x64.tr"
                 _ld_xmm0(c, _vreg_disp(src));
 #line 360 "src/codegen/native/isa_x64.tr"
@@ -709,10 +709,10 @@ __auto_type src = _t6619.data.IFToI.src;
                 ByteBuf_u8(c, 192LL);
 #line 365 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t6619.tag == LInst_IFCall1) {
-                __auto_type dst = _t6619.data.IFCall1.dst;
-__auto_type callee = _t6619.data.IFCall1.callee;
-__auto_type arg = _t6619.data.IFCall1.arg;
+            } else if (_t7089.tag == LInst_IFCall1) {
+                __auto_type dst = _t7089.data.IFCall1.dst;
+__auto_type callee = _t7089.data.IFCall1.callee;
+__auto_type arg = _t7089.data.IFCall1.arg;
 #line 367 "src/codegen/native/isa_x64.tr"
                 _ld_xmm0(c, _vreg_disp(arg));
 #line 368 "src/codegen/native/isa_x64.tr"
@@ -737,10 +737,10 @@ __auto_type arg = _t6619.data.IFCall1.arg;
                     _st_rax(c, _vreg_disp(dst));
                 }
                 _tr_obj_release(fr, _trdrop_Reloc);
-            } else if (_t6619.tag == LInst_IFCallF) {
-                __auto_type dst = _t6619.data.IFCallF.dst;
-__auto_type callee = _t6619.data.IFCallF.callee;
-__auto_type arg = _t6619.data.IFCallF.arg;
+            } else if (_t7089.tag == LInst_IFCallF) {
+                __auto_type dst = _t7089.data.IFCallF.dst;
+__auto_type callee = _t7089.data.IFCallF.callee;
+__auto_type arg = _t7089.data.IFCallF.arg;
 #line 379 "src/codegen/native/isa_x64.tr"
                 _ld_xmm0(c, _vreg_disp(arg));
 #line 380 "src/codegen/native/isa_x64.tr"
@@ -762,11 +762,11 @@ __auto_type arg = _t6619.data.IFCallF.arg;
 #line 388 "src/codegen/native/isa_x64.tr"
                 _st_xmm0(c, _vreg_disp(dst));
                 _tr_obj_release(ffr, _trdrop_Reloc);
-            } else if (_t6619.tag == LInst_IFCall2F) {
-                __auto_type dst = _t6619.data.IFCall2F.dst;
-__auto_type callee = _t6619.data.IFCall2F.callee;
-__auto_type a = _t6619.data.IFCall2F.a;
-__auto_type b = _t6619.data.IFCall2F.b;
+            } else if (_t7089.tag == LInst_IFCall2F) {
+                __auto_type dst = _t7089.data.IFCall2F.dst;
+__auto_type callee = _t7089.data.IFCall2F.callee;
+__auto_type a = _t7089.data.IFCall2F.a;
+__auto_type b = _t7089.data.IFCall2F.b;
 #line 390 "src/codegen/native/isa_x64.tr"
                 _ld_xmm0(c, _vreg_disp(a));
 #line 391 "src/codegen/native/isa_x64.tr"
@@ -790,23 +790,23 @@ __auto_type b = _t6619.data.IFCall2F.b;
 #line 400 "src/codegen/native/isa_x64.tr"
                 _st_xmm0(c, _vreg_disp(dst));
                 _tr_obj_release(f2r, _trdrop_Reloc);
-            } else if (_t6619.tag == LInst_IBitsF) {
-                __auto_type dst = _t6619.data.IBitsF.dst;
-__auto_type src = _t6619.data.IBitsF.src;
+            } else if (_t7089.tag == LInst_IBitsF) {
+                __auto_type dst = _t7089.data.IBitsF.dst;
+__auto_type src = _t7089.data.IBitsF.src;
 #line 404 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(src));
 #line 405 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t6619.tag == LInst_IFBits) {
-                __auto_type dst = _t6619.data.IFBits.dst;
-__auto_type src = _t6619.data.IFBits.src;
+            } else if (_t7089.tag == LInst_IFBits) {
+                __auto_type dst = _t7089.data.IFBits.dst;
+__auto_type src = _t7089.data.IFBits.src;
 #line 407 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(src));
 #line 408 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t6619.tag == LInst_IAddrVar) {
-                __auto_type dst = _t6619.data.IAddrVar.dst;
-__auto_type name = _t6619.data.IAddrVar.name;
+            } else if (_t7089.tag == LInst_IAddrVar) {
+                __auto_type dst = _t7089.data.IAddrVar.dst;
+__auto_type name = _t7089.data.IAddrVar.name;
 #line 410 "src/codegen/native/isa_x64.tr"
                 ByteBuf_u8(c, 72LL);
 #line 411 "src/codegen/native/isa_x64.tr"
@@ -817,12 +817,12 @@ __auto_type name = _t6619.data.IAddrVar.name;
                 ByteBuf_u32(c, _var_disp(lf, name));
 #line 414 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t6619.tag == LInst_IAddrGlobal) {
+            } else if (_t7089.tag == LInst_IAddrGlobal) {
 #line 419 "src/codegen/native/isa_x64.tr"
                 _emit_return(c, 0LL);
-            } else if (_t6619.tag == LInst_IFuncAddr) {
-                __auto_type dst = _t6619.data.IFuncAddr.dst;
-__auto_type fname = _t6619.data.IFuncAddr.fname;
+            } else if (_t7089.tag == LInst_IFuncAddr) {
+                __auto_type dst = _t7089.data.IFuncAddr.dst;
+__auto_type fname = _t7089.data.IFuncAddr.fname;
 #line 421 "src/codegen/native/isa_x64.tr"
                 ByteBuf_u8(c, 72LL);
 #line 422 "src/codegen/native/isa_x64.tr"
@@ -846,10 +846,10 @@ __auto_type fname = _t6619.data.IFuncAddr.fname;
 #line 431 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
                 _tr_obj_release(fnaddr_r, _trdrop_Reloc);
-            } else if (_t6619.tag == LInst_ICallInd) {
-                __auto_type dst = _t6619.data.ICallInd.dst;
-__auto_type fnreg = _t6619.data.ICallInd.fnreg;
-__auto_type iargs = _t6619.data.ICallInd.args;
+            } else if (_t7089.tag == LInst_ICallInd) {
+                __auto_type dst = _t7089.data.ICallInd.dst;
+__auto_type fnreg = _t7089.data.ICallInd.fnreg;
+__auto_type iargs = _t7089.data.ICallInd.args;
 #line 433 "src/codegen/native/isa_x64.tr"
                 long long ci = 0LL;
 #line 434 "src/codegen/native/isa_x64.tr"
@@ -870,15 +870,15 @@ __auto_type iargs = _t6619.data.ICallInd.args;
 #line 441 "src/codegen/native/isa_x64.tr"
                     _st_rax(c, _vreg_disp(dst));
                 }
-            } else if (_t6619.tag == LInst_IAsm) {
-                __auto_type acode = _t6619.data.IAsm.code;
-__auto_type acons = _t6619.data.IAsm.cons;
+            } else if (_t7089.tag == LInst_IAsm) {
+                __auto_type acode = _t7089.data.IAsm.code;
+__auto_type acons = _t7089.data.IAsm.cons;
 #line 443 "src/codegen/native/isa_x64.tr"
                 /* pass */
-            } else if (_t6619.tag == LInst_ILoad) {
-                __auto_type dst = _t6619.data.ILoad.dst;
-__auto_type base = _t6619.data.ILoad.base;
-__auto_type off = _t6619.data.ILoad.off;
+            } else if (_t7089.tag == LInst_ILoad) {
+                __auto_type dst = _t7089.data.ILoad.dst;
+__auto_type base = _t7089.data.ILoad.base;
+__auto_type off = _t7089.data.ILoad.off;
 #line 446 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(base));
 #line 447 "src/codegen/native/isa_x64.tr"
@@ -891,10 +891,10 @@ __auto_type off = _t6619.data.ILoad.off;
                 ByteBuf_u32(c, off);
 #line 451 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t6619.tag == LInst_IStore) {
-                __auto_type base = _t6619.data.IStore.base;
-__auto_type off = _t6619.data.IStore.off;
-__auto_type src = _t6619.data.IStore.src;
+            } else if (_t7089.tag == LInst_IStore) {
+                __auto_type base = _t7089.data.IStore.base;
+__auto_type off = _t7089.data.IStore.off;
+__auto_type src = _t7089.data.IStore.src;
 #line 453 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(base));
 #line 454 "src/codegen/native/isa_x64.tr"
@@ -907,10 +907,10 @@ __auto_type src = _t6619.data.IStore.src;
                 ByteBuf_u8(c, 136LL);
 #line 458 "src/codegen/native/isa_x64.tr"
                 ByteBuf_u32(c, off);
-            } else if (_t6619.tag == LInst_ILoadB) {
-                __auto_type dst = _t6619.data.ILoadB.dst;
-__auto_type base = _t6619.data.ILoadB.base;
-__auto_type off = _t6619.data.ILoadB.off;
+            } else if (_t7089.tag == LInst_ILoadB) {
+                __auto_type dst = _t7089.data.ILoadB.dst;
+__auto_type base = _t7089.data.ILoadB.base;
+__auto_type off = _t7089.data.ILoadB.off;
 #line 460 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(base));
 #line 461 "src/codegen/native/isa_x64.tr"
@@ -923,10 +923,10 @@ __auto_type off = _t6619.data.ILoadB.off;
                 ByteBuf_u32(c, off);
 #line 465 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t6619.tag == LInst_IStoreB) {
-                __auto_type base = _t6619.data.IStoreB.base;
-__auto_type off = _t6619.data.IStoreB.off;
-__auto_type src = _t6619.data.IStoreB.src;
+            } else if (_t7089.tag == LInst_IStoreB) {
+                __auto_type base = _t7089.data.IStoreB.base;
+__auto_type off = _t7089.data.IStoreB.off;
+__auto_type src = _t7089.data.IStoreB.src;
 #line 467 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(base));
 #line 468 "src/codegen/native/isa_x64.tr"
@@ -942,24 +942,24 @@ __auto_type src = _t6619.data.IStoreB.src;
             ii = (ii + 1LL);
         }
 #line 474 "src/codegen/native/isa_x64.tr"
-        __auto_type _t6620 = blk->term;
-        if (_t6620.tag == LTerm_TRetInt) {
-            __auto_type rv = _t6620.data.TRetInt.v;
+        __auto_type _t7090 = blk->term;
+        if (_t7090.tag == LTerm_TRetInt) {
+            __auto_type rv = _t7090.data.TRetInt.v;
 #line 476 "src/codegen/native/isa_x64.tr"
             _emit_return(c, rv);
-        } else if (_t6620.tag == LTerm_TRetVal) {
-            __auto_type rvreg = _t6620.data.TRetVal.v;
+        } else if (_t7090.tag == LTerm_TRetVal) {
+            __auto_type rvreg = _t7090.data.TRetVal.v;
 #line 478 "src/codegen/native/isa_x64.tr"
             _ld_rax(c, _vreg_disp(rvreg));
 #line 479 "src/codegen/native/isa_x64.tr"
             ByteBuf_u8(c, 201LL);
 #line 480 "src/codegen/native/isa_x64.tr"
             ByteBuf_u8(c, 195LL);
-        } else if (_t6620.tag == LTerm_TRetVoid) {
+        } else if (_t7090.tag == LTerm_TRetVoid) {
 #line 482 "src/codegen/native/isa_x64.tr"
             _emit_return(c, 0LL);
-        } else if (_t6620.tag == LTerm_TBr) {
-            __auto_type target = _t6620.data.TBr.target;
+        } else if (_t7090.tag == LTerm_TBr) {
+            __auto_type target = _t7090.data.TBr.target;
 #line 484 "src/codegen/native/isa_x64.tr"
             ByteBuf_u8(c, 233LL);
 #line 485 "src/codegen/native/isa_x64.tr"
@@ -973,10 +973,10 @@ __auto_type src = _t6619.data.IStoreB.src;
 #line 489 "src/codegen/native/isa_x64.tr"
             ByteBuf_u32(c, 0LL);
             _tr_obj_release(jp, _trdrop_Jump);
-        } else if (_t6620.tag == LTerm_TCondBr) {
-            __auto_type cond = _t6620.data.TCondBr.cond;
-__auto_type tb = _t6620.data.TCondBr.then_b;
-__auto_type eb = _t6620.data.TCondBr.else_b;
+        } else if (_t7090.tag == LTerm_TCondBr) {
+            __auto_type cond = _t7090.data.TCondBr.cond;
+__auto_type tb = _t7090.data.TCondBr.then_b;
+__auto_type eb = _t7090.data.TCondBr.else_b;
 #line 491 "src/codegen/native/isa_x64.tr"
             _ld_rax(c, _vreg_disp(cond));
 #line 492 "src/codegen/native/isa_x64.tr"
@@ -1014,7 +1014,7 @@ __auto_type eb = _t6620.data.TCondBr.else_b;
             _tr_obj_release(jp2, _trdrop_Jump);
             _tr_obj_release(jp3, _trdrop_Jump);
         } else if (1) {
-            __auto_type _ = _t6620;
+            __auto_type _ = _t7090;
 #line 509 "src/codegen/native/isa_x64.tr"
             _emit_return(c, 0LL);
         }
@@ -1028,7 +1028,7 @@ __auto_type eb = _t6620.data.TCondBr.else_b;
 #line 515 "src/codegen/native/isa_x64.tr"
         Jump* j = ((Jump*)List_ptr_get(jumps, ji));
 #line 516 "src/codegen/native/isa_x64.tr"
-        long long rel = ({ __auto_type _ord_t6621 = (List_i64_get(block_start, j->target)); __auto_type _wr = ((_ord_t6621 - (j->patch_off + 4LL))); _wr; });
+        long long rel = ({ __auto_type _ord_t7091 = (List_i64_get(block_start, j->target)); __auto_type _wr = ((_ord_t7091 - (j->patch_off + 4LL))); _wr; });
 #line 517 "src/codegen/native/isa_x64.tr"
         ByteBuf_patch_u32(c, j->patch_off, rel);
 #line 518 "src/codegen/native/isa_x64.tr"
