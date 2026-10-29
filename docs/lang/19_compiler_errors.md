@@ -644,6 +644,16 @@ mut n: int = "3"       # E-5: the initializer of 'n'
 mut s = "a" + 1        # E-5: cannot apply '+' to a str and a int
 ```
 
+Also covered: conditions (`if` / `elif` / `while` / `and` / `or` / `not` /
+`assert` / `a if c else b`) that are certainly a str, tuple or Option; the two
+branches of a conditional expression having different kinds; `for` / comprehension
+sources that are numbers or None, and non-int `range()` arguments; `return`
+with a value in a function without a return type (or without a value in a typed
+one); using a value-less call (`mut x = f()`, `print(f())`); `len()` of a number;
+`s[i] = c` on a str; str / Option / non-int arguments where a Pointer, Option or
+int index is required; wrong key / value / element / arity in Dict, Set and Tuple
+literals; `~` and shifts on non-integers; `case 3:` against a str, and so on.
+
 **FIX:** Convert explicitly (`str(x)`, `int(s)`, `float(x)`) or pass the right value.
 The check is deliberately conservative: it stays silent whenever the type of an
 expression is not known for certain, so it never rejects a valid program.

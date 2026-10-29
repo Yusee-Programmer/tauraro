@@ -1150,9 +1150,62 @@ extend Sema:
         if act == "None" and (exp_scalar or exp == "List" or exp == "Dict" or exp == "Tuple"): return true
         if act == "class" and (exp_scalar or exp == "List" or exp == "Dict" or exp == "Tuple"): return true
         if act == "Option" and (exp_scalar or exp == "List" or exp == "Dict" or exp == "class"): return true
+        if exp == "Option" and (act_scalar or act == "List" or act == "Dict" or act == "Tuple"): return true
         if exp == "Tuple" and act != "Tuple": return act_scalar or act == "List" or act == "Dict"
         if act == "Tuple" and exp != "Tuple": return exp_scalar or exp == "List" or exp == "Dict" or exp == "class"
         return false
+
+    # A condition (if / while / and / or / assert / ternary) must be a bool-like value: a string, tuple or
+    # Option has no truth value in the generated code.
+    pub def check_bool_ctx(self, h: Pointer[HirExpr], what: str):
+        mut bf = self.firm_family(h)
+        if bf == "str" or bf == "Tuple" or bf == "Option" or bf == "Result":
+            self.error("[E-5] Type mismatch: " + what + " must be a bool, but it is " + self.family_word(bf) + ".\n      FIX: write an explicit comparison, e.g. `s != \"\"` / `len(t) > 0` / `o.is_some()`.")
+
+    # `for x in <iter>` / comprehension source: numbers and None cannot be iterated; range() takes ints.
+    pub def check_iterable(self, h: Pointer[HirExpr]):
+        mut itf = self.firm_family(h)
+        if itf == "int" or itf == "float" or itf == "bool" or itf == "None":
+            self.error("[E-5] Type mismatch: cannot loop over " + self.family_word(itf) + ".\n      FIX: iterate over a list, string, dict, set or range(n) (use `for i in range(n):` to count).")
+            return
+        match h.read():
+            case HirExpr.ECall(rc, rargs, _):
+                match rc.read():
+                    case HirExpr.EIdent(rfn, _, _):
+                        if rfn == "range" and self.resolve("range").kind == SymbolKind.SFunction and not self.fn_defs.contains("range"):
+                            mut ri = 0
+                            while ri < rargs.len:
+                                mut raf = self.firm_family(rargs.get(ri))
+                                if raf == "str" or raf == "float" or raf == "List" or raf == "Dict" or raf == "Tuple" or raf == "None" or raf == "Option":
+                                    self.error("[E-5] Type mismatch: argument " + (ri + 1).to_str() + " of range() must be an int but is " + self.family_word(raf) + ".\n      FIX: pass integers, e.g. range(0, n) (convert with int(x) if needed).")
+                                    break
+                                ri = ri + 1
+                    case _: pass
+            case _: pass
+
+    # A call to a plain user function that is declared without a return type produces no value.
+    pub def check_not_void_call(self, h: Pointer[HirExpr], what: str):
+        if _is_invalid_ptr(h as usize): return
+        match h.read():
+            case HirExpr.ECall(vc, _, _):
+                match vc.read():
+                    case HirExpr.EIdent(vfn, _, _):
+                        if self.fn_defs.contains(vfn) and not self.classes.contains(vfn) and self.resolve(vfn).kind == SymbolKind.SFunction:
+                            mut vfd = self.fn_defs.get(vfn)
+                            if vfd.generics.len == 0 and not vfd.is_async and not vfd.is_extern and vfd.throws_ty as usize == 0 as usize and (vfd.ret_ty as usize == 0 as usize or vfd.ret_ty.read().name == "void"):
+                                self.error("[E-5] Type mismatch: " + what + " is a call to '" + vfn + "()', which returns no value.\n      FIX: give '" + vfn + "' a return type (`-> <type>`) and return a value, or call it as a statement.")
+                    case _: pass
+            case _: pass
+
+    # `case 3:` / `case "a":` against a scrutinee that is certainly of another kind.
+    pub def check_lit_pattern(self, sf: str, pf: str):
+        if sf == "" or sf == pf: return
+        mut bad = false
+        if pf == "str": bad = sf == "int" or sf == "float" or sf == "bool" or sf == "List" or sf == "Dict" or sf == "Tuple" or sf == "class"
+        if pf == "int": bad = sf == "str" or sf == "List" or sf == "Dict" or sf == "Tuple" or sf == "class"
+        if pf == "bool": bad = sf == "str" or sf == "List" or sf == "Dict" or sf == "Tuple" or sf == "class"
+        if bad:
+            self.error("[E-5] Type mismatch: this 'case' pattern is " + self.family_word(pf) + " literal but the value being matched is " + self.family_word(sf) + ".\n      FIX: use a pattern of the same type as the matched value.")
 
     pub def family_word(self, fam: str) -> str:
         if fam == "class": return "a class/enum value"
@@ -1175,6 +1228,13 @@ extend Sema:
                             self.error("[E-5] Type mismatch: " + what + " is a " + exp_ty.name + "[" + elt.name + "] but its element " + (li + 1).to_str() + " is " + self.family_word(self.firm_family(items.get(li))) + ".\n      FIX: make every element a '" + elt.name + "'.")
                             break
                         li = li + 1
+                case HirExpr.ESet(items, _):
+                    mut si2 = 0
+                    while si2 < items.len:
+                        if self.family_mismatch(self.decl_family(elt), self.firm_family(items.get(si2))):
+                            self.error("[E-5] Type mismatch: " + what + " is a " + exp_ty.name + "[" + elt.name + "] but its element " + (si2 + 1).to_str() + " is " + self.family_word(self.firm_family(items.get(si2))) + ".\n      FIX: make every element a '" + elt.name + "'.")
+                            break
+                        si2 = si2 + 1
                 case HirExpr.EMethodCall(cmo, cmm, _, _):
                     # `Vec[Obj] = Vec[int].init(4)`: the constructor's element type must be the declared one
                     if cmm == "init" or cmm == "new":
@@ -1185,6 +1245,32 @@ extend Sema:
                             mut def_ = self.decl_family(elt)
                             if cef != "" and def_ != "" and (self.family_mismatch(def_, cef) or (cef == "class" and def_ == "class" and cen != elt.name)):
                                 self.error("[E-5] Type mismatch: " + what + " is a " + exp_ty.name + "[" + elt.name + "] but is given a " + cty.name + "[" + cen + "].\n      FIX: construct it with the declared element type: " + cty.name + "[" + elt.name + "].init(...).")
+                case _: pass
+        if (exp_ty.name == "Dict" or exp_ty.name == "Map") and exp_ty.args.len == 2 and not _is_invalid_ptr(e as usize):
+            match e.read():
+                case HirExpr.EDict(dks, dvs, _):
+                    mut di2 = 0
+                    while di2 < dks.len and di2 < dvs.len:
+                        if self.family_mismatch(self.decl_family(exp_ty.args.get(0).read()), self.firm_family(dks.get(di2))):
+                            self.error("[E-5] Type mismatch: " + what + " is a " + exp_ty.name + "[" + exp_ty.args.get(0).read().name + ", " + exp_ty.args.get(1).read().name + "] but its key " + (di2 + 1).to_str() + " is " + self.family_word(self.firm_family(dks.get(di2))) + ".\n      FIX: make every key a '" + exp_ty.args.get(0).read().name + "'.")
+                            break
+                        if self.family_mismatch(self.decl_family(exp_ty.args.get(1).read()), self.firm_family(dvs.get(di2))):
+                            self.error("[E-5] Type mismatch: " + what + " is a " + exp_ty.name + "[" + exp_ty.args.get(0).read().name + ", " + exp_ty.args.get(1).read().name + "] but its value " + (di2 + 1).to_str() + " is " + self.family_word(self.firm_family(dvs.get(di2))) + ".\n      FIX: make every value a '" + exp_ty.args.get(1).read().name + "'.")
+                            break
+                        di2 = di2 + 1
+                case _: pass
+        if (exp_ty.name == "Tuple" or exp_ty.name == "tuple") and exp_ty.args.len > 0 and not _is_invalid_ptr(e as usize):
+            match e.read():
+                case HirExpr.ETuple(tis, _):
+                    if tis.len != exp_ty.args.len:
+                        self.error("[E-5] Type mismatch: " + what + " is a Tuple of " + exp_ty.args.len.to_str() + " elements but is given a tuple of " + tis.len.to_str() + ".\n      FIX: give exactly " + exp_ty.args.len.to_str() + " values, one per declared element type.")
+                    else:
+                        mut ti2 = 0
+                        while ti2 < tis.len:
+                            if self.family_mismatch(self.decl_family(exp_ty.args.get(ti2).read()), self.firm_family(tis.get(ti2))):
+                                self.error("[E-5] Type mismatch: element " + (ti2 + 1).to_str() + " of " + what + " should be '" + exp_ty.args.get(ti2).read().name + "' but is " + self.family_word(self.firm_family(tis.get(ti2))) + ".\n      FIX: give each tuple element the declared type.")
+                                break
+                            ti2 = ti2 + 1
                 case _: pass
         # (checked inside unsafe: too - these are plain type / arity facts)
         mut ef = self.decl_family(exp_ty)
@@ -5184,6 +5270,9 @@ extend Sema:
         if f.ret_ty as usize != 0 as usize and not f.is_extern: self.check_type_known(f.ret_ty, "the return type of '" + f.name + "'")
         if f.ret_ty as usize != 0 as usize and f.generics.len == 0:
             self.current_func_ret_family = self.decl_family(f.ret_ty.read())
+            if f.ret_ty.read().name == "void" and not f.is_async and f.throws_ty as usize == 0 as usize: self.current_func_ret_family = "void"
+        elif f.ret_ty as usize == 0 as usize and f.generics.len == 0 and not f.is_async and not f.is_extern and f.throws_ty as usize == 0 as usize:
+            self.current_func_ret_family = "void"
         mut saved_ret_regions = self.current_func_ret_regions
         mut saved_outlives_a = self.current_func_outlives_a
         mut saved_outlives_b = self.current_func_outlives_b
@@ -5798,11 +5887,13 @@ extend Sema:
                                     if ret_sym.ty.read().name == "Pointer":
                                         self.error("[L-1] '" + ret_name + "' is a local Pointer that may not outlive this function call. Returning it is unsafe.\n      FIX: Annotate the return type with 'from <param>' if the pointer borrows from a parameter, or wrap the allocation in 'unsafe:' if it is heap-allocated.")
                         case _: pass
-                if e as usize == 0 as usize and self.current_func_ret_family != "" and self.current_func_ret_family != "Option" and self.current_func_ret_family != "Result" and self.current_func_ret_family != "Pointer":
+                if e as usize == 0 as usize and self.current_func_ret_family != "" and self.current_func_ret_family != "void" and self.current_func_ret_family != "Option" and self.current_func_ret_family != "Result" and self.current_func_ret_family != "Pointer":
                     mut _br_who = "'" + self.current_func_name + "'"
                     if self.closure_depth > 0: _br_who = "this closure"
                     self.error("[E-5] Type mismatch: " + _br_who + " is declared to return " + self.family_word(self.current_func_ret_family) + " but this 'return' has no value.\n      FIX: return a value of the declared type, or remove the return type if the function returns nothing.")
                 mut _ret_h = self.lower_expr(e)
+                if e as usize != 0 as usize and self.current_func_ret_family == "void" and self.closure_depth == 0 and self.firm_family(_ret_h) != "":
+                    self.error("[E-5] Type mismatch: '" + self.current_func_name + "' has no return type but this returns " + self.family_word(self.firm_family(_ret_h)) + ".\n      FIX: declare the return type (`def " + self.current_func_name + "(...) -> <type>:`) or remove the value.")
                 if e as usize != 0 as usize and self.current_func_ret_family != "":
                     mut _rf = self.firm_family(_ret_h)
                     if self.family_mismatch(self.current_func_ret_family, _rf):
@@ -5826,6 +5917,7 @@ extend Sema:
                     self._check_ty_arity(ty_ptr, "'" + name + "' declaration", 0)
                     self.check_type_known(ty_ptr, "the declaration of '" + name + "'")
                 mut hval = self.lower_expr(val_ptr)
+                self.check_not_void_call(hval, "the initializer of '" + name + "'")
                 if ty.name != "void" and ty.name != "None": hval = self._patch_empty_dict_hint(hval, ty)
                 if ty_ptr as usize != 0 as usize and val_ptr as usize != 0 as usize:
                     self.check_fn_value_throws(ty_ptr, hir_expr_type(hval), "the initializer of '" + name + "'")
@@ -6054,6 +6146,10 @@ extend Sema:
                         case HirExpr.EIndex(_io, _, _):
                             # `items[i] = v`: v must fit the element type of a List[T] / Vec[T] declared variable
                             mut _io_ty = self.firm_type(_io)
+                            if self.firm_family(_io) == "str":
+                                self.error("[E-5] Type mismatch: a str cannot be modified through an index.\n      FIX: strings are immutable; build a new string (slice + replacement) or use a List of chars.")
+                            if (_io_ty.name == "Dict" or _io_ty.name == "Map") and _io_ty.args.len == 2:
+                                self.check_expr_assignable(_io_ty.args.get(1).read(), hv, "a value of this " + _io_ty.name + "[" + _io_ty.args.get(0).read().name + ", " + _io_ty.args.get(1).read().name + "]")
                             if (_io_ty.name == "List" or _io_ty.name == "Vec") and _io_ty.args.len == 1:
                                 self.check_expr_assignable(_io_ty.args.get(0).read(), hv, "an element of this " + _io_ty.name + "[" + _io_ty.args.get(0).read().name + "]")
                         case _: pass
@@ -6173,6 +6269,7 @@ extend Sema:
                 self.branch_moved_buf = Vec[str].init(4)
                 self.branch_init_buf = Vec[str].init(4)
                 mut hcond = self.lower_expr(cond)
+                self.check_bool_ctx(hcond, "an 'if' condition")
                 self.block_depth = self.block_depth + 1
                 self.open_block()
                 mut hthen = self.lower_block(then_b)
@@ -6213,6 +6310,7 @@ extend Sema:
                     while k >= 0:
                         mut elif_c = elifs.get(k)
                         mut elif_cond = self.lower_expr(elif_c.cond)
+                        self.check_bool_ctx(elif_cond, "an 'elif' condition")
                         self.open_block()
                         mut elif_body = self.lower_block(elif_c.body.read())
                         self.close_block()
@@ -6296,6 +6394,7 @@ extend Sema:
                 return box_hirstmt(HirStmt.SIf(hcond, hthen, helse))
             case Stmt.SWhile(cond, body, decorators):
                 mut sw_cond = self.lower_expr(cond)
+                self.check_bool_ctx(sw_cond, "a 'while' condition")
                 # Fix 1+4: loop body might not run -> all moves/inits are "maybe"
                 mut sw_outer_cap_m = self.capturing_moves
                 mut sw_outer_buf_m = self.branch_moved_buf
@@ -6343,6 +6442,7 @@ extend Sema:
                     self.error("[N-1] '" + var + "' cannot be used as a loop variable.\n      FIX: choose a different name for the loop variable.")
                 self.enter_scope()
                 mut h_iter_for = self.lower_expr(iter)
+                self.check_iterable(h_iter_for)
                 mut var_ty_for = AstType.init("int")
                 mut iter_hn = hir_expr_type(h_iter_for).name
                 mut iter_hal = hir_expr_type(h_iter_for).args.len
@@ -6417,6 +6517,7 @@ extend Sema:
             case Stmt.SForUnpack(vars, iter, body):
                 self.enter_scope()
                 mut h_iter_fu = self.lower_expr(iter)
+                self.check_iterable(h_iter_fu)
                 # Infer per-variable types from the iterator kind
                 mut fu_tys = Vec[AstType].init(vars.len)
                 mut fu_ti = 0
@@ -6479,6 +6580,9 @@ extend Sema:
                             if not ex_guarded: ex_has_wild = true
                         case Pattern.PBind(_):
                             if not ex_guarded: ex_has_wild = true
+                        case Pattern.PLitInt(_): self.check_lit_pattern(self.firm_family(hsubj), "int")
+                        case Pattern.PLitStr(_, _): self.check_lit_pattern(self.firm_family(hsubj), "str")
+                        case Pattern.PLitBool(_): self.check_lit_pattern(self.firm_family(hsubj), "bool")
                         case Pattern.PVariant(_, ex_vn):
                             if not ex_guarded: ex_covered.push(ex_vn)
                         case Pattern.PVariantBind(_, ex_vn2, _):
@@ -6564,7 +6668,10 @@ extend Sema:
                 self.close_block()
                 return box_hirstmt(HirStmt.STry(h_try_body, h_catches, h_finally_b))
             case Stmt.SRaise(e): return box_hirstmt(HirStmt.SRaise(self.lower_expr(e)))
-            case Stmt.SAssert(cond, msg): return box_hirstmt(HirStmt.SAssert(self.lower_expr(cond), self.lower_expr(msg)))
+            case Stmt.SAssert(cond, msg):
+                mut _as_c = self.lower_expr(cond)
+                self.check_bool_ctx(_as_c, "an assert condition")
+                return box_hirstmt(HirStmt.SAssert(_as_c, self.lower_expr(msg)))
             case Stmt.SDefer(inner):
                 return box_hirstmt(HirStmt.SDefer(self.lower_stmt(inner)))
             case Stmt.SWith(items, aliases, body):
@@ -7138,12 +7245,15 @@ extend Sema:
                     self.check_not_type_value(right)
                     self.check_not_fn_operand(left, op)
                     self.check_not_fn_operand(right, op)
+                if op == "and" or op == "or" or op == "&&" or op == "||":
+                    self.check_bool_ctx(hleft, "an operand of '" + op + "'")
+                    self.check_bool_ctx(hright, "an operand of '" + op + "'")
                 if true:
                     mut _bo_lf = self.firm_family(hleft)
                     mut _bo_rf = self.firm_family(hright)
                     mut _bo_bad = _bo_rf
-                    if _bo_lf == "str" or _bo_lf == "List" or _bo_lf == "Dict": _bo_bad = _bo_lf
-                    if (op == "|" or op == "&" or op == "^" or op == "<<" or op == ">>") and (_bo_lf == "str" or _bo_rf == "str" or _bo_lf == "List" or _bo_rf == "List" or _bo_lf == "Dict" or _bo_rf == "Dict"):
+                    if _bo_lf == "str" or _bo_lf == "List" or _bo_lf == "Dict" or _bo_lf == "float": _bo_bad = _bo_lf
+                    if (op == "|" or op == "&" or op == "^" or op == "<<" or op == ">>") and (_bo_lf == "float" or _bo_rf == "float" or _bo_lf == "str" or _bo_rf == "str" or _bo_lf == "List" or _bo_rf == "List" or _bo_lf == "Dict" or _bo_rf == "Dict"):
                         self.error("[E-5] Type mismatch: '" + op + "' needs integer operands, but one side is " + self.family_word(_bo_bad) + ".\n      FIX: convert it to an int first.")
                     if (_bo_lf == "Tuple" or _bo_rf == "Tuple" or _bo_lf == "Dict" or _bo_rf == "Dict") and (op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**") and not ((_bo_lf == "Tuple" and _bo_rf == "Tuple") and op == "+"):
                         mut _bo_t = _bo_lf
@@ -7214,6 +7324,18 @@ extend Sema:
                 mut hexpr_inner = self.lower_expr(expr)
                 if (op == "-" or op == "+") and self.firm_family(hexpr_inner) == "str":
                     self.error("[E-5] Type mismatch: unary '" + op + "' cannot be applied to a str.\n      FIX: convert it first, e.g. -int(s).")
+                if op == "not":
+                    mut _nf = self.firm_family(hexpr_inner)
+                    if _nf == "str" or _nf == "List" or _nf == "Dict" or _nf == "Tuple" or _nf == "Option" or _nf == "Pointer" or _nf == "Result":
+                        self.error("[E-5] Type mismatch: 'not' cannot be applied to " + self.family_word(_nf) + ".\n      FIX: negate a bool; for emptiness / absence write an explicit test, e.g. `len(x) == 0` or `x.is_none()`.")
+                if op == "~":
+                    mut _tf = self.firm_family(hexpr_inner)
+                    if _tf == "str" or _tf == "float" or _tf == "List" or _tf == "Dict" or _tf == "Tuple":
+                        self.error("[E-5] Type mismatch: '~' needs an integer operand, but it is " + self.family_word(_tf) + ".\n      FIX: convert it to an int first.")
+                if op == "-" or op == "+":
+                    mut _uf = self.firm_family(hexpr_inner)
+                    if _uf == "List" or _uf == "Dict" or _uf == "Tuple" or _uf == "None" or _uf == "Option":
+                        self.error("[E-5] Type mismatch: unary '" + op + "' cannot be applied to " + self.family_word(_uf) + ".\n      FIX: check that the variable holds the number you meant.")
                 mut inner_ty = hir_expr_type(hexpr_inner)
                 mut un_ty = inner_ty
                 if op == "&":
@@ -7416,6 +7538,15 @@ extend Sema:
                             # A generic fn returning its type param (-> T) yields the
                             # CONCRETE type of the first argument declared as that T
                             # (otherwise `mut a = largest(1, 2)` emits a `T*` local).
+                            if (n == "len" or n == "print" or n == "str" or n == "int" or n == "float") and not self.fn_defs.contains(n) and not self.extern_defs.contains(n) and self.resolve(n).kind == SymbolKind.SFunction:
+                                mut _bi = 0
+                                while _bi < hl.len:
+                                    self.check_not_void_call(hl.get(_bi), "argument " + (_bi + 1).to_str() + " of '" + n + "()'")
+                                    _bi = _bi + 1
+                                if n == "len" and hl.len == 1:
+                                    mut _lf = self.firm_family(hl.get(0))
+                                    if _lf == "int" or _lf == "float" or _lf == "bool" or _lf == "None":
+                                        self.error("[E-5] Type mismatch: len() needs a string, list, dict or set, but is given " + self.family_word(_lf) + ".\n      FIX: len() counts elements; for a number use str(x).len() or compare the value directly.")
                             if self.extern_defs.contains(n) and not self.fn_defs.contains(n) and self.resolve(n).kind != SymbolKind.SVariable:
                                 self.check_call_args(self.extern_defs.get(n), hl, 0, "'" + n + "()'")
                             if self.fn_defs.contains(n):
@@ -8887,6 +9018,11 @@ extend Sema:
                 mut hcond = self.lower_expr(cond)
                 mut hthen = self.lower_expr(then_e)
                 mut helse = self.lower_expr(else_e)
+                self.check_bool_ctx(hcond, "the condition of this conditional expression")
+                mut _te_a = self.firm_family(hthen)
+                mut _te_b = self.firm_family(helse)
+                if _te_a != "None" and _te_b != "None" and _te_a != "Option" and _te_b != "Option" and (self.family_mismatch(_te_a, _te_b) or self.family_mismatch(_te_b, _te_a)):
+                    self.error("[E-5] Type mismatch: the two branches of this conditional expression have different types (" + self.family_word(_te_a) + " and " + self.family_word(_te_b) + ").\n      FIX: make both branches the same type, converting one with str(x) / int(x) if needed.")
                 mut ite_ty = hir_expr_type(hthen)
                 return box_hirexpr(HirExpr.EIfElse(hcond, hthen, helse, ite_ty))
             case Expr.EDo(do_body):
@@ -9011,6 +9147,7 @@ extend Sema:
                     mut hgen_val = HirComprehension()
                     hgen_val.target = gen_ast.target
                     mut h_iter_lc = self.lower_expr(gen_ast.iter)
+                    self.check_iterable(h_iter_lc)
                     hgen_val.iter = h_iter_lc
                     mut lc_itn = hir_expr_type(h_iter_lc).name
                     mut lc_ial = hir_expr_type(h_iter_lc).args.len
@@ -9048,6 +9185,7 @@ extend Sema:
                     mut hgen_val2 = HirComprehension()
                     hgen_val2.target = gen_ast2.target
                     mut h_iter_ge = self.lower_expr(gen_ast2.iter)
+                    self.check_iterable(h_iter_ge)
                     hgen_val2.iter = h_iter_ge
                     mut ge_itn = hir_expr_type(h_iter_ge).name
                     mut ge_ial = hir_expr_type(h_iter_ge).args.len
