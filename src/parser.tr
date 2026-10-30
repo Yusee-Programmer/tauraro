@@ -1322,15 +1322,21 @@ extend Parser:
         self.expect_newline()
         return box_stmt(Stmt.SLet(name, Ownership.Own, false, true, false, ty_ptr, val_ptr))
 
-    pub def parse_if_stmt(self) -> Pointer[Stmt]:
-        self.pos = self.pos + 1
-        cond = self.parse_expr()
+    # After the condition of `if` / `elif` / `while`: the ':' that opens the block.
+    pub def require_colon_after_cond(self, kw: str):
+        mut _cc_ln = self.cur_line()
+        if self.pos > 0 and self.pos - 1 < self.lines.len: _cc_ln = self.lines.get(self.pos - 1)
         self.skip_newlines()
         match self.peek():
             case Token.Colon:
                 self.pos = self.pos + 1
             case _:
-                pass
+                self.emit_diag_at(_cc_ln, 0, "expected ':' after the condition of '" + kw + "'", "write '" + kw + " condition:' followed by an indented block.")
+
+    pub def parse_if_stmt(self) -> Pointer[Stmt]:
+        self.pos = self.pos + 1
+        cond = self.parse_expr()
+        self.require_colon_after_cond("if")
         then_b = self.parse_block()
         mut elifs = Vec[ElifClause].init(2)
         mut else_b = Block.init()
@@ -1342,12 +1348,7 @@ extend Parser:
                 case Token.KwElif:
                     self.pos = self.pos + 1
                     ec = self.parse_expr()
-                    self.skip_newlines()
-                    match self.peek():
-                        case Token.Colon:
-                            self.pos = self.pos + 1
-                        case _:
-                            pass
+                    self.require_colon_after_cond("elif")
                     eb = self.parse_block()
                     unsafe:
                         mut eb_ptr = alloc[Block](1)
@@ -1370,12 +1371,7 @@ extend Parser:
     pub def parse_while_stmt(self) -> Pointer[Stmt]:
         self.pos = self.pos + 1
         cond = self.parse_expr()
-        self.skip_newlines()
-        match self.peek():
-            case Token.Colon:
-                self.pos = self.pos + 1
-            case _:
-                pass
+        self.require_colon_after_cond("while")
         body = self.parse_block()
         return box_stmt(Stmt.SWhile(cond, body, Vec[Decorator].init(0)))
 

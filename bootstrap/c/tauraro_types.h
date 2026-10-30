@@ -3869,6 +3869,7 @@ __attribute__((hot)) Stmt* Parser_parse_gpu_stmt(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_let_stmt(Parser* self, bool is_mut);
 __attribute__((hot)) Stmt* Parser_parse_shared_let_stmt(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_const_let_stmt(Parser* self);
+__attribute__((hot)) void Parser_require_colon_after_cond(Parser* self, TrStr kw);
 __attribute__((hot)) Stmt* Parser_parse_if_stmt(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_while_stmt(Parser* self);
 __attribute__((hot)) Stmt* Parser_parse_loop_stmt(Parser* self);

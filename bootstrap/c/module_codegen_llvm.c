@@ -35,9 +35,9 @@ __attribute__((hot)) TrStr LlvmGenerator_generate_nh(LlvmGenerator* self, HirPro
 #line 47 "src/codegen/llvm/mod.tr"
     LlvmEmitter* e = LlvmEmitter_init(m);
 #line 48 "src/codegen/llvm/mod.tr"
-    TrStr _trret1889 = LlvmEmitter_emit_module(e);
+    TrStr _trret1897 = LlvmEmitter_emit_module(e);
     _tr_obj_release(m, _trdrop_LModule);
     _tr_obj_release(e, _trdrop_LlvmEmitter);
-    return _trret1889;
+    return _trret1897;
 }
 

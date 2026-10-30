@@ -1,0 +1,12 @@
+# Python-style pow(a, b) and divmod(a, b) builtins.
+from std.test import TestRunner
+
+def main():
+    mut t = TestRunner.init("pow_divmod_builtins")
+    a = 17
+    t.assert_eq_int(pow(2, 10), 1024, "pow int")
+    t.assert_true(pow(2.0, 0.5) > 1.41, "pow float")
+    q, r = divmod(a, 5)
+    t.assert_eq_int(q, 3, "divmod quotient")
+    t.assert_eq_int(r, 2, "divmod remainder")
+    t.summary()

@@ -1166,11 +1166,25 @@ extend Sema:
                 return ""
             case HirExpr.ECall(callee, _, _):
                 match callee.read():
-                    case HirExpr.EIdent(fn, _, _):
+                    case HirExpr.EIdent(fn0, _, _):
+                        # `f[T](..)` is lowered to a call of `f__MONO_T`: judge it by `f`'s declaration
+                        mut fn = fn0
+                        mut _mn_i = 0
+                        while _mn_i + 7 <= fn0.len():
+                            if fn0.slice(_mn_i, _mn_i + 7) == "__MONO_":
+                                fn = fn0.slice(0, _mn_i)
+                                break
+                            _mn_i = _mn_i + 1
                         if self.classes.contains(fn) and self.resolve(fn).kind != SymbolKind.SVariable and self.decl_family(AstType.init(fn)) == "class": return "class"
                         if self.fn_defs.contains(fn):
                             mut fd = self.fn_defs.get(fn)
-                            if fd.generics.len > 0 or fd.is_extern or fd.ret_ty as usize == 0 as usize: return ""
+                            if fd.is_extern or fd.ret_ty as usize == 0 as usize: return ""
+                            if fd.generics.len > 0:
+                                # a generic function whose declared result is a plain scalar does not depend on T
+                                mut _gr = fd.ret_ty.read()
+                                if _gr.args.len == 0 and (_gr.name == "int" or _gr.name == "float" or _gr.name == "bool" or _gr.name == "str") and not (fd.throws_ty as usize != 0 as usize and fd.throws_ty.read().name != ""):
+                                    return _gr.name
+                                return ""
                             if fd.throws_ty as usize != 0 as usize and fd.throws_ty.read().name != "": return ""
                             return self.decl_family(fd.ret_ty.read())
                         if self.extern_defs.contains(fn) and not self.fn_defs.contains(fn):
@@ -1184,6 +1198,17 @@ extend Sema:
                             if fn == "int" or fn == "len": return "int"
                             if fn == "float": return "float"
                         return ""
+                    case HirExpr.EIndex(gcb, _, _):
+                        # explicit-generic call `f[T](..)` of a generic function with a plain scalar result
+                        match gcb.read():
+                            case HirExpr.EIdent(gfn, _, _):
+                                if self.fn_defs.contains(gfn) and not self.classes.contains(gfn) and self.resolve(gfn).kind != SymbolKind.SVariable:
+                                    mut gfd = self.fn_defs.get(gfn)
+                                    if gfd.generics.len > 0 and not gfd.is_extern and gfd.ret_ty as usize != 0 as usize and not (gfd.throws_ty as usize != 0 as usize and gfd.throws_ty.read().name != ""):
+                                        mut _gr2 = gfd.ret_ty.read()
+                                        if _gr2.args.len == 0 and (_gr2.name == "int" or _gr2.name == "float" or _gr2.name == "bool" or _gr2.name == "str"): return _gr2.name
+                                return ""
+                            case _: return ""
                     case _: return ""
             case _: return ""
         return ""
@@ -1210,6 +1235,7 @@ extend Sema:
     # A condition (if / while / and / or / assert / ternary) must be a bool-like value: a string, tuple or
     # Option has no truth value in the generated code.
     pub def check_bool_ctx(self, h: Pointer[HirExpr], what: str):
+        self.check_not_void_call(h, what)
         mut bf = self.firm_family(h)
         mut _bc_tn = ""
         if not _is_invalid_ptr(h as usize):
@@ -1256,6 +1282,15 @@ extend Sema:
                             if vfd.generics.len == 0 and not vfd.is_async and not vfd.is_extern and vfd.throws_ty as usize == 0 as usize and (vfd.ret_ty as usize == 0 as usize or vfd.ret_ty.read().name == "void"):
                                 self.error("[E-5] Type mismatch: " + what + " is a call to '" + vfn + "()', which returns no value.\n      FIX: give '" + vfn + "' a return type (`-> <type>`) and return a value, or call it as a statement.")
                     case _: pass
+            case HirExpr.EMethodCall(vmo, vmm, _, _):
+                if vmm == "join" and hir_expr_type(vmo).name == "Thread":
+                    self.error("[E-5] Type mismatch: " + what + " is a call to 'Thread.join()', which returns no value.\n      FIX: call 'join()' as a statement; share results through a Shared[T] / Atomic value.")
+                    return
+                mut vmc = self.method_receiver_class(vmo)
+                if vmc != "":
+                    mut vmd = self.find_unique_method(vmc, vmm)
+                    if vmd.name != "" and vmd.generics.len == 0 and not vmd.is_async and vmd.throws_ty as usize == 0 as usize and (vmd.ret_ty as usize == 0 as usize or vmd.ret_ty.read().name == "void"):
+                        self.error("[E-5] Type mismatch: " + what + " is a call to '" + vmc + "." + vmm + "()', which returns no value.\n      FIX: give the method a return type (`-> <type>`) and return a value, or call it as a statement.")
             case _: pass
 
     # `case 3:` / `case "a":` against a scrutinee that is certainly of another kind.
@@ -1634,6 +1669,7 @@ extend Sema:
         if type_name == "Thread" and variant == "spawn" and hl.len == 0:
             self.error("[E-4] 'Thread.spawn()' takes at least 1 argument (the function to run) but 0 were given.\n      FIX: Thread.spawn(worker_fn, arg1, ...) - pass the function, then its arguments.")
         if type_name == "Thread" and variant == "spawn" and hl.len >= 1:
+            self.check_not_void_call(hl.get(0), "the function argument of Thread.spawn()")
             mut spf = self.firm_family(hl.get(0))
             if spf == "int" or spf == "float" or spf == "bool" or spf == "str" or spf == "List" or spf == "Dict" or spf == "Tuple" or spf == "class" or spf == "None":
                 self.error("[E-5] Type mismatch: the first argument of Thread.spawn() must be a function, but is given " + self.family_word(spf) + ".\n      FIX: Thread.spawn(worker_fn, arg1, ...) - pass the function, then its arguments.")
@@ -1919,6 +1955,8 @@ extend Sema:
                         self.error("[E-5] Type mismatch: argument " + (ii + 1).to_str() + " of " + ty.name + "." + method + "() must be an int but is " + self.family_word(iaf) + ".\n      FIX: pass an integer position / count.")
                         break
                     ii = ii + 1
+            if vi >= 0 and vi < hl.len and (ef == "int" or ef == "float" or ef == "bool" or ef == "str") and hir_expr_type(hl.get(vi)).name == "def":
+                self.error("[E-5] Type mismatch: " + ty.name + "[" + ty.args.get(0).read().name + "]." + method + "() is given a function value.\n      FIX: call the function and pass its result, or keep functions in a " + ty.name + "[def(...) -> ...].")
             if vi >= 0 and vi < hl.len and self.family_mismatch(ef, self.firm_family(hl.get(vi))):
                 self.error("[E-5] Type mismatch: " + ty.name + "[" + ty.args.get(0).read().name + "]." + method + "() is given " + self.family_word(self.firm_family(hl.get(vi))) + ".\n      FIX: pass a '" + ty.args.get(0).read().name + "' (convert it first if needed).")
         elif (ty.name == "Dict" or ty.name == "Map") and ty.args.len > 1:
@@ -6298,6 +6336,7 @@ extend Sema:
                 if self.cur_fn_ret as usize != 0 as usize and self.closure_depth == 0 and self.cur_fn_ret.read().name == "def" and self._closure_untyped(e): self.closure_hint = self.cur_fn_ret
                 self.lam_int_ok = true
                 mut _ret_h = self.lower_expr(e)
+                if self.closure_depth == 0: self.check_not_void_call(_ret_h, "the returned value")
                 self.lam_int_ok = false
                 self.closure_hint = Pointer[AstType](0)
                 if e as usize != 0 as usize and self.closure_depth == 0 and self.cur_fn_ret as usize != 0 as usize:
@@ -6575,6 +6614,33 @@ extend Sema:
                                     case Expr.EDo(_): return self.lower_stmt(box_astestmt(Stmt.SLet(cl_decl_name, Ownership.Own, false, false, false, Pointer[AstType](0), val)))
                                     case _: pass
                         case _: pass
+                # `arr[0] = v` / `obj.f = v` where the root variable is not declared (yet):
+                # the root is read, so it must exist (a bare `name = v` is the only declaring form).
+                if target as usize != 0 as usize:
+                    mut _rt_e = target
+                    mut _rt_deep = false
+                    mut _rt_go = true
+                    while _rt_go:
+                        _rt_go = false
+                        match _rt_e.read():
+                            case Expr.EIndex(_rt_o, _):
+                                _rt_e = _rt_o
+                                _rt_deep = true
+                                _rt_go = true
+                            case Expr.EPropAccess(_rt_o, _):
+                                _rt_e = _rt_o
+                                _rt_deep = true
+                                _rt_go = true
+                            case _: pass
+                    if _rt_deep:
+                        match _rt_e.read():
+                            case Expr.EIdent(_rt_n):
+                                mut _rt_c = _rt_n.slice(0, 1)
+                                if _rt_n.len() > 0 and _rt_c >= "a" and _rt_c <= "z" and not self.is_known_name(_rt_n):
+                                    mut _rt_sym = self.resolve(_rt_n)
+                                    if _rt_sym.name == "" or self.sym_out_of_scope(_rt_sym):
+                                        self.error("[N-3] name '" + _rt_n + "' is not defined.\n      FIX: declare '" + _rt_n + "' (e.g. 'mut " + _rt_n + " = ...') before assigning into it, or check the spelling.")
+                            case _: pass
                 self.in_assign_target = true
                 if target as usize != 0 as usize:
                     match target.read():
@@ -6589,6 +6655,7 @@ extend Sema:
                 mut hv = self.lower_expr(val)
                 self.closure_hint = Pointer[AstType](0)
                 hv = self._patch_empty_dict_hint(hv, hir_expr_type(htgt))
+                self.check_not_void_call(hv, "the value assigned here")
                 self._open_assign(htgt, hv)
                 if target as usize != 0 as usize:
                     match htgt.read():
@@ -8203,6 +8270,8 @@ extend Sema:
                         self.error("[E-5] Type mismatch: '" + op + "' cannot be applied to " + self.family_word(_bo_t) + ".\n      FIX: check that the variable holds the number you meant (it holds " + self.family_word(_bo_t) + " here).")
                     if op == "+" and ((_bo_lf == "str" and (_bo_rf == "List" or _bo_rf == "Dict" or _bo_rf == "Tuple")) or (_bo_rf == "str" and (_bo_lf == "List" or _bo_lf == "Dict" or _bo_lf == "Tuple"))):
                         self.error("[E-5] Type mismatch: cannot apply '+' to " + self.family_word(_bo_lf) + " and " + self.family_word(_bo_rf) + ".\n      FIX: convert one side first (str(x) / a list index) so both operands have the same type.")
+                    if (op == "<" or op == ">" or op == "<=" or op == ">=") and ((_bo_lf == "int" or _bo_lf == "float" or _bo_lf == "bool" or _bo_lf == "str") and (_bo_rf == "List" or _bo_rf == "Dict" or _bo_rf == "Tuple") or (_bo_rf == "int" or _bo_rf == "float" or _bo_rf == "bool" or _bo_rf == "str") and (_bo_lf == "List" or _bo_lf == "Dict" or _bo_lf == "Tuple")):
+                        self.error("[E-5] Type mismatch: cannot order-compare (" + op + ") " + self.family_word(_bo_lf) + " with " + self.family_word(_bo_rf) + ".\n      FIX: compare values of the same kind, e.g. a number with a number (use len(x) or an element for a collection).")
                     if (_bo_lf == "None" or _bo_rf == "None") and (op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**" or op == "<" or op == ">" or op == "<=" or op == ">="):
                         self.error("[E-5] Type mismatch: '" + op + "' cannot be applied to None.\n      FIX: the value here is None; give the variable a real value before using it in arithmetic or comparisons.")
                     if (_bo_lf == "Option" or _bo_rf == "Option") and (op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**" or op == "<" or op == ">" or op == "<=" or op == ">="):
@@ -8307,6 +8376,24 @@ extend Sema:
                 if callee as usize != 0 as usize:
                     match callee.read():
                         case Expr.EIdent(ato_n):
+                            # Python builtins `pow(a, b)` and `divmod(a, b)`, unless the program defines those names itself.
+                            if (ato_n == "pow" or ato_n == "divmod") and args.len == 2 and not self.fn_defs.contains(ato_n) and not self.fn_sigs.contains(ato_n) and not self.extern_names.contains(ato_n) and not self.extern_defs.contains(ato_n) and not self.classes.contains(ato_n) and not self.is_local_var(ato_n) and self.resolve(ato_n).name == "":
+                                if ato_n == "pow":
+                                    return self.lower_expr(box_astexpr(Expr.EBinOp("**", args.get(0), args.get(1))))
+                                mut _dm_simple = true
+                                mut _dm_i = 0
+                                while _dm_i < 2:
+                                    match args.get(_dm_i).read():
+                                        case Expr.EIdent(_): pass
+                                        case Expr.ELitInt(_): pass
+                                        case _: _dm_simple = false
+                                    _dm_i = _dm_i + 1
+                                if _dm_simple:
+                                    mut _dm_items = Vec[Pointer[Expr]].init(2)
+                                    _dm_items.push(box_astexpr(Expr.EBinOp("//", args.get(0), args.get(1))))
+                                    _dm_items.push(box_astexpr(Expr.EBinOp("%", args.get(0), args.get(1))))
+                                    return self.lower_expr(box_astexpr(Expr.ETuple(_dm_items)))
+                                self.error("[E-4] divmod() arguments must be plain variables or literals here.\n      FIX: store the operands in variables first, or write `(a // b, a % b)`.")
                             # Python-style conversions `set()` `list(x)` `dict()` `tuple(x)` (types are inferred).
                             if (ato_n == "sorted" or ato_n == "reversed") and args.len == 1 and not self.fn_defs.contains(ato_n) and self.resolve(ato_n).kind == SymbolKind.SFunction:
                                 mut _sr = self._lower_sorted(ato_n, args.get(0))
@@ -8500,6 +8587,8 @@ extend Sema:
                                     case _: pass
                                 if pr_var and (pr_t.name == "Vec" or pr_t.name == "List" or pr_t.name == "Dict" or pr_t.name == "Set") and pr_t.args.len > 0 and pr_t.args.get(0).read().name == "def":
                                     self.error("[E-5] Type mismatch: a " + pr_t.name + " of function values cannot be printed.\n      FIX: print the results of calling the functions instead.")
+                                if pr_var and self.classes.contains(pr_t.name) and not self.ambiguous_classes.contains(pr_t.name) and not self.classes.get(pr_t.name).is_class and not self.is_builtin_dispatch_class(pr_t.name):
+                                    self.error("[E-5] Type mismatch: a '@value_type' value of '" + pr_t.name + "' cannot be printed directly.\n      FIX: print its fields (e.g. `print(v.field)`) or a str built by a method (e.g. `print(v.to_string())`).")
                                 if pr_var and (pr_t.name == "Result" or pr_t.name == "Option") and pr_t.args.len > 0:
                                     self.error("[E-5] Type mismatch: a " + pr_t.name + " cannot be printed directly.\n      FIX: print its payload instead (e.g. `.unwrap()` after checking `.is_ok` / `.is_some`), or print a message for each case.")
                                 pr_i = pr_i + 1

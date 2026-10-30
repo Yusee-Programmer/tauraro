@@ -391,6 +391,18 @@ expect_diag "generic class as value" 'class Box[K, V]:\n    pub k: K\n    pub v:
 expect_diag "str.eq no arg" 'def main():\n    mut a = "x"\n    print(a.eq())\n' "'str.eq()' takes 1 argument but 0 were given"
 expect_diag "pub without def in extend" 'class Foo:\n    pub v: int\nextend Foo:\n    pub  to_int(self) -> int:\n        return self.v\ndef main():\n    print(1)\n' "expected 'def' to declare a method of 'Foo'"
 expect_diag "match expr without colon" 'def main():\n    print("a", match"b")\n' "expected ':' after the subject of a match expression"
+expect_diag "index-assign to undeclared name" 'def main():\n    arr[0] = 7\n    mut arr: [int; 4]\n    arr[1] = 8\n' "name 'arr' is not defined"
+expect_diag "if without colon" 'def f() -> int:\n    return 1\ndef main():\n    if f()\n        print(1)\n' "expected ':' after the condition of 'if'"
+expect_diag "while without colon" 'def main():\n    mut i = 0\n    while i < 3\n        i = i + 1\n' "expected ':' after the condition of 'while'"
+expect_diag "print value_type" '@value_type\nclass P:\n    pub n: int\ndef main():\n    mut p = P(3)\n    print(p)\n' "'@value_type' value of 'P' cannot be printed directly"
+expect_diag "push function into List[int]" 'def f() -> int:\n    return 1\ndef main():\n    mut c = [1, 2]\n    c.push(f)\n' "List[int].push() is given a function value"
+expect_diag "generic scalar return mismatch" 'pub def hb[K](key: K) -> int:\n    return 42\npub def g(x: int) -> List[int]:\n    return hb[int](x)\ndef main():\n    print(1)\n' "'g' is declared to return a List but this returns an int"
+expect_diag "float ordered vs dict" 'def main():\n    mut f = 5.5\n    mut g = {}\n    if f > g:\n        print(1)\n' "cannot order-compare (>)"
+expect_diag "x = th.join()" 'def w(p: int):\n    print(p)\ndef main():\n    mut th = Thread.spawn(w, 1)\n    x = th.join()\n    print(1)\n' "call to 'Thread.join()', which returns no value"
+expect_diag "assign void call" 'def w(p: int):\n    print(p)\ndef main():\n    x = w(1)\n    print(1)\n' "the value assigned here is a call to 'w()', which returns no value"
+expect_diag "void method as init" 'class C:\n    pub n: int\n    pub def m(self):\n        print(1)\ndef main():\n    mut c = C(1)\n    mut x = c.m()\n' "call to 'C.m()', which returns no value"
+expect_diag "void call as if cond" 'def w(p: int):\n    print(p)\ndef main():\n    if w(1):\n        print(1)\n' "an 'if' condition is a call to 'w()'"
+expect_diag "Thread.spawn(void call)" 'def w(p: int):\n    print(p)\ndef main():\n    mut th = Thread.spawn(w(1))\n    th.join()\n' "function argument of Thread.spawn()"
 if [ -n "$diagfail" ]; then
     echo "  FAILED:$diagfail"
     failed=$((failed + 1))
