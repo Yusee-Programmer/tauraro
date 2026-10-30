@@ -1,0 +1,36 @@
+# Seed for the uefi-x64 / wasm link targets: allocator hooks + an exported frame entry.
+mut _arena: [u8; 4096]
+mut _heap_next: usize = 0 as usize
+
+@allocator
+def heap_alloc(n: usize) -> Pointer[u8]:
+    unsafe:
+        mut p: Pointer[u8] = _arena.as_ptr().offset(_heap_next as int)
+        _heap_next = _heap_next + ((n + 7) / 8) * 8
+        return p
+@free
+def heap_free(p: Pointer[u8]):
+    pass
+@realloc
+def heap_realloc(p: Pointer[u8], n: usize) -> Pointer[u8]:
+    return heap_alloc(n)
+@calloc
+def heap_calloc(n: usize, sz: usize) -> Pointer[u8]:
+    return heap_alloc(n * sz)
+
+def shade(x: int, y: int) -> int:
+    return (x * 3 + y * 5) % 256
+
+pub export def tauraro_ui_render(fb: Pointer[u32], width: int, height: int, pitch: int):
+    unsafe:
+        mut y = 0
+        while y < height:
+            mut x = 0
+            while x < width:
+                fb.offset(y * pitch + x).write(shade(x, y) as u32)
+                x = x + 1
+            y = y + 1
+
+pub export def tauraro_uefi_frame(fb: Pointer[u32], width: int, height: int, pitch: int, mouse_x: int, mouse_y: int, mouse_down: bool, has_key: bool, key_code: int) -> bool:
+    tauraro_ui_render(fb, width, height, pitch)
+    return not has_key

@@ -6283,7 +6283,7 @@ extend Sema:
                                     if ret_sym.ty.read().name == "Pointer":
                                         self.error("[L-1] '" + ret_name + "' is a local Pointer that may not outlive this function call. Returning it is unsafe.\n      FIX: Annotate the return type with 'from <param>' if the pointer borrows from a parameter, or wrap the allocation in 'unsafe:' if it is heap-allocated.")
                         case _: pass
-                if e as usize == 0 as usize and self.current_func_ret_family != "" and self.current_func_ret_family != "void" and self.current_func_ret_family != "Option" and self.current_func_ret_family != "Result" and self.current_func_ret_family != "Pointer":
+                if e as usize == 0 as usize and self.current_func_ret_family != "" and self.current_func_ret_family != "void" and self.current_func_ret_family != "Result":
                     mut _br_who = "'" + self.current_func_name + "'"
                     if self.closure_depth > 0: _br_who = "this closure"
                     self.error("[E-5] Type mismatch: " + _br_who + " is declared to return " + self.family_word(self.current_func_ret_family) + " but this 'return' has no value.\n      FIX: return a value of the declared type, or remove the return type if the function returns nothing.")
@@ -8247,6 +8247,10 @@ extend Sema:
                     if hir_expr_type(hexpr_inner).name == "Set": _nf = "Set"
                     if _nf == "str" or _nf == "List" or _nf == "Dict" or _nf == "Tuple" or _nf == "Option" or _nf == "Pointer" or _nf == "Result" or _nf == "Set":
                         self.error("[E-5] Type mismatch: 'not' cannot be applied to " + self.family_word(_nf) + ".\n      FIX: negate a bool; for emptiness / absence write an explicit test, e.g. `len(x) == 0` or `x.is_none()`.")
+                if op == "*":
+                    mut _df = self.firm_family(hexpr_inner)
+                    if _df == "int" or _df == "float" or _df == "bool":
+                        self.error("[E-5] Type mismatch: unary '*' dereferences a pointer, but this operand is " + self.family_word(_df) + ".\n      FIX: dereference a Pointer[T] (p.read()), or write a binary '*' with a left operand if you meant to multiply.")
                 if op == "~":
                     mut _tf = self.firm_family(hexpr_inner)
                     if _tf == "str" or _tf == "float" or _tf == "List" or _tf == "Dict" or _tf == "Tuple":
@@ -9254,6 +9258,8 @@ extend Sema:
                         if hobj_ty.args.len > 0: _arr_elem = hobj_ty.args.get(0).read()
                         ret_ty = AstType.init_generic("Pointer", box_asttype(_arr_elem))
                     elif method == "len" or method == "length": ret_ty = AstType.init("int")
+                    elif method != "get" and method != "get_index" and method != "set_index" and not self.is_universal_method(method) and not self.class_method_exists("Array", method):
+                        self.error("[E-6] A fixed-size array has no method '" + method + "()'.\n      FIX: arrays support a[i], len and as_ptr(); use List[T] for push/pop/insert and friends.")
                 # Set[T] built-in method return types
                 elif hobj_ty.name == "Set":
                     if method == "contains" or method == "has" or method == "is_empty" or method == "is_subset": ret_ty = AstType.init("bool")

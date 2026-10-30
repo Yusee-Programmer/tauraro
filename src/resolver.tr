@@ -14,6 +14,9 @@
 # contributes all of its declarations.
 
 from std.core.io import read_file, file_exists
+
+extern "C":
+    def _tr_file_size(path: str) -> int
 from core.vec import Vec
 from core.map import Map
 from core.string import StringObj, StringBuilder
@@ -303,6 +306,24 @@ extend ModuleResolver:
             if not has_tr:
                 source = read_file(path + ".tr")
             if source == "": return
+
+        # A NUL byte would silently cut the source short for the lexer.
+        mut nul_p = source as Pointer[char]
+        mut nul_n = source.len()
+        mut nul_at = -1
+        mut nul_i = 0
+        while nul_i < nul_n:
+            if nul_p.offset(nul_i).read() as int == 0:
+                nul_at = nul_i
+                break
+            nul_i = nul_i + 1
+        if nul_at < 0 and _tr_file_size(path) > nul_n + 0 and _tr_file_size(path) > 0 and nul_n < _tr_file_size(path):
+            nul_at = nul_n
+        if nul_at >= 0:
+            self.parse_errors = self.parse_errors + 1
+            print("error: [LEX-1] " + path + " contains a NUL byte (offset " + nul_at.to_str() + "); source files must be text.")
+            print("  = help: remove the stray NUL (0x00) byte - it would silently truncate the rest of the file.")
+            return
 
         # A module is TRUSTED (audited unsafe core, exempt from the default raw-pointer
         # check [P-2]) if it is std/core library code OR carries the `# @trusted` module

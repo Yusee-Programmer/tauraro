@@ -579,6 +579,8 @@ extend Parser:
                             arr_t.array_size = arr_sz
                             self.pos = self.pos + 1
                         case _: pass
+                elif self.peek() == Token.RBracket:
+                    self.emit_diag("an array type needs a length", "write a fixed-size array as '[T; N]' (e.g. '[u8; 16]'), or use List[T] for a growable list.")
                 if self.peek() == Token.RBracket: self.pos = self.pos + 1
                 return arr_t
             case Token.KwDef:
@@ -2052,6 +2054,8 @@ extend Parser:
                 case Token.Dot:
                     self.pos = self.pos + 1
                     mut attr = self.consume_method_ident()
+                    if attr == "":
+                        self.emit_diag("expected a field or method name after '.'", "write the member name right after the dot, e.g. 'value.len' or 'value.method()'.")
                     match self.peek():
                         case Token.LParen:
                             self.pos = self.pos + 1
@@ -2865,7 +2869,15 @@ extend Parser:
                         return box_decl(Decl.DTypeAlias(alias_name, box_asttype(target_ty)))
             case Token.KwDef:
                 mut _fline = self.cur_line()
+                mut _fpos = self.pos + 1
                 mut f = self.parse_function_def(False)
+                if f.body.stmts.len == 0 and f.name != "":
+                    # A declaration without a body is only meaningful inside `extern "C":`; elsewhere it
+                    # would compile to an empty function that silently returns 0.
+                    mut _fend = self.pos
+                    self.pos = _fpos
+                    self.emit_diag("function '" + f.name + "' has no body", "add ':' and an indented body (use 'pass' for an empty one), or declare it inside an 'extern \"C\":' block if it is defined in C.")
+                    self.pos = _fend
                 f.line = _fline
                 f.is_public = is_public
                 f.is_export = is_export

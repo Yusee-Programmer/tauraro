@@ -159,8 +159,13 @@ def one(task):
 def main():
     seed0, count = int(sys.argv[1]), int(sys.argv[2])
     jobs = int(sys.argv[3]) if len(sys.argv) > 3 else 3
-    files = sorted(os.path.join(ROOT, "tests", d, f) for d in ("regression", "lang") for f in os.listdir(os.path.join(ROOT, "tests", d))
-                   if f.endswith(".tr") and os.path.getsize(os.path.join(ROOT, "tests", d, f)) < 6000)
+    if os.environ.get("TOK_SEEDS"):
+        # TOK_SEEDS=dir[:dir...] : fuzz programs from these directories instead (e.g. tests/fuzz/seeds_bare for the
+        # bare-metal / cross link targets, whose programs need allocator hooks and an @entry / export entry point).
+        files = sorted(os.path.join(dd, f) for dd in os.environ["TOK_SEEDS"].split(":") for f in os.listdir(dd) if f.endswith(".tr"))
+    else:
+      files = sorted(os.path.join(ROOT, "tests", d, f) for d in ("regression", "lang") for f in os.listdir(os.path.join(ROOT, "tests", d))
+                     if f.endswith(".tr") and os.path.getsize(os.path.join(ROOT, "tests", d, f)) < 6000)
     tmp_root = tempfile.mkdtemp(prefix="tokfuzz")
     counts = {}
     with cf.ThreadPoolExecutor(jobs) as ex:

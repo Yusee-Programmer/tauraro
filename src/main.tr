@@ -184,6 +184,70 @@ pub def require_c_compiler(cc: str):
     print("  " + c_green("= help") + ": install gcc or clang and make sure it is on PATH (Windows: MinGW-w64 or LLVM; macOS: xcode-select --install), or put a 'zig' next to tauraroc.")
     _tr_exit(1)
 
+# True when a C-compiler / linker message describes a missing or unsuitable toolchain for the requested
+# target (no cross sysroot, a tool that cannot target this architecture, a missing driver) rather than a
+# problem in the user's program or a Tauraro bug.
+def toolchain_msg(msg: str) -> bool:
+    if _tr_str_contains(msg, "unknown argument") or _tr_str_contains(msg, "unsupported option") or _tr_str_contains(msg, "unsupported argument"): return true
+    if _tr_str_contains(msg, "unknown target") or _tr_str_contains(msg, "No available targets") or _tr_str_contains(msg, "unable to create target"): return true
+    if _tr_str_contains(msg, "unrecognised emulation") or _tr_str_contains(msg, "unrecognized emulation") or _tr_str_contains(msg, "unable to find"): return true
+    if _tr_str_contains(msg, "Permission denied") or _tr_str_contains(msg, "command not found") or _tr_str_contains(msg, "not found: zig"): return true
+    if _tr_str_contains(msg, "fatal error") and (_tr_str_contains(msg, "file not found") or _tr_str_contains(msg, "No such file or directory")):
+        if not _tr_str_contains(msg, "tauraro") and not _tr_str_contains(msg, "build/") and not _tr_str_contains(msg, ".tr"): return true
+    if _tr_str_contains(msg, "cannot find crt") or _tr_str_contains(msg, "cannot find -lgcc") or _tr_str_contains(msg, "cannot find -lc"): return true
+    return false
+
+def print_toolchain_error(msg: str):
+    mut m = msg
+    # Drop the tool's own "clang: error: " / ".../ld.bfd: " prefix: the diagnostic names the problem, not the tool.
+    mut ep = m.find("error: ")
+    if ep >= 0: m = m.slice(ep + 7, m.len())
+    mut lp = m.find("ld.bfd: ")
+    if lp >= 0: m = m.slice(lp + 8, m.len())
+    lp = m.find("ld.lld: ")
+    if lp >= 0: m = m.slice(lp + 8, m.len())
+    if m == "": m = "the C toolchain reported an error"
+    print(c_red("error") + ": " + c_bold("[TC-2] the C toolchain cannot build for this target: " + m))
+    print("  " + c_green("= help") + ": cross builds need a toolchain for the target: install `zig` (put it next to tauraroc or on PATH; it bundles a libc for every target), or a clang/gcc cross compiler with its sysroot (--sysroot <path>). Bare-metal links also need lld or arm-none-eabi-gcc / riscv64-unknown-elf-gcc.")
+    _tr_setenv("TAURARO_ICE_PRINTED", "1")
+
+# A turnkey cross/bare-metal step that needs `zig` (wasm, uefi): say so up front instead of letting the
+# shell print "zig: not found" / "Permission denied".
+pub def require_zig(what: str):
+    mut null_dev = "/dev/null"
+    if _tr_is_windows(): null_dev = "nul"
+    if _tr_system("zig version >" + null_dev + " 2>&1") == 0: return
+    print(c_red("error") + ": " + c_bold("[TC-2] " + what + " needs `zig`, which was not found."))
+    print("  " + c_green("= help") + ": install zig (https://ziglang.org/download) and put it on PATH, or place it next to tauraroc as zig/zig.")
+    _tr_setenv("TAURARO_ICE_PRINTED", "1")
+    _tr_exit(1)
+
+# A captured cross/bare-metal tool log failed: report the first real problem as a Tauraro diagnostic
+# (toolchain trouble, link error, or an internal-error for rejected C) instead of raw tool output.
+pub def report_tool_log(log_path: str, stage: str):
+    mut txt = ""
+    if file_exists(log_path): txt = read_file(log_path)
+    if _tr_getenv("TAURARO_SHOW_C_ERRORS") == "1":
+        print(txt)
+        return
+    mut lines = txt.split("\n")
+    mut li = 0
+    while li < lines.len:
+        mut tl = lines.get(li).trim()
+        if toolchain_msg(tl):
+            print_toolchain_error(tl)
+            return
+        li = li + 1
+    if _tr_str_contains(txt, "undefined reference") or _tr_str_contains(txt, "undefined symbol") or _tr_str_contains(txt, "multiple definition") or _tr_str_contains(txt, "cannot find -l"):
+        print_link_error(txt)
+        _tr_setenv("TAURARO_ICE_PRINTED", "1")
+    elif _tr_str_contains(txt, "linker command failed") and not _tr_str_contains(txt, ".tr:"):
+        print_toolchain_error("the linker failed for this target")
+    elif txt.trim().len() == 0:
+        print_toolchain_error("")
+    else:
+        print_ice(stage, txt)
+
 # Link-time failure: report the undefined / duplicate symbols or missing libraries as a Tauraro
 # diagnostic instead of the linker's own output (ld, lld, Apple ld and MSVC all phrase these differently).
 def print_link_error(log: str):
@@ -253,7 +317,10 @@ def print_link_error(log: str):
             si = si + 1
         if syms.len > 8: names = names + ", ... (" + str(syms.len) + " in all)"
         print(c_red("error") + ": " + c_bold("[LNK-1] link failed: undefined symbol" + (if syms.len > 1: "s" else: "") + " " + names + "."))
-        print("  " + c_green("= help") + ": a function declared with extern \"C\" (or used from a C shim) has no definition. FIX: pass the C file or library that defines it with --link <file.c|lib.a> (or -l<lib>), or remove the declaration if it is not needed.")
+        if syms.contains("_stack_top") or syms.contains("_sidata") or syms.contains("_sdata"):
+            print("  " + c_green("= help") + ": these symbols come from the linker script of a bare-metal `@entry` program. FIX: build with an embedded target and --emit-ld <file.ld> (e.g. --freestanding --target embedded-arm --emit-ld app.ld) so the turnkey bare-metal link is used.")
+        else:
+            print("  " + c_green("= help") + ": a function declared with extern \"C\" (or used from a C shim) has no definition. FIX: pass the C file or library that defines it with --link <file.c|lib.a> (or -l<lib>), or remove the declaration if it is not needed.")
         shown = 1
     if dups.len > 0:
         print(c_red("error") + ": " + c_bold("[LNK-2] link failed: symbol '" + dups.get(0) + "' is defined more than once."))
@@ -265,6 +332,15 @@ def print_link_error(log: str):
         shown = 1
     if shown == 0:
         mut msg = other
+        mut tci = 0
+        while tci < lines.len:
+            if toolchain_msg(lines.get(tci).trim()):
+                print_toolchain_error(lines.get(tci).trim())
+                return
+            tci = tci + 1
+        if _tr_str_contains(msg, "linker command failed"):
+            print_toolchain_error("the linker failed for this target")
+            return
         if msg == "": msg = "the linker reported an error"
         print(c_red("error") + ": " + c_bold("[LNK-4] link failed: " + msg))
         print("  " + c_green("= help") + ": rerun with TAURARO_SHOW_C_ERRORS=1 to see the full linker output.")
@@ -663,11 +739,11 @@ def uefi_zig_stub_frame(entry_name: str, has_heap_init: bool, heap_size_mb: int)
 pub def target_extra_flags(triple: str) -> str:
     # Bare-metal / freestanding: no OS, no libc
     if _tr_str_contains(triple, "none-eabi"):
-        return " -nostdlib -freestanding -ffreestanding -DTAURARO_NO_OS=1"
+        return " -nostdlib -ffreestanding -DTAURARO_NO_OS=1"
     if _tr_str_contains(triple, "none-elf"):
-        return " -nostdlib -freestanding -ffreestanding -DTAURARO_NO_OS=1"
+        return " -nostdlib -ffreestanding -DTAURARO_NO_OS=1"
     if _tr_str_contains(triple, "unknown-elf"):
-        return " -nostdlib -freestanding -ffreestanding -DTAURARO_NO_OS=1"
+        return " -nostdlib -ffreestanding -DTAURARO_NO_OS=1"
     # WebAssembly bare (no WASI): no OS services
     if _tr_str_contains(triple, "wasm32-unknown-unknown"):
         return " -nostdlib --no-standard-libraries -DTAURARO_WASM=1 -DTAURARO_NO_OS=1"
@@ -1412,6 +1488,9 @@ def print_ice(cpath: str, log: str):
             src_file = parts.get(0)
             src_line = int(parts.get(1))
             if parts.len >= 3: src_col = int(parts.get(2))
+    if src_file == "" and toolchain_msg(msg):
+        print_toolchain_error(msg)
+        return
     if src_file == "":
         print(c_red("error") + ": " + c_bold("[ICE] internal compiler error: " + c_msg_to_tauraro(msg)))
         if first != "": print("  (in the C generated for '" + cpath + "')")
@@ -1688,6 +1767,7 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
 #      LLVM on that one file, not the whole toolkit.
 pub def compile_wasm_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: str, inc_dir: str,
                       opt_level: str, verbose: bool, memory_mb: int) -> int:
+    require_zig("--target wasm")
     mut cc = "zig cc -target wasm32-freestanding"
     # -fno-strict-aliasing: see the identical comment on the native/cross
     # compile_incremental warn_flags above - same generated C, same UB.
@@ -1715,11 +1795,13 @@ pub def compile_wasm_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: 
         mut opath = obj_path_for(cpath)
         o_files.push(opath)
         if needs.get(i) or not file_exists(opath):
-            mut ccmd = cc + common + " -c \"" + cpath + "\" -o \"" + opath + "\""
+            mut wlog = opath + ".log"
+            mut ccmd = cc + common + " -c \"" + cpath + "\" -o \"" + opath + "\" 2>\"" + wlog + "\""
             if verbose: print("  [CC -c wasm] " + cpath)
             mut crc = _tr_system(ccmd)
+            if crc == 0: delete_file(wlog)
             if crc != 0:
-                print(c_red("error") + ": compiling " + cpath + " failed (exit code " + str(crc) + ")")
+                report_tool_log(wlog, cpath)
                 delete_file(opath)
                 mut rj = i + 1
                 while rj < c_files.len:
@@ -1751,7 +1833,11 @@ pub def compile_wasm_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: 
         cmd = cmd + " \"" + o_files.get(i) + "\""
         i = i + 1
     if verbose: print("  [LINK wasm-ld] " + cmd)
-    return _tr_system(cmd)
+    mut wllog = exe_path + ".wasmld.log"
+    mut wlrc = _tr_system(cmd + " 2>\"" + wllog + "\"")
+    if wlrc != 0: report_tool_log(wllog, "the wasm link")
+    delete_file(wllog)
+    return wlrc
 
 pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bool) -> int:
     mut cc = detect_c_compiler()
@@ -2323,6 +2409,18 @@ pub def main(args: Vec[str]):
             while hdi < hff.decorators.len:
                 mut hdn = hff.decorators.get(hdi).name
                 if hdn == "allocator" or hdn == "free" or hdn == "realloc" or hdn == "calloc": hooks_seen = hooks_seen + 1
+                if hdn == "allocator" or hdn == "free" or hdn == "realloc" or hdn == "calloc":
+                    mut want_params = 1
+                    if hdn == "realloc" or hdn == "calloc": want_params = 2
+                    mut ret_nm = hff.ret_ty.name
+                    mut ret_void = ret_nm == "" or ret_nm == "void" or ret_nm == "None"
+                    if hff.params.len != want_params or (hdn != "free" and ret_void):
+                        mut want_sig = "(n: usize) -> Pointer[u8]"
+                        if hdn == "free": want_sig = "(p: Pointer[u8])"
+                        if hdn == "realloc": want_sig = "(p: Pointer[u8], n: usize) -> Pointer[u8]"
+                        if hdn == "calloc": want_sig = "(n: usize, sz: usize) -> Pointer[u8]"
+                        _print_diag("error", "[TIER-2] the @" + hdn + " hook '" + hff.name + "' has the wrong signature (needs " + want_params.to_str() + " parameter(s)" + (if hdn != "free": " and a pointer return type" else: "") + ").\n      FIX: declare it as `def " + hff.name + want_sig + ":`.")
+                        _tr_exit(1)
                 hdi = hdi + 1
             hfi = hfi + 1
         mut hdr_given = false
@@ -2896,8 +2994,7 @@ pub def main(args: Vec[str]):
         if _tr_system(bm_cmd) == 0:
             print("Bare-metal ELF written to: " + bm_elf)
             return
-        print(c_red("error") + ": bare-metal link failed (see build/bare_link.log)")
-        print("       need a freestanding toolchain — the bundled zig, or arm-none-eabi / riscv64 gcc.")
+        report_tool_log("build/bare_link.log", "the bare-metal link")
         _tr_exit(1)
 
     # -- Turnkey UEFI link (--target uefi-x64 --freestanding builds) ----------
@@ -2928,6 +3025,7 @@ pub def main(args: Vec[str]):
             print("       tauraro_ui_render(fb, width, height, pitch) -> void, called once.")
             _tr_exit(1)
         mut uefi_has_heap_init = hir_has_export_fn(hir, "tauraro_heap_init")
+        require_zig("--target uefi-x64")
 
         mut uefi_stub_path = build_dir + "_tr_uefi_stub.zig"
         mut uefi_stub_src = ""
@@ -2970,8 +3068,7 @@ pub def main(args: Vec[str]):
             print("  entry: " + uefi_entry)
             print("  place it at EFI/BOOT/BOOTX64.EFI on a FAT ESP (USB/qemu OVMF) to boot it")
             return
-        print(c_red("error") + ": uefi link failed (see build/uefi_link.log)")
-        print("       needs the bundled zig (ships with the compiler SDK) on PATH.")
+        report_tool_log("build/uefi_link.log", "the uefi link")
         _tr_exit(1)
 
     # Zero-cost C++ interop: auto-discover `# tauraro-cpp-*` pragmas in the imported
