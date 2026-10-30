@@ -403,6 +403,10 @@ expect_diag "assign void call" 'def w(p: int):\n    print(p)\ndef main():\n    x
 expect_diag "void method as init" 'class C:\n    pub n: int\n    pub def m(self):\n        print(1)\ndef main():\n    mut c = C(1)\n    mut x = c.m()\n' "call to 'C.m()', which returns no value"
 expect_diag "void call as if cond" 'def w(p: int):\n    print(p)\ndef main():\n    if w(1):\n        print(1)\n' "an 'if' condition is a call to 'w()'"
 expect_diag "Thread.spawn(void call)" 'def w(p: int):\n    print(p)\ndef main():\n    mut th = Thread.spawn(w(1))\n    th.join()\n' "function argument of Thread.spawn()"
+expect_diag "bare th.join" 'def w(p: int):\n    print(p)\ndef main():\n    mut th = Thread.spawn(w, 1)\n    th.join\n    print(1)\n' "Missing call parentheses: 'join' is a method"
+expect_diag "bare method stmt" 'class C:\n    pub n: int\n    pub def m(self):\n        print(1)\ndef main():\n    mut c = C(1)\n    c.m\n' "Missing call parentheses: 'm' is a method"
+expect_diag "void call in binop" 'def f():\n    print(1)\ndef main():\n    print(f() + 1)\n' "the left operand of '+' is a call to 'f()', which returns no value"
+expect_diag "void call in list lit" 'def f():\n    print(1)\ndef main():\n    mut y = [f()]\n    print(1)\n' "a list element is a call to 'f()', which returns no value"
 if [ -n "$diagfail" ]; then
     echo "  FAILED:$diagfail"
     failed=$((failed + 1))

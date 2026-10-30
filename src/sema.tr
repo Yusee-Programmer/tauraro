@@ -1270,6 +1270,23 @@ extend Sema:
                     case _: pass
             case _: pass
 
+    # `th.join` / `obj.method` as a whole statement: a method named without its call parentheses does nothing.
+    pub def check_bare_method_stmt(self, hs: Pointer[HirStmt]):
+        match hs.read():
+            case HirStmt.SExpr(be):
+                if _is_invalid_ptr(be as usize): return
+                match be.read():
+                    case HirExpr.EPropAccess(bo, bp, _):
+                        mut is_m = false
+                        if bp == "join" and hir_expr_type(bo).name == "Thread": is_m = true
+                        else:
+                            mut bc = self.method_receiver_class(bo)
+                            if bc != "" and self.find_unique_method(bc, bp).name != "": is_m = true
+                        if is_m:
+                            self.error("[E-5] Missing call parentheses: '" + bp + "' is a method, so naming it as a statement does nothing.\n      FIX: call it with parentheses: `" + bp + "()`.")
+                    case _: pass
+            case _: pass
+
     # A call to a plain user function that is declared without a return type produces no value.
     pub def check_not_void_call(self, h: Pointer[HirExpr], what: str):
         if _is_invalid_ptr(h as usize): return
@@ -6256,6 +6273,7 @@ extend Sema:
                                 self._dup_err(self._second_decl_line(self.current_line, bare_n, self.current_func_name == "", 1), "[N-3] name '" + bare_n + "' is not defined.\n      FIX: check the spelling, declare it with 'mut " + bare_n + " = ...', or remove this line.")
                         case _: pass
                 mut h_s_expr = box_hirstmt(HirStmt.SExpr(self.lower_expr(e)))
+                self.check_bare_method_stmt(h_s_expr)
                 # Rule T-4: Result returned by throws-function must be handled
                 if e as usize != 0 as usize:
                     match e.read():
@@ -8242,6 +8260,8 @@ extend Sema:
                     self.check_not_type_value(right)
                     self.check_not_fn_operand(left, op)
                     self.check_not_fn_operand(right, op)
+                    self.check_not_void_call(hleft, "the left operand of '" + op + "'")
+                    self.check_not_void_call(hright, "the right operand of '" + op + "'")
                 if op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**":
                     mut _vo_side = ""
                     match right.read():
@@ -10096,6 +10116,7 @@ extend Sema:
                 mut n = 0
                 while n < items.len:
                     hitems.push(self.lower_expr(items.get(n)))
+                    self.check_not_void_call(hitems.get(n), "a list element")
                     n = n + 1
                 mut list_ty = AstType.init("List")
                 if hitems.len > 1:
