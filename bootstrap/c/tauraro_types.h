@@ -4048,6 +4048,7 @@ __attribute__((hot)) TrStr Sema_firm_family(Sema* self, HirExpr* e);
 __attribute__((hot)) bool Sema_family_mismatch(Sema* self, TrStr exp, TrStr act);
 __attribute__((hot)) void Sema_check_bool_ctx(Sema* self, HirExpr* h, TrStr what);
 __attribute__((hot)) void Sema_check_iterable(Sema* self, HirExpr* h);
+__attribute__((hot)) void Sema_check_bare_method_stmt(Sema* self, HirStmt* hs);
 __attribute__((hot)) void Sema_check_not_void_call(Sema* self, HirExpr* h, TrStr what);
 __attribute__((hot)) void Sema_check_lit_pattern(Sema* self, TrStr sf, TrStr pf);
 __attribute__((hot)) TrStr Sema_num_canon(Sema* self, TrStr n);

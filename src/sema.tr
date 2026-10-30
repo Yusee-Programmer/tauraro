@@ -8418,6 +8418,8 @@ extend Sema:
                             if (ato_n == "sorted" or ato_n == "reversed") and args.len == 1 and not self.fn_defs.contains(ato_n) and self.resolve(ato_n).kind == SymbolKind.SFunction:
                                 mut _sr = self._lower_sorted(ato_n, args.get(0))
                                 if _sr as usize != 0 as usize: return _sr
+                            if (ato_n == "map" or ato_n == "filter") and args.len != 2 and self.resolve(ato_n).kind == SymbolKind.SFunction and not self.fn_defs.contains(ato_n) and not self.fn_sigs.contains(ato_n) and not self.extern_names.contains(ato_n) and not self.extern_defs.contains(ato_n) and not self.classes.contains(ato_n) and not self.is_local_var(ato_n):
+                                self.error("[E-4] '" + ato_n + "()' takes exactly 2 arguments (a function and a list) but " + args.len.to_str() + " were given.\n      FIX: write `" + ato_n + "(fn, items)`.")
                             if (ato_n == "map" or ato_n == "filter") and args.len == 2 and self.resolve(ato_n).kind == SymbolKind.SFunction and not self.fn_defs.contains(ato_n) and not self.classes.contains(ato_n):
                                 return self._lower_map_filter(ato_n, args.get(0), args.get(1))
                             if (ato_n == "set" or ato_n == "list" or ato_n == "dict" or ato_n == "tuple") and self.resolve(ato_n).name == "" and not self.fn_defs.contains(ato_n) and not self.classes.contains(ato_n):
@@ -9748,6 +9750,8 @@ extend Sema:
                 if obj as usize != 0 as usize:
                     match obj.read():
                         case Expr.EIdent(_pa_n):
+                            if self.resolve(_pa_n).kind == SymbolKind.SVariable and self.firm_family(self.lower_expr(obj)) == "None":
+                                self.error("[E-5] Type mismatch: '" + _pa_n + "." + prop + "' reads a member of None.\n      FIX: '" + _pa_n + "' only ever holds None; give it a real value before using its members.")
                             if _pa_n != "" and not self.is_local_var(_pa_n) and not self._is_known_type_name(_pa_n) and self.resolve(_pa_n).name == "" and not self.classes.contains(_pa_n) and not self.enums.contains(_pa_n):
                                 self.error("[E-1] '" + _pa_n + "' is not a defined type or value, so '" + _pa_n + "." + prop + "' cannot be resolved.\n      FIX: check the spelling, import the type, or define it.")
                         case _: pass
