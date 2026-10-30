@@ -2801,6 +2801,7 @@ typedef struct Sema {
     List_i64* open_def_lines;
     bool open_pass2;
     bool lam_int_ok;
+    TrMap* extern_files;
     List_TrStr* pending_lams;
     AstType** cur_fn_ret;
     TrMap* assign_froms;
@@ -2892,6 +2893,7 @@ static void _trdrop_Sema(void* vp) {
     List_ptr_free_obj(self->infer_res_fn, _trdrop_FunctionDef);
     List_i64_free(self->infer_res_state);
     List_ptr_free(self->infer_res_ty);
+    Dict_free_strval(self->extern_files);
     List_TrStr_free(self->pending_lams);
     Dict_free(self->assign_froms);
     Dict_free(self->fn_sigs);
