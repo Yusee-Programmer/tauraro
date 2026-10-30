@@ -1522,7 +1522,7 @@ extend Sema:
     pub def builtin_method_range(self, fam: str, method: str) -> int:
         if fam == "str":
             if method == "len" or method == "upper" or method == "lower" or method == "to_upper" or method == "to_lower" or method == "strip" or method == "trim" or method == "trim_left" or method == "trim_right" or method == "capitalize" or method == "title" or method == "reverse": return 0
-            if method == "find" or method == "index_of" or method == "contains" or method == "starts_with" or method == "ends_with" or method == "split" or method == "split_exact" or method == "repeat" or method == "strip_prefix" or method == "strip_suffix": return 101
+            if method == "eq" or method == "ne" or method == "find" or method == "index_of" or method == "contains" or method == "starts_with" or method == "ends_with" or method == "split" or method == "split_exact" or method == "repeat" or method == "strip_prefix" or method == "strip_suffix": return 101
             if method == "replace": return 202
         elif fam == "List":
             if method == "len" or method == "length" or method == "reverse" or method == "clear" or method == "copy" or method == "clone" or method == "first" or method == "last" or method == "free" or method == "is_empty" or method == "max" or method == "min" or method == "max_val" or method == "min_val" or method == "sum" or method == "reversed" or method == "reversed_copy" or method == "sort_asc" or method == "sort_desc" or method == "to_list": return 0
@@ -5298,6 +5298,13 @@ extend Sema:
                 mut sy = self.resolve(n)
                 if sy.name != "" and (sy.kind == SymbolKind.SClass or sy.kind == SymbolKind.SEnum or sy.kind == SymbolKind.SInterface) and (self.classes.contains(n) or self.enums.contains(n) or self.interfaces.contains(n)):
                     self.error("[E-9] '" + n + "' is a type, not a value.\n      FIX: create a value with `" + n + "(...)` (or a static constructor such as `" + n + ".init(...)`), or use the type only in annotations.")
+            case Expr.EIndex(_ixo, _ixi):
+                if not _is_invalid_ptr(_ixo as usize):
+                    match _ixo.read():
+                        case Expr.EIdent(_ixn):
+                            if not self.is_local_var(_ixn) and self.classes.contains(_ixn) and self.resolve(_ixn).kind == SymbolKind.SClass:
+                                self.error("[E-9] '" + _ixn + "[...]' is a type, not a value.\n      FIX: create a value with `" + _ixn + "[T].init(...)` or `" + _ixn + "(...)`, or use the type only in annotations.")
+                        case _: pass
             case Expr.EPropAccess(_bo, _bp):
                 match _bo.read():
                     case Expr.EIdent(_bn):
@@ -6544,6 +6551,13 @@ extend Sema:
                 return box_hirstmt(HirStmt.SLet(name, ownership, is_mut, is_const, is_shared, ty, hval))
             case Stmt.SAssign(target, val):
                 self.check_not_type_value(val)
+                if target as usize != 0 as usize:
+                    match target.read():
+                        case Expr.EList(_ale): self.error("[E-9] cannot assign to a list literal.\n      FIX: assign to a variable, a field or an element: 'a[i] = v'.")
+                        case Expr.ELitInt(_ali): self.error("[E-9] cannot assign to a number.\n      FIX: assign to a variable, a field or an element.")
+                        case Expr.ELitStr(_als, _alb): self.error("[E-9] cannot assign to a string literal.\n      FIX: assign to a variable, a field or an element.")
+                        case Expr.ECall(_alc, _ala): self.error("[E-9] cannot assign to the result of a call.\n      FIX: assign to a variable, a field or an element.")
+                        case _: pass
                 # `name = <closure literal>` (first assignment, no `mut`) declares an immutable
                 # local exactly like `let`: route it through the SLet path so the closure gets
                 # the stack env / escape analysis / ownership handling instead of an always-
@@ -8161,6 +8175,14 @@ extend Sema:
                     self.check_not_type_value(right)
                     self.check_not_fn_operand(left, op)
                     self.check_not_fn_operand(right, op)
+                if op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**":
+                    mut _vo_side = ""
+                    match right.read():
+                        case Expr.ECall(_vc, _va): _vo_side = "right"
+                        case Expr.EMethodCall(_vo, _vm, _va2): _vo_side = "right"
+                        case _: pass
+                    if _vo_side != "" and hir_expr_type(hright).name == "void":
+                        self.error("[E-5] Type mismatch: the right operand of '" + op + "' is a call that returns nothing.\n      FIX: finish the expression - an operator needs a value on both sides.")
                 if op == "and" or op == "or" or op == "&&" or op == "||":
                     self.check_bool_ctx(hleft, "an operand of '" + op + "'")
                     self.check_bool_ctx(hright, "an operand of '" + op + "'")
@@ -8271,6 +8293,13 @@ extend Sema:
                 return box_hirexpr(HirExpr.EUnaryOp(op, hexpr_inner, un_ty))
             case Expr.ECall(callee, args):
                 # Special built-in: await_timeout(async_expr, ms) -> EAwaitTimeout
+                if callee as usize != 0 as usize:
+                    match callee.read():
+                        case Expr.ELitInt(_lc1): self.error("[E-5] Type mismatch: a number is not callable.\n      FIX: put an operator between the number and the parenthesised value, or call a function by name.")
+                        case Expr.ELitFloat(_lc2): self.error("[E-5] Type mismatch: a number is not callable.\n      FIX: put an operator between the number and the parenthesised value, or call a function by name.")
+                        case Expr.ELitStr(_lc3, _lc3b): self.error("[E-5] Type mismatch: a string is not callable.\n      FIX: put an operator between the string and the parenthesised value, or call a function by name.")
+                        case Expr.ELitBool(_lc4): self.error("[E-5] Type mismatch: a bool is not callable.\n      FIX: put an operator between the value and the parenthesised value, or call a function by name.")
+                        case _: pass
                 if callee as usize != 0 as usize:
                     match callee.read():
                         case Expr.EIdent(ato_n):
@@ -8882,6 +8911,14 @@ extend Sema:
                             if free_sym.name != "": self.mark_freed(free_nm)
                         case _: pass
                 mut hobj_ty = hir_expr_type(hobj)
+                if hobj_ty.name == "void" and not self.is_universal_method(method):
+                    mut _vr_call = false
+                    match obj.read():
+                        case Expr.ECall(_vc, _va): _vr_call = true
+                        case Expr.EMethodCall(_vo, _vm, _va2): _vr_call = true
+                        case _: pass
+                    if _vr_call:
+                        self.error("[E-5] Type mismatch: cannot call '." + method + "()' on a call that returns nothing.\n      FIX: the call before '." + method + "' has no result; remove the stray '.' / chaining, or call '" + method + "' on a value.")
                 if true:
                     mut _ba_fam = self.firm_family(hobj)
                     if _ba_fam == "":
@@ -9296,6 +9333,8 @@ extend Sema:
                     if (method == "Some" or (method == "some" and _recv_name == "Option")) and hl.len == 1:
                         ret_ty = AstType.init("Option")
                         ret_ty.args.push(box_asttype(hir_expr_type(hl.get(0))))
+                    elif (method == "Some" or (method == "some" and _recv_name == "Option")):
+                        self.error("[E-4] 'Option.some()' takes 1 argument(s) but " + hl.len.to_str() + " given.\n      FIX: wrap exactly one value: Option.some(value).")
                     elif (method == "None" or (method == "none" and _recv_name == "Option")): ret_ty = AstType.init("Option")
                     elif method == "is_some" or method == "is_none": ret_ty = AstType.init("bool")
                     elif method == "unwrap" or method == "expect":

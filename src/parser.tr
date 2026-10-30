@@ -1835,6 +1835,7 @@ extend Parser:
         mut subj = self.parse_expr()
         self.skip_newlines()
         if self.peek() == Token.Colon: self.pos = self.pos + 1
+        else: self.emit_diag("expected ':' after the subject of a match expression", "write 'match value:' followed by an indented block of 'case' arms.")
         mut arms = self.parse_match_arms()
         return box_expr(Expr.EMatch(subj, arms))
 
@@ -3685,6 +3686,10 @@ extend Parser:
                 case Token.KwPass:
                     self.pos = self.pos + 1
                     self.expect_newline()
+                case Token.Ident(_xn):
+                    if is_p:
+                        self.emit_diag("expected 'def' to declare a method of '" + target + "', found '" + _xn + "'", "write 'pub def " + _xn + "(self, ...)'; an extend block holds only methods.")
+                    self.pos = self.pos + 1
                 case _:
                     self.pos = self.pos + 1
         if self.peek() == Token.Dedent:
