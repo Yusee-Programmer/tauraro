@@ -294,6 +294,7 @@ pub class Sema:
     pub open_def_lines:  Vec[int]
     pub open_pass2:      bool
     pub lam_int_ok:      bool                    # the closure being lowered is a call argument / returned value: a bare `lambda` parameter defaults to int (documented)
+    pub extern_files:    Map[str, str]           # extern function name -> source file that first declared it (duplicate-across-blocks check)
     pub pending_lams:    Vec[str]                # deferred lambdas declared in the function being lowered
     pub cur_fn_ret:      Pointer[AstType]        # declared return type of the function being lowered (null = none)
     pub assign_froms:       Map[str, int] # block-local last use tracking
@@ -435,6 +436,7 @@ extend Sema:
         s.self_rec_seen      = false
         s.cur_fn_ret         = Pointer[AstType](0)
         s.pending_lams       = Vec[str].init(4)
+        s.extern_files       = Map[str, str].init(16)
         s.open_seq           = Map[str, int].init(8)
         s.open_hints         = Map[str, AstType].init(8)
         s.open_filled        = Map[str, AstType].init(8)
@@ -1209,6 +1211,15 @@ extend Sema:
     # Option has no truth value in the generated code.
     pub def check_bool_ctx(self, h: Pointer[HirExpr], what: str):
         mut bf = self.firm_family(h)
+        mut _bc_tn = ""
+        if not _is_invalid_ptr(h as usize):
+            match h.read():
+                case HirExpr.EIdent(_, _, _): _bc_tn = hir_expr_type(h).name
+                case _: pass
+        if bf == "Dict" or _bc_tn == "Dict" or _bc_tn == "Map" or _bc_tn == "Set":
+            mut _bc_w = "a Dict"
+            if _bc_tn == "Set": _bc_w = "a Set"
+            self.error("[E-5] Type mismatch: " + what + " must be a bool, but it is " + _bc_w + ".\n      FIX: test it explicitly, e.g. `len(x) > 0` or `x.is_empty()`.")
         if bf == "str" or bf == "Tuple" or bf == "Option" or bf == "Result":
             self.error("[E-5] Type mismatch: " + what + " must be a bool, but it is " + self.family_word(bf) + ".\n      FIX: write an explicit comparison, e.g. `s != \"\"` / `len(t) > 0` / `o.is_some()`.")
 
@@ -5418,6 +5429,11 @@ extend Sema:
                             self.error("[N-5] extern function '" + f.name + "' is declared twice in this extern block.\n      FIX: remove one of the declarations.")
                             break
                         _edj = _edj + 1
+                    if self.extern_files.contains(f.name) and self.extern_files.get(f.name) == self.current_file and _edj == ei:
+                        self.current_line = f.line
+                        self.error("[N-5] extern function '" + f.name + "' is declared twice (in two extern blocks).\n      FIX: remove one of the declarations.")
+                    elif not self.extern_files.contains(f.name):
+                        self.extern_files.insert(f.name, self.current_file)
                     mut _e_ret = box_asttype(AstType.init("void"))
                     if f.ret_ty as usize != 0 as usize: _e_ret = f.ret_ty
                     self.declare(f.name, SymbolKind.SFunction, _e_ret, false)
@@ -5846,6 +5862,12 @@ extend Sema:
         self.current_line = c.line
         self.current_class_name = c.name
         self.current_region_params = c.region_params
+        mut _cdi = 0
+        while _cdi < c.decorators.len:
+            mut _cdn = c.decorators.get(_cdi).name
+            if not self.decorator_names.contains(_cdn) and not self.is_builtin_decorator(_cdn):
+                self.error("[N-9] Unknown decorator '@" + _cdn + "' on class '" + c.name + "'.\n      FIX: check the spelling, or define it with `decorator " + _cdn + "(...)`. Class decorators: @value_type, @packed, @aligned, @union, @derive_eq, @derive_clone, @copy.")
+            _cdi = _cdi + 1
         mut hfields = Vec[HirField].init(4)
         mut i = 0
         while i < c.fields.len:
@@ -6617,6 +6639,14 @@ extend Sema:
                                 # declares an IMMUTABLE binding (Rust-like default).
                                 self.declare(sa_decl_name, SymbolKind.SVariable, box_asttype(hir_expr_type(hv)), false)
                                 self._mark_open_if_empty(sa_decl_name, hv)
+                                # Like `mut x = expr`: remember what the new binding is CERTAIN to hold.
+                                mut _ib_firm = self.firm_family(hv)
+                                mut _ib_ty = self.firm_type(hv)
+                                if _ib_ty.name != "" and _ib_firm == "": _ib_firm = self.decl_family(_ib_ty)
+                                mut _ib_cls = ""
+                                if _ib_firm == "class": _ib_cls = self.firm_class(hv)
+                                if _ib_firm == "class" and _ib_cls == "" and _ib_ty.name != "" and self.classes.contains(_ib_ty.name): _ib_cls = _ib_ty.name
+                                if _ib_firm != "": self.set_symbol_firm_ty(sa_decl_name, _ib_firm, _ib_cls, _ib_ty)
                                 # The target was lowered BEFORE it was declared, so it carries no type;
                                 # give it the declared one -- codegen keys the owning-local tracking
                                 # (a `str` local is released at scope exit) on the target's type.
@@ -9453,7 +9483,10 @@ extend Sema:
                     mut _cls = self.classes.get(hobj_ty.name)
                     mut _hty_n = hobj_ty.name
                     mut _is_builtin_dispatch = _hty_n == "Thread" or _hty_n == "Atomic" or _hty_n == "ThreadLocal" or _hty_n == "ThreadPool" or _hty_n == "Mutex" or _hty_n == "RwLock" or _hty_n == "Chan" or _hty_n == "Channel" or _hty_n == "Shared" or _hty_n == "Weak" or _hty_n == "StringBuilder" or _hty_n == "OS" or _hty_n == "Process" or _hty_n == "Env" or _hty_n == "Hash" or _hty_n == "File" or _hty_n == "AsyncPool" or _hty_n == "AsyncTask"
-                    if not _is_builtin_dispatch and not self.class_method_exists(hobj_ty.name, method) and not self.is_universal_method(method):
+                    # Env/OS/Process/File are plain std classes whose every method is declared in source,
+                    # so a misspelt method on them is still a clean early error.
+                    mut _std_cls = _hty_n == "Env" or _hty_n == "OS" or _hty_n == "Process" or _hty_n == "File"
+                    if (not _is_builtin_dispatch or _std_cls) and not self.class_method_exists(hobj_ty.name, method) and not self.is_universal_method(method):
                         self.error("[E-1] No method '" + method + "' found on type '" + hobj_ty.name + "'.\n      FIX: Define 'pub def " + method + "(self, ...)' in '" + hobj_ty.name + "' or its base class via 'extend " + hobj_ty.name + ":'.")
                     mut _mi = 0
                     mut _mdef_throws_ty: Pointer[AstType] = 0 as Pointer[AstType]
@@ -9652,6 +9685,8 @@ extend Sema:
                 if (_pc_f == "List" or _pc_f == "Dict") and not self.class_method_exists(hobj_ty_n, prop) and not self.class_has_field(hobj_ty_n, prop):
                     if not (prop == "len" or prop == "length" or prop == "capacity" or prop == "data" or prop == "keys" or prop == "values" or prop == "items"):
                         self.error("[E-7] A " + _pc_f + " has no field '" + prop + "'.\n      FIX: collections expose .len (and methods such as .append()); check the spelling.")
+                elif _pc_f == "Tuple" and prop != "data":
+                    self.error("[E-7] A tuple has no field '" + prop + "'.\n      FIX: tuples have a fixed size known from the literal; read elements with t[0], t[1], ... or unpack them: a, b = t.")
                 elif _pc_f == "str" and not (prop == "len" or prop == "length" or prop == "data"):
                     self.error("[E-7] A str has no field '" + prop + "'.\n      FIX: strings expose .len and methods such as .upper(); check the spelling.")
                 if (hobj_ty_n == "Result" or hobj_ty_n == "Option"):
@@ -9875,6 +9910,8 @@ extend Sema:
                     self.error("[E-5] Type mismatch: a str cannot be cast to " + cast_to + " with 'as'.\n      FIX: parse it with int(s) / float(s) instead.")
                 if (cast_from == "List" or cast_from == "Dict" or cast_from == "Tuple" or cast_from == "Option" or cast_from == "Result" or cast_from == "None") and (self.decl_family(ty.read()) == "float" or self.decl_family(ty.read()) == "bool" or cast_to == "str" or (cast_from == "Tuple" and self.decl_family(ty.read()) == "int")):
                     self.error("[E-5] Type mismatch: " + self.family_word(cast_from) + " cannot be cast to " + cast_to + " with 'as'.\n      FIX: 'as' converts between numbers and pointers; extract a value first (indexing, len(x), x.unwrap()).")
+                if cast_to == "Pointer" and (cast_from == "float" or cast_from == "bool"):
+                    self.error("[E-5] Type mismatch: " + self.family_word(cast_from) + " cannot be cast to a Pointer with 'as'.\n      FIX: only integers (addresses), strings and other pointers convert to a Pointer; cast to int first if an address is what you mean.")
                 return box_hirexpr(HirExpr.ECast(cast_in, ty.read()))
             case Expr.EFString(parts):
                 self.check_no_heap("an f-string", "build output in a fixed byte buffer, or print the parts separately; plain string literals are fine (they live in rodata)")
@@ -9985,6 +10022,13 @@ extend Sema:
                     elif self.current_func_name != "" and not self.infer_mode and not _cl_int_ok:
                         self.error("[R-6] cannot infer the type of the lambda parameter '" + pa.name + "': nothing here shows what it is.\n      FIX: write the parameter types, e.g. `def (" + pa.name + ": int) -> int: ...`, or use it where its type is known (call it, or pass it to a `def(int) -> int` parameter).")
                     self.declare(pa.name, SymbolKind.SVariable, box_asttype(pa_ty), false)
+                    if pa.ty as usize != 0 as usize or (_cl_hint_ok and _cl_hint.read().args.get(l) as usize != 0 as usize):
+                        # an explicitly typed (or call-site / expected-type typed) closure parameter is CERTAIN to hold that type
+                        mut _cp_fam = self.decl_family(pa_ty)
+                        if _cp_fam != "":
+                            mut _cp_cls = ""
+                            if _cp_fam == "class" and self.classes.contains(pa_ty.name): _cp_cls = pa_ty.name
+                            self.set_symbol_firm_ty(pa.name, _cp_fam, _cp_cls, pa_ty)
                     mut hpa = HirParam()
                     hpa.name = pa.name
                     hpa.ty = pa_ty
@@ -10000,6 +10044,8 @@ extend Sema:
                 mut clo_saved_family = self.current_func_ret_family
                 self.current_func_ret_family = ""
                 if ret_ty as usize != 0 as usize: self.current_func_ret_family = self.decl_family(ret_ty.read())
+                # a `throws` closure is typed `Result`, but its `return v` returns the plain success value
+                if self.current_func_ret_family == "Result": self.current_func_ret_family = ""
                 mut clo_body = self.lower_block(body)
                 self.current_func_ret_family = clo_saved_family
                 self.fn_scope_base.pop()

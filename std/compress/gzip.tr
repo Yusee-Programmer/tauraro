@@ -287,4 +287,3 @@ def _gz_slice(data: str, off: int, n: int) -> str:
 
 extern "C":
     def _tr_str_wrap(s: Pointer[char]) -> str
-    def _tr_str_wrap_len(s: Pointer[char], blen: int) -> str
