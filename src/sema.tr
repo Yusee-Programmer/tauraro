@@ -1388,6 +1388,53 @@ extend Sema:
 
     # `b.put(5)` where `b: Box[str]`: a parameter declared as the class's type parameter `T` takes
     # the receiver's concrete type argument.
+    # `Env` is dispatched by the code generator (get_var / set_var / cwd) on top of std's class: any other
+    # name must be a method that class declares.
+    pub def check_env_method(self, cls: str, method: str):
+        if cls != "Env" or not self.classes.contains("Env") or self.ambiguous_classes.contains("Env"): return
+        if method == "get_var" or method == "set_var" or method == "cwd" or self.is_universal_method(method): return
+        mut ec = self.classes.get("Env")
+        if ec.methods.len == 0 or ec.base_classes.len > 0 or ec.iface_names.len > 0 or self.class_method_exists("Env", method): return
+        self.error("[E-1] No method '" + method + "' found on type 'Env'.\n      FIX: check the spelling; Env has get_var, set_var, has_var, unset_var, cwd and the argument accessors (see std/sys/env.tr).")
+
+    # `Str.name(...)` without `from std.string.str import Str`: only `Str.join` is built in.
+    pub def check_str_receiver(self, obj: Pointer[Expr], method: str):
+        if method == "join": return
+        match obj.read():
+            case Expr.EIdent(sn):
+                if sn == "Str" and not self.classes.contains("Str") and not self.enums.contains("Str") and not self.type_aliases.contains("Str") and not self.ambiguous_classes.contains("Str") and self.resolve("Str").name == "":
+                    self.error("[N-3] name 'Str' is not defined.\n      FIX: import it first: from std.string.str import Str")
+            case _: pass
+
+    # `Vec[Nope].init(4)`: the type arguments of a constructor call must name types that exist.
+    pub def check_type_args_of_ctor(self, obj: Pointer[Expr]):
+        match obj.read():
+            case Expr.EIndex(bo, idx):
+                match bo.read():
+                    case Expr.EIdent(bn):
+                        if self.resolve(bn).kind == SymbolKind.SVariable and self.resolve(bn).name != "": return
+                        if not (bn == "Vec" or bn == "List" or bn == "Map" or bn == "Dict" or bn == "Set" or self.classes.contains(bn)): return
+                        self.check_type_arg_expr(idx)
+                    case _: pass
+            case _: pass
+
+    pub def check_type_arg_expr(self, idx: Pointer[Expr]):
+        match idx.read():
+            case Expr.EIdent(tn):
+                if not self.type_name_known(tn):
+                    self.error("[N-4] Unknown type '" + tn + "' (in a type argument of a constructor call).\n      FIX: check the spelling, or import it (e.g. `from std.x import " + tn + "`).")
+            case Expr.ETuple(its):
+                mut ti = 0
+                while ti < its.len:
+                    self.check_type_arg_expr(its.get(ti))
+                    ti = ti + 1
+            case Expr.EIndex(bo2, idx2):
+                match bo2.read():
+                    case Expr.EIdent(bn2):
+                        if bn2 == "Vec" or bn2 == "List" or bn2 == "Map" or bn2 == "Dict" or bn2 == "Set" or bn2 == "Option": self.check_type_arg_expr(idx2)
+                    case _: pass
+            case _: pass
+
     pub def check_generic_method_args(self, rty: AstType, method: str, hl: Vec[Pointer[HirExpr]]):
         if rty.args.len == 0 or not self.classes.contains(rty.name) or self.ambiguous_classes.contains(rty.name) or self.is_builtin_dispatch_class(rty.name): return
         if rty.name == "Map" or rty.name == "Vec" or rty.name == "List" or rty.name == "Dict" or rty.name == "Set" or rty.name == "Option" or rty.name == "Result": return
@@ -8823,6 +8870,16 @@ extend Sema:
                         if _tw >= 0 and _tw != hl.len:
                             self.error("[E-4] 'Tuple." + method + "()' takes " + _tw.to_str() + " argument(s) but " + hl.len.to_str() + " given.\n      FIX: tuple.get(index), tuple.first(), tuple.last(), tuple.count().")
                     if method == "get" or method == "pop" or method == "get_or" or self.is_universal_method(method): self.check_user_method_call(hir_expr_type(hobj).name, obj, method, hl)
+                    if method == "get" or method == "pop" or method == "get_or":
+                        # these names take the catch-all return-type branch below, so the generic-class argument check is made here
+                        mut _gm_recv_type = false
+                        match obj.read():
+                            case Expr.EIdent(_gm_rn): _gm_recv_type = self.classes.contains(_gm_rn) and self.resolve(_gm_rn).kind != SymbolKind.SVariable
+                            case _: pass
+                        if not _gm_recv_type: self.check_generic_method_args(hir_expr_type(hobj), method, hl)
+                    self.check_type_args_of_ctor(obj)
+                    self.check_env_method(hir_expr_type(hobj).name, method)
+                    self.check_str_receiver(obj, method)
                     if hir_expr_type(hobj).name == "void" or hir_expr_type(hobj).name == "":
                         match obj.read():
                             case Expr.EIdent(_sb_t):

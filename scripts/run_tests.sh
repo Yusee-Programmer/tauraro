@@ -367,6 +367,10 @@ expect_diag "unknown generic bound" 'def f[T: Nope](x: T) -> T:\n    return x\nd
 expect_diag "duplicate extern decl" 'extern "C":\n    def getpid() -> int\n    def getpid() -> int\ndef main():\n    print(getpid())\n' "[N-5] extern function 'getpid' is declared twice"
 expect_diag "missing colon def" 'def main()\n    print(1)\n' "missing ':' at the end of this function header"
 expect_diag "const field assign" 'class Cell:\n    pub v: str\ndef main():\n    const c = Cell()\n    c.v = "x"\n' "because 'c' is a constant"
+expect_diag "ctor unknown type arg" 'from std.core.vec import Vec\ndef main():\n    mut v: Vec[int] = Vec[Nope].init(4)\n    v.push(1)\n' "[N-4] Unknown type 'Nope' (in a type argument of a constructor call)"
+expect_diag "Env unknown method" 'from std.sys.env import Env\ndef main():\n    mut e = Env.init()\n    print(e.has_var_zz("A"))\n' "[E-1] No method 'has_var_zz' found on type 'Env'"
+expect_diag "Str not imported" 'def main():\n    print(Str.substr("hello", 1, 2))\n' "[N-3] name 'Str' is not defined"
+expect_diag "generic get wrong arg kind" 'class Box[K, V]:\n    pub k: K\n    pub v: V\nextend Box[K, V]:\n    pub def init(k: K, v: V) -> Box[K, V]:\n        mut b = Box[K, V]()\n        b.k = k\n        b.v = v\n        return b\n    pub def get(self, key: K) -> V:\n        return self.v\ndef main():\n    mut b = Box[int, str].init(5, "five")\n    print(b.get("x"))\n' "[E-5] Type mismatch: argument 1 of 'Box.get()'"
 if [ -n "$diagfail" ]; then
     echo "  FAILED:$diagfail"
     failed=$((failed + 1))
