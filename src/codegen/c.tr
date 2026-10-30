@@ -9896,6 +9896,11 @@ pub class CGenerator:
                                     self.capture_local_mono(n, hir_expr_type(v), v)
                             else:
                                 self.w(pad + "__auto_type " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
+                                # A bare `s = set()` is int-keyed in C: record it so the auto-drop
+                                # frees it with _tr_idict_free, not Dict_free.
+                                mut _sa_ty0 = hir_expr_type(v).name
+                                if (_sa_ty0 == "Set" or _sa_ty0 == "Dict" or _sa_ty0 == "Map") and (_sa_rhs.starts_with("({ _TrISet*") or _sa_rhs.starts_with("({ TrIDict*")):
+                                    self.coll_local_idict.insert(n, true)
                             self.decl_vars.insert(n, true)
                             return
                     case HirExpr.EIndex(idx_obj, idx_key, _):

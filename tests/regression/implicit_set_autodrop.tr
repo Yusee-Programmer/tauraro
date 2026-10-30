@@ -1,0 +1,5 @@
+def main():
+    st = set()
+    st.add(5)
+    st.add(7)
+    print(st.len())
