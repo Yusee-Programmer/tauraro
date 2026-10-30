@@ -383,7 +383,7 @@ expect_diag "Env unknown method" 'from std.sys.env import Env\ndef main():\n    
 expect_diag "Str not imported" 'def main():\n    print(Str.substr("hello", 1, 2))\n' "[N-3] name 'Str' is not defined"
 expect_diag "generic get wrong arg kind" 'class Box[K, V]:\n    pub k: K\n    pub v: V\nextend Box[K, V]:\n    pub def init(k: K, v: V) -> Box[K, V]:\n        mut b = Box[K, V]()\n        b.k = k\n        b.v = v\n        return b\n    pub def get(self, key: K) -> V:\n        return self.v\ndef main():\n    mut b = Box[int, str].init(5, "five")\n    print(b.get("x"))\n' "[E-5] Type mismatch: argument 1 of 'Box.get()'"
 expect_diag "method on void call" 'class P:\n    pub x: int\n    pub def hi(self):\n        print(self.x)\ndef main():\n    mut p = P(1)\n    p.hi()\n    .foo(p, 2)\n' "cannot call '.foo()' on a call that returns nothing"
-expect_diag "binop void rhs" 'def f():\n    print(1)\ndef main():\n    mut x = 5 -\n    f()\n    print(x)\n' "the right operand of '-' is a call that returns nothing"
+expect_diag "binop void rhs" 'class P:\n    pub x: int\n    pub def hi(self):\n        print(self.x)\ndef main():\n    mut p = P(1)\n    mut x = 5 -\n    p.hi()\n    print(x)\n' "the right operand of '-' is a call that returns nothing"
 expect_diag "call a number" 'def main():\n    print(1e (2, 3))\n' "a number is not callable"
 expect_diag "Option.some no arg" 'def main():\n    mut o = Option.some()\n    print(o.is_some())\n' "'Option.some()' takes 1 argument(s) but 0 given"
 expect_diag "assign to list literal" 'def main():\n    mut arr: [int; 4]\n    [arr0] = 7\n    print(arr[0])\n' "cannot assign to a list literal"

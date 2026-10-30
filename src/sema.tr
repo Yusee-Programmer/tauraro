@@ -8178,8 +8178,12 @@ extend Sema:
                 if op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**":
                     mut _vo_side = ""
                     match right.read():
-                        case Expr.ECall(_vc, _va): _vo_side = "right"
-                        case Expr.EMethodCall(_vo, _vm, _va2): _vo_side = "right"
+                        case Expr.EMethodCall(_vo, _vm, _va2):
+                            if not _is_invalid_ptr(_vo as usize):
+                                match _vo.read():
+                                    case Expr.EIdent(_von):
+                                        if self.is_local_var(_von) and self.classes.contains(self.resolve(_von).ty.read().name): _vo_side = "right"
+                                    case _: pass
                         case _: pass
                     if _vo_side != "" and hir_expr_type(hright).name == "void":
                         self.error("[E-5] Type mismatch: the right operand of '" + op + "' is a call that returns nothing.\n      FIX: finish the expression - an operator needs a value on both sides.")

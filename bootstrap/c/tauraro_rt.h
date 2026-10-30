@@ -305,6 +305,7 @@ static inline void*  memset(void* d,int c,size_t n){ unsigned char* a=(unsigned 
 static inline int    memcmp(const void* x,const void* y,size_t n){ const unsigned char* a=(const unsigned char*)x; const unsigned char* b=(const unsigned char*)y; for(size_t i=0;i<n;i++){ if(a[i]!=b[i]) return (int)a[i]-(int)b[i]; } return 0; }
 static inline int    strcmp(const char* a,const char* b){ while(*a && *a==*b){a++;b++;} return (int)(unsigned char)*a-(int)(unsigned char)*b; }
 static inline int    strncmp(const char* a,const char* b,size_t n){ for(size_t i=0;i<n;i++){ if(a[i]!=b[i]) return (int)(unsigned char)a[i]-(int)(unsigned char)b[i]; if(!a[i]) break; } return 0; }
+static inline void*  memchr(const void* s,int c,size_t n){ const unsigned char* p=(const unsigned char*)s; for(size_t i=0;i<n;i++){ if(p[i]==(unsigned char)c) return (void*)(p+i); } return 0; }
 static inline char*  strchr(const char* s,int c){ for(;*s;s++){ if(*s==(char)c) return (char*)s; } return c?0:(char*)s; }
 static inline char*  strcpy(char* d,const char* s){ char* r=d; while((*d++=*s++)); return r; }
 static inline char*  strncpy(char* d,const char* s,size_t n){ size_t i=0; for(;i<n&&s[i];i++) d[i]=s[i]; for(;i<n;i++) d[i]='\0'; return d; }
@@ -8199,7 +8200,7 @@ _TR_XLINK char* _tr_exe_dir(void) {
     if(!realpath(tmp,buf)){strcpy(buf,".");return buf;}
     for(int i=(int)strlen(buf)-1;i>0;i--){if(buf[i]=='/'){buf[i]='\0';break;}}
     return buf;
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(TAURARO_KERNEL) && !defined(TAURARO_BARE)
     char* buf=(char*)_tr_c_malloc(4096);
     ssize_t n=readlink("/proc/self/exe",buf,4095);
     if(n<=0){buf[0]='.';buf[1]='\0';return buf;}
