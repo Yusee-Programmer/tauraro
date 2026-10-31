@@ -1054,6 +1054,18 @@ extend Sema:
                                         return nothing
                                 case _: pass
                         case _: pass
+                # `Option.some(x)` / `Result.ok(x)` of a certain scalar x: Option[T] / Result[T, void]
+                if margs.len == 1 and (mm == "some" or mm == "Some" or mm == "ok" or mm == "Ok"):
+                    match mo.read():
+                        case HirExpr.EIdent(ctn, _, _):
+                            if ((ctn == "Option" and (mm == "some" or mm == "Some")) or (ctn == "Result" and (mm == "ok" or mm == "Ok"))) and not self.classes.contains(ctn) and self.resolve(ctn).kind != SymbolKind.SVariable:
+                                mut cf = self.firm_family(margs.get(0))
+                                if cf == "int" or cf == "float" or cf == "bool" or cf == "str":
+                                    mut ct = AstType.init(ctn)
+                                    ct.args.push(box_asttype(AstType.init(cf)))
+                                    if ctn == "Result": ct.args.push(box_asttype(AstType.init("void")))
+                                    return ct
+                        case _: pass
                 mut rt = self.firm_type(mo)
                 if rt.name == "":
                     mut rf = self.firm_family(mo)
@@ -1119,6 +1131,14 @@ extend Sema:
             case HirExpr.ELitNone(_): return "None"
             case HirExpr.EFString(_, _): return "str"
             case HirExpr.EList(_, _): return "List"
+            case HirExpr.EDo(dbody, dty):
+                # `map(f, xs)` / `filter(f, xs)` / `list(xs)` lower to a do-block that builds and yields a List
+                if dty.name == "List" and dbody.stmts.len > 0:
+                    match dbody.stmts.get(0).read():
+                        case HirStmt.SLet(dnm, _, _, _, _, _, _):
+                            if dnm.starts_with("__mf") or dnm.starts_with("__lstc"): return "List"
+                        case _: pass
+                return ""
             case HirExpr.EDict(_, _, _): return "Dict"
             case HirExpr.ETuple(_, _): return "Tuple"
             case HirExpr.EIdent(nm, _, _):
@@ -1164,6 +1184,11 @@ extend Sema:
                     if (_uw_t.name == "Option" or _uw_t.name == "Result") and _uw_t.args.len > 0:
                         mut _uw_a = _uw_t.args.get(0).read()
                         if _uw_a.args.len == 0 and (_uw_a.name == "int" or _uw_a.name == "float" or _uw_a.name == "bool" or _uw_a.name == "str"): return _uw_a.name
+                if margs.len == 0 and (mm == "to_float" or mm == "to_f64" or mm == "to_int" or mm == "to_i64"):
+                    mut cvf = self.firm_family(mo)
+                    if cvf == "int" or cvf == "float" or cvf == "bool" or cvf == "str":
+                        if mm == "to_float" or mm == "to_f64": return "float"
+                        return "int"
                 if (mm == "len" or mm == "length") and margs.len == 0:
                     mut lrf = self.firm_family(mo)
                     if lrf == "str" or lrf == "List" or lrf == "Dict": return "int"
@@ -1177,7 +1202,7 @@ extend Sema:
                     mut ft = self.find_field_type(pc, pf)
                     if ft.name != "": return self.decl_family(ft)
                 return ""
-            case HirExpr.ECall(callee, _, _):
+            case HirExpr.ECall(callee, fcargs, _):
                 match callee.read():
                     case HirExpr.EIdent(fn0, _, _):
                         # `f[T](..)` is lowered to a call of `f__MONO_T`: judge it by `f`'s declaration
@@ -1207,6 +1232,7 @@ extend Sema:
                                 if xd_fam == "int" or xd_fam == "float" or xd_fam == "bool": return xd_fam   # a C function's str / pointer results are not certain
                         mut fn_sym = self.resolve(fn)
                         if fn_sym.name == "" or (fn_sym.kind == SymbolKind.SFunction and not self.classes.contains(fn)):
+                            if (fn == "map" or fn == "filter") and fcargs.len == 2 and fn_sym.name != "" and not self.classes.contains(fn): return "List"
                             if fn == "str": return "str"
                             if fn == "int" or fn == "len": return "int"
                             if fn == "float": return "float"
@@ -1350,7 +1376,33 @@ extend Sema:
         if fam == "int": return "an int"
         return "a " + fam
     # Report an E-5 mismatch when `e` is certainly a different kind of value than `exp_ty` declares.
+    # True when `ty` (or any type argument) names one of the generic parameters `gens`.
+    pub def type_mentions_generic(self, ty: AstType, gens: Vec[str]) -> bool:
+        mut gi = 0
+        while gi < gens.len:
+            if ty.name == gens.get(gi): return true
+            gi = gi + 1
+        mut ai = 0
+        while ai < ty.args.len:
+            if self.type_mentions_generic(ty.args.get(ai).read(), gens): return true
+            ai = ai + 1
+        return false
+
     pub def check_expr_assignable(self, exp_ty: AstType, e: Pointer[HirExpr], what: str):
+        # `m: Mutex[int] = Mutex.init("s")` / ThreadLocal / RwLock / Atomic: the initial value must be a T
+        if (exp_ty.name == "Mutex" or exp_ty.name == "RwLock" or exp_ty.name == "ThreadLocal" or exp_ty.name == "Atomic") and exp_ty.args.len == 1 and not self.classes.contains(exp_ty.name) and not _is_invalid_ptr(e as usize):
+            match e.read():
+                case HirExpr.EMethodCall(wmo, wmm, wargs, _):
+                    if (wmm == "init" or wmm == "new") and wargs.len == 1:
+                        match wmo.read():
+                            case HirExpr.EIdent(wcn, _, _):
+                                if wcn == exp_ty.name:
+                                    mut wdf = self.decl_family(exp_ty.args.get(0).read())
+                                    mut waf = self.firm_family(wargs.get(0))
+                                    if wdf != "" and waf != "" and wdf != "class" and self.family_mismatch(wdf, waf):
+                                        self.error("[E-5] Type mismatch: " + what + " is a " + exp_ty.name + "[" + exp_ty.args.get(0).read().name + "] but its initial value is " + self.family_word(waf) + ".\n      FIX: pass a '" + exp_ty.args.get(0).read().name + "' value, e.g. " + exp_ty.name + "." + wmm + "(0), or change the declared element type.")
+                            case _: pass
+                case _: pass
         # `List[str] = [1, 2]`: check the literal's elements against the declared element type
         if exp_ty.name == "char" and not _is_invalid_ptr(e as usize):
             match e.read():
@@ -1364,6 +1416,8 @@ extend Sema:
                 case HirExpr.EList(items, lty):
                     if exp_ty.name == "List" and items.len > 0 and lty.name == "List" and lty.args.len == 1 and self.num_canon(lty.args.get(0).read().name) != self.num_canon(elt.name) and self.is_num_prim(lty.args.get(0).read().name) and self.is_num_prim(elt.name):
                         self.error("[E-5] Type mismatch: " + what + " is a List[" + elt.name + "] but this list literal holds " + lty.args.get(0).read().name + " values.\n      FIX: build it with List[" + elt.name + "].init(...) and push(...) the elements, or cast every element: [1 as " + elt.name + ", ...].")
+                    if exp_ty.name == "List" and items.len > 0 and lty.name == "List" and lty.args.len == 1 and ((lty.args.get(0).read().name == "bool" and self.is_num_prim(elt.name)) or (elt.name == "bool" and self.is_num_prim(lty.args.get(0).read().name))):
+                        self.error("[E-5] Type mismatch: " + what + " is a List[" + elt.name + "] but this list literal holds " + lty.args.get(0).read().name + " values.\n      FIX: make every element a '" + elt.name + "' (convert with int(x) / x != 0 as needed), or declare the list as List[" + lty.args.get(0).read().name + "].")
                     mut li = 0
                     while li < items.len:
                         if self.family_mismatch(self.decl_family(elt), self.firm_family(items.get(li))):
@@ -5769,7 +5823,7 @@ extend Sema:
                     if p.name == "self" and self.current_class_name != "" and self.classes.contains(self.current_class_name) and self.decl_family(AstType.init(self.current_class_name)) == "class":
                         pb_sym.firm = "class"
                         pb_sym.firm_cls = self.current_class_name
-                    if p.ty as usize != 0 as usize and not p.is_variadic and f.generics.len == 0:
+                    if p.ty as usize != 0 as usize and not p.is_variadic and (f.generics.len == 0 or not self.type_mentions_generic(p_ty, f.generics)):
                         pb_sym.firm = self.decl_family(p_ty)
                         if pb_sym.firm != "": pb_sym.firm_ty = p_ty
                         if pb_sym.firm == "class" and self.classes.contains(p_ty.name): pb_sym.firm_cls = p_ty.name

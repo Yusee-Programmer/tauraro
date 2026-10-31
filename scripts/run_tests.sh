@@ -422,6 +422,12 @@ expect_diag "call a None local" 'def main():\n    mut f = None\n    print(f(2))\
 expect_diag "bare Box type" 'def mk() -> Box:\n    return 1\ndef main():\n    print(1)\n' "the builtin Box needs a type argument"
 expect_diag "with on a float" 'def main():\n    mut g = 1.5\n    with g as x:\n        print(1)\n' "'with' needs a context manager"
 expect_diag "empty global dict as int" 'mut cnt = {}\ndef main():\n    mut x: int = cnt\n    print(x)\n' "Type mismatch"
+expect_diag "Result.ok(str).unwrap() as int" 'def take(n: int):\n    print(n)\ndef main():\n    mut r = Result.ok("s")\n    take(r.unwrap())\n' "[E-5] Type mismatch"
+expect_diag "ThreadLocal int given str" 'def main():\n    mut tl: ThreadLocal[int] = ThreadLocal.new("s")\n    tl.free()\n' "its initial value is a str"
+expect_diag "generic fn scalar param as wrong dict key" 'def put[T](d: Dict[str, T], k: bool, v: T):\n    d.set(k, v)\ndef main():\n    mut d: Dict[str, int] = {}\n    put(d, true, 1)\n' "the key of Dict"
+expect_diag "float expr returned as class" 'class Foo:\n    v: int\nextend Foo:\n    pub def f(self) -> Foo:\n        return self.v.to_float() + 0.5\ndef main():\n    print(1)\n' "declared to return"
+expect_diag "List[int] literal of bools" 'def f(x: int) -> bool:\n    return x > 1\ndef main():\n    mut a: List[int] = [f(1), f(2)]\n    print(len(a))\n' "list literal holds bool"
+expect_diag "map result indexed by str" 'def main():\n    ys = map(lambda v: v * 0.5, [1.0, 3.0])\n    print(ys["a"])\n' "is indexed with a str"
 if [ -n "$diagfail" ]; then
     echo "  FAILED:$diagfail"
     failed=$((failed + 1))
