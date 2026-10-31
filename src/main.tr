@@ -2358,6 +2358,10 @@ pub def main(args: Vec[str]):
         sema.errors.push(infer_msgs.get(infer_mi))
         infer_mi = infer_mi + 1
     mut hir = sema.analyze(prog)
+    mut ng_i = 0
+    while ng_i < sema.none_read_names.len:
+        if not sema.assigned_names.contains(sema.none_read_names.get(ng_i)): sema.errors.push(sema.none_read_msgs.get(ng_i))
+        ng_i = ng_i + 1
     _tr_set_ice_ctx("generating C for " + input_path)
 
     if sema.warnings.len > 0:

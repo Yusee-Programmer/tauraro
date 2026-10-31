@@ -21,7 +21,7 @@ __attribute__((hot)) long long _indent_of(TrStr line) {
 #line 31 "src/doc.tr"
     long long i = 0LL;
 #line 32 "src/doc.tr"
-    while (((i < _tr_str_lenv((line))) && ({ TrStr _cmpa_t2835 = (_tr_str_slicev((line), i, (i + 1LL))); TrStr _cmpb_t2836 = (_tr_str_lit_len(" ", 1LL)); _Bool _cmpr_t2837 = _tr_str_eqv(_cmpa_t2835, _cmpb_t2836); _tr_str_release(_cmpa_t2835); _cmpr_t2837; }))) {
+    while (((i < _tr_str_lenv((line))) && ({ TrStr _cmpa_t2844 = (_tr_str_slicev((line), i, (i + 1LL))); TrStr _cmpb_t2845 = (_tr_str_lit_len(" ", 1LL)); _Bool _cmpr_t2846 = _tr_str_eqv(_cmpa_t2844, _cmpb_t2845); _tr_str_release(_cmpa_t2844); _cmpr_t2846; }))) {
 #line 32 "src/doc.tr"
         i = (i + 1LL);
     }
@@ -35,21 +35,21 @@ __attribute__((hot)) TrStr _comment_text(TrStr line) {
 #line 38 "src/doc.tr"
     if (_tr_str_starts_withv((t), (_tr_str_lit_len("# ", 2LL)))) {
 #line 38 "src/doc.tr"
-        TrStr _trret600 = _tr_str_slicev((t), 2LL, _tr_str_lenv((t)));
+        TrStr _trret602 = _tr_str_slicev((t), 2LL, _tr_str_lenv((t)));
         _tr_str_release(t);
-        return _trret600;
+        return _trret602;
     }
 #line 39 "src/doc.tr"
     if (_tr_str_starts_withv((t), (_tr_str_lit_len("#", 1LL)))) {
 #line 39 "src/doc.tr"
-        TrStr _trret601 = _tr_str_slicev((t), 1LL, _tr_str_lenv((t)));
+        TrStr _trret603 = _tr_str_slicev((t), 1LL, _tr_str_lenv((t)));
         _tr_str_release(t);
-        return _trret601;
+        return _trret603;
     }
 #line 40 "src/doc.tr"
-    TrStr _trret602 = _tr_str_retain(t);
+    TrStr _trret604 = _tr_str_retain(t);
     _tr_str_release(t);
-    return _trret602;
+    return _trret604;
 }
 
 __attribute__((hot)) long long _bracket_depth(TrStr s) {
@@ -95,9 +95,9 @@ __attribute__((hot)) TrStr _signature(TrStr decl) {
 #line 59 "src/doc.tr"
     if (_tr_str_starts_withv((s), (_tr_str_lit_len("pub ", 4LL)))) {
 #line 59 "src/doc.tr"
-        TrStr _strtmp_t2838 = _tr_str_slicev((s), 4LL, _tr_str_lenv((s)));
+        TrStr _strtmp_t2847 = _tr_str_slicev((s), 4LL, _tr_str_lenv((s)));
         _tr_str_release(s);
-        s = _strtmp_t2838;
+        s = _strtmp_t2847;
     }
 #line 60 "src/doc.tr"
     long long d = 0LL;
@@ -123,10 +123,10 @@ __attribute__((hot)) TrStr _signature(TrStr decl) {
                 d = (d - 1LL);
             } else if ((_tr_str_eqv((c), (_tr_str_lit_len(":", 1LL))) && (d == 0LL))) {
 #line 72 "src/doc.tr"
-                TrStr _trret603 = _tr_str_stripv((_tr_str_slicev((s), 0LL, i)));
+                TrStr _trret605 = _tr_str_stripv((_tr_str_slicev((s), 0LL, i)));
                 _tr_str_release(s);
                 _tr_str_release(c);
-                return _trret603;
+                return _trret605;
             }
         }
 #line 73 "src/doc.tr"
@@ -134,9 +134,9 @@ __attribute__((hot)) TrStr _signature(TrStr decl) {
         _tr_str_release(c);
     }
 #line 74 "src/doc.tr"
-    TrStr _trret604 = _tr_str_retain(s);
+    TrStr _trret606 = _tr_str_retain(s);
     _tr_str_release(s);
-    return _trret604;
+    return _trret606;
 }
 
 __attribute__((hot)) TrStr _first_word_after(TrStr s, TrStr kw) {
@@ -145,9 +145,9 @@ __attribute__((hot)) TrStr _first_word_after(TrStr s, TrStr kw) {
 #line 78 "src/doc.tr"
     if (_tr_str_starts_withv((t), (_tr_str_lit_len("pub ", 4LL)))) {
 #line 78 "src/doc.tr"
-        TrStr _strtmp_t2839 = _tr_str_slicev((t), 4LL, _tr_str_lenv((t)));
+        TrStr _strtmp_t2848 = _tr_str_slicev((t), 4LL, _tr_str_lenv((t)));
         _tr_str_release(t);
-        t = _strtmp_t2839;
+        t = _strtmp_t2848;
     }
 #line 79 "src/doc.tr"
     if ((!_tr_str_starts_withv((t), (_tr_strx_concatv((kw), (_tr_str_lit_len(" ", 1LL))))))) {
@@ -156,9 +156,9 @@ __attribute__((hot)) TrStr _first_word_after(TrStr s, TrStr kw) {
         return _tr_str_lit_len("", 0LL);
     }
 #line 80 "src/doc.tr"
-    TrStr _strtmp_t2842 = ({ __auto_type _ord_t2840 = ((_tr_str_lenv((kw)) + 1LL)); __auto_type _ord_t2841 = (_tr_str_lenv((t))); __auto_type _wr = (_tr_str_stripv((_tr_str_slicev((t), _ord_t2840, _ord_t2841)))); _wr; });
+    TrStr _strtmp_t2851 = ({ __auto_type _ord_t2849 = ((_tr_str_lenv((kw)) + 1LL)); __auto_type _ord_t2850 = (_tr_str_lenv((t))); __auto_type _wr = (_tr_str_stripv((_tr_str_slicev((t), _ord_t2849, _ord_t2850)))); _wr; });
     _tr_str_release(t);
-    t = _strtmp_t2842;
+    t = _strtmp_t2851;
 #line 81 "src/doc.tr"
     long long i = 0LL;
 #line 82 "src/doc.tr"
@@ -176,9 +176,9 @@ __attribute__((hot)) TrStr _first_word_after(TrStr s, TrStr kw) {
         _tr_str_release(c);
     }
 #line 86 "src/doc.tr"
-    TrStr _trret605 = _tr_str_slicev((t), 0LL, i);
+    TrStr _trret607 = _tr_str_slicev((t), 0LL, i);
     _tr_str_release(t);
-    return _trret605;
+    return _trret607;
 }
 
 __attribute__((hot)) TrStr _join_doc(List_TrStr* lines) {
@@ -194,7 +194,7 @@ __attribute__((hot)) TrStr _join_doc(List_TrStr* lines) {
             StringBuilder_append(sb, _tr_str_lit_len("\n", 1LL));
         }
 #line 93 "src/doc.tr"
-        ({ TrStr _sbt_t2843 = (List_TrStr_get(lines, i)); StringBuilder_append(sb, _sbt_t2843); _tr_str_release(_sbt_t2843); });
+        ({ TrStr _sbt_t2852 = (List_TrStr_get(lines, i)); StringBuilder_append(sb, _sbt_t2852); _tr_str_release(_sbt_t2852); });
 #line 94 "src/doc.tr"
         i = (i + 1LL);
     }
@@ -225,52 +225,52 @@ __attribute__((hot)) TrStr doc_module_name(TrStr path) {
 #line 109 "src/doc.tr"
     while (_tr_str_starts_withv((p), (_tr_str_lit_len("./", 2LL)))) {
 #line 109 "src/doc.tr"
-        TrStr _strtmp_t2844 = _tr_str_slicev((p), 2LL, _tr_str_lenv((p)));
+        TrStr _strtmp_t2853 = _tr_str_slicev((p), 2LL, _tr_str_lenv((p)));
         _tr_str_release(p);
-        p = _strtmp_t2844;
+        p = _strtmp_t2853;
     }
 #line 111 "src/doc.tr"
-    if ((_tr_str_starts_withv((p), (_tr_str_lit_len("/", 1LL))) || ((_tr_str_lenv((p)) > 1LL) && ({ TrStr _cmpa_t2845 = (_tr_str_slicev((p), 1LL, 2LL)); TrStr _cmpb_t2846 = (_tr_str_lit_len(":", 1LL)); _Bool _cmpr_t2847 = _tr_str_eqv(_cmpa_t2845, _cmpb_t2846); _tr_str_release(_cmpa_t2845); _cmpr_t2847; })))) {
+    if ((_tr_str_starts_withv((p), (_tr_str_lit_len("/", 1LL))) || ((_tr_str_lenv((p)) > 1LL) && ({ TrStr _cmpa_t2854 = (_tr_str_slicev((p), 1LL, 2LL)); TrStr _cmpb_t2855 = (_tr_str_lit_len(":", 1LL)); _Bool _cmpr_t2856 = _tr_str_eqv(_cmpa_t2854, _cmpb_t2855); _tr_str_release(_cmpa_t2854); _cmpr_t2856; })))) {
 #line 112 "src/doc.tr"
         long long at = _tr_str_index_ofv((p), (_tr_str_lit_len("/std/", 5LL)));
 #line 113 "src/doc.tr"
         if ((at >= 0LL)) {
 #line 113 "src/doc.tr"
-            TrStr _strtmp_t2848 = _tr_str_slicev((p), (at + 1LL), _tr_str_lenv((p)));
+            TrStr _strtmp_t2857 = _tr_str_slicev((p), (at + 1LL), _tr_str_lenv((p)));
             _tr_str_release(p);
-            p = _strtmp_t2848;
+            p = _strtmp_t2857;
         } else {
 #line 115 "src/doc.tr"
             long long k = (_tr_str_lenv((p)) - 1LL);
 #line 116 "src/doc.tr"
-            while (((k >= 0LL) && ({ TrStr _cmpa_t2849 = (_tr_str_slicev((p), k, (k + 1LL))); TrStr _cmpb_t2850 = (_tr_str_lit_len("/", 1LL)); _Bool _cmpr_t2851 = !_tr_str_eqv(_cmpa_t2849, _cmpb_t2850); _tr_str_release(_cmpa_t2849); _cmpr_t2851; }))) {
+            while (((k >= 0LL) && ({ TrStr _cmpa_t2858 = (_tr_str_slicev((p), k, (k + 1LL))); TrStr _cmpb_t2859 = (_tr_str_lit_len("/", 1LL)); _Bool _cmpr_t2860 = !_tr_str_eqv(_cmpa_t2858, _cmpb_t2859); _tr_str_release(_cmpa_t2858); _cmpr_t2860; }))) {
 #line 116 "src/doc.tr"
                 k = (k - 1LL);
             }
 #line 117 "src/doc.tr"
-            TrStr _strtmp_t2852 = _tr_str_slicev((p), (k + 1LL), _tr_str_lenv((p)));
+            TrStr _strtmp_t2861 = _tr_str_slicev((p), (k + 1LL), _tr_str_lenv((p)));
             _tr_str_release(p);
-            p = _strtmp_t2852;
+            p = _strtmp_t2861;
         }
     }
 #line 118 "src/doc.tr"
     if (_tr_str_ends_withv((p), (_tr_str_lit_len(".tr", 3LL)))) {
 #line 118 "src/doc.tr"
-        TrStr _strtmp_t2853 = _tr_str_slicev((p), 0LL, (_tr_str_lenv((p)) - 3LL));
+        TrStr _strtmp_t2862 = _tr_str_slicev((p), 0LL, (_tr_str_lenv((p)) - 3LL));
         _tr_str_release(p);
-        p = _strtmp_t2853;
+        p = _strtmp_t2862;
     }
 #line 119 "src/doc.tr"
     if (_tr_str_ends_withv((p), (_tr_str_lit_len("/mod", 4LL)))) {
 #line 119 "src/doc.tr"
-        TrStr _strtmp_t2854 = _tr_str_slicev((p), 0LL, (_tr_str_lenv((p)) - 4LL));
+        TrStr _strtmp_t2863 = _tr_str_slicev((p), 0LL, (_tr_str_lenv((p)) - 4LL));
         _tr_str_release(p);
-        p = _strtmp_t2854;
+        p = _strtmp_t2863;
     }
 #line 120 "src/doc.tr"
-    TrStr _trret606 = _tr_str_replacev((p), (_tr_str_lit_len("/", 1LL)), (_tr_str_lit_len(".", 1LL)));
+    TrStr _trret608 = _tr_str_replacev((p), (_tr_str_lit_len("/", 1LL)), (_tr_str_lit_len(".", 1LL)));
     _tr_str_release(p);
-    return _trret606;
+    return _trret608;
 }
 
 __attribute__((hot)) List_TrStr* _doc_lines(TrStr text) {
@@ -295,7 +295,7 @@ __attribute__((hot)) List_TrStr* _doc_lines(TrStr text) {
 #line 132 "src/doc.tr"
         if ((c == 10LL)) {
 #line 133 "src/doc.tr"
-            ({ TrStr _at_t2855 = (_tr_str_slicev((text), start, i)); List_TrStr_append(out, _at_t2855); _tr_str_release(_at_t2855); });
+            ({ TrStr _at_t2864 = (_tr_str_slicev((text), start, i)); List_TrStr_append(out, _at_t2864); _tr_str_release(_at_t2864); });
 #line 134 "src/doc.tr"
             start = (i + 1LL);
         }
@@ -305,7 +305,7 @@ __attribute__((hot)) List_TrStr* _doc_lines(TrStr text) {
 #line 136 "src/doc.tr"
     if ((start < n)) {
 #line 136 "src/doc.tr"
-        ({ TrStr _at_t2856 = (_tr_str_slicev((text), start, n)); List_TrStr_append(out, _at_t2856); _tr_str_release(_at_t2856); });
+        ({ TrStr _at_t2865 = (_tr_str_slicev((text), start, n)); List_TrStr_append(out, _at_t2865); _tr_str_release(_at_t2865); });
     }
 #line 137 "src/doc.tr"
     return out;
@@ -417,7 +417,7 @@ __attribute__((hot)) DocModule* doc_parse(TrStr path, TrStr text) {
                     pending_indent = ind;
                 }
 #line 189 "src/doc.tr"
-                ({ TrStr _at_t2857 = (_comment_text(t)); List_TrStr_append(pending, _at_t2857); _tr_str_release(_at_t2857); });
+                ({ TrStr _at_t2866 = (_comment_text(t)); List_TrStr_append(pending, _at_t2866); _tr_str_release(_at_t2866); });
             }
 #line 190 "src/doc.tr"
             i = (i + 1LL);
@@ -429,13 +429,13 @@ __attribute__((hot)) DocModule* doc_parse(TrStr path, TrStr text) {
 #line 192 "src/doc.tr"
         if (((scope_indent >= 0LL) && (ind <= scope_indent))) {
 #line 193 "src/doc.tr"
-            TrStr _strtmp_t2858 = _tr_str_lit_len("", 0LL);
+            TrStr _strtmp_t2867 = _tr_str_lit_len("", 0LL);
             _tr_str_release(scope_kind);
-            scope_kind = _strtmp_t2858;
+            scope_kind = _strtmp_t2867;
 #line 194 "src/doc.tr"
-            TrStr _strtmp_t2859 = _tr_str_lit_len("", 0LL);
+            TrStr _strtmp_t2868 = _tr_str_lit_len("", 0LL);
             _tr_str_release(scope_name);
-            scope_name = _strtmp_t2859;
+            scope_name = _strtmp_t2868;
 #line 195 "src/doc.tr"
             scope_indent = (-1LL);
         }
@@ -448,7 +448,7 @@ __attribute__((hot)) DocModule* doc_parse(TrStr path, TrStr text) {
 #line 200 "src/doc.tr"
             j = (j + 1LL);
 #line 201 "src/doc.tr"
-            ({ TrStr _ap_t2860 = (_tr_str_lit_len(" ", 1LL)); TrStr _ap_t2861 = (_tr_str_stripv((List_TrStr_get(lines, j)))); _tr_str_append(&decl, _ap_t2860); _tr_str_append(&decl, _ap_t2861); _tr_str_release(_ap_t2861); });
+            ({ TrStr _ap_t2869 = (_tr_str_lit_len(" ", 1LL)); TrStr _ap_t2870 = (_tr_str_stripv((List_TrStr_get(lines, j)))); _tr_str_append(&decl, _ap_t2869); _tr_str_append(&decl, _ap_t2870); _tr_str_release(_ap_t2870); });
         }
 #line 202 "src/doc.tr"
         TrStr doc = _join_doc(pending);
@@ -459,7 +459,7 @@ __attribute__((hot)) DocModule* doc_parse(TrStr path, TrStr text) {
 #line 205 "src/doc.tr"
             if (_tr_str_starts_withv((decl), (_tr_str_lit_len("pub def ", 8LL)))) {
 #line 206 "src/doc.tr"
-                ({ TrStr _at_t2862 = (_first_word_after(decl, _tr_str_lit_len("def", 3LL))); TrStr _at_t2863 = (_signature(decl)); DocItem* _ord_t2864 = (_new_item(_tr_str_lit_len("def", 3LL), _at_t2862, _at_t2863, doc, _tr_str_lit_len("", 0LL))); List_ptr_append(m->items, _tr_obj_retain(_ord_t2864)); _tr_str_release(_at_t2862); _tr_str_release(_at_t2863); _tr_obj_release(_ord_t2864, _trdrop_DocItem); });
+                ({ TrStr _at_t2871 = (_first_word_after(decl, _tr_str_lit_len("def", 3LL))); TrStr _at_t2872 = (_signature(decl)); DocItem* _ord_t2873 = (_new_item(_tr_str_lit_len("def", 3LL), _at_t2871, _at_t2872, doc, _tr_str_lit_len("", 0LL))); List_ptr_append(m->items, _tr_obj_retain(_ord_t2873)); _tr_str_release(_at_t2871); _tr_str_release(_at_t2872); _tr_obj_release(_ord_t2873, _trdrop_DocItem); });
             } else if (_tr_str_starts_withv((decl), (_tr_str_lit_len("pub const ", 10LL)))) {
 #line 208 "src/doc.tr"
                 TrStr cs = _tr_str_slicev((decl), 4LL, _tr_str_lenv((decl)));
@@ -470,31 +470,31 @@ __attribute__((hot)) DocModule* doc_parse(TrStr path, TrStr text) {
 #line 211 "src/doc.tr"
                     if (_tr_str_eqv((doc), (_tr_str_lit_len("", 0LL)))) {
 #line 211 "src/doc.tr"
-                        TrStr _strtmp_t2865 = _tr_str_stripv((_tr_str_slicev((cs), (hash + 3LL), _tr_str_lenv((cs)))));
+                        TrStr _strtmp_t2874 = _tr_str_stripv((_tr_str_slicev((cs), (hash + 3LL), _tr_str_lenv((cs)))));
                         _tr_str_release(doc);
-                        doc = _strtmp_t2865;
+                        doc = _strtmp_t2874;
                     }
 #line 212 "src/doc.tr"
-                    TrStr _strtmp_t2866 = _tr_str_stripv((_tr_str_slicev((cs), 0LL, hash)));
+                    TrStr _strtmp_t2875 = _tr_str_stripv((_tr_str_slicev((cs), 0LL, hash)));
                     _tr_str_release(cs);
-                    cs = _strtmp_t2866;
+                    cs = _strtmp_t2875;
                 }
 #line 213 "src/doc.tr"
-                ({ TrStr _at_t2867 = (_first_word_after(decl, _tr_str_lit_len("const", 5LL))); DocItem* _ord_t2868 = (_new_item(_tr_str_lit_len("const", 5LL), _at_t2867, cs, doc, _tr_str_lit_len("", 0LL))); List_ptr_append(m->items, _tr_obj_retain(_ord_t2868)); _tr_str_release(_at_t2867); _tr_obj_release(_ord_t2868, _trdrop_DocItem); });
+                ({ TrStr _at_t2876 = (_first_word_after(decl, _tr_str_lit_len("const", 5LL))); DocItem* _ord_t2877 = (_new_item(_tr_str_lit_len("const", 5LL), _at_t2876, cs, doc, _tr_str_lit_len("", 0LL))); List_ptr_append(m->items, _tr_obj_retain(_ord_t2877)); _tr_str_release(_at_t2876); _tr_obj_release(_ord_t2877, _trdrop_DocItem); });
                 _tr_str_release(cs);
             } else if (_tr_str_starts_withv((decl), (_tr_str_lit_len("pub class ", 10LL)))) {
 #line 215 "src/doc.tr"
                 TrStr cn = _first_word_after(decl, _tr_str_lit_len("class", 5LL));
 #line 216 "src/doc.tr"
-                ({ TrStr _at_t2869 = (_signature(decl)); DocItem* _ord_t2870 = (_new_item(_tr_str_lit_len("class", 5LL), cn, _at_t2869, doc, _tr_str_lit_len("", 0LL))); List_ptr_append(m->items, _tr_obj_retain(_ord_t2870)); _tr_str_release(_at_t2869); _tr_obj_release(_ord_t2870, _trdrop_DocItem); });
+                ({ TrStr _at_t2878 = (_signature(decl)); DocItem* _ord_t2879 = (_new_item(_tr_str_lit_len("class", 5LL), cn, _at_t2878, doc, _tr_str_lit_len("", 0LL))); List_ptr_append(m->items, _tr_obj_retain(_ord_t2879)); _tr_str_release(_at_t2878); _tr_obj_release(_ord_t2879, _trdrop_DocItem); });
 #line 217 "src/doc.tr"
-                TrStr _strtmp_t2871 = _tr_str_lit_len("class", 5LL);
+                TrStr _strtmp_t2880 = _tr_str_lit_len("class", 5LL);
                 _tr_str_release(scope_kind);
-                scope_kind = _strtmp_t2871;
+                scope_kind = _strtmp_t2880;
 #line 218 "src/doc.tr"
-                TrStr _strtmp_t2872 = _tr_str_retain(cn);
+                TrStr _strtmp_t2881 = _tr_str_retain(cn);
                 _tr_str_release(scope_name);
-                scope_name = _strtmp_t2872;
+                scope_name = _strtmp_t2881;
 #line 219 "src/doc.tr"
                 scope_indent = 0LL;
                 _tr_str_release(cn);
@@ -502,15 +502,15 @@ __attribute__((hot)) DocModule* doc_parse(TrStr path, TrStr text) {
 #line 221 "src/doc.tr"
                 TrStr en = _first_word_after(decl, _tr_str_lit_len("enum", 4LL));
 #line 222 "src/doc.tr"
-                ({ TrStr _at_t2873 = (_signature(decl)); DocItem* _ord_t2874 = (_new_item(_tr_str_lit_len("enum", 4LL), en, _at_t2873, doc, _tr_str_lit_len("", 0LL))); List_ptr_append(m->items, _tr_obj_retain(_ord_t2874)); _tr_str_release(_at_t2873); _tr_obj_release(_ord_t2874, _trdrop_DocItem); });
+                ({ TrStr _at_t2882 = (_signature(decl)); DocItem* _ord_t2883 = (_new_item(_tr_str_lit_len("enum", 4LL), en, _at_t2882, doc, _tr_str_lit_len("", 0LL))); List_ptr_append(m->items, _tr_obj_retain(_ord_t2883)); _tr_str_release(_at_t2882); _tr_obj_release(_ord_t2883, _trdrop_DocItem); });
 #line 223 "src/doc.tr"
-                TrStr _strtmp_t2875 = _tr_str_lit_len("enum", 4LL);
+                TrStr _strtmp_t2884 = _tr_str_lit_len("enum", 4LL);
                 _tr_str_release(scope_kind);
-                scope_kind = _strtmp_t2875;
+                scope_kind = _strtmp_t2884;
 #line 224 "src/doc.tr"
-                TrStr _strtmp_t2876 = _tr_str_retain(en);
+                TrStr _strtmp_t2885 = _tr_str_retain(en);
                 _tr_str_release(scope_name);
-                scope_name = _strtmp_t2876;
+                scope_name = _strtmp_t2885;
 #line 225 "src/doc.tr"
                 scope_indent = 0LL;
                 _tr_str_release(en);
@@ -518,15 +518,15 @@ __attribute__((hot)) DocModule* doc_parse(TrStr path, TrStr text) {
 #line 227 "src/doc.tr"
                 TrStr inn = _first_word_after(decl, _tr_str_lit_len("interface", 9LL));
 #line 228 "src/doc.tr"
-                ({ TrStr _at_t2877 = (_signature(decl)); DocItem* _ord_t2878 = (_new_item(_tr_str_lit_len("interface", 9LL), inn, _at_t2877, doc, _tr_str_lit_len("", 0LL))); List_ptr_append(m->items, _tr_obj_retain(_ord_t2878)); _tr_str_release(_at_t2877); _tr_obj_release(_ord_t2878, _trdrop_DocItem); });
+                ({ TrStr _at_t2886 = (_signature(decl)); DocItem* _ord_t2887 = (_new_item(_tr_str_lit_len("interface", 9LL), inn, _at_t2886, doc, _tr_str_lit_len("", 0LL))); List_ptr_append(m->items, _tr_obj_retain(_ord_t2887)); _tr_str_release(_at_t2886); _tr_obj_release(_ord_t2887, _trdrop_DocItem); });
 #line 229 "src/doc.tr"
-                TrStr _strtmp_t2879 = _tr_str_lit_len("interface", 9LL);
+                TrStr _strtmp_t2888 = _tr_str_lit_len("interface", 9LL);
                 _tr_str_release(scope_kind);
-                scope_kind = _strtmp_t2879;
+                scope_kind = _strtmp_t2888;
 #line 230 "src/doc.tr"
-                TrStr _strtmp_t2880 = _tr_str_retain(inn);
+                TrStr _strtmp_t2889 = _tr_str_retain(inn);
                 _tr_str_release(scope_name);
-                scope_name = _strtmp_t2880;
+                scope_name = _strtmp_t2889;
 #line 231 "src/doc.tr"
                 scope_indent = 0LL;
                 _tr_str_release(inn);
@@ -534,13 +534,13 @@ __attribute__((hot)) DocModule* doc_parse(TrStr path, TrStr text) {
 #line 233 "src/doc.tr"
                 TrStr xn = _first_word_after(decl, _tr_str_lit_len("extend", 6LL));
 #line 234 "src/doc.tr"
-                TrStr _strtmp_t2881 = _tr_str_lit_len("extend", 6LL);
+                TrStr _strtmp_t2890 = _tr_str_lit_len("extend", 6LL);
                 _tr_str_release(scope_kind);
-                scope_kind = _strtmp_t2881;
+                scope_kind = _strtmp_t2890;
 #line 235 "src/doc.tr"
-                TrStr _strtmp_t2882 = _tr_str_retain(xn);
+                TrStr _strtmp_t2891 = _tr_str_retain(xn);
                 _tr_str_release(scope_name);
-                scope_name = _strtmp_t2882;
+                scope_name = _strtmp_t2891;
 #line 236 "src/doc.tr"
                 scope_indent = 0LL;
                 _tr_str_release(xn);
@@ -555,17 +555,17 @@ __attribute__((hot)) DocModule* doc_parse(TrStr path, TrStr text) {
 #line 241 "src/doc.tr"
                 if ((_tr_str_index_ofv((sig), (_tr_str_lit_len("(self", 5LL))) < 0LL)) {
 #line 241 "src/doc.tr"
-                    TrStr _strtmp_t2883 = _tr_str_lit_len("static", 6LL);
+                    TrStr _strtmp_t2892 = _tr_str_lit_len("static", 6LL);
                     _tr_str_release(kind);
-                    kind = _strtmp_t2883;
+                    kind = _strtmp_t2892;
                 }
 #line 242 "src/doc.tr"
-                ({ TrStr _at_t2884 = (_first_word_after(decl, _tr_str_lit_len("def", 3LL))); DocItem* _ord_t2885 = (_new_item(kind, _at_t2884, sig, doc, scope_name)); List_ptr_append(m->items, _tr_obj_retain(_ord_t2885)); _tr_str_release(_at_t2884); _tr_obj_release(_ord_t2885, _trdrop_DocItem); });
+                ({ TrStr _at_t2893 = (_first_word_after(decl, _tr_str_lit_len("def", 3LL))); DocItem* _ord_t2894 = (_new_item(kind, _at_t2893, sig, doc, scope_name)); List_ptr_append(m->items, _tr_obj_retain(_ord_t2894)); _tr_str_release(_at_t2893); _tr_obj_release(_ord_t2894, _trdrop_DocItem); });
                 _tr_str_release(sig);
                 _tr_str_release(kind);
             } else if ((_tr_str_eqv((scope_kind), (_tr_str_lit_len("interface", 9LL))) && _tr_str_starts_withv((decl), (_tr_str_lit_len("def ", 4LL))))) {
 #line 244 "src/doc.tr"
-                ({ TrStr _at_t2886 = (_first_word_after(decl, _tr_str_lit_len("def", 3LL))); TrStr _at_t2887 = (_signature(decl)); DocItem* _ord_t2888 = (_new_item(_tr_str_lit_len("method", 6LL), _at_t2886, _at_t2887, doc, scope_name)); List_ptr_append(m->items, _tr_obj_retain(_ord_t2888)); _tr_str_release(_at_t2886); _tr_str_release(_at_t2887); _tr_obj_release(_ord_t2888, _trdrop_DocItem); });
+                ({ TrStr _at_t2895 = (_first_word_after(decl, _tr_str_lit_len("def", 3LL))); TrStr _at_t2896 = (_signature(decl)); DocItem* _ord_t2897 = (_new_item(_tr_str_lit_len("method", 6LL), _at_t2895, _at_t2896, doc, scope_name)); List_ptr_append(m->items, _tr_obj_retain(_ord_t2897)); _tr_str_release(_at_t2895); _tr_str_release(_at_t2896); _tr_obj_release(_ord_t2897, _trdrop_DocItem); });
             } else if (((_tr_str_eqv((scope_kind), (_tr_str_lit_len("class", 5LL))) && _tr_str_starts_withv((decl), (_tr_str_lit_len("pub ", 4LL)))) && (!_tr_str_starts_withv((decl), (_tr_str_lit_len("pub def ", 8LL)))))) {
 #line 246 "src/doc.tr"
                 TrStr f = _tr_str_slicev((decl), 4LL, _tr_str_lenv((decl)));
@@ -578,14 +578,14 @@ __attribute__((hot)) DocModule* doc_parse(TrStr path, TrStr text) {
 #line 250 "src/doc.tr"
                     if (_tr_str_eqv((fdoc), (_tr_str_lit_len("", 0LL)))) {
 #line 250 "src/doc.tr"
-                        TrStr _strtmp_t2889 = _tr_str_stripv((_tr_str_slicev((f), (hash + 1LL), _tr_str_lenv((f)))));
+                        TrStr _strtmp_t2898 = _tr_str_stripv((_tr_str_slicev((f), (hash + 1LL), _tr_str_lenv((f)))));
                         _tr_str_release(fdoc);
-                        fdoc = _strtmp_t2889;
+                        fdoc = _strtmp_t2898;
                     }
 #line 251 "src/doc.tr"
-                    TrStr _strtmp_t2890 = _tr_str_stripv((_tr_str_slicev((f), 0LL, hash)));
+                    TrStr _strtmp_t2899 = _tr_str_stripv((_tr_str_slicev((f), 0LL, hash)));
                     _tr_str_release(f);
-                    f = _strtmp_t2890;
+                    f = _strtmp_t2899;
                 }
 #line 252 "src/doc.tr"
                 long long colon = _tr_str_index_ofv((f), (_tr_str_lit_len(":", 1LL)));
@@ -594,12 +594,12 @@ __attribute__((hot)) DocModule* doc_parse(TrStr path, TrStr text) {
 #line 254 "src/doc.tr"
                 if ((colon > 0LL)) {
 #line 254 "src/doc.tr"
-                    TrStr _strtmp_t2891 = _tr_str_stripv((_tr_str_slicev((f), 0LL, colon)));
+                    TrStr _strtmp_t2900 = _tr_str_stripv((_tr_str_slicev((f), 0LL, colon)));
                     _tr_str_release(fname);
-                    fname = _strtmp_t2891;
+                    fname = _strtmp_t2900;
                 }
 #line 255 "src/doc.tr"
-                ({ DocItem* _ord_t2892 = (_new_item(_tr_str_lit_len("field", 5LL), fname, f, fdoc, scope_name)); List_ptr_append(m->items, _tr_obj_retain(_ord_t2892)); _tr_obj_release(_ord_t2892, _trdrop_DocItem); });
+                ({ DocItem* _ord_t2901 = (_new_item(_tr_str_lit_len("field", 5LL), fname, f, fdoc, scope_name)); List_ptr_append(m->items, _tr_obj_retain(_ord_t2901)); _tr_obj_release(_ord_t2901, _trdrop_DocItem); });
                 _tr_str_release(f);
                 _tr_str_release(fdoc);
                 _tr_str_release(fname);
@@ -615,14 +615,14 @@ __attribute__((hot)) DocModule* doc_parse(TrStr path, TrStr text) {
 #line 261 "src/doc.tr"
                     if (_tr_str_eqv((vdoc), (_tr_str_lit_len("", 0LL)))) {
 #line 261 "src/doc.tr"
-                        TrStr _strtmp_t2893 = _tr_str_stripv((_tr_str_slicev((v), (hash2 + 1LL), _tr_str_lenv((v)))));
+                        TrStr _strtmp_t2902 = _tr_str_stripv((_tr_str_slicev((v), (hash2 + 1LL), _tr_str_lenv((v)))));
                         _tr_str_release(vdoc);
-                        vdoc = _strtmp_t2893;
+                        vdoc = _strtmp_t2902;
                     }
 #line 262 "src/doc.tr"
-                    TrStr _strtmp_t2894 = _tr_str_stripv((_tr_str_slicev((v), 0LL, hash2)));
+                    TrStr _strtmp_t2903 = _tr_str_stripv((_tr_str_slicev((v), 0LL, hash2)));
                     _tr_str_release(v);
-                    v = _strtmp_t2894;
+                    v = _strtmp_t2903;
                 }
 #line 263 "src/doc.tr"
                 TrStr vn = _tr_str_retain(v);
@@ -631,12 +631,12 @@ __attribute__((hot)) DocModule* doc_parse(TrStr path, TrStr text) {
 #line 265 "src/doc.tr"
                 if ((po > 0LL)) {
 #line 265 "src/doc.tr"
-                    TrStr _strtmp_t2895 = _tr_str_slicev((v), 0LL, po);
+                    TrStr _strtmp_t2904 = _tr_str_slicev((v), 0LL, po);
                     _tr_str_release(vn);
-                    vn = _strtmp_t2895;
+                    vn = _strtmp_t2904;
                 }
 #line 266 "src/doc.tr"
-                ({ TrStr _at_t2896 = (_tr_str_stripv((vn))); DocItem* _ord_t2897 = (_new_item(_tr_str_lit_len("variant", 7LL), _at_t2896, v, vdoc, scope_name)); List_ptr_append(m->items, _tr_obj_retain(_ord_t2897)); _tr_str_release(_at_t2896); _tr_obj_release(_ord_t2897, _trdrop_DocItem); });
+                ({ TrStr _at_t2905 = (_tr_str_stripv((vn))); DocItem* _ord_t2906 = (_new_item(_tr_str_lit_len("variant", 7LL), _at_t2905, v, vdoc, scope_name)); List_ptr_append(m->items, _tr_obj_retain(_ord_t2906)); _tr_str_release(_at_t2905); _tr_obj_release(_ord_t2906, _trdrop_DocItem); });
                 _tr_str_release(v);
                 _tr_str_release(vdoc);
                 _tr_str_release(vn);
@@ -694,7 +694,7 @@ __attribute__((hot)) void _md_members(StringBuilder* sb, DocModule* m, TrStr own
 #line 289 "src/doc.tr"
             if ((_tr_str_eqv((it->owner), (owner)) && (_tr_str_eqv((it->kind), (_tr_str_lit_len("field", 5LL))) || _tr_str_eqv((it->kind), (_tr_str_lit_len("variant", 7LL)))))) {
 #line 290 "src/doc.tr"
-                ({ __auto_type _ord_t2898 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_md_cell(it->sig)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("| `", 3LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("` | ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2899 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2898); TrStr _tr_cr = (_md_cell(it->doc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" |\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2899); _tr_str_release(_sbt_t2899); });
+                ({ __auto_type _ord_t2907 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_md_cell(it->sig)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("| `", 3LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("` | ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2908 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2907); TrStr _tr_cr = (_md_cell(it->doc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" |\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2908); _tr_str_release(_sbt_t2908); });
             }
 #line 291 "src/doc.tr"
             i = (i + 1LL);
@@ -709,11 +709,11 @@ __attribute__((hot)) void _md_members(StringBuilder* sb, DocModule* m, TrStr own
 #line 295 "src/doc.tr"
         if ((_tr_str_eqv((mt->owner), (owner)) && (_tr_str_eqv((mt->kind), (_tr_str_lit_len("method", 6LL))) || _tr_str_eqv((mt->kind), (_tr_str_lit_len("static", 6LL)))))) {
 #line 296 "src/doc.tr"
-            ({ TrStr _sbt_t2900 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("\n#### `", 7LL)), (owner))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (mt->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("`\n\n```tauraro\n", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (mt->sig)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n```\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2900); _tr_str_release(_sbt_t2900); });
+            ({ TrStr _sbt_t2909 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("\n#### `", 7LL)), (owner))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (mt->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("`\n\n```tauraro\n", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (mt->sig)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n```\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2909); _tr_str_release(_sbt_t2909); });
 #line 297 "src/doc.tr"
             if ((!_tr_str_eqv((mt->doc), (_tr_str_lit_len("", 0LL))))) {
 #line 297 "src/doc.tr"
-                ({ TrStr _sbt_t2901 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("\n", 1LL)), (mt->doc))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2901); _tr_str_release(_sbt_t2901); });
+                ({ TrStr _sbt_t2910 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("\n", 1LL)), (mt->doc))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2910); _tr_str_release(_sbt_t2910); });
             }
         }
 #line 298 "src/doc.tr"
@@ -725,13 +725,13 @@ __attribute__((hot)) TrStr doc_markdown(DocModule* m) {
 #line 301 "src/doc.tr"
     StringBuilder* sb = StringBuilder_init(4096LL);
 #line 302 "src/doc.tr"
-    ({ TrStr _sbt_t2902 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# ", 2LL)), (m->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2902); _tr_str_release(_sbt_t2902); });
+    ({ TrStr _sbt_t2911 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# ", 2LL)), (m->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2911); _tr_str_release(_sbt_t2911); });
 #line 303 "src/doc.tr"
-    ({ TrStr _sbt_t2903 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("`", 1LL)), (m->path))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("`\n\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2903); _tr_str_release(_sbt_t2903); });
+    ({ TrStr _sbt_t2912 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("`", 1LL)), (m->path))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("`\n\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2912); _tr_str_release(_sbt_t2912); });
 #line 304 "src/doc.tr"
     if ((!_tr_str_eqv((m->doc), (_tr_str_lit_len("", 0LL))))) {
 #line 304 "src/doc.tr"
-        ({ TrStr _sbt_t2904 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("```text\n", 8LL)), (m->doc))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n```\n\n", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2904); _tr_str_release(_sbt_t2904); });
+        ({ TrStr _sbt_t2913 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("```text\n", 8LL)), (m->doc))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n```\n\n", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2913); _tr_str_release(_sbt_t2913); });
     }
 #line 305 "src/doc.tr"
     if (_has_kind(m, _tr_str_lit_len("const", 5LL), _tr_str_lit_len("", 0LL))) {
@@ -746,7 +746,7 @@ __attribute__((hot)) TrStr doc_markdown(DocModule* m) {
 #line 310 "src/doc.tr"
             if (_tr_str_eqv((it->kind), (_tr_str_lit_len("const", 5LL)))) {
 #line 310 "src/doc.tr"
-                ({ __auto_type _ord_t2905 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_md_cell(it->sig)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("| `", 3LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("` | ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2906 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2905); TrStr _tr_cr = (_md_cell(it->doc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" |\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2906); _tr_str_release(_sbt_t2906); });
+                ({ __auto_type _ord_t2914 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_md_cell(it->sig)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("| `", 3LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("` | ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2915 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2914); TrStr _tr_cr = (_md_cell(it->doc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" |\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2915); _tr_str_release(_sbt_t2915); });
             }
 #line 311 "src/doc.tr"
             i = (i + 1LL);
@@ -767,11 +767,11 @@ __attribute__((hot)) TrStr doc_markdown(DocModule* m) {
 #line 318 "src/doc.tr"
             if (_tr_str_eqv((it2->kind), (_tr_str_lit_len("def", 3LL)))) {
 #line 319 "src/doc.tr"
-                ({ TrStr _sbt_t2907 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("\n### `", 6LL)), (it2->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("`\n\n```tauraro\n", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (it2->sig)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n```\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2907); _tr_str_release(_sbt_t2907); });
+                ({ TrStr _sbt_t2916 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("\n### `", 6LL)), (it2->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("`\n\n```tauraro\n", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (it2->sig)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n```\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2916); _tr_str_release(_sbt_t2916); });
 #line 320 "src/doc.tr"
                 if ((!_tr_str_eqv((it2->doc), (_tr_str_lit_len("", 0LL))))) {
 #line 320 "src/doc.tr"
-                    ({ TrStr _sbt_t2908 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("\n", 1LL)), (it2->doc))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2908); _tr_str_release(_sbt_t2908); });
+                    ({ TrStr _sbt_t2917 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("\n", 1LL)), (it2->doc))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2917); _tr_str_release(_sbt_t2917); });
                 }
             }
 #line 321 "src/doc.tr"
@@ -789,11 +789,11 @@ __attribute__((hot)) TrStr doc_markdown(DocModule* m) {
 #line 326 "src/doc.tr"
         if (((_tr_str_eqv((c->kind), (_tr_str_lit_len("class", 5LL))) || _tr_str_eqv((c->kind), (_tr_str_lit_len("enum", 4LL)))) || _tr_str_eqv((c->kind), (_tr_str_lit_len("interface", 9LL))))) {
 #line 327 "src/doc.tr"
-            ({ TrStr _sbt_t2909 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("## ", 3LL)), (c->kind))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" `", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (c->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("`\n\n```tauraro\n", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (c->sig)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n```\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2909); _tr_str_release(_sbt_t2909); });
+            ({ TrStr _sbt_t2918 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("## ", 3LL)), (c->kind))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" `", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (c->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("`\n\n```tauraro\n", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (c->sig)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n```\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2918); _tr_str_release(_sbt_t2918); });
 #line 328 "src/doc.tr"
             if ((!_tr_str_eqv((c->doc), (_tr_str_lit_len("", 0LL))))) {
 #line 328 "src/doc.tr"
-                ({ TrStr _sbt_t2910 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("\n", 1LL)), (c->doc))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2910); _tr_str_release(_sbt_t2910); });
+                ({ TrStr _sbt_t2919 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("\n", 1LL)), (c->doc))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2919); _tr_str_release(_sbt_t2919); });
             }
 #line 329 "src/doc.tr"
             _md_members(sb, m, c->name);
@@ -833,11 +833,11 @@ __attribute__((hot)) TrStr doc_html(DocModule* m) {
 #line 345 "src/doc.tr"
     StringBuilder_append(sb, _tr_str_lit_len("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n", 129LL));
 #line 346 "src/doc.tr"
-    ({ __auto_type _ord_t2911 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_html_esc(m->name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<title>", 7LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</title>\n<style>", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2912 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2911); TrStr _tr_cr = (doc_css()); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</style></head><body><main>\n", 28LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2912); _tr_str_release(_sbt_t2912); });
+    ({ __auto_type _ord_t2920 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_html_esc(m->name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<title>", 7LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</title>\n<style>", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2921 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2920); TrStr _tr_cr = (doc_css()); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</style></head><body><main>\n", 28LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2921); _tr_str_release(_sbt_t2921); });
 #line 347 "src/doc.tr"
-    ({ __auto_type _ord_t2913 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_html_esc(m->name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<p><a href=\"index.html\">Index</a></p>\n<h1>", 42LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</h1>\n<p class=\"path\">", 22LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2914 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2913); TrStr _tr_cr = (_html_esc(m->path)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</p>\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2914); _tr_str_release(_sbt_t2914); });
+    ({ __auto_type _ord_t2922 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_html_esc(m->name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<p><a href=\"index.html\">Index</a></p>\n<h1>", 42LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</h1>\n<p class=\"path\">", 22LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2923 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2922); TrStr _tr_cr = (_html_esc(m->path)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</p>\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2923); _tr_str_release(_sbt_t2923); });
 #line 348 "src/doc.tr"
-    ({ TrStr _sbt_t2915 = (_html_doc(m->doc)); StringBuilder_append(sb, _sbt_t2915); _tr_str_release(_sbt_t2915); });
+    ({ TrStr _sbt_t2924 = (_html_doc(m->doc)); StringBuilder_append(sb, _sbt_t2924); _tr_str_release(_sbt_t2924); });
 #line 349 "src/doc.tr"
     if (_has_kind(m, _tr_str_lit_len("const", 5LL), _tr_str_lit_len("", 0LL))) {
 #line 350 "src/doc.tr"
@@ -851,7 +851,7 @@ __attribute__((hot)) TrStr doc_html(DocModule* m) {
 #line 354 "src/doc.tr"
             if (_tr_str_eqv((it->kind), (_tr_str_lit_len("const", 5LL)))) {
 #line 354 "src/doc.tr"
-                ({ __auto_type _ord_t2916 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_html_esc(it->sig)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<tr><td><code>", 14LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</code></td><td>", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2917 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2916); TrStr _tr_cr = (_html_esc(it->doc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</td></tr>\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2917); _tr_str_release(_sbt_t2917); });
+                ({ __auto_type _ord_t2925 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_html_esc(it->sig)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<tr><td><code>", 14LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</code></td><td>", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2926 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2925); TrStr _tr_cr = (_html_esc(it->doc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</td></tr>\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2926); _tr_str_release(_sbt_t2926); });
             }
 #line 355 "src/doc.tr"
             i = (i + 1LL);
@@ -872,7 +872,7 @@ __attribute__((hot)) TrStr doc_html(DocModule* m) {
 #line 362 "src/doc.tr"
             if (_tr_str_eqv((it2->kind), (_tr_str_lit_len("def", 3LL)))) {
 #line 363 "src/doc.tr"
-                ({ __auto_type _ord_t2918 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_html_anchor(it2->name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<h3 id=\"", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\">", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2919 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2918); TrStr _tr_cr = (_html_esc(it2->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</h3>\n<pre class=\"sig\">", 23LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2920 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2919); TrStr _tr_cr = (_html_esc(it2->sig)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</pre>\n", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2921 = (({ TrStr _tr_cl = (_ord_t2920); TrStr _tr_cr = (_html_doc(it2->doc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); StringBuilder_append(sb, _sbt_t2921); _tr_str_release(_sbt_t2921); });
+                ({ __auto_type _ord_t2927 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_html_anchor(it2->name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<h3 id=\"", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\">", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2928 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2927); TrStr _tr_cr = (_html_esc(it2->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</h3>\n<pre class=\"sig\">", 23LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2929 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2928); TrStr _tr_cr = (_html_esc(it2->sig)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</pre>\n", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2930 = (({ TrStr _tr_cl = (_ord_t2929); TrStr _tr_cr = (_html_doc(it2->doc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); StringBuilder_append(sb, _sbt_t2930); _tr_str_release(_sbt_t2930); });
             }
 #line 364 "src/doc.tr"
             i2 = (i2 + 1LL);
@@ -887,7 +887,7 @@ __attribute__((hot)) TrStr doc_html(DocModule* m) {
 #line 368 "src/doc.tr"
         if (((_tr_str_eqv((c->kind), (_tr_str_lit_len("class", 5LL))) || _tr_str_eqv((c->kind), (_tr_str_lit_len("enum", 4LL)))) || _tr_str_eqv((c->kind), (_tr_str_lit_len("interface", 9LL))))) {
 #line 369 "src/doc.tr"
-            ({ __auto_type _ord_t2922 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_html_anchor(c->name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<h2 id=\"", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\">", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2923 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2922); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (c->kind)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2924 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2923); TrStr _tr_cr = (_html_esc(c->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</h2>\n<pre class=\"sig\">", 23LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2925 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2924); TrStr _tr_cr = (_html_esc(c->sig)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</pre>\n", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2926 = (({ TrStr _tr_cl = (_ord_t2925); TrStr _tr_cr = (_html_doc(c->doc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); StringBuilder_append(sb, _sbt_t2926); _tr_str_release(_sbt_t2926); });
+            ({ __auto_type _ord_t2931 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_html_anchor(c->name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<h2 id=\"", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\">", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2932 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2931); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (c->kind)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2933 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2932); TrStr _tr_cr = (_html_esc(c->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</h2>\n<pre class=\"sig\">", 23LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2934 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2933); TrStr _tr_cr = (_html_esc(c->sig)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</pre>\n", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2935 = (({ TrStr _tr_cl = (_ord_t2934); TrStr _tr_cr = (_html_doc(c->doc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); StringBuilder_append(sb, _sbt_t2935); _tr_str_release(_sbt_t2935); });
 #line 370 "src/doc.tr"
             if ((_has_kind(m, _tr_str_lit_len("field", 5LL), c->name) || _has_kind(m, _tr_str_lit_len("variant", 7LL), c->name))) {
 #line 371 "src/doc.tr"
@@ -901,7 +901,7 @@ __attribute__((hot)) TrStr doc_html(DocModule* m) {
 #line 375 "src/doc.tr"
                     if ((_tr_str_eqv((fi->owner), (c->name)) && (_tr_str_eqv((fi->kind), (_tr_str_lit_len("field", 5LL))) || _tr_str_eqv((fi->kind), (_tr_str_lit_len("variant", 7LL)))))) {
 #line 376 "src/doc.tr"
-                        ({ __auto_type _ord_t2927 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_html_esc(fi->sig)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<tr><td><code>", 14LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</code></td><td>", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2928 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2927); TrStr _tr_cr = (_html_esc(fi->doc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</td></tr>\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2928); _tr_str_release(_sbt_t2928); });
+                        ({ __auto_type _ord_t2936 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_html_esc(fi->sig)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<tr><td><code>", 14LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</code></td><td>", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2937 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2936); TrStr _tr_cr = (_html_esc(fi->doc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</td></tr>\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2937); _tr_str_release(_sbt_t2937); });
                     }
 #line 377 "src/doc.tr"
                     f = (f + 1LL);
@@ -918,7 +918,7 @@ __attribute__((hot)) TrStr doc_html(DocModule* m) {
 #line 382 "src/doc.tr"
                 if ((_tr_str_eqv((mt->owner), (c->name)) && (_tr_str_eqv((mt->kind), (_tr_str_lit_len("method", 6LL))) || _tr_str_eqv((mt->kind), (_tr_str_lit_len("static", 6LL)))))) {
 #line 383 "src/doc.tr"
-                    ({ TrStr _at_t2929 = (({ TrStr _tr_cl = (_tr_strx_concatv((c->name), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (mt->name)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2931 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_html_anchor(_at_t2929)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<h4 id=\"", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\">", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t2930 = (({ TrStr _tr_cl = (_tr_strx_concatv((c->name), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (mt->name)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2932 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2931); TrStr _tr_cr = (_html_esc(_at_t2930)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</h4>\n<pre class=\"sig\">", 23LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2933 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2932); TrStr _tr_cr = (_html_esc(mt->sig)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</pre>\n", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2934 = (({ TrStr _tr_cl = (_ord_t2933); TrStr _tr_cr = (_html_doc(mt->doc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); StringBuilder_append(sb, _sbt_t2934); _tr_str_release(_at_t2929); _tr_str_release(_at_t2930); _tr_str_release(_sbt_t2934); });
+                    ({ TrStr _at_t2938 = (({ TrStr _tr_cl = (_tr_strx_concatv((c->name), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (mt->name)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2940 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_html_anchor(_at_t2938)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<h4 id=\"", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\">", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t2939 = (({ TrStr _tr_cl = (_tr_strx_concatv((c->name), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (mt->name)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2941 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2940); TrStr _tr_cr = (_html_esc(_at_t2939)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</h4>\n<pre class=\"sig\">", 23LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2942 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2941); TrStr _tr_cr = (_html_esc(mt->sig)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</pre>\n", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t2943 = (({ TrStr _tr_cl = (_ord_t2942); TrStr _tr_cr = (_html_doc(mt->doc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); StringBuilder_append(sb, _sbt_t2943); _tr_str_release(_at_t2938); _tr_str_release(_at_t2939); _tr_str_release(_sbt_t2943); });
                 }
 #line 384 "src/doc.tr"
                 q = (q + 1LL);
@@ -950,7 +950,7 @@ __attribute__((hot)) TrStr doc_index_markdown(List_ptr* mods) {
 #line 397 "src/doc.tr"
         DocModule* m = ((DocModule*)List_ptr_get(mods, i));
 #line 398 "src/doc.tr"
-        ({ __auto_type _ord_t2936 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("| [`", 4LL)), (m->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("`](", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".md) | ", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t2935 = (_summary(m->doc)); TrStr _sbt_t2937 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2936); TrStr _tr_cr = (_md_cell(_at_t2935)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" |\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2937); _tr_str_release(_at_t2935); _tr_str_release(_sbt_t2937); });
+        ({ __auto_type _ord_t2945 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("| [`", 4LL)), (m->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("`](", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".md) | ", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t2944 = (_summary(m->doc)); TrStr _sbt_t2946 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2945); TrStr _tr_cr = (_md_cell(_at_t2944)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" |\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2946); _tr_str_release(_at_t2944); _tr_str_release(_sbt_t2946); });
 #line 399 "src/doc.tr"
         i = (i + 1LL);
     }
@@ -962,7 +962,7 @@ __attribute__((hot)) TrStr doc_index_html(List_ptr* mods) {
 #line 403 "src/doc.tr"
     StringBuilder* sb = StringBuilder_init(4096LL);
 #line 404 "src/doc.tr"
-    ({ TrStr _sbt_t2938 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (doc_css()); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>API reference</title>\n<style>", 165LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</style></head><body><main>\n<h1>API reference</h1>\n<table>\n", 59LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2938); _tr_str_release(_sbt_t2938); });
+    ({ TrStr _sbt_t2947 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (doc_css()); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>API reference</title>\n<style>", 165LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</style></head><body><main>\n<h1>API reference</h1>\n<table>\n", 59LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2947); _tr_str_release(_sbt_t2947); });
 #line 405 "src/doc.tr"
     long long i = 0LL;
 #line 406 "src/doc.tr"
@@ -970,7 +970,7 @@ __attribute__((hot)) TrStr doc_index_html(List_ptr* mods) {
 #line 407 "src/doc.tr"
         DocModule* m = ((DocModule*)List_ptr_get(mods, i));
 #line 408 "src/doc.tr"
-        ({ __auto_type _ord_t2939 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("<tr><td><a href=\"", 17LL)), (m->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".html\"><code>", 13LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2941 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2939); TrStr _tr_cr = (_html_esc(m->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</code></a></td><td>", 20LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t2940 = (_summary(m->doc)); TrStr _sbt_t2942 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2941); TrStr _tr_cr = (_html_esc(_at_t2940)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</td></tr>\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2942); _tr_str_release(_at_t2940); _tr_str_release(_sbt_t2942); });
+        ({ __auto_type _ord_t2948 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("<tr><td><a href=\"", 17LL)), (m->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".html\"><code>", 13LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t2950 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2948); TrStr _tr_cr = (_html_esc(m->name)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</code></a></td><td>", 20LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t2949 = (_summary(m->doc)); TrStr _sbt_t2951 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t2950); TrStr _tr_cr = (_html_esc(_at_t2949)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("</td></tr>\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t2951); _tr_str_release(_at_t2949); _tr_str_release(_sbt_t2951); });
 #line 409 "src/doc.tr"
         i = (i + 1LL);
     }
@@ -988,33 +988,33 @@ __attribute__((hot)) TrStr _summary(TrStr doc) {
 #line 417 "src/doc.tr"
     if ((nl >= 0LL)) {
 #line 417 "src/doc.tr"
-        TrStr _strtmp_t2943 = _tr_str_slicev((doc), 0LL, nl);
+        TrStr _strtmp_t2952 = _tr_str_slicev((doc), 0LL, nl);
         _tr_str_release(first);
-        first = _strtmp_t2943;
+        first = _strtmp_t2952;
     }
 #line 418 "src/doc.tr"
     long long dash = _tr_str_index_ofv((first), (_tr_str_lit_len(" -- ", 4LL)));
 #line 419 "src/doc.tr"
     if ((dash >= 0LL)) {
 #line 419 "src/doc.tr"
-        TrStr _strtmp_t2944 = _tr_str_slicev((first), (dash + 4LL), _tr_str_lenv((first)));
+        TrStr _strtmp_t2953 = _tr_str_slicev((first), (dash + 4LL), _tr_str_lenv((first)));
         _tr_str_release(first);
-        first = _strtmp_t2944;
+        first = _strtmp_t2953;
     } else {
 #line 421 "src/doc.tr"
         long long em = _tr_str_index_ofv((first), (_tr_str_lit_len(" — ", 5LL)));
 #line 422 "src/doc.tr"
         if ((em >= 0LL)) {
 #line 422 "src/doc.tr"
-            TrStr _strtmp_t2945 = _tr_str_slicev((first), (em + 5LL), _tr_str_lenv((first)));
+            TrStr _strtmp_t2954 = _tr_str_slicev((first), (em + 5LL), _tr_str_lenv((first)));
             _tr_str_release(first);
-            first = _strtmp_t2945;
+            first = _strtmp_t2954;
         }
     }
 #line 423 "src/doc.tr"
-    TrStr _trret607 = _tr_str_stripv((first));
+    TrStr _trret609 = _tr_str_stripv((first));
     _tr_str_release(first);
-    return _trret607;
+    return _trret609;
 }
 
 __attribute__((hot)) List_TrStr* _doc_expand(TrStr path) {
@@ -1032,10 +1032,10 @@ __attribute__((hot)) List_TrStr* _doc_expand(TrStr path) {
 #line 432 "src/doc.tr"
     if (_tr_is_windows()) {
 #line 433 "src/doc.tr"
-        ({ TrStr _aet_t2946 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_replacev((path), (_tr_str_lit_len("/", 1LL)), (_tr_str_lit_len("\\", 1LL)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("dir /b /s /o:n \"", 16LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\\*.tr\" > ", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tmp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" 2>nul", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t2946.data); _tr_str_release(_aet_t2946); });
+        ({ TrStr _aet_t2955 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_replacev((path), (_tr_str_lit_len("/", 1LL)), (_tr_str_lit_len("\\", 1LL)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("dir /b /s /o:n \"", 16LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\\*.tr\" > ", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tmp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" 2>nul", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t2955.data); _tr_str_release(_aet_t2955); });
     } else {
 #line 435 "src/doc.tr"
-        ({ TrStr _aet_t2947 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("find \"", 6LL)), (path))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" -name '*.tr' -type f | LC_ALL=C sort > ", 41LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tmp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" 2>/dev/null", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t2947.data); _tr_str_release(_aet_t2947); });
+        ({ TrStr _aet_t2956 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("find \"", 6LL)), (path))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" -name '*.tr' -type f | LC_ALL=C sort > ", 41LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tmp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" 2>/dev/null", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t2956.data); _tr_str_release(_aet_t2956); });
     }
 #line 436 "src/doc.tr"
     if (file_exists(tmp)) {
@@ -1059,10 +1059,10 @@ __attribute__((hot)) List_TrStr* _doc_expand(TrStr path) {
 #line 443 "src/doc.tr"
         if (_tr_is_windows()) {
 #line 443 "src/doc.tr"
-            ({ TrStr _aet_t2948 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("del /Q ", 7LL)), (tmp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" 2>nul >nul", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t2948.data); _tr_str_release(_aet_t2948); });
+            ({ TrStr _aet_t2957 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("del /Q ", 7LL)), (tmp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" 2>nul >nul", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t2957.data); _tr_str_release(_aet_t2957); });
         } else {
 #line 444 "src/doc.tr"
-            ({ TrStr _aet_t2949 = (_tr_strx_concatv((_tr_str_lit_len("rm -f ", 6LL)), (tmp))); _tr_system(_aet_t2949.data); _tr_str_release(_aet_t2949); });
+            ({ TrStr _aet_t2958 = (_tr_strx_concatv((_tr_str_lit_len("rm -f ", 6LL)), (tmp))); _tr_system(_aet_t2958.data); _tr_str_release(_aet_t2958); });
         }
     }
 #line 445 "src/doc.tr"
@@ -1078,7 +1078,7 @@ __attribute__((hot)) long long run_doc(List_TrStr* inputs, TrStr out_dir, bool h
 #line 452 "src/doc.tr"
     while ((i < inputs->len)) {
 #line 453 "src/doc.tr"
-        List_TrStr* files = ({ TrStr _at_t2950 = (List_TrStr_get(inputs, i)); __auto_type _wr = (_doc_expand(_at_t2950)); _tr_str_release(_at_t2950); _wr; });
+        List_TrStr* files = ({ TrStr _at_t2959 = (List_TrStr_get(inputs, i)); __auto_type _wr = (_doc_expand(_at_t2959)); _tr_str_release(_at_t2959); _wr; });
 #line 454 "src/doc.tr"
         if ((files->len == 0LL)) {
 #line 455 "src/doc.tr"
@@ -1105,7 +1105,7 @@ __attribute__((hot)) long long run_doc(List_TrStr* inputs, TrStr out_dir, bool h
                 return 1LL;
             }
 #line 463 "src/doc.tr"
-            ({ TrStr _at_t2951 = (read_file(f)); List_ptr_append(mods, doc_parse(f, _at_t2951)); _tr_str_release(_at_t2951); });
+            ({ TrStr _at_t2960 = (read_file(f)); List_ptr_append(mods, doc_parse(f, _at_t2960)); _tr_str_release(_at_t2960); });
 #line 464 "src/doc.tr"
             k = (k + 1LL);
             _tr_str_release(f);
@@ -1137,10 +1137,10 @@ __attribute__((hot)) long long run_doc(List_TrStr* inputs, TrStr out_dir, bool h
 #line 473 "src/doc.tr"
     if (_tr_is_windows()) {
 #line 473 "src/doc.tr"
-        ({ TrStr _aet_t2952 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_replacev((out_dir), (_tr_str_lit_len("/", 1LL)), (_tr_str_lit_len("\\", 1LL)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("mkdir \"", 7LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" 2>nul", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t2952.data); _tr_str_release(_aet_t2952); });
+        ({ TrStr _aet_t2961 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_replacev((out_dir), (_tr_str_lit_len("/", 1LL)), (_tr_str_lit_len("\\", 1LL)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("mkdir \"", 7LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" 2>nul", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t2961.data); _tr_str_release(_aet_t2961); });
     } else {
 #line 474 "src/doc.tr"
-        ({ TrStr _aet_t2953 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("mkdir -p \"", 10LL)), (out_dir))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\"", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t2953.data); _tr_str_release(_aet_t2953); });
+        ({ TrStr _aet_t2962 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("mkdir -p \"", 10LL)), (out_dir))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\"", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t2962.data); _tr_str_release(_aet_t2962); });
     }
 #line 475 "src/doc.tr"
     long long j2 = 0LL;
@@ -1151,10 +1151,10 @@ __attribute__((hot)) long long run_doc(List_TrStr* inputs, TrStr out_dir, bool h
 #line 478 "src/doc.tr"
         if (html) {
 #line 478 "src/doc.tr"
-            ({ TrStr _at_t2954 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((out_dir), (_tr_str_lit_len("/", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".html", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t2955 = (doc_html(m)); write_file(_at_t2954, _at_t2955); _tr_str_release(_at_t2954); _tr_str_release(_at_t2955); });
+            ({ TrStr _at_t2963 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((out_dir), (_tr_str_lit_len("/", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".html", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t2964 = (doc_html(m)); write_file(_at_t2963, _at_t2964); _tr_str_release(_at_t2963); _tr_str_release(_at_t2964); });
         } else {
 #line 479 "src/doc.tr"
-            ({ TrStr _at_t2956 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((out_dir), (_tr_str_lit_len("/", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".md", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t2957 = (doc_markdown(m)); write_file(_at_t2956, _at_t2957); _tr_str_release(_at_t2956); _tr_str_release(_at_t2957); });
+            ({ TrStr _at_t2965 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((out_dir), (_tr_str_lit_len("/", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".md", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t2966 = (doc_markdown(m)); write_file(_at_t2965, _at_t2966); _tr_str_release(_at_t2965); _tr_str_release(_at_t2966); });
         }
 #line 480 "src/doc.tr"
         j2 = (j2 + 1LL);
@@ -1162,10 +1162,10 @@ __attribute__((hot)) long long run_doc(List_TrStr* inputs, TrStr out_dir, bool h
 #line 481 "src/doc.tr"
     if (html) {
 #line 481 "src/doc.tr"
-        ({ TrStr _at_t2958 = (_tr_strx_concatv((out_dir), (_tr_str_lit_len("/index.html", 11LL)))); TrStr _at_t2959 = (doc_index_html(mods)); write_file(_at_t2958, _at_t2959); _tr_str_release(_at_t2958); _tr_str_release(_at_t2959); });
+        ({ TrStr _at_t2967 = (_tr_strx_concatv((out_dir), (_tr_str_lit_len("/index.html", 11LL)))); TrStr _at_t2968 = (doc_index_html(mods)); write_file(_at_t2967, _at_t2968); _tr_str_release(_at_t2967); _tr_str_release(_at_t2968); });
     } else {
 #line 482 "src/doc.tr"
-        ({ TrStr _at_t2960 = (_tr_strx_concatv((out_dir), (_tr_str_lit_len("/README.md", 10LL)))); TrStr _at_t2961 = (doc_index_markdown(mods)); write_file(_at_t2960, _at_t2961); _tr_str_release(_at_t2960); _tr_str_release(_at_t2961); });
+        ({ TrStr _at_t2969 = (_tr_strx_concatv((out_dir), (_tr_str_lit_len("/README.md", 10LL)))); TrStr _at_t2970 = (doc_index_markdown(mods)); write_file(_at_t2969, _at_t2970); _tr_str_release(_at_t2969); _tr_str_release(_at_t2970); });
     }
 #line 483 "src/doc.tr"
     ({ printf("%s", _tr_strz(({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(mods->len)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("doc: ", 5LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" module(s) written to ", 22LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (out_dir)); _tr_str_release(_tr_cl); _tr_cres; }))); printf("\n"); });

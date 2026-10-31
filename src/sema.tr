@@ -271,6 +271,10 @@ pub class Sema:
     pub decl_files:          Vec[str]        # source file of each prog.decls entry (parallel; empty = every decl is in current_file)
     pub current_func_name:  str
     pub current_class_name: str
+    pub none_globals: Map[str, bool]   # module-level `mut x = None` (untyped) globals
+    pub assigned_names: Map[str, bool]   # every name that is the target of a plain `name = value` assignment anywhere
+    pub none_read_names: Vec[str]      # deferred: member read of a None-initialised global (name)
+    pub none_read_msgs: Vec[str]       # deferred: the diagnostic for each
     pub global_firm: Map[str, str]   # module-level variables whose kind is certain (annotation / literal initialiser)
     pub extern_defs: Map[str, FunctionDef]   # extern "C" declarations (name -> signature) for call checks
     pub ambiguous_classes: Map[str, bool]   # class names declared more than once (different modules); member checks skip them
@@ -480,6 +484,10 @@ extend Sema:
         s.ambiguous_classes = Map[str, bool].init(8)
         s.extern_defs = Map[str, FunctionDef].init(16)
         s.global_firm = Map[str, str].init(16)
+        s.none_globals = Map[str, bool].init(8)
+        s.assigned_names = Map[str, bool].init(64)
+        s.none_read_names = Vec[str].init(1)
+        s.none_read_msgs = Vec[str].init(1)
         s.current_func_ret_regions = Vec[str].init(0)
         s.current_func_outlives_a = Vec[str].init(0)
         s.current_func_outlives_b = Vec[str].init(0)
@@ -1151,6 +1159,11 @@ extend Sema:
                     mut mmd = self.find_unique_method(mrc, mm)
                     if mmd.name != "" and mmd.ret_ty as usize != 0 as usize and not (mmd.throws_ty as usize != 0 as usize and mmd.throws_ty.read().name != ""):
                         return self.decl_family(mmd.ret_ty.read())
+                if mm == "unwrap" and margs.len == 0:
+                    mut _uw_t = self.firm_type(mo)
+                    if (_uw_t.name == "Option" or _uw_t.name == "Result") and _uw_t.args.len > 0:
+                        mut _uw_a = _uw_t.args.get(0).read()
+                        if _uw_a.args.len == 0 and (_uw_a.name == "int" or _uw_a.name == "float" or _uw_a.name == "bool" or _uw_a.name == "str"): return _uw_a.name
                 if (mm == "len" or mm == "length") and margs.len == 0:
                     mut lrf = self.firm_family(mo)
                     if lrf == "str" or lrf == "List" or lrf == "Dict": return "int"
@@ -1574,7 +1587,7 @@ extend Sema:
     pub def builtin_method_range(self, fam: str, method: str) -> int:
         if fam == "str":
             if method == "len" or method == "upper" or method == "lower" or method == "to_upper" or method == "to_lower" or method == "strip" or method == "trim" or method == "trim_left" or method == "trim_right" or method == "capitalize" or method == "title" or method == "reverse": return 0
-            if method == "eq" or method == "ne" or method == "find" or method == "index_of" or method == "contains" or method == "starts_with" or method == "ends_with" or method == "split" or method == "split_exact" or method == "repeat" or method == "strip_prefix" or method == "strip_suffix": return 101
+            if method == "eq" or method == "ne" or method == "find" or method == "index_of" or method == "contains" or method == "starts_with" or method == "ends_with" or method == "split" or method == "split_exact" or method == "repeat" or method == "strip_prefix" or method == "strip_suffix" or method == "join": return 101
             if method == "replace": return 202
         elif fam == "List":
             if method == "len" or method == "length" or method == "reverse" or method == "clear" or method == "copy" or method == "clone" or method == "first" or method == "last" or method == "free" or method == "is_empty" or method == "max" or method == "min" or method == "max_val" or method == "min_val" or method == "sum" or method == "reversed" or method == "reversed_copy" or method == "sort_asc" or method == "sort_desc" or method == "to_list": return 0
@@ -1654,6 +1667,9 @@ extend Sema:
             self.error("[N-4] Unknown type '" + t.name + "' (in " + where_ + ").\n      FIX: check the spelling, or import it (e.g. `from std.x import " + t.name + "`).")
             return
         if _is_invalid_ptr(t.args as usize): return
+        if t.name == "Box" and t.args.len == 0 and not self.classes.contains("Box") and not self.enums.contains("Box") and not self.type_aliases.contains("Box"):
+            self.error("[N-4] Unknown type 'Box' (in " + where_ + "): the builtin Box needs a type argument.\n      FIX: write Box[T], or check the spelling of your own class name (a class named Box must be declared).")
+            return
         mut ai = 0
         while ai < t.args.len:
             if t.args.get(ai).read().name == "void" and (t.name == "List" or t.name == "Vec" or t.name == "Dict" or t.name == "Map" or t.name == "Set" or t.name == "Option"):
@@ -1668,6 +1684,9 @@ extend Sema:
             if self.is_universal_method(method): return
             if self.known_collection_method(fam, method): return
             self.error("[E-6] " + self.family_word(fam) + " has no method '" + method + "()'.\n      FIX: check the spelling, or that the receiver is the collection you meant.")
+            return
+        if (fam == "int" or fam == "float" or fam == "bool" or fam == "Tuple") and (method == "len" or method == "length" or method == "__len__"):
+            self.error("[E-6] " + self.family_word(fam) + " has no method '" + method + "()'.\n      FIX: only strings and collections have a length; check that the receiver is the value you meant.")
             return
         if fam == "int" or fam == "float":
             if self.is_universal_method(method) or self.known_number_method(method): return
@@ -3996,10 +4015,11 @@ extend Sema:
                                     case Expr.ELitFloat(_): g_ty = box_asttype(AstType.init("float"))
                                     case Expr.ELitStr(_, _): g_ty = box_asttype(AstType.init("str"))
                                     case Expr.ELitBool(_): g_ty = box_asttype(AstType.init("bool"))
+                                    case Expr.ELitNone: self.none_globals.insert(g_name, true)
                                     case Expr.EList(gl_items): 
-                                        if gl_items.len > 0: self.global_firm.insert(g_name, "List")
+                                        self.global_firm.insert(g_name, "List")
                                     case Expr.EDict(gd_k, _):
-                                        if gd_k.len > 0: self.global_firm.insert(g_name, "Dict")
+                                        self.global_firm.insert(g_name, "Dict")
                                     case _: pass
                             if g_ty as usize != 0 as usize:
                                 self.declare(g_name, SymbolKind.SVariable, g_ty, g_is_mut)
@@ -6707,6 +6727,7 @@ extend Sema:
                         case _: pass
                     match target.read():
                         case Expr.EIdent(_as_n):
+                            self.assigned_names.insert(_as_n, true)
                             mut _as_sym = self.resolve(_as_n)
                             if _as_sym.name != "" and _as_sym.kind == SymbolKind.SVariable and _as_sym.firm != "":
                                 mut _as_af = self.firm_family(hv)
@@ -7242,6 +7263,9 @@ extend Sema:
                 while k < items.len:
                     mut h_wi = self.lower_expr(items.get(k))
                     h_items.push(h_wi)
+                    mut _wf = self.firm_family(h_wi)
+                    if _wf == "int" or _wf == "float" or _wf == "bool" or _wf == "str" or _wf == "List" or _wf == "Dict" or _wf == "Tuple" or _wf == "None":
+                        self.error("[E-5] Type mismatch: 'with' needs a context manager (a class with __enter__ / __exit__), but is given " + self.family_word(_wf) + ".\n      FIX: use a value of a class that defines __exit__, or drop the 'with'.")
                     # Declare the alias so body can reference it
                     if k < aliases.len and aliases.get(k) != "":
                         mut wi_ty = hir_expr_type(h_wi)
@@ -8599,6 +8623,10 @@ extend Sema:
                         # [G-1] generic bounds: verify the inferred type args satisfy them.
                         self.check_call_bounds(n, hl)
                         self.check_call_fn_args(n, hl)
+                        if self.is_local_var(n) and not self.fn_defs.contains(n) and not self.classes.contains(n) and not self.fn_sigs.contains(n) and not self.extern_names.contains(n) and not self.extern_defs.contains(n) and self._is_plain_local_callee(n):
+                            mut _nc_f = self.firm_family(hcallee)
+                            if _nc_f == "int" or _nc_f == "float" or _nc_f == "bool" or _nc_f == "str" or _nc_f == "List" or _nc_f == "Dict" or _nc_f == "Tuple" or _nc_f == "None":
+                                self.error("[E-5] Type mismatch: '" + n + "' is " + self.family_word(_nc_f) + ", which is not callable.\n      FIX: call a function by name, or store a function/lambda in '" + n + "' if you meant to call it.")
                         if (n == "print" or n == "println") and not self.is_local_var(n):
                             mut pr_i = 0
                             while pr_i < hl.len:
@@ -8611,6 +8639,18 @@ extend Sema:
                                     self.error("[E-5] Type mismatch: a " + pr_t.name + " of function values cannot be printed.\n      FIX: print the results of calling the functions instead.")
                                 if pr_var and self.classes.contains(pr_t.name) and not self.ambiguous_classes.contains(pr_t.name) and not self.classes.get(pr_t.name).is_class and not self.is_builtin_dispatch_class(pr_t.name):
                                     self.error("[E-5] Type mismatch: a '@value_type' value of '" + pr_t.name + "' cannot be printed directly.\n      FIX: print its fields (e.g. `print(v.field)`) or a str built by a method (e.g. `print(v.to_string())`).")
+                                if pr_var and (pr_t.name == "def" or pr_t.name == "lambda"):
+                                    self.error("[E-5] Type mismatch: a function value cannot be printed.\n      FIX: call the function and print its result, e.g. `print(f(1))`.")
+                                if pr_var and (pr_t.name == "List" or pr_t.name == "Vec" or pr_t.name == "Dict" or pr_t.name == "Map" or pr_t.name == "Set") and pr_t.args.len > 0:
+                                    mut _pe_i = 0
+                                    while _pe_i < pr_t.args.len:
+                                        mut _pe_n = pr_t.args.get(_pe_i).read().name
+                                        if (self.classes.contains(_pe_n) and not self.ambiguous_classes.contains(_pe_n) and not self.is_builtin_dispatch_class(_pe_n) and _pe_n != "Str") or _pe_n == "List" or _pe_n == "Vec" or _pe_n == "Dict" or _pe_n == "Map" or _pe_n == "Set":
+                                            self.error("[E-5] Type mismatch: a " + pr_t.name + " with " + _pe_n + " elements cannot be printed directly.\n      FIX: print the elements one by one (e.g. in a `for` loop, printing a field or a str built from each).")
+                                            break
+                                        _pe_i = _pe_i + 1
+                                if pr_var and pr_t.name == "Array" and pr_t.array_size > 0:
+                                    self.error("[E-5] Type mismatch: a fixed-size array cannot be printed directly.\n      FIX: print its elements (e.g. `print(arr[0])`), or copy it into a List first.")
                                 if pr_var and (pr_t.name == "Result" or pr_t.name == "Option") and pr_t.args.len > 0:
                                     self.error("[E-5] Type mismatch: a " + pr_t.name + " cannot be printed directly.\n      FIX: print its payload instead (e.g. `.unwrap()` after checking `.is_ok` / `.is_some`), or print a message for each case.")
                                 pr_i = pr_i + 1
@@ -9132,6 +9172,8 @@ extend Sema:
                 # class`es that resolve to a symbol even when the def isn't in
                 # self.classes for this unit — so keying on `resolve(...)=="" ` (truly
                 # unresolved), not on the symbol KIND, avoids false-flagging them.
+                if _recv_name != "" and not self.is_local_var(_recv_name) and (_recv_name == "OS" or _recv_name == "Process" or _recv_name == "Env" or _recv_name == "Hash" or _recv_name == "File" or _recv_name == "Math" or _recv_name == "Clock" or _recv_name == "Time" or _recv_name == "Random" or _recv_name == "Hmac") and not self.classes.contains(_recv_name) and not self.enums.contains(_recv_name) and self.resolve(_recv_name).name == "":
+                    self.error("[E-1] '" + _recv_name + "' is not imported, so '" + _recv_name + "." + method + "(...)' cannot be resolved.\n      FIX: import it first (e.g. `from std.sys.env import Env`), or check the spelling.")
                 if _recv_name != "" and not self.is_local_var(_recv_name) and not self._is_known_type_name(_recv_name):
                     if self.resolve(_recv_name).name == "":
                         self.error("[E-1] '" + _recv_name + "' is not a defined type or value, so '" + _recv_name + "." + method + "(...)' cannot be resolved.\n      FIX: check the spelling, import the type, or define it — a call on an unknown name would otherwise emit invalid C.")
@@ -9750,6 +9792,11 @@ extend Sema:
                 if obj as usize != 0 as usize:
                     match obj.read():
                         case Expr.EIdent(_pa_n):
+                            if self.current_func_name != "" and self.none_globals.contains(_pa_n) and self.is_global_symbol(_pa_n) and self.resolve(_pa_n).kind == SymbolKind.SVariable:
+                                mut _ng_loc = ""
+                                if self.current_file.len() > 0: _ng_loc = self.current_file + ":"
+                                self.none_read_names.push(_pa_n)
+                                self.none_read_msgs.push(_ng_loc + self.current_line.to_str() + ": [E-5] Type mismatch: '" + _pa_n + "." + prop + "' reads a member of None.\n      FIX: the module-level '" + _pa_n + "' is initialised to None and never assigned anything else; give it a real value.")
                             if self.resolve(_pa_n).kind == SymbolKind.SVariable and self.firm_family(self.lower_expr(obj)) == "None":
                                 self.error("[E-5] Type mismatch: '" + _pa_n + "." + prop + "' reads a member of None.\n      FIX: '" + _pa_n + "' only ever holds None; give it a real value before using its members.")
                             if _pa_n != "" and not self.is_local_var(_pa_n) and not self._is_known_type_name(_pa_n) and self.resolve(_pa_n).name == "" and not self.classes.contains(_pa_n) and not self.enums.contains(_pa_n):
@@ -10641,6 +10688,12 @@ extend Sema:
     # generic/collection/concurrency/module-static type. Used to detect a method
     # call whose receiver is a bare identifier naming NO known type (a
     # silent-miscompile hazard — codegen would emit a bogus free call).
+    # A name that is not one of the compiler's builtin function names (a local of that name does not shadow the builtin call).
+    pub def _is_plain_local_callee(self, n: str) -> bool:
+        if n == "sum" or n == "min" or n == "max" or n == "len" or n == "abs" or n == "str" or n == "int" or n == "float" or n == "bool" or n == "print" or n == "println" or n == "range" or n == "sorted" or n == "reversed" or n == "map" or n == "filter": return false
+        if n == "set" or n == "list" or n == "dict" or n == "tuple" or n == "round" or n == "pow" or n == "divmod" or n == "any" or n == "all" or n == "input" or n == "open" or n == "zip" or n == "enumerate" or n == "id" or n == "hash" or n == "type" or n == "chr" or n == "ord" or n == "bytes" or n == "repr" or n == "format" or n == "isinstance": return false
+        return true
+
     pub def _is_known_type_name(self, name: str) -> bool:
         if name == "": return true
         if self.is_primitive_name(name): return true
