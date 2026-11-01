@@ -931,6 +931,12 @@ static inline _TrWeakBox* _tr_weak_new(_TrSharedBox* b) {
     w->box = b;
     return w;
 }
+/* A second, independent Weak[T] handle to the same box (a Weak copied into a field /
+ * second owner must not alias the handle the first owner will drop). NULL-safe. */
+static inline _TrWeakBox* _tr_weak_clone(_TrWeakBox* w) {
+    if (!w) return NULL;
+    return _tr_weak_new(w->box);
+}
 static inline bool _tr_weak_is_alive(_TrWeakBox* w) {
     if (!w || !w->box) return false;
     return atomic_load(&w->box->refcount) > 0;

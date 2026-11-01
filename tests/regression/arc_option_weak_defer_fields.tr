@@ -1,0 +1,75 @@
+# tests/regression/arc_option_weak_defer_fields.tr
+# ARC floor regressions found by the cycles/leaks audit (all are memory-safety bugs in
+# SAFE code, caught by scripts/asan_check.sh):
+#   1. `defer` bodies ran AFTER the scope-exit drops, so a deferred call that read a
+#      local read freed memory (use-after-free).
+#   2. An `Option[Class]` FIELD did not co-own its payload: `a.next = Option.Some(b)`
+#      stored a raw pointer, so once `b` (a local) died the field dangled (UAF). The
+#      field now retains on store, releases on overwrite and in the class drop.
+#   3. A `Weak[T]` FIELD was never released (handle + control block leaked); a Weak
+#      copied from another Weak must clone the handle, not alias it (double drop).
+from std.test import TestRunner
+
+class Node:
+    pub name: str
+    pub next: Option[Node]
+
+class Parent:
+    pub name: str
+
+class Child:
+    pub name: str
+    pub parent: Weak[Parent]
+
+def mk(n: str) -> Node:
+    mut x = Node()
+    x.name = n
+    return x
+
+def chain() -> Node:
+    mut a = mk("a")
+    mut b = mk("b")
+    mut c = mk("c")
+    b.next = Option.Some(c)
+    a.next = Option.Some(b)
+    return a
+
+def reassign() -> str:
+    mut a = mk("a")
+    a.next = Option.Some(mk("x"))
+    a.next = Option.Some(mk("y"))
+    a.next = Option.None
+    mut b = mk("b")
+    a.next = Option.Some(b)
+    a.next = Option.Some(b)
+    return a.next.unwrap().name
+
+def deferred() -> int:
+    mut a = mk("deferred")
+    defer print(a.name)
+    mut b = mk("other")
+    return 1
+
+def weak_copy() -> bool:
+    shared p = Parent()
+    p.name = "p"
+    mut w = p.downgrade()
+    mut c1 = Child()
+    mut c2 = Child()
+    c1.parent = w
+    c2.parent = c1.parent
+    c1.parent = p.downgrade()
+    return c2.parent.is_alive()
+
+def main():
+    mut t = TestRunner.init("arc_option_weak_defer_fields")
+    t.section("Option[Class] field co-owns its payload")
+    mut head = chain()
+    t.assert_eq_str(head.next.unwrap().name, "b", "payload outlives the local that built it")
+    t.assert_eq_str(head.next.unwrap().next.unwrap().name, "c", "nested payload survives")
+    t.assert_eq_str(reassign(), "b", "overwrite releases the old payload, shared payload stays valid")
+    t.section("defer runs before the locals it reads are released")
+    t.assert_eq_int(deferred(), 1, "defer on a class local")
+    t.section("Weak field")
+    t.assert_true(weak_copy(), "a copied Weak keeps its own handle")
+    t.summary()

@@ -2783,6 +2783,17 @@ pub class CGenerator:
                     elif _is_str_type(self.resolve_generic_prim(_csfld.ty.name)):
                         self.ws("    _tr_str_release(self->" + _c_field(_csfld.name) + ");\n")
                         _csf = _csf + 1
+                    elif _csfld.ty.name == "Weak":
+                        # A Weak[T] field owns its own weak handle (stores clone or take a fresh
+                        # downgrade()): release it so the handle and, once the strong side is gone,
+                        # the control block are reclaimed.
+                        self.ws("    if (self->" + _c_field(_csfld.name) + ") _tr_weak_drop(self->" + _c_field(_csfld.name) + ");\n")
+                        _csf = _csf + 1
+                    elif _csfld.ty.name == "Option" and _csfld.ty.args.len > 0 and self.is_heap_class_tn(self.resolve_generic_tyname(_csfld.ty.args.get(0).read().name)) and not self.has_method(self.resolve_generic_tyname(_csfld.ty.args.get(0).read().name), "free"):
+                        # Option[HeapClass] field co-owns the payload (stores retain it): release it.
+                        mut _ofn = _c_field(_csfld.name)
+                        self.ws("    if (self->" + _ofn + ".tag == Option_Some && self->" + _ofn + ".data.Some.val) _tr_obj_release(self->" + _ofn + ".data.Some.val, " + self.obj_drop_fn(self.resolve_generic_tyname(_csfld.ty.args.get(0).read().name)) + ");\n")
+                        _csf = _csf + 1
                     elif _csfld.ty.name == "Shared":
                         # A Shared[T] field owns one strong reference to the control block.
                         self.ws("    if (self->" + _c_field(_csfld.name) + ") _tr_shared_drop(self->" + _c_field(_csfld.name) + ");\n")
@@ -4250,6 +4261,68 @@ pub class CGenerator:
                         fi = fi + 1
             case _: pass
         return false
+
+    # Assignment target is a `Weak[T]` class FIELD (not a `ref` borrow field).
+    pub def _store_is_weak_field(self, t: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(t as usize): return false
+        match t.read():
+            case HirExpr.EPropAccess(_, _, _):
+                if hir_expr_type(t).name != "Weak": return false
+                return not self._store_target_is_borrow_field(t)
+            case _: return false
+
+    pub def _is_downgrade_call(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return false
+        match e.read():
+            case HirExpr.EMethodCall(_, m, _, _): return m == "downgrade"
+            case _: return false
+
+    # Assignment target is an `Option[HeapClass]` class FIELD that co-owns its payload.
+    pub def _store_is_opt_obj_field(self, t: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(t as usize): return false
+        match t.read():
+            case HirExpr.EPropAccess(_, _, _):
+                mut ft = hir_expr_type(t)
+                if ft.name != "Option" or ft.args.len == 0: return false
+                mut pn = self.resolve_generic_tyname(ft.args.get(0).read().name)
+                if not self.is_heap_class_tn(pn): return false
+                if self.has_method(pn, "free"): return false
+                return not self._store_target_is_borrow_field(t)
+            case _: return false
+
+    # `Option.Some(<fresh owned object>)`: the option TRANSFERS the payload's rc=1.
+    pub def _is_fresh_some(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return false
+        mut payload = Pointer[HirExpr](0)
+        match e.read():
+            case HirExpr.ECall(callee, args, _):
+                match callee.read():
+                    case HirExpr.EIdent(cn, _, _):
+                        if cn == "Some" and args.len > 0: payload = args.get(0)
+                    case _: pass
+            case HirExpr.EMethodCall(recv, m, args, _):
+                if (m == "Some" or m == "some") and args.len > 0:
+                    match recv.read():
+                        case HirExpr.EIdent(rn, _, _):
+                            if rn == "Option": payload = args.get(0)
+                        case _: pass
+            case _: pass
+        if _is_invalid_ptr(payload as usize): return false
+        if payload as usize == 0 as usize: return false
+        match payload.read():
+            case HirExpr.ECall(pc, _, _):
+                match pc.read():
+                    case HirExpr.EIdent(pcn, _, _):
+                        if self.classes.contains(pcn): return true
+                        return self._fn_owned_lookup(pcn)
+                    case _: return false
+            case HirExpr.EMethodCall(prv, pm, _, _):
+                match prv.read():
+                    case HirExpr.EIdent(prn, _, _):
+                        if self.classes.contains(prn) and (pm == "init" or pm == "new"): return true
+                    case _: pass
+                return false
+            case _: return false
 
     pub def _obj_store_needs_retain(self, e: Pointer[HirExpr]) -> bool:
         if _is_invalid_ptr(e as usize): return false
@@ -10213,6 +10286,35 @@ pub class CGenerator:
                     # List/Vec runtime handle or restricting the clone to call sites proven
                     # not to alias a live local (out of scope for a same-session patch).
                     self.w(pad + self.gen_expr(t) + " = " + _assign_rhs + ";\n")
+                    return
+                elif self._store_is_weak_field(t):
+                    # Weak[T] field: the field owns ONE weak handle. A fresh `x.downgrade()` transfers
+                    # its handle; anything else (another Weak local/field) is CLONED so the two
+                    # owners never drop the same handle. The old handle is dropped after the store.
+                    mut _wk_rhs = _assign_rhs
+                    if not self._is_downgrade_call(v): _wk_rhs = "_tr_weak_clone(" + _wk_rhs + ")"
+                    mut _wk_new = "_wknew" + self.next_temp()
+                    mut _wk_old = "_wkold" + self.next_temp()
+                    mut _wk_f = self.gen_expr(t)
+                    self.w(pad + "_TrWeakBox* " + _wk_new + " = " + _wk_rhs + ";\n")
+                    self.w(pad + "_TrWeakBox* " + _wk_old + " = " + _wk_f + ";\n")
+                    self.w(pad + _wk_f + " = " + _wk_new + ";\n")
+                    self.w(pad + "if (" + _wk_old + ") _tr_weak_drop(" + _wk_old + ");\n")
+                    return
+                elif self._store_is_opt_obj_field(t):
+                    # Option[HeapClass] field: the field co-owns the payload (released in _trdrop_T
+                    # and when overwritten). A fresh `Option.Some(Ctor(..))` transfers its rc=1;
+                    # any other source (a local, another field, a call result) is retained.
+                    mut _of_tn = self.resolve_generic_tyname(hir_expr_type(t).args.get(0).read().name)
+                    mut _of_new = "_optnew" + self.next_temp()
+                    mut _of_old = "_optold" + self.next_temp()
+                    mut _of_f = self.gen_expr(t)
+                    self.w(pad + "Option " + _of_new + " = " + _assign_rhs + ";\n")
+                    if not self._is_fresh_some(v):
+                        self.w(pad + "if (" + _of_new + ".tag == Option_Some && " + _of_new + ".data.Some.val) _tr_obj_retain(" + _of_new + ".data.Some.val);\n")
+                    self.w(pad + "Option " + _of_old + " = " + _of_f + ";\n")
+                    self.w(pad + _of_f + " = " + _of_new + ";\n")
+                    self.w(pad + "if (" + _of_old + ".tag == Option_Some && " + _of_old + ".data.Some.val) _tr_obj_release(" + _of_old + ".data.Some.val, " + self.obj_drop_fn(_of_tn) + ");\n")
                     return
                 elif self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(t).name)) and not self.has_method(self.resolve_generic_tyname(hir_expr_type(t).name), "free"):
                     # `ref T` (borrow) field store: no co-ownership — plain store, no

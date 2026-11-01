@@ -1,0 +1,8 @@
+# EXPECT: [S-2]
+# A 2-class cycle where one edge is Option[...] inside a List.
+class A:
+    pub b: B
+class B:
+    pub l: List[Option[A]]
+def main():
+    print(1)

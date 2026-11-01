@@ -1,0 +1,59 @@
+# Leak gate: an Option[Class] field co-owns its payload (retain on store, release on
+# overwrite / class drop) and a Weak[T] field releases its handle. Neither may grow the
+# live-allocation count across a loop. Run by scripts/leak_check.sh.
+extern "C":
+    def _tr_mem_live() -> int
+
+class Node:
+    pub v: int
+    pub next: Option[Node]
+
+class Parent:
+    pub v: int
+
+class Child:
+    pub v: int
+    pub parent: Weak[Parent]
+
+def mk(v: int) -> Node:
+    mut n = Node()
+    n.v = v
+    return n
+
+def opt_chain() -> int:
+    mut a = mk(1)
+    mut b = mk(2)
+    a.next = Option.Some(b)
+    a.next = Option.Some(mk(3))
+    a.next = Option.Some(b)
+    a.next = Option.None
+    b.next = Option.Some(mk(4))
+    return a.v + b.v
+
+def weak_field() -> int:
+    shared p = Parent()
+    p.v = 7
+    mut c = Child()
+    c.parent = p.downgrade()
+    mut d = Child()
+    d.parent = c.parent
+    c.parent = p.downgrade()
+    if d.parent.is_alive(): return 1
+    return 0
+
+def workload():
+    opt_chain()
+    weak_field()
+
+def main():
+    workload()
+    mut before = _tr_mem_live()
+    mut r = 0
+    while r < 100:
+        workload()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    if leaked <= 0:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str())

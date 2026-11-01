@@ -1,0 +1,6 @@
+# EXPECT: [S-2]
+# A cycle routed through Mutex[...].
+class Node:
+    pub m: Mutex[Node]
+def main():
+    print(1)

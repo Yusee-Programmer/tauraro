@@ -1,0 +1,8 @@
+# EXPECT: [S-2]
+# A cycle routed through a generic user class instantiated with the owner.
+class Cell[T]:
+    pub v: T
+class Node:
+    pub c: Cell[Node]
+def main():
+    print(1)

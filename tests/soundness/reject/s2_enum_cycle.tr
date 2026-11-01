@@ -1,0 +1,9 @@
+# EXPECT: [S-2]
+# A cycle routed through an enum payload: class -> enum -> class.
+enum Link:
+    To(n: Node)
+    End
+class Node:
+    pub link: Link
+def main():
+    print(1)

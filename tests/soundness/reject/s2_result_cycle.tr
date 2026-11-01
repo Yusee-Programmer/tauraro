@@ -1,0 +1,6 @@
+# EXPECT: [S-2]
+# A cycle routed through Result[...].
+class Node:
+    pub r: Result[Node, str]
+def main():
+    print(1)

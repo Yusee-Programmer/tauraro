@@ -1,0 +1,7 @@
+# EXPECT: [S-2]
+# A strong cycle routed through Option[...] (the canonical linked-node field) leaks: --strict rejects it.
+class Node:
+    pub name: str
+    pub next: Option[Node]
+def main():
+    print(1)

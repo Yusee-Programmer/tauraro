@@ -1,0 +1,14 @@
+# EXPECT: pass
+# Option[Weak[T]] / Weak edges and an enum with scalar payloads are NOT strong
+# ownership: no cycle, accepted under --strict.
+enum Tag:
+    Num(v: int)
+    Name(s: str)
+class Parent:
+    pub kids: List[Child]
+    pub tag: Tag
+class Child:
+    pub parent: Weak[Parent]
+    pub tag: Tag
+def main():
+    print("ok")

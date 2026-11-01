@@ -1,0 +1,8 @@
+# EXPECT: [S-2]
+# A cycle through a base class: Derived owns Base's fields, and Base owns a Derived.
+class Base:
+    pub d: Derived
+class Derived(Base):
+    pub x: int
+def main():
+    print(1)

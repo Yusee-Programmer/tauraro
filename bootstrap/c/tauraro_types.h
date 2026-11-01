@@ -2722,6 +2722,7 @@ typedef struct Symbol {
     long long decl_block_depth;
     long long decl_block_id;
     bool str_escaped;
+    bool defer_used;
     bool coll_escaped;
     AstType* firm_ty;
     TrStr firm_cls;
@@ -4124,6 +4125,7 @@ __attribute__((hot)) bool Sema__sendable_reaches_plain_rc(Sema* self, TrStr tn, 
 __attribute__((hot)) bool Sema__is_unsafe_sendable(Sema* self, TrStr n);
 __attribute__((hot)) void Sema__check_spawn_nested_rc(Sema* self, HirExpr* arg_expr);
 __attribute__((hot)) void Sema__collect_strong_edge(Sema* self, AstType* ft, List_TrStr* out);
+__attribute__((hot)) List_TrStr* Sema__node_edges(Sema* self, TrStr name);
 __attribute__((hot)) List_TrStr* Sema__strong_owned(Sema* self, ClassDef* cd);
 __attribute__((hot)) void Sema__cycle_dfs(Sema* self, TrStr cur, TrStr start, TrMap* on_path, TrMap* reported, long long depth);
 __attribute__((hot)) void Sema_check_ownership_cycles(Sema* self, Program* prog);
@@ -4144,6 +4146,7 @@ __attribute__((hot)) AstType** Sema_list_hint_for_fn(Sema* self, TrStr fname, lo
 __attribute__((hot)) AstType** Sema_list_hint_for_method(Sema* self, TrStr method, long long k);
 __attribute__((hot)) void Sema_collect_idents(Sema* self, HirExpr* e, List_TrStr* out);
 __attribute__((hot)) bool Sema_is_local_var(Sema* self, TrStr name);
+__attribute__((hot)) void Sema_mark_defer_used(Sema* self, HirStmt* st);
 __attribute__((hot)) void Sema_mark_str_escaped(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_set_borrows_region(Sema* self, TrStr name, TrStr region);
 __attribute__((hot)) TrStr Sema_compute_region(Sema* self, Expr* e);
@@ -5113,6 +5116,10 @@ __attribute__((hot)) void CGenerator__reg_fn_owned(CGenerator* self, TrStr key, 
 __attribute__((hot)) bool CGenerator__obj_expr_owns_ref(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__is_user_borrow_wrapper_call(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__store_target_is_borrow_field(CGenerator* self, HirExpr* t);
+__attribute__((hot)) bool CGenerator__store_is_weak_field(CGenerator* self, HirExpr* t);
+__attribute__((hot)) bool CGenerator__is_downgrade_call(CGenerator* self, HirExpr* e);
+__attribute__((hot)) bool CGenerator__store_is_opt_obj_field(CGenerator* self, HirExpr* t);
+__attribute__((hot)) bool CGenerator__is_fresh_some(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__obj_store_needs_retain(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_lv_name(CGenerator* self, TrStr n);
 __attribute__((hot)) TrStr CGenerator_obj_drop_fn(CGenerator* self, TrStr tn);

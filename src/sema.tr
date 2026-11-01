@@ -65,6 +65,7 @@ pub class Symbol:
     pub decl_block_depth: int # auto-drop: nested-block depth (if/while bodies) at declaration; only depth==0 is droppable by the enclosing scope
     pub decl_block_id: int    # auto-drop: id of the innermost if/while C block open at declaration within the current scope; 0 = scope top-level
     pub str_escaped: bool     # auto-drop: a `str` local passed as a call/method-call ARGUMENT - may be aliased into a legacy List_str/Dict/Set (#52 not yet migrated); excluded from auto-drop to avoid UAF
+    pub defer_used: bool      # auto-drop: referenced by a `defer` body, which runs AFTER the scope-exit drops - dropping it would be a use-after-free, so it is never auto-dropped (a leak, not a UAF)
     pub coll_escaped: bool    # auto-drop: a List/Vec/Dict/Map/Set local that is ever read in a non-receiver position (call/method arg, assigned to another var, returned, stored in a literal) - raw unrefcounted pointer, so any alias must disable auto-free to avoid UAF
     pub firm_ty: AstType      # the FULL declared / inferred type this variable is certain to have (name == "" when unsure)
     pub firm_cls: str         # class name this variable is CERTAIN to hold ("" when unsure); lets field / method result kinds be known
@@ -98,6 +99,7 @@ extend Symbol:
         s.decl_block_id = 0
         s.str_escaped = false
         s.coll_escaped = false
+        s.defer_used = false
         s.borrows_region = ""
         s.open_coll = false
         s.open_key = ""
@@ -2676,6 +2678,19 @@ extend Sema:
         # ref Context`) is the canonical safe way to break an ownership cycle.
         if ft.is_borrow: return
         if n == "Pointer" or n == "Weak": return
+        # Option / Result / Tuple and the builtin wrappers hold their payload(s) STRONGLY:
+        # a cycle routed through them (`next: Option[Node]`, `(int, Node)`, `Box[Node]`,
+        # `Mutex[Node]`, `Result[Node, str]`) leaks exactly like a direct field.
+        if n == "Option" or n == "Result" or n == "Tuple" or n == "Mutex" or n == "RwLock" or n == "Atomic" or n == "Chan" or ((n == "Box") and not self.classes.contains("Box")):
+            mut oi = 0
+            while oi < ft.args.len:
+                self._collect_strong_edge(ft.args.get(oi).read(), out)
+                oi = oi + 1
+            return
+        # A user ENUM is a node of the ownership graph: its variant payloads own what they hold.
+        if self.enums.contains(n):
+            out.push(n)
+            return
         if n == "Vec" or n == "List" or n == "Set":
             if ft.args.len > 0: self._collect_strong_edge(ft.args.get(0).read(), out)
             return
@@ -2688,6 +2703,38 @@ extend Sema:
                 if self.classes.contains(si): out.push(si)
             return
         if self._is_rc_class(n): out.push(n)
+        # A generic user class instantiated with an owning argument (`Cell[Node]`) holds
+        # that argument strongly through its `T` fields.
+        if self.classes.contains(n) and ft.args.len > 0:
+            mut gi = 0
+            while gi < ft.args.len:
+                self._collect_strong_edge(ft.args.get(gi).read(), out)
+                gi = gi + 1
+
+    # Strong-ownership edges out of a graph node: a class (its fields + its base classes)
+    # or an enum (its variant payloads).
+    pub def _node_edges(self, name: str) -> Vec[str]:
+        if self.enums.contains(name):
+            mut eo = Vec[str].init(4)
+            mut en = self.enums.get(name)
+            mut vi = 0
+            while vi < en.variants.len:
+                mut vf = en.variants.get(vi).fields
+                mut fi = 0
+                while fi < vf.len:
+                    if vf.get(fi).ty as usize != 0 as usize:
+                        self._collect_strong_edge(vf.get(fi).ty.read(), eo)
+                    fi = fi + 1
+                vi = vi + 1
+            return eo
+        mut cd = self.classes.get(name)
+        mut out = self._strong_owned(cd)
+        mut bi = 0
+        while bi < cd.base_classes.len:
+            mut bn = cd.base_classes.get(bi)
+            if self._is_rc_class(bn): out.push(bn)
+            bi = bi + 1
+        return out
 
     pub def _strong_owned(self, cd: ClassDef) -> Vec[str]:
         mut out = Vec[str].init(4)
@@ -2703,8 +2750,8 @@ extend Sema:
     # already on the current path, that path is a leak cycle → report [S-2] once.
     pub def _cycle_dfs(self, cur: str, start: str, on_path: Map[str, bool], reported: Map[str, bool], depth: int):
         if depth > 200: return
-        if not self.classes.contains(cur): return
-        mut edges = self._strong_owned(self.classes.get(cur))
+        if not self.classes.contains(cur) and not self.enums.contains(cur): return
+        mut edges = self._node_edges(cur)
         mut i = 0
         while i < edges.len:
             mut nxt = edges.get(i)
@@ -2773,6 +2820,7 @@ extend Sema:
         if sym.kind != SymbolKind.SVariable: return false
         if sym.is_param: return false
         if sym.ty as usize == 0 as usize: return false
+        if sym.defer_used: return false
         # A `shared` (Shared[T]/Rc) local owns one strong reference to a control
         # block; auto-drop it (`_tr_shared_drop`) at scope exit so the refcount is
         # released and the payload reclaimed at count 0 (codegen routes SAutoDrop for
@@ -3171,6 +3219,31 @@ extend Sema:
             if self.scopes.get(i).variables.contains(name): return true
             i = i - 1
         return false
+
+    # A `defer` body runs at function exit, AFTER the scope-exit auto-drops: every
+    # local it mentions must stay alive (never auto-dropped) or the deferred call reads
+    # freed memory.
+    pub def mark_defer_used(self, st: Pointer[HirStmt]):
+        if _is_invalid_ptr(st as usize): return
+        mut names = Vec[str].init(4)
+        match st.read():
+            case HirStmt.SExpr(e): self.collect_idents(e, names)
+            case HirStmt.SAssign(t, v):
+                self.collect_idents(t, names)
+                self.collect_idents(v, names)
+            case _: pass
+        mut ni = 0
+        while ni < names.len:
+            mut nm = names.get(ni)
+            mut i = self.scopes.len - 1
+            while i >= 0:
+                if self.scopes.get(i).variables.contains(nm):
+                    mut sym = self.scopes.get(i).variables.get(nm)
+                    sym.defer_used = true
+                    self.scopes.get(i).variables.insert(nm, sym)
+                    break
+                i = i - 1
+            ni = ni + 1
 
     pub def mark_str_escaped(self, name: str):
         mut i = self.scopes.len - 1
@@ -4723,7 +4796,21 @@ extend Sema:
             case HirStmt.SUnsafe(ub): return self._param_consumed_in_block(pname, ub)
             case HirStmt.SWith(_, _, wb): return self._param_consumed_in_block(pname, wb)
             case HirStmt.STaskGroup(tb): return self._param_consumed_in_block(pname, tb)
-            case HirStmt.SDefer(ds): return self._param_consumed_in_stmt(pname, ds)
+            case HirStmt.SDefer(ds):
+                # The deferred body runs after the scope-exit drops: a local it mentions must
+                # outlive them, so treat any mention as consuming (never dropped here).
+                mut _dfn = Vec[str].init(4)
+                match ds.read():
+                    case HirStmt.SExpr(_dfe): self.collect_idents(_dfe, _dfn)
+                    case HirStmt.SAssign(_dft, _dfv):
+                        self.collect_idents(_dft, _dfn)
+                        self.collect_idents(_dfv, _dfn)
+                    case _: pass
+                mut _dfi = 0
+                while _dfi < _dfn.len:
+                    if _dfn.get(_dfi) == pname: return true
+                    _dfi = _dfi + 1
+                return self._param_consumed_in_stmt(pname, ds)
             case HirStmt.STry(tb, catches, fb):
                 if self._param_consumed_in_block(pname, tb): return true
                 if self._param_consumed_in_block(pname, fb): return true
@@ -7309,7 +7396,9 @@ extend Sema:
                 self.check_bool_ctx(_as_c, "an assert condition")
                 return box_hirstmt(HirStmt.SAssert(_as_c, self.lower_expr(msg)))
             case Stmt.SDefer(inner):
-                return box_hirstmt(HirStmt.SDefer(self.lower_stmt(inner)))
+                mut _df_lowered = self.lower_stmt(inner)
+                self.mark_defer_used(_df_lowered)
+                return box_hirstmt(HirStmt.SDefer(_df_lowered))
             case Stmt.SWith(items, aliases, body):
                 self.enter_scope()
                 mut h_items = Vec[Pointer[HirExpr]].init(items.len)

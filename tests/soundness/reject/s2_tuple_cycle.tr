@@ -1,0 +1,6 @@
+# EXPECT: [S-2]
+# A cycle routed through a tuple field.
+class Node:
+    pub pair: (int, Node)
+def main():
+    print(1)
