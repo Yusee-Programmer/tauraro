@@ -5242,6 +5242,30 @@ static inline void _tr_bounds_check(long long i, size_t len) {
     }
 }
 
+/* Bounds-checked byte index of a str: `s[i]` traps (same message as List) instead of reading
+ * outside the buffer. */
+static inline char _tr_str_at(TrStr s, long long i) {
+    _tr_bounds_check(i, s.len);
+    return s.data[i];
+}
+
+/* Defined float -> integer conversion (a plain C cast is UB for NaN / out of range): NaN -> 0,
+ * saturate to the target range. `bits` is the target width (8/16/32/64), `sgn` its signedness. */
+static inline long long _tr_f2i(double x, int bits, int sgn) {
+    if (x != x) return 0;
+    double hi = (double)(1ULL << (sgn ? bits - 1 : (bits < 64 ? bits : 63)));
+    if (!sgn && bits == 64) hi = hi * 2.0;
+    double lo = sgn ? -hi : 0.0;
+    if (x <= lo) return sgn ? (bits == 64 ? (-9223372036854775807LL - 1) : -(1LL << (bits - 1))) : 0;
+    if (x >= hi) return sgn ? (bits == 64 ? 9223372036854775807LL : (1LL << (bits - 1)) - 1) : (bits == 64 ? -1LL : (1LL << bits) - 1);
+    return (long long)x;
+}
+static inline unsigned long long _tr_f2u(double x) {
+    if (x != x || x <= 0.0) return 0;
+    if (x >= 18446744073709551616.0) return ~0ULL;
+    return (unsigned long long)x;
+}
+
 #ifndef _TR_GLOBAL
 #ifdef _TR_MAIN
   #define _TR_GLOBAL

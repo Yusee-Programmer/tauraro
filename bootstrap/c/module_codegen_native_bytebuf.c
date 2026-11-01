@@ -48,25 +48,25 @@ __attribute__((hot)) void ByteBuf_u16(ByteBuf* self, long long v) {
 #line 43 "src/codegen/native/bytebuf.tr"
     ByteBuf_u8(self, (v & 255LL));
 #line 44 "src/codegen/native/bytebuf.tr"
-    ByteBuf_u8(self, ((v >> 8LL) & 255LL));
+    ByteBuf_u8(self, ((v >> ((8LL) & 63)) & 255LL));
 }
 
 __attribute__((hot)) void ByteBuf_u32(ByteBuf* self, long long v) {
 #line 47 "src/codegen/native/bytebuf.tr"
     ByteBuf_u8(self, (v & 255LL));
 #line 48 "src/codegen/native/bytebuf.tr"
-    ByteBuf_u8(self, ((v >> 8LL) & 255LL));
+    ByteBuf_u8(self, ((v >> ((8LL) & 63)) & 255LL));
 #line 49 "src/codegen/native/bytebuf.tr"
-    ByteBuf_u8(self, ((v >> 16LL) & 255LL));
+    ByteBuf_u8(self, ((v >> ((16LL) & 63)) & 255LL));
 #line 50 "src/codegen/native/bytebuf.tr"
-    ByteBuf_u8(self, ((v >> 24LL) & 255LL));
+    ByteBuf_u8(self, ((v >> ((24LL) & 63)) & 255LL));
 }
 
 __attribute__((hot)) void ByteBuf_u64(ByteBuf* self, long long v) {
 #line 53 "src/codegen/native/bytebuf.tr"
     ByteBuf_u32(self, (v & 4294967295LL));
 #line 54 "src/codegen/native/bytebuf.tr"
-    ByteBuf_u32(self, ((v >> 32LL) & 4294967295LL));
+    ByteBuf_u32(self, ((v >> ((32LL) & 63)) & 4294967295LL));
 }
 
 __attribute__((hot)) void ByteBuf_cstr(ByteBuf* self, TrStr s) {
@@ -137,11 +137,11 @@ __attribute__((hot)) void ByteBuf_patch_u32(ByteBuf* self, long long off, long l
 #line 100 "src/codegen/native/bytebuf.tr"
     (*(self->data + off) = ((unsigned char)((v & 255LL))));
 #line 101 "src/codegen/native/bytebuf.tr"
-    (*(self->data + (off + 1LL)) = ((unsigned char)(((v >> 8LL) & 255LL))));
+    (*(self->data + (off + 1LL)) = ((unsigned char)(((v >> ((8LL) & 63)) & 255LL))));
 #line 102 "src/codegen/native/bytebuf.tr"
-    (*(self->data + (off + 2LL)) = ((unsigned char)(((v >> 16LL) & 255LL))));
+    (*(self->data + (off + 2LL)) = ((unsigned char)(((v >> ((16LL) & 63)) & 255LL))));
 #line 103 "src/codegen/native/bytebuf.tr"
-    (*(self->data + (off + 3LL)) = ((unsigned char)(((v >> 24LL) & 255LL))));
+    (*(self->data + (off + 3LL)) = ((unsigned char)(((v >> ((24LL) & 63)) & 255LL))));
 }
 
 __attribute__((hot)) void ByteBuf_align_to(ByteBuf* self, long long align) {

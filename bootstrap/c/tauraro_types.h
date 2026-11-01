@@ -58,6 +58,8 @@ typedef struct MirFunction MirFunction;
 typedef struct MirProgram MirProgram;
 typedef struct MirBuilder MirBuilder;
 typedef struct LiveSet LiveSet;
+typedef struct PfState PfState;
+typedef struct PfCtx PfCtx;
 typedef struct Symbol Symbol;
 typedef struct Scope Scope;
 typedef struct Sema Sema;
@@ -156,6 +158,8 @@ static void _trdrop_MirFunction(void* vp);
 static void _trdrop_MirProgram(void* vp);
 static void _trdrop_MirBuilder(void* vp);
 static void _trdrop_LiveSet(void* vp);
+static void _trdrop_PfState(void* vp);
+static void _trdrop_PfCtx(void* vp);
 static void _trdrop_Symbol(void* vp);
 static void _trdrop_Scope(void* vp);
 static void _trdrop_Sema(void* vp);
@@ -2721,6 +2725,63 @@ static void _trdrop_LiveSet(void* vp) {
 }
 #endif
 
+#ifndef PfState_STRUCT_DEFINED
+#define PfState_STRUCT_DEFINED
+typedef struct PfState {
+    size_t __rc;
+    List_TrStr* freed;
+    List_TrStr* pa;
+    List_TrStr* pb;
+    List_TrStr* stk;
+    List_TrStr* own;
+    List_TrStr* nul;
+    List_TrStr* sz;
+    bool dead;
+} PfState;
+static void _trdrop_PfState(void* vp) {
+    PfState* self = (PfState*)vp; (void)self;
+}
+#endif
+
+#ifndef PfCtx_STRUCT_DEFINED
+#define PfCtx_STRUCT_DEFINED
+typedef struct PfCtx {
+    size_t __rc;
+    List_TrStr* errs;
+    long long line;
+    TrStr fn_name;
+    bool ret_from;
+    bool is_main;
+    List_TrStr* params;
+    List_TrStr* locals;
+    TrMap* summaries;
+    PfState* ret_acc;
+    bool ret_seen;
+    List_ptr* brk;
+    List_i64* brk_base;
+    List_ptr* cnt;
+    List_i64* cnt_base;
+    bool report;
+    TrMap* alloc_line;
+    bool noesc;
+    bool in_defer;
+    long long unsafe_depth;
+    TrMap* externs;
+} PfCtx;
+static void _trdrop_PfCtx(void* vp) {
+    PfCtx* self = (PfCtx*)vp; (void)self;
+    List_TrStr_free(self->errs);
+    _tr_str_release(self->fn_name);
+    List_TrStr_free(self->locals);
+    _tr_obj_release(self->ret_acc, _trdrop_PfState);
+    List_ptr_free_obj(self->brk, _trdrop_PfState);
+    List_i64_free(self->brk_base);
+    List_ptr_free_obj(self->cnt, _trdrop_PfState);
+    List_i64_free(self->cnt_base);
+    Dict_free(self->alloc_line);
+}
+#endif
+
 #ifndef Symbol_STRUCT_DEFINED
 #define Symbol_STRUCT_DEFINED
 typedef struct Symbol {
@@ -2854,6 +2915,11 @@ typedef struct Sema {
     TrMap* container_borrows;
     bool capturing_moves;
     List_TrStr* branch_moved_buf;
+    List_ptr* pf_fns;
+    List_TrStr* pf_files;
+    List_i64* pf_lines;
+    TrMap* extern_ptr_names;
+    bool pf_trigger;
     bool capturing_inits;
     List_TrStr* branch_init_buf;
     TrMap* copy_classes;
@@ -2937,6 +3003,10 @@ static void _trdrop_Sema(void* vp) {
     List_ptr_free_obj(self->nested_interfaces, _trdrop_HirInterface);
     List_ptr_free_obj(self->closure_caps, _trdrop_HirParam);
     Dict_free_strval(self->container_borrows);
+    List_ptr_free_obj(self->pf_fns, _trdrop_HirFunction);
+    List_TrStr_free(self->pf_files);
+    List_i64_free(self->pf_lines);
+    Dict_free(self->extern_ptr_names);
     Dict_free(self->copy_classes);
     _tr_str_release(self->current_func_ret_from);
     _tr_str_release(self->current_func_ret_family);
@@ -3440,7 +3510,6 @@ static void _trdrop_LModule(void* vp) {
     List_ptr_free_obj(self->classes, _trdrop_ClassLayout);
     List_ptr_free_obj(self->enums, _trdrop_EnumLayout);
     List_TrStr_free(self->ifaces);
-    List_TrStr_free(self->externs);
     List_TrStr_free(self->fn_names);
     List_i64_free(self->fn_ret);
     List_TrStr_free(self->strings);
@@ -4058,6 +4127,56 @@ __attribute__((hot)) TrStr set_str(List_TrStr* v);
 __attribute__((hot)) TrStr term_str(MirTerm* t);
 __attribute__((hot)) TrStr stmt_str(MirStmt* s);
 __attribute__((hot)) TrStr dump_mir(MirProgram* mp);
+__attribute__((malloc,returns_nonnull,hot)) PfState* PfState_init();
+__attribute__((hot)) PfState* PfState_copy(PfState* self);
+__attribute__((hot)) bool pf_has(List_TrStr* v, TrStr s);
+__attribute__((hot)) void pf_add(List_TrStr* v, TrStr s);
+__attribute__((hot)) bool pf_under(TrStr p, TrStr n);
+__attribute__((hot)) List_TrStr* pf_vcopy(List_TrStr* v);
+__attribute__((hot)) List_TrStr* pf_inter(List_TrStr* a, List_TrStr* b);
+__attribute__((hot)) void pf_assign_from(PfState* into, PfState* o);
+__attribute__((hot)) bool pf_has_pair(PfState* st, TrStr a, TrStr b);
+__attribute__((hot)) void pf_merge(PfState* into, PfState* o);
+__attribute__((malloc,returns_nonnull,hot)) PfCtx* PfCtx_init(TrMap* summaries);
+__attribute__((hot)) void PfCtx_err(PfCtx* self, TrStr msg);
+__attribute__((hot)) bool pf_null(HirExpr* e);
+__attribute__((hot)) TrStr pf_path(HirExpr* e);
+__attribute__((hot)) TrStr pf_root(HirExpr* e);
+__attribute__((hot)) bool pf_is_dealloc(HirExpr* callee);
+__attribute__((hot)) TrStr pf_callee_name(HirExpr* callee);
+__attribute__((hot)) TrStr pf_stack_src(HirExpr* e, PfState* st, PfCtx* cx);
+__attribute__((hot)) long long pf_lit(HirExpr* e);
+__attribute__((hot)) bool pf_is_lit(HirExpr* e);
+__attribute__((hot)) bool pf_named_call(HirExpr* callee, TrStr want);
+__attribute__((hot)) bool pf_is_alloc(HirExpr* val);
+__attribute__((hot)) long long pf_alloc_n(HirExpr* val);
+__attribute__((hot)) bool pf_is_null_lit(HirExpr* val);
+__attribute__((hot)) long long pf_size_of(PfState* st, TrStr path);
+__attribute__((hot)) void pf_kill(PfState* st, TrStr path);
+__attribute__((hot)) List_TrStr* pf_drop_under(List_TrStr* v, TrStr path);
+__attribute__((hot)) void pf_kill_fields(PfState* st, TrStr path);
+__attribute__((hot)) void pf_link(PfState* st, TrStr a, TrStr b);
+__attribute__((hot)) void pf_free(PfState* st, TrStr path);
+__attribute__((hot)) TrStr pf_is_freed(PfState* st, TrStr path);
+__attribute__((hot)) bool pf_zeroish(HirExpr* e);
+__attribute__((hot)) TrStr pf_nulltest(HirExpr* cond);
+__attribute__((hot)) void pf_refine(PfState* st, TrStr test, bool taken);
+__attribute__((hot)) void pf_block(PfCtx* cx, HirBlock* b, PfState* st);
+__attribute__((hot)) void pf_use_msg(PfCtx* cx, TrStr name);
+__attribute__((hot)) void pf_exprs(PfCtx* cx, List_ptr* v, PfState* st);
+__attribute__((hot)) void pf_branchy_block(PfCtx* cx, HirBlock* b, PfState* st);
+__attribute__((hot)) void pf_ptr_checks(PfCtx* cx, PfState* st, HirExpr* o, TrStr m, List_ptr* args);
+__attribute__((hot)) void pf_expr(PfCtx* cx, HirExpr* e, PfState* st);
+__attribute__((hot)) void pf_leak_warn(PfCtx* cx, TrStr name, TrStr why);
+__attribute__((hot)) void pf_leak_check(PfCtx* cx, PfState* st, TrStr why);
+__attribute__((hot)) void pf_bind(PfCtx* cx, PfState* st, TrStr path, HirExpr* val, bool simple);
+__attribute__((hot)) void pf_declare(PfCtx* cx, PfState* st, TrStr name, HirExpr* val);
+__attribute__((hot)) void pf_assign(PfCtx* cx, PfState* st, HirExpr* tgt, HirExpr* val);
+__attribute__((hot)) void pf_exit_loop_ctx(PfCtx* cx, PfState* brk_out, PfState* cnt_out);
+__attribute__((hot)) void pf_loop(PfCtx* cx, PfState* st, HirExpr* cond, TrStr lv, HirBlock* body, bool always);
+__attribute__((hot)) void pf_stmt(PfCtx* cx, HirStmt* sp, PfState* st);
+__attribute__((hot)) List_i64* pf_run_fn(HirFunction* hf, TrMap* summaries, TrMap* externs, bool report, List_TrStr* errs);
+__attribute__((hot)) List_TrStr* ptrflow_check(List_ptr* fns, TrMap* externs);
 __attribute__((hot)) bool _is_neg_int_lit(Expr* e);
 __attribute__((hot)) bool _is_builtin_type_word(TrStr n);
 __attribute__((hot)) bool _is_c_top_collision(TrStr n);
@@ -4274,6 +4393,7 @@ __attribute__((hot)) void Sema_check_duplicate_decls(Sema* self, Program* prog);
 __attribute__((hot)) void Sema__check_type_name_dup(Sema* self, TrMap* types, TrMap* fns, TrStr file, TrStr name, TrStr kind, long long line);
 __attribute__((hot)) void Sema_check_base_classes(Sema* self, Program* prog);
 __attribute__((hot)) void Sema__check_overrides(Sema* self, ClassDef* c);
+__attribute__((hot)) void Sema_run_ptrflow(Sema* self, HirProgram* hp);
 __attribute__((hot)) void Sema_check_not_type_value(Sema* self, Expr* e);
 __attribute__((hot)) void Sema_check_not_fn_operand(Sema* self, Expr* e, TrStr op);
 __attribute__((hot)) void Sema_register_decl(Sema* self, Decl* d);
@@ -4532,6 +4652,8 @@ __attribute__((hot)) TrStr _c_dot_to_safe(TrStr s);
 __attribute__((hot)) TrStr _indent_str(long long n);
 __attribute__((hot)) bool _is_invalid_ptr(unsigned long long addr);
 __attribute__((hot)) bool _is_str_type(TrStr n);
+__attribute__((hot)) TrStr _tr_int_bits(TrStr n);
+__attribute__((hot)) TrStr _tr_int_signed(TrStr n);
 __attribute__((hot)) bool _is_int_type(TrStr n);
 __attribute__((hot)) bool _hir_neg_int_lit(HirExpr* e);
 __attribute__((hot)) bool _is_float_type(TrStr n);
@@ -6317,6 +6439,42 @@ __attribute__((hot)) mir_LiveSet*** core_alloc_resize_mir_LiveSet_ptr(mir_LiveSe
 __attribute__((hot)) void core_alloc_dealloc_mir_LiveSet_ptr(mir_LiveSet*** ptr);
 __attribute__((hot)) core_map_MapNode_str_mir_LiveSet** core_alloc_alloc_core_map_MapNode_str_mir_LiveSet(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_mir_LiveSet(core_map_MapNode_str_mir_LiveSet** ptr);
+
+typedef PfState ptrflow_PfState;
+struct core_vec_Vec_ptrflow_PfState { ptrflow_PfState** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_ptrflow_PfState core_vec_Vec_ptrflow_PfState;
+struct core_vec_Vec_ptrflow_PfState_ptr { ptrflow_PfState*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_ptrflow_PfState_ptr core_vec_Vec_ptrflow_PfState_ptr;
+struct core_map_MapNode_str_ptrflow_PfState { char* key; ptrflow_PfState* value; struct core_map_MapNode_str_ptrflow_PfState* next; };
+typedef struct core_map_MapNode_str_ptrflow_PfState core_map_MapNode_str_ptrflow_PfState;
+struct core_map_Map_str_ptrflow_PfState { core_map_MapNode_str_ptrflow_PfState** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_ptrflow_PfState core_map_Map_str_ptrflow_PfState;
+__attribute__((hot)) ptrflow_PfState** core_alloc_alloc_ptrflow_PfState(long long count);
+__attribute__((hot)) ptrflow_PfState** core_alloc_resize_ptrflow_PfState(ptrflow_PfState** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_ptrflow_PfState(ptrflow_PfState** ptr);
+__attribute__((hot)) ptrflow_PfState*** core_alloc_alloc_ptrflow_PfState_ptr(long long count);
+__attribute__((hot)) ptrflow_PfState*** core_alloc_resize_ptrflow_PfState_ptr(ptrflow_PfState*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_ptrflow_PfState_ptr(ptrflow_PfState*** ptr);
+__attribute__((hot)) core_map_MapNode_str_ptrflow_PfState** core_alloc_alloc_core_map_MapNode_str_ptrflow_PfState(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_ptrflow_PfState(core_map_MapNode_str_ptrflow_PfState** ptr);
+
+typedef PfCtx ptrflow_PfCtx;
+struct core_vec_Vec_ptrflow_PfCtx { ptrflow_PfCtx** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_ptrflow_PfCtx core_vec_Vec_ptrflow_PfCtx;
+struct core_vec_Vec_ptrflow_PfCtx_ptr { ptrflow_PfCtx*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_ptrflow_PfCtx_ptr core_vec_Vec_ptrflow_PfCtx_ptr;
+struct core_map_MapNode_str_ptrflow_PfCtx { char* key; ptrflow_PfCtx* value; struct core_map_MapNode_str_ptrflow_PfCtx* next; };
+typedef struct core_map_MapNode_str_ptrflow_PfCtx core_map_MapNode_str_ptrflow_PfCtx;
+struct core_map_Map_str_ptrflow_PfCtx { core_map_MapNode_str_ptrflow_PfCtx** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_ptrflow_PfCtx core_map_Map_str_ptrflow_PfCtx;
+__attribute__((hot)) ptrflow_PfCtx** core_alloc_alloc_ptrflow_PfCtx(long long count);
+__attribute__((hot)) ptrflow_PfCtx** core_alloc_resize_ptrflow_PfCtx(ptrflow_PfCtx** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_ptrflow_PfCtx(ptrflow_PfCtx** ptr);
+__attribute__((hot)) ptrflow_PfCtx*** core_alloc_alloc_ptrflow_PfCtx_ptr(long long count);
+__attribute__((hot)) ptrflow_PfCtx*** core_alloc_resize_ptrflow_PfCtx_ptr(ptrflow_PfCtx*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_ptrflow_PfCtx_ptr(ptrflow_PfCtx*** ptr);
+__attribute__((hot)) core_map_MapNode_str_ptrflow_PfCtx** core_alloc_alloc_core_map_MapNode_str_ptrflow_PfCtx(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_ptrflow_PfCtx(core_map_MapNode_str_ptrflow_PfCtx** ptr);
 
 typedef SymbolKind sema_SymbolKind;
 struct core_vec_Vec_sema_SymbolKind { sema_SymbolKind* data; long long len; long long capacity; };

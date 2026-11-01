@@ -119,7 +119,7 @@ __attribute__((hot)) TrStr _ll_hexpad16(long long v) {
 #line 49 "src/codegen/llvm/lltype.tr"
     while ((k >= 0LL)) {
 #line 50 "src/codegen/llvm/lltype.tr"
-        long long nib = ((v >> (4LL * k)) & 15LL);
+        long long nib = ((v >> (((4LL * k)) & 63)) & 15LL);
 #line 51 "src/codegen/llvm/lltype.tr"
         StringBuilder_append_char(sb, _ll_hexdigit(nib));
 #line 52 "src/codegen/llvm/lltype.tr"
@@ -150,7 +150,7 @@ __attribute__((hot)) TrStr _ll_str_escape(TrStr s, long long blen) {
 #line 72 "src/codegen/llvm/lltype.tr"
             StringBuilder_append(sb, _tr_str_lit_len("\\", 1LL));
 #line 73 "src/codegen/llvm/lltype.tr"
-            StringBuilder_append_char(sb, _ll_hexdigit(((b >> 4LL) & 15LL)));
+            StringBuilder_append_char(sb, _ll_hexdigit(((b >> ((4LL) & 63)) & 15LL)));
 #line 74 "src/codegen/llvm/lltype.tr"
             StringBuilder_append_char(sb, _ll_hexdigit((b & 15LL)));
         }

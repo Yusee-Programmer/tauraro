@@ -1792,23 +1792,23 @@ __attribute__((hot)) void lex_append_utf8(StringBuilder* sb, long long cp) {
         StringBuilder_append_char(sb, cp);
     } else if ((cp < 2048LL)) {
 #line 105 "src/lexer.tr"
-        StringBuilder_append_char(sb, (192LL | (cp >> 6LL)));
+        StringBuilder_append_char(sb, (192LL | (cp >> ((6LL) & 63))));
 #line 106 "src/lexer.tr"
         StringBuilder_append_char(sb, (128LL | (cp & 63LL)));
     } else if ((cp < 65536LL)) {
 #line 108 "src/lexer.tr"
-        StringBuilder_append_char(sb, (224LL | (cp >> 12LL)));
+        StringBuilder_append_char(sb, (224LL | (cp >> ((12LL) & 63))));
 #line 109 "src/lexer.tr"
-        StringBuilder_append_char(sb, (128LL | ((cp >> 6LL) & 63LL)));
+        StringBuilder_append_char(sb, (128LL | ((cp >> ((6LL) & 63)) & 63LL)));
 #line 110 "src/lexer.tr"
         StringBuilder_append_char(sb, (128LL | (cp & 63LL)));
     } else {
 #line 112 "src/lexer.tr"
-        StringBuilder_append_char(sb, (240LL | (cp >> 18LL)));
+        StringBuilder_append_char(sb, (240LL | (cp >> ((18LL) & 63))));
 #line 113 "src/lexer.tr"
-        StringBuilder_append_char(sb, (128LL | ((cp >> 12LL) & 63LL)));
+        StringBuilder_append_char(sb, (128LL | ((cp >> ((12LL) & 63)) & 63LL)));
 #line 114 "src/lexer.tr"
-        StringBuilder_append_char(sb, (128LL | ((cp >> 6LL) & 63LL)));
+        StringBuilder_append_char(sb, (128LL | ((cp >> ((6LL) & 63)) & 63LL)));
 #line 115 "src/lexer.tr"
         StringBuilder_append_char(sb, (128LL | (cp & 63LL)));
     }
