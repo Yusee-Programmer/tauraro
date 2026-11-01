@@ -1,0 +1,6 @@
+# EXPECT: [T-11]
+# Shared[T] elements in a collection are not supported by the code generator; reported up front.
+class C implements Sendable:
+    pub n: Atomic[int]
+def main():
+    mut hs: List[Shared[C]] = []

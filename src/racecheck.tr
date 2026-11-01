@@ -22,6 +22,9 @@ class RcSite:
     pub args:     Vec[Pointer[Expr]]
     pub line:     int
     pub in_loop:  bool
+    pub depth:    int
+    pub recv:     str            # `spawn r.m()`: receiver ident
+    pub meth:     str
 
 class RcFn:
     pub name:     str
@@ -34,6 +37,17 @@ class RcFn:
     pub locals:   Vec[str]
     pub ltn:      Vec[str]       # local name ...
     pub ltt:      Vec[str]       # ... and its type / constructor name
+    pub ltarg:    Vec[str]       # first generic argument of that type
+    pub ldepth:   Vec[int]       # loop depth at the declaration
+    pub wafter:   Vec[bool]      # write happened after a spawn of this function
+    pub ca_fn:    Vec[str]       # `f(.., ident, ..)`: callee, argument index, ident
+    pub ca_idx:   Vec[int]
+    pub ca_name:  Vec[str]
+    pub idents:   Vec[str]       # every identifier mentioned (locals included)
+    pub thr_made: Vec[str]       # locals bound to Thread.spawn(...)
+    pub thr_line: Vec[int]
+    pub pairs_a:  Vec[str]       # lock order: held ...
+    pub pairs_b:  Vec[str]       # ... then acquired (module-level mutexes)
     pub touched:  Vec[str]       # identifier mentioned (candidate global)
     pub touched_w: Vec[bool]     # ... in a write / mutating position
     pub touched_after: Vec[bool] # ... after a spawn statement of this same function
@@ -60,6 +74,17 @@ def _rc_new_fn(name: str, file: str, line: int, is_lib: bool) -> RcFn:
     f.locals = Vec[str].init(4)
     f.ltn = Vec[str].init(4)
     f.ltt = Vec[str].init(4)
+    f.ltarg = Vec[str].init(4)
+    f.ldepth = Vec[int].init(4)
+    f.wafter = Vec[bool].init(2)
+    f.idents = Vec[str].init(8)
+    f.ca_fn = Vec[str].init(1)
+    f.ca_idx = Vec[int].init(1)
+    f.ca_name = Vec[str].init(1)
+    f.thr_made = Vec[str].init(1)
+    f.thr_line = Vec[int].init(1)
+    f.pairs_a = Vec[str].init(1)
+    f.pairs_b = Vec[str].init(1)
     f.touched = Vec[str].init(4)
     f.touched_w = Vec[bool].init(4)
     f.touched_after = Vec[bool].init(4)
@@ -138,6 +163,37 @@ def _rc_ctor_name(v: Pointer[Expr]) -> str:
         case _: return ""
     return ""
 
+# Generic argument of an initialiser: `Mutex[A].init(..)` -> A.
+def _rc_ctor_arg(v: Pointer[Expr]) -> str:
+    if _rc_nul(v): return ""
+    match v.read():
+        case Expr.EMethodCall(o, _, _):
+            if not _rc_nul(o):
+                match o.read():
+                    case Expr.EIndex(_, ix):
+                        if not _rc_nul(ix):
+                            match ix.read():
+                                case Expr.EIdent(an): return an
+                                case _: return ""
+                    case _: return ""
+        case _: return ""
+    return ""
+
+def _rc_dot(n: str) -> int:
+    mut i = 0
+    while i < n.len():
+        if n.slice(i, i + 1) == ".": return i
+        i = i + 1
+    return 0 - 1
+
+def _rc_is_thread_spawn(v: Pointer[Expr]) -> bool:
+    if _rc_nul(v): return false
+    match v.read():
+        case Expr.EMethodCall(o, m, _):
+            if m == "spawn" and _rc_root(o) == "Thread": return true
+        case _: pass
+    return false
+
 def _rc_is_lambda(v: Pointer[Expr]) -> bool:
     if _rc_nul(v): return false
     match v.read():
@@ -146,6 +202,21 @@ def _rc_is_lambda(v: Pointer[Expr]) -> bool:
     return false
 
 extend RcCk:
+    # [T-11] `Shared[T]`/`Weak[T]` as the element type of a collection is not supported by the code
+    # generator (it surfaced as a late C error); say so up front.
+    pub def ty_check(self, t: Pointer[AstType], file: str, line: int):
+        if t as usize == 0 as usize: return
+        mut ty = t.read()
+        mut coll = ty.name == "List" or ty.name == "Vec" or ty.name == "Set" or ty.name == "Dict" or ty.name == "Map"
+        mut i = 0
+        while i < ty.args.len:
+            mut a = ty.args.get(i)
+            if coll and a as usize != 0 as usize and (a.read().name == "Shared" or a.read().name == "Weak"):
+                self.msgs.push(file + ":" + line.to_str() + ": [T-11] '" + ty.name + "' cannot hold '" + a.read().name + "[..]' elements: reference-counted shared handles are not supported as collection elements.\n      FIX: wrap the handle in a small class (`class Handle: pub inner: Shared[T]`) and store that, or keep the handles in separate variables.")
+                return
+            self.ty_check(a, file, line)
+            i = i + 1
+
     pub def where(self, line: int) -> str:
         mut l = line
         if l <= 0: l = self.cur.line
@@ -162,6 +233,44 @@ extend RcCk:
             i = i - 1
         return ""
 
+    pub def ltarg_of(self, f: RcFn, name: str) -> str:
+        mut i = f.params.len - 1
+        while i >= 0:
+            if f.params.get(i) == name: return f.pinner.get(i)
+            i = i - 1
+        i = f.ltn.len - 1
+        while i >= 0:
+            if f.ltn.get(i) == name: return f.ltarg.get(i)
+            i = i - 1
+        return ""
+
+    # Class of a local/param, looking through Shared[T].
+    pub def lclass(self, f: RcFn, name: str) -> str:
+        mut t = self.ltype(f, name)
+        if t == "Shared": return self.ltarg_of(f, name)
+        return t
+
+    pub def ldepth_of(self, f: RcFn, name: str) -> int:
+        if _rc_has(f.params, name): return 0
+        mut i = f.ltn.len - 1
+        while i >= 0:
+            if f.ltn.get(i) == name: return f.ldepth.get(i)
+            i = i - 1
+        return 0 - 1
+
+    # Does statement `sp` mention identifier `name`?
+    pub def mentions(self, sp: Pointer[Stmt], name: str) -> bool:
+        mut tmp = _rc_new_fn("", self.cur.file, self.cur.line, true)
+        mut saved = self.cur
+        mut sl = self.cur_line
+        mut ss = self.seen_spawn
+        self.cur = tmp
+        self.stmt(sp)
+        self.cur = saved
+        self.cur_line = sl
+        self.seen_spawn = ss
+        return _rc_has(tmp.idents, name)
+
     pub def note(self, name: str, w: bool):
         if _rc_has(self.cur.locals, name) or _rc_has(self.cur.params, name): return
         self.cur.touched.push(name)
@@ -174,6 +283,7 @@ extend RcCk:
         if r == "": return
         self.cur.wroot.push(r)
         self.cur.wprop.push(_rc_first_prop(target))
+        self.cur.wafter.push(self.seen_spawn)
         self.note(r, true)
 
     pub def block(self, b: Block):
@@ -195,6 +305,9 @@ extend RcCk:
         mut names = Vec[str].init(2)
         mut state = Vec[int].init(2)     # Mutex: 1 locked; RwLock: 1 read-held, 2 write-held; Thread: 1 joined
         mut kinds = Vec[str].init(2)
+        mut guards = Vec[str].init(1)    # names bound from Mutex.get() on a heap payload
+        mut gmx = Vec[str].init(1)
+        mut grel = Vec[bool].init(1)
         mut line = self.cur.line
         mut i = 0
         while i < b.stmts.len:
@@ -203,15 +316,24 @@ extend RcCk:
             mut call = Pointer[Expr](0)
             mut simple = true
             mut is_line = false
+            mut letname = ""
             match sp.read():
                 case Stmt.SLine(n):
                     line = n
                     is_line = true
                 case Stmt.SExpr(e): call = e
-                case Stmt.SLet(_, _, _, _, _, _, v): call = v
+                case Stmt.SLet(lnm, _, _, _, _, _, v):
+                    call = v
+                    letname = lnm
                 case Stmt.SAssign(_, v2): call = v2
                 case _: simple = false
             if is_line: continue
+            mut gk = 0
+            while gk < guards.len:
+                if grel.get(gk) and guards.get(gk) != "" and self.mentions(sp, guards.get(gk)):
+                    self.cur.msgs.push(self.where(line) + "[T-9] '" + guards.get(gk) + "' was obtained from `" + gmx.get(gk) + ".get()` and is used after the lock was released: the guarded object is then reachable by other threads while this one still reads/writes it (a data race).\n      FIX: keep every use of '" + guards.get(gk) + "' before `" + gmx.get(gk) + ".unlock()` / `" + gmx.get(gk) + ".set(..)`, or copy the data out while the lock is held.")
+                    guards.set(gk, "")
+                gk = gk + 1
             if not simple:
                 names = Vec[str].init(2)
                 state = Vec[int].init(2)
@@ -227,6 +349,11 @@ extend RcCk:
                             case _: pass
                     if r == "": continue
                     mut k = self.ltype(self.cur, r)
+                    if k == "" and not _rc_has(self.cur.locals, r) and not _rc_has(self.cur.params, r):
+                        mut gq = 0
+                        while gq < self.gnames.len:
+                            if self.gnames.get(gq) == r: k = self.gtn.get(gq)
+                            gq = gq + 1
                     if not (k == "Mutex" or k == "RwLock" or k == "Thread"): continue
                     if margs.len != 0 and m != "set" and m != "write_set": continue
                     mut idx = 0 - 1
@@ -242,9 +369,27 @@ extend RcCk:
                     mut st = state.get(idx)
                     if k == "Mutex":
                         if m == "get":
+                            mut gj2 = 0
+                            while gj2 < names.len:
+                                if kinds.get(gj2) == "Mutex" and state.get(gj2) == 1 and names.get(gj2) != r:
+                                    if not (_rc_has(self.cur.locals, r) or _rc_has(self.cur.params, r) or _rc_has(self.cur.locals, names.get(gj2)) or _rc_has(self.cur.params, names.get(gj2))):
+                                        self.cur.pairs_a.push(names.get(gj2))
+                                        self.cur.pairs_b.push(r)
+                                gj2 = gj2 + 1
+                            mut pa = self.ltarg_of(self.cur, r)
+                            mut ci0 = self.find_class(pa)
+                            if letname != "" and (pa == "List" or pa == "Dict" or pa == "Set" or pa == "Vec" or pa == "Map" or (ci0 >= 0 and not self.class_lib.get(ci0))):
+                                guards.push(letname)
+                                gmx.push(r)
+                                grel.push(false)
                             if st == 1: self.cur.msgs.push(self.where(line) + "[T-9] '" + r + ".get()' acquires the lock again while this thread already holds it (no `set()`/`unlock()` since the previous `get()`): the second call blocks forever.\n      FIX: finish with `" + r + ".set(v)` or `" + r + ".unlock()` before locking again, or reuse the first value.")
                             state.set(idx, 1)
-                        elif m == "unlock" or m == "set": state.set(idx, 0)
+                        elif m == "unlock" or m == "set":
+                            state.set(idx, 0)
+                            mut gr = 0
+                            while gr < guards.len:
+                                if gmx.get(gr) == r: grel.set(gr, true)
+                                gr = gr + 1
                     elif k == "RwLock":
                         if m == "read": state.set(idx, 1)
                         elif m == "read_unlock" or m == "write_set": state.set(idx, 0)
@@ -263,13 +408,27 @@ extend RcCk:
             case Stmt.SLine(n): self.cur_line = n
             case Stmt.SExpr(e): self.expr(e)
             case Stmt.SLet(name, _, _, _, is_sh, ty, v):
+                self.ty_check(ty, self.cur.file, self.cur_line)
                 self.expr(v)
                 self.declare(name)
                 mut tn = ""
                 if ty as usize != 0 as usize: tn = ty.read().name
                 if tn == "": tn = _rc_ctor_name(v)
+                mut targ = _rc_ctor_arg(v)
+                if ty as usize != 0 as usize and ty.read().args.len > 0: targ = ty.read().args.get(0).read().name
+                if is_sh and not _rc_nul(v):
+                    match v.read():
+                        case Expr.EIdent(src):
+                            tn = self.ltype(self.cur, src)
+                            targ = self.ltarg_of(self.cur, src)
+                        case _: pass
                 self.cur.ltn.push(name)
                 self.cur.ltt.push(tn)
+                self.cur.ltarg.push(targ)
+                self.cur.ldepth.push(self.loop_depth)
+                if _rc_is_thread_spawn(v):
+                    self.cur.thr_made.push(name)
+                    self.cur.thr_line.push(self.cur_line)
                 if is_sh: self.cur.shvars.push(name)
                 if _rc_is_lambda(v): self.cur.closures.push(name)
             case Stmt.SMultiLet(names, _, v):
@@ -345,13 +504,25 @@ extend RcCk:
                 self.block(b)
             case Stmt.SSpawn(e):
                 self.spawn_expr(e)
-            case Stmt.STaskGroup(b): self.block(b)
+            case Stmt.STaskGroup(b):
+                self.block(b)
+                self.seen_spawn = false
             case Stmt.SGpuBlock(b): self.block(b)
             case Stmt.SDefer(s): self.stmt(s)
             case Stmt.SLocalDecl(d):
                 match d.read():
                     case Decl.DFunction(f):
+                        mut nidx = self.fns.len
                         self.add_fn(f, self.cur.file, self.cur.is_lib)
+                        if nidx < self.fns.len and not self.cur.is_lib:
+                            mut nf = self.fns.get(nidx)
+                            mut nk = 0
+                            while nk < nf.touched.len:
+                                mut nn = nf.touched.get(nk)
+                                if _rc_has(self.cur.locals, nn) or _rc_has(self.cur.params, nn):
+                                    self.cur.msgs.push(self.where(self.cur_line) + "[N-3] the nested function '" + f.name + "' uses '" + nn + "' from the enclosing function '" + self.cur.name + "', but a nested `def` does not capture the enclosing function's locals (it is an ordinary function).\n      FIX: pass '" + nn + "' as a parameter, or use a `lambda` (which does capture), or move the value to module level.")
+                                    break
+                                nk = nk + 1
                     case _: pass
             case _: pass
 
@@ -367,6 +538,17 @@ extend RcCk:
                         case _: pass
                 self.record_site(tn, args, 0)
                 self.expr(e)
+            case Expr.EMethodCall(o, m, margs):
+                mut r = ""
+                if not _rc_nul(o):
+                    match o.read():
+                        case Expr.EIdent(rn): r = rn
+                        case _: pass
+                if r != "":
+                    self.record_site("", margs, 0)
+                    self.cur.sites.get(self.cur.sites.len - 1).recv = r
+                    self.cur.sites.get(self.cur.sites.len - 1).meth = m
+                self.expr(e)
             case _: self.expr(e)
 
     pub def record_site(self, target: str, args: Vec[Pointer[Expr]], skip: int):
@@ -379,6 +561,9 @@ extend RcCk:
             i = i + 1
         s.line = self.cur_line
         s.in_loop = self.loop_depth > 0
+        s.depth = self.loop_depth
+        s.recv = ""
+        s.meth = ""
         self.cur.sites.push(s)
         self.seen_spawn = true
 
@@ -400,7 +585,9 @@ extend RcCk:
     pub def expr(self, e: Pointer[Expr]):
         if _rc_nul(e): return
         match e.read():
-            case Expr.EIdent(n): self.note(n, false)
+            case Expr.EIdent(n):
+                self.cur.idents.push(n)
+                self.note(n, false)
             case Expr.EBinOp(_, l, r):
                 self.expr(l)
                 self.expr(r)
@@ -410,6 +597,15 @@ extend RcCk:
                     match c.read():
                         case Expr.EIdent(fnm):
                             self.cur.calls.push(fnm)
+                            mut cai = 0
+                            while cai < args.len:
+                                match args.get(cai).read():
+                                    case Expr.EIdent(can):
+                                        self.cur.ca_fn.push(fnm)
+                                        self.cur.ca_idx.push(cai)
+                                        self.cur.ca_name.push(can)
+                                    case _: pass
+                                cai = cai + 1
                             if fnm == "await_all":
                                 mut ai = 0
                                 while ai < args.len:
@@ -437,15 +633,34 @@ extend RcCk:
                 if direct != "":
                     self.cur.mcrecv.push(direct)
                     self.cur.mcname.push(m)
+                if m == "join" or m == "wait" or m == "free" or m == "await": self.seen_spawn = false
                 if m == "spawn" and args.len > 0:
                     mut t = ""
                     match args.get(0).read():
                         case Expr.EIdent(tn2): t = tn2
+                        case Expr.EClosure(cps, _, cbody, _):
+                            # a closure literal handed to a thread: it must not capture the spawning frame
+                            mut tmp = _rc_new_fn("", self.cur.file, self.cur.line, true)
+                            mut ci = 0
+                            while ci < cps.len:
+                                tmp.params.push(cps.get(ci).name)
+                                ci = ci + 1
+                            mut saved = self.cur
+                            self.cur = tmp
+                            self.block(cbody)
+                            self.cur = saved
+                            mut ck = 0
+                            while ck < tmp.touched.len:
+                                if _rc_has(self.cur.locals, tmp.touched.get(ck)) or _rc_has(self.cur.params, tmp.touched.get(ck)):
+                                    self.cur.msgs.push(self.where(self.cur_line) + "[T-6] the closure passed to `spawn` captures '" + tmp.touched.get(ck) + "' from the spawning function by reference: the new thread would race on it and outlive it.\n      FIX: spawn a named `def` and pass '" + tmp.touched.get(ck) + "' as an argument (an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle).")
+                                    break
+                                ck = ck + 1
                         case _: pass
                     if t != "": self.record_site(t, args, 1)
                 if recv != "" and _rc_mut_method(m):
                     self.cur.wroot.push(recv)
                     self.cur.wprop.push(_rc_first_prop(o))
+                    self.cur.wafter.push(self.seen_spawn)
                     self.note(recv, true)
             case Expr.EPropAccess(o, _): self.expr(o)
             case Expr.EIndex(o, i):
@@ -520,6 +735,7 @@ extend RcCk:
         mut pi = 0
         while pi < f.params.len:
             rf.params.push(f.params.get(pi).name)
+            if not rf.is_lib: self.ty_check(f.params.get(pi).ty, file, f.line)
             mut pt = f.params.get(pi).ty
             if pt as usize != 0 as usize:
                 rf.ptypes.push(pt.read().name)
@@ -540,6 +756,11 @@ extend RcCk:
         self.loop_depth = 0
         self.seen_spawn = false
         self.block(f.body)
+        mut tw = 0
+        while tw < rf.thr_made.len:
+            if not _rc_has(rf.idents, rf.thr_made.get(tw)):
+                rf.msgs.push("W|" + file + ":" + rf.thr_line.get(tw).to_str() + ": [T-9] the Thread handle '" + rf.thr_made.get(tw) + "' is never joined, detached or used: the thread runs unsupervised and the program may exit while it is still working.\n      FIX: call `" + rf.thr_made.get(tw) + ".join()` (wait for it) or `" + rf.thr_made.get(tw) + ".detach()` (run independently).")
+            tw = tw + 1
         self.cur = saved
         self.cur_line = saved_line
         self.loop_depth = saved_ld
@@ -627,62 +848,44 @@ extend RcCk:
                         q = q + 1
                     if not dup: seen.push(ni)
                 ci = ci + 1
+            mut mci = 0
+            while mci < f.mcrecv.len:
+                mut rcv = f.mcrecv.get(mci)
+                mut rcn = ""
+                if rcv == "self":
+                    mut dot = _rc_dot(f.name)
+                    if dot > 0: rcn = f.name.slice(0, dot)
+                else:
+                    rcn = self.lclass(f, rcv)
+                    if rcn == "":
+                        mut gj = 0
+                        while gj < self.gnames.len:
+                            if self.gnames.get(gj) == rcv: rcn = self.gtn.get(gj)
+                            gj = gj + 1
+                if rcn != "":
+                    mut mni = self.find_fn(rcn + "." + f.mcname.get(mci))
+                    if mni >= 0:
+                        mut dup2 = false
+                        mut q2 = 0
+                        while q2 < seen.len:
+                            if seen.get(q2) == mni: dup2 = true
+                            q2 = q2 + 1
+                        if not dup2: seen.push(mni)
+                mci = mci + 1
             k = k + 1
         return seen
 
     pub def analyze_site(self, f: RcFn, s: RcSite):
         # a closure VALUE as the spawn target
-        if _rc_has(f.closures, s.target):
+        if s.target != "" and _rc_has(f.closures, s.target):
             self.msgs.push(self.where2(f, s.line) + "[T-6] '" + s.target + "' is a closure value: it captures its surrounding locals by reference into this stack frame, so a spawned thread would race on them and outlive them.\n      FIX: spawn a named `def` and pass the data it needs as arguments (an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle).")
+            return
+        if s.recv != "":
+            self.analyze_method_site(f, s)
             return
         mut ti = self.find_fn(s.target)
         if ti < 0: return
-        mut reach = self.reach(ti)
-        # [T-8] module-level mutable state reachable from the spawned function
-        mut gi = 0
-        while gi < self.gnames.len:
-            if not self.gsync.get(gi):
-                mut g = self.gnames.get(gi)
-                mut wr = false
-                mut rd = false
-                mut ri = 0
-                while ri < reach.len:
-                    mut rf = self.fns.get(reach.get(ri))
-                    mut ti2 = 0
-                    while ti2 < rf.touched.len:
-                        if rf.touched.get(ti2) == g:
-                            if rf.touched_w.get(ti2): wr = true
-                            else: rd = true
-                        ti2 = ti2 + 1
-                    if self.find_class(self.gtn.get(gi)) >= 0:
-                        # a method call on a user-class global may mutate it
-                        mut mq = 0
-                        while mq < rf.mcrecv.len:
-                            if rf.mcrecv.get(mq) == g and not _rc_has(rf.locals, g) and not _rc_has(rf.params, g):
-                                mut mfi = self.find_fn(self.gtn.get(gi) + "." + rf.mcname.get(mq))
-                                if mfi >= 0:
-                                    mut mff = self.fns.get(mfi)
-                                    mut mk = 0
-                                    while mk < mff.wroot.len:
-                                        if mff.wroot.get(mk) == "self" and mff.wprop.get(mk) != "" and self.field_plain(self.gtn.get(gi), mff.wprop.get(mk)): wr = true
-                                        mk = mk + 1
-                            mq = mq + 1
-                    ri = ri + 1
-                if rd and not wr:
-                    mut fi = 0
-                    while fi < self.fns.len:
-                        mut of = self.fns.get(fi)
-                        if not of.is_lib:
-                            mut oi = 0
-                            while oi < of.touched.len:
-                                if of.touched.get(oi) == g and of.touched_w.get(oi) and of.touched_after.get(oi): wr = true
-                                oi = oi + 1
-                        fi = fi + 1
-                if wr:
-                    self.msgs.push(self.where2(f, s.line) + "[T-8] the spawned function '" + s.target + "' uses the module-level mutable '" + g + "', which is plain data shared by every thread: concurrent access is a data race.\n      FIX: make '" + g + "' an `Atomic[T]` (counters/flags), a `Mutex[T]`/`RwLock[T]` (compound state), or pass the state to the thread explicitly.")
-                elif rd:
-                    pass
-            gi = gi + 1
+        self.check_globals(f, s, ti, s.target)
         # [T-8] plain-field mutation through an object shared by several threads
         mut tf = self.fns.get(ti)
         mut ai = 0
@@ -691,6 +894,7 @@ extend RcCk:
             match s.args.get(ai).read():
                 case Expr.EIdent(nn): an = nn
                 case _: pass
+            mut ptn = tf.ptypes.get(ai)
             if an != "":
                 mut cnt = 0
                 mut si = 0
@@ -704,14 +908,134 @@ extend RcCk:
                         oa = oa + 1
                     si = si + 1
                 mut is_sh = _rc_has(f.shvars, an) or self.ltype(f, an) == "Shared"
-                if is_sh and tf.ptypes.get(ai) != "Shared" and tf.ptypes.get(ai) != "":
-                    self.msgs.push(self.where2(f, s.line) + "[T-10] '" + an + "' is a `Shared` handle but '" + s.target + "' declares parameter '" + tf.params.get(ai) + ": " + tf.ptypes.get(ai) + "': the thread would be handed the shared control block where it expects the object itself (a type confusion).\n      FIX: declare the worker's parameter as `" + tf.params.get(ai) + ": Shared[" + tf.ptypes.get(ai) + "]`.")
+                if is_sh and ptn != "Shared" and ptn != "":
+                    self.msgs.push(self.where2(f, s.line) + "[T-10] '" + an + "' is a `Shared` handle but '" + s.target + "' declares parameter '" + tf.params.get(ai) + ": " + ptn + "': the thread would be handed the shared control block where it expects the object itself (a type confusion).\n      FIX: declare the worker's parameter as `" + tf.params.get(ai) + ": Shared[" + ptn + "]`.")
                     ai = ai + 1
                     continue
-                mut multi = cnt >= 2 or _rc_has(f.shvars, an) or self.ltype(f, an) == "Shared"
+                mut dd = self.ldepth_of(f, an)
+                mut multi = cnt >= 2 or is_sh or ptn == "Shared" or (dd >= 0 and s.depth > dd)
                 if multi:
                     self.check_shared_writes(f, s, tf, ai, an)
+                    if is_sh or ptn == "Shared": self.check_parent_writes(f, s, an)
+            elif ptn == "Shared":
+                # a Shared handle that is not a plain variable (`handles.get(i)`, `s.clone()`, a field)
+                self.check_shared_writes(f, s, tf, ai, "a shared handle")
             ai = ai + 1
+
+    # `spawn r.m(args)`: the method runs on another thread with `self` = r.
+    pub def analyze_method_site(self, f: RcFn, s: RcSite):
+        mut cn = self.lclass(f, s.recv)
+        if cn == "": return
+        mut mi = self.find_fn(cn + "." + s.meth)
+        if mi < 0: return
+        self.check_globals(f, s, mi, cn + "." + s.meth)
+        mut cnt = 0
+        mut si = 0
+        while si < f.sites.len:
+            if f.sites.get(si).recv == s.recv: cnt = cnt + 1
+            si = si + 1
+        mut is_sh = _rc_has(f.shvars, s.recv) or self.ltype(f, s.recv) == "Shared"
+        mut dd = self.ldepth_of(f, s.recv)
+        if not (cnt >= 2 or is_sh or (dd >= 0 and s.depth > dd)): return
+        mut mf = self.fns.get(mi)
+        mut k = 0
+        while k < mf.wroot.len:
+            if mf.wroot.get(k) == "self" and mf.wprop.get(k) != "" and self.field_plain(cn, mf.wprop.get(k)):
+                self.shared_msg(f, s, mf, cn, mf.wprop.get(k), s.recv)
+                return
+            k = k + 1
+        if is_sh: self.check_parent_writes(f, s, s.recv)
+
+    # the spawning function itself writes a plain field of the handle it just shared
+    pub def check_parent_writes(self, f: RcFn, s: RcSite, an: str):
+        mut cn = self.lclass(f, an)
+        if cn == "": return
+        mut k = 0
+        while k < f.wroot.len:
+            if f.wroot.get(k) == an and f.wafter.get(k) and f.wprop.get(k) != "" and self.field_plain(cn, f.wprop.get(k)):
+                self.msgs.push(self.where2(f, s.line) + "[T-8] '" + f.name + "' writes the plain field '" + cn + "." + f.wprop.get(k) + "' of '" + an + "' while a spawned thread holds the same shared object: the two threads race on that field.\n      FIX: make '" + f.wprop.get(k) + "' an `Atomic[T]` or guard the object with a `Mutex[T]`, or finish the writes before spawning / after the threads are joined.")
+                return
+            k = k + 1
+
+    pub def check_globals(self, f: RcFn, s: RcSite, ti: int, label: str):
+        mut reach = self.reach(ti)
+        # [T-8] module-level mutable state reachable from the spawned function
+        mut gi = 0
+        while gi < self.gnames.len:
+            if not self.gsync.get(gi):
+                mut g = self.gnames.get(gi)
+                mut wr = false
+                mut rd = false
+                mut called = false
+                mut mwrites = false
+                mut ri = 0
+                while ri < reach.len:
+                    mut rf = self.fns.get(reach.get(ri))
+                    mut ti2 = 0
+                    while ti2 < rf.touched.len:
+                        if rf.touched.get(ti2) == g:
+                            if rf.touched_w.get(ti2): wr = true
+                            else: rd = true
+                        ti2 = ti2 + 1
+                    if self.find_class(self.gtn.get(gi)) >= 0:
+                        # a method call on a user-class global that (transitively) writes self state
+                        mut mq = 0
+                        while mq < rf.mcrecv.len:
+                            if rf.mcrecv.get(mq) == g and not _rc_has(rf.locals, g) and not _rc_has(rf.params, g): called = true
+                            mq = mq + 1
+                        mut pre = self.gtn.get(gi) + "."
+                        if rf.name.len() > pre.len() and rf.name.slice(0, pre.len()) == pre:
+                            mut mk = 0
+                            while mk < rf.wroot.len:
+                                if rf.wroot.get(mk) == "self" and rf.wprop.get(mk) != "" and self.field_plain(self.gtn.get(gi), rf.wprop.get(mk)): mwrites = true
+                                mk = mk + 1
+                    ri = ri + 1
+                if called and mwrites: wr = true
+                if rd and not wr:
+                    mut fi = 0
+                    while fi < self.fns.len:
+                        mut of = self.fns.get(fi)
+                        if not of.is_lib:
+                            mut oi = 0
+                            while oi < of.touched.len:
+                                if of.touched.get(oi) == g and of.touched_w.get(oi) and of.touched_after.get(oi): wr = true
+                                oi = oi + 1
+                        fi = fi + 1
+                if wr:
+                    self.msgs.push(self.where2(f, s.line) + "[T-8] the spawned function '" + label + "' uses the module-level mutable '" + g + "', which is plain data shared by every thread: concurrent access is a data race.\n      FIX: make '" + g + "' an `Atomic[T]` (counters/flags), a `Mutex[T]`/`RwLock[T]` (compound state), or pass the state to the thread explicitly.")
+                elif rd:
+                    pass
+            gi = gi + 1
+
+    # First plain field of class `cn` that function `fi` writes through its parameter `pname`
+    # (directly, via a method of `cn`, or by handing the parameter on to another function).
+    pub def param_write_prop(self, fi: int, pname: str, cn: str, depth: int) -> str:
+        mut tf = self.fns.get(fi)
+        mut wi = 0
+        while wi < tf.wroot.len:
+            if tf.wroot.get(wi) == pname and tf.wprop.get(wi) != "" and self.field_plain(cn, tf.wprop.get(wi)): return tf.wprop.get(wi)
+            wi = wi + 1
+        mut mi = 0
+        while mi < tf.mcrecv.len:
+            if tf.mcrecv.get(mi) == pname:
+                mut mf = self.find_fn(cn + "." + tf.mcname.get(mi))
+                if mf >= 0:
+                    mut mfn = self.fns.get(mf)
+                    mut k = 0
+                    while k < mfn.wroot.len:
+                        if mfn.wroot.get(k) == "self" and mfn.wprop.get(k) != "" and self.field_plain(cn, mfn.wprop.get(k)): return mfn.wprop.get(k)
+                        k = k + 1
+            mi = mi + 1
+        if depth < 4:
+            mut ci = 0
+            while ci < tf.ca_fn.len:
+                if tf.ca_name.get(ci) == pname:
+                    mut ni = self.find_fn(tf.ca_fn.get(ci))
+                    if ni >= 0 and tf.ca_idx.get(ci) < self.fns.get(ni).params.len:
+                        mut r = self.param_write_prop(ni, self.fns.get(ni).params.get(tf.ca_idx.get(ci)), cn, depth + 1)
+                        if r != "": return r
+                ci = ci + 1
+        return ""
 
     pub def check_shared_writes(self, f: RcFn, s: RcSite, tf: RcFn, ai: int, an: str):
         mut pn = tf.params.get(ai)
@@ -719,27 +1043,10 @@ extend RcCk:
         if cn == "Shared": cn = tf.pinner.get(ai)
         if cn == "":
             return
-        mut wi = 0
-        while wi < tf.wroot.len:
-            if tf.wroot.get(wi) == pn and tf.wprop.get(wi) != "":
-                if self.field_plain(cn, tf.wprop.get(wi)):
-                    self.shared_msg(f, s, tf, cn, tf.wprop.get(wi), an)
-                    return
-            wi = wi + 1
-        mut mi = 0
-        while mi < tf.mcrecv.len:
-            if tf.mcrecv.get(mi) == pn:
-                mut mf = self.find_fn(cn + "." + tf.mcname.get(mi))
-                if mf >= 0:
-                    mut mfn = self.fns.get(mf)
-                    mut k = 0
-                    while k < mfn.wroot.len:
-                        if mfn.wroot.get(k) == "self" and mfn.wprop.get(k) != "":
-                            if self.field_plain(cn, mfn.wprop.get(k)):
-                                self.shared_msg(f, s, tf, cn, mfn.wprop.get(k), an)
-                                return
-                        k = k + 1
-            mi = mi + 1
+        mut ti = self.find_fn(s.target)
+        if ti < 0: return
+        mut pr = self.param_write_prop(ti, pn, cn, 0)
+        if pr != "": self.shared_msg(f, s, tf, cn, pr, an)
 
     pub def shared_msg(self, f: RcFn, s: RcSite, tf: RcFn, cn: str, prop: str, an: str):
         self.msgs.push(self.where2(f, s.line) + "[T-8] '" + s.target + "' mutates the plain field '" + cn + "." + prop + "' of '" + an + "', which is shared by several threads: `Shared[T]` only makes the reference COUNT atomic, not the fields, so the concurrent writes race.\n      FIX: make '" + prop + "' an `Atomic[T]` (or guard the whole object with `Mutex[" + cn + "]`), or give each thread its own value.")
@@ -771,6 +1078,7 @@ pub def check_data_races(prog: Program, decl_files: Vec[str], input_path: str) -
     ck.gtn = Vec[str].init(4)
     ck.msgs = Vec[str].init(2)
     ck.cur = _rc_new_fn("", input_path, 0, true)
+    ck.cur = _rc_new_fn("", input_path, 0, true)
     mut i = 0
     while i < prog.decls.len:
         mut dfc = input_path
@@ -779,6 +1087,11 @@ pub def check_data_races(prog: Program, decl_files: Vec[str], input_path: str) -
             case Decl.DClass(c):
                 ck.classes.push(c)
                 ck.class_lib.push(_rc_path_lib(dfc))
+                if not _rc_path_lib(dfc):
+                    mut fq = 0
+                    while fq < c.fields.len:
+                        ck.ty_check(c.fields.get(fq).ty, dfc, c.line)
+                        fq = fq + 1
             case Decl.DActor(c2):
                 ck.classes.push(c2)
                 ck.class_lib.push(_rc_path_lib(dfc))
@@ -840,4 +1153,21 @@ pub def check_data_races(prog: Program, decl_files: Vec[str], input_path: str) -
                 ck.analyze_site(f, f.sites.get(sj))
                 sj = sj + 1
         i = i + 1
+    # lock-order inversion between two functions over module-level mutexes (warning)
+    mut pi = 0
+    while pi < ck.fns.len:
+        mut pf = ck.fns.get(pi)
+        mut pk = 0
+        while pk < pf.pairs_a.len:
+            mut qi = pi + 1
+            while qi < ck.fns.len:
+                mut qf = ck.fns.get(qi)
+                mut qk = 0
+                while qk < qf.pairs_a.len:
+                    if qf.pairs_a.get(qk) == pf.pairs_b.get(pk) and qf.pairs_b.get(qk) == pf.pairs_a.get(pk):
+                        ck.msgs.push("W|" + pf.file + ":" + pf.line.to_str() + ": [T-9] lock-order inversion: '" + pf.name + "' locks '" + pf.pairs_a.get(pk) + "' then '" + pf.pairs_b.get(pk) + "', but '" + qf.name + "' locks them in the opposite order: two threads running them can deadlock.\n      FIX: always acquire the mutexes in one global order.")
+                    qk = qk + 1
+                qi = qi + 1
+            pk = pk + 1
+        pi = pi + 1
     return ck.msgs

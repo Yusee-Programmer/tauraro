@@ -1,0 +1,9 @@
+# EXPECT: [T-9]
+# A guard bound from Mutex.get() on a heap payload must not be used after the lock is released.
+class A:
+    pub v: int
+def main():
+    mut m: Mutex[A] = Mutex.init(A())
+    mut g = m.get()
+    m.unlock()
+    g.v = 5

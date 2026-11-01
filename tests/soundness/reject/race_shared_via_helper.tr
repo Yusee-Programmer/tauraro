@@ -1,0 +1,15 @@
+# EXPECT: [T-8]
+# Writing through a helper the worker hands the shared object to is still a write.
+class C implements Sendable:
+    pub n: int
+def inc(c: Shared[C]) -> void:
+    c.n = c.n + 1
+def bump(c: Shared[C]) -> void:
+    inc(c)
+async def main():
+    mut c = C()
+    c.n = 0
+    shared s = c
+    task_group:
+        spawn bump(s)
+        spawn bump(s)

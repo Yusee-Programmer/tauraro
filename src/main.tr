@@ -2361,7 +2361,9 @@ pub def main(args: Vec[str]):
     mut race_msgs = check_data_races(prog, sema.decl_files, input_path)
     mut race_mi = 0
     while race_mi < race_msgs.len:
-        sema.errors.push(race_msgs.get(race_mi))
+        mut race_m = race_msgs.get(race_mi)
+        if race_m.len() > 2 and race_m.slice(0, 2) == "W|": sema.warnings.push(race_m.slice(2, race_m.len()))
+        else: sema.errors.push(race_m)
         race_mi = race_mi + 1
     mut hir = sema.analyze(prog)
     mut ng_i = 0

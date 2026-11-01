@@ -2141,7 +2141,7 @@ _TR_XLINK void _tr_rwlbox_cleanup_w(_TrRWLBox** bp) {
 typedef struct { void*(*fn)(void*); void* arg; } _TrPoolItem;
 typedef struct {
     _TrChan* queue; _TrThread* workers; int n_workers;
-    _TrWG* wg; volatile int shutdown;
+    _TrWG* wg; _Atomic int shutdown;
 } _TrThreadPool;
 static void* _tr_pool_worker(void* arg) {
     _TrThreadPool* pool = (_TrThreadPool*)arg;
@@ -4903,7 +4903,7 @@ typedef struct _TrAsyncPool {
     int             n_workers;
     _TrChan*        injector;   /* overflow + external (non-worker-thread) submissions */
     _TrCondMutex    parkcv;     /* idle-worker park/wake */
-    volatile int    shutdown;
+    _Atomic int    shutdown;
     _Atomic long long rr;       /* round-robin submission counter */
 } _TrAsyncPool;
 

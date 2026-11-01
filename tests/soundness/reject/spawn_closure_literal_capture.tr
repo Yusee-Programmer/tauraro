@@ -1,0 +1,6 @@
+# EXPECT: [T-6]
+# A closure literal handed to Thread.spawn captures the spawning frame by reference.
+def main():
+    mut n = 0
+    mut t = Thread.spawn(lambda x: x + n, 1)
+    t.join()

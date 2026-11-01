@@ -1,0 +1,8 @@
+# EXPECT: [T-9]
+# Same through set(): the list is mutated after the lock is gone.
+def main():
+    mut l: List[int] = []
+    mut m: Mutex[List[int]] = Mutex.init(l)
+    mut g = m.get()
+    m.set(g)
+    g.push(1)

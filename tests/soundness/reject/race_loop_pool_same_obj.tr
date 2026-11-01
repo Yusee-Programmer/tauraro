@@ -1,0 +1,15 @@
+# EXPECT: [T-8]
+# One object handed to pool tasks in a loop is shared by every task.
+class C implements Sendable:
+    pub n: int
+def bump(c: C) -> void:
+    c.n += 1
+def main():
+    mut c = C()
+    c.n = 0
+    mut pool: ThreadPool = ThreadPool.new(2)
+    mut i = 0
+    while i < 4:
+        pool.spawn(bump, c)
+        i = i + 1
+    pool.wait()

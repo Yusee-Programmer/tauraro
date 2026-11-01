@@ -1,0 +1,13 @@
+# EXPECT: [T-8]
+# A handle produced by an expression (`s.clone()`) is still a Shared handle: two workers mutating a plain field race.
+class C implements Sendable:
+    pub n: int
+def bump(c: Shared[C]) -> void:
+    c.n += 1
+async def main():
+    mut c = C()
+    c.n = 0
+    shared s = c
+    task_group:
+        spawn bump(s.clone())
+        spawn bump(s.clone())

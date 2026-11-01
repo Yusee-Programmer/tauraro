@@ -1,0 +1,10 @@
+# EXPECT: pass
+# Safe counterpart.
+class A:
+    pub v: int
+def main():
+    mut m: Mutex[A] = Mutex.init(A())
+    mut g = m.get()
+    g.v = 5
+    m.unlock()
+    print("ok")

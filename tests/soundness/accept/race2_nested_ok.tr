@@ -1,0 +1,6 @@
+# EXPECT: pass
+# Safe counterpart.
+def main():
+    def sq(z: int) -> int:
+        return z * z
+    print(sq(3))

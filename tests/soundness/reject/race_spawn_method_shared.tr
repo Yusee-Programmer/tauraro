@@ -1,0 +1,14 @@
+# EXPECT: [T-8]
+# spawn obj.method() on a shared object whose method writes a plain field.
+class W implements Sendable:
+    pub n: int
+extend W:
+    pub def go(self) -> void:
+        self.n += 1
+async def main():
+    mut w = W()
+    w.n = 0
+    shared s = w
+    task_group:
+        spawn s.go()
+        spawn s.go()

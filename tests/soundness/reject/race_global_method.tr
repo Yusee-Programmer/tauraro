@@ -1,0 +1,17 @@
+# EXPECT: [T-8]
+# A spawned function calling a method of a module-level object that mutates its fields.
+class Reg:
+    pub n: int
+extend Reg:
+    pub def bump(self) -> void:
+        self.n += 1
+extend Reg:
+    pub def twice(self) -> void:
+        self.bump()
+        self.bump()
+mut reg = Reg()
+def worker(i: int) -> void:
+    reg.twice()
+def main():
+    mut t = Thread.spawn(worker, 1)
+    t.join()

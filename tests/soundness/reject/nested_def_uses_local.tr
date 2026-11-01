@@ -1,0 +1,8 @@
+# EXPECT: [N-3]
+# A nested def is a plain function: it cannot read the enclosing locals.
+def main():
+    mut cnt = 0
+    def inc(z: int) -> void:
+        cnt = cnt + 1
+    inc(0)
+    print(cnt)

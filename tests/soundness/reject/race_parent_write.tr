@@ -1,0 +1,13 @@
+# EXPECT: [T-8]
+# The spawning function writes a plain field while the worker holds the shared object.
+class C implements Sendable:
+    pub n: int
+def bump(c: Shared[C]) -> void:
+    mut x = c.n
+async def main():
+    mut c = C()
+    c.n = 0
+    shared s = c
+    task_group:
+        spawn bump(s)
+        s.n = 5

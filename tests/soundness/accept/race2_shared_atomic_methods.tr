@@ -1,0 +1,21 @@
+# EXPECT: pass
+# Shared object with Atomic fields: methods, clone() handles, spawn r.method() are all race-free.
+class Hits implements Sendable:
+    pub n: Atomic[int]
+extend Hits:
+    pub def init() -> Hits:
+        mut h = Hits()
+        h.n = Atomic.new(0)
+        return h
+    pub def go(self) -> void:
+        self.n.add(1)
+def bump(h: Shared[Hits]) -> void:
+    h.go()
+async def main():
+    mut h = Hits.init()
+    shared s = h
+    task_group:
+        spawn bump(s)
+        spawn bump(s.clone())
+        spawn s.go()
+    assert_eq(s.n.load(), 3)
