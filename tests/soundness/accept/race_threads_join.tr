@@ -1,0 +1,16 @@
+# EXPECT: pass
+# Concurrency soundness: safe pattern (run under TSan during development).
+def work(n: int) -> void:
+    mut s = 0
+    mut i = 0
+    while i < n:
+        s = s + i
+        i = i + 1
+def main():
+    mut ts: List[Thread] = []
+    mut i = 0
+    while i < 4:
+        ts.push(Thread.spawn(work, 1000))
+        i = i + 1
+    for t in ts:
+        t.join()

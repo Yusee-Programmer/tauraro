@@ -1,0 +1,12 @@
+# EXPECT: [T-8]
+# One Sendable object with a plain field handed to two spawns is shared state.
+class Box implements Sendable:
+    pub n: int
+def poke(b: Box) -> void:
+    b.n = b.n + 1
+async def main():
+    mut b = Box()
+    b.n = 0
+    task_group:
+        spawn poke(b)
+        spawn poke(b)

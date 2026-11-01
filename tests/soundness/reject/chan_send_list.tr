@@ -1,0 +1,6 @@
+# EXPECT: [T-1]
+# A Chan[List[int]] hands an unsynchronised list to another thread.
+def main():
+    mut ch: Chan[List[int]] = Chan.init(2)
+    mut l: List[int] = []
+    ch.send(l)

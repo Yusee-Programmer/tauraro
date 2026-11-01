@@ -63,6 +63,9 @@ typedef struct PfCtx PfCtx;
 typedef struct Symbol Symbol;
 typedef struct Scope Scope;
 typedef struct Sema Sema;
+typedef struct RcSite RcSite;
+typedef struct RcFn RcFn;
+typedef struct RcCk RcCk;
 typedef struct Formatter Formatter;
 typedef struct DocItem DocItem;
 typedef struct DocModule DocModule;
@@ -163,6 +166,9 @@ static void _trdrop_PfCtx(void* vp);
 static void _trdrop_Symbol(void* vp);
 static void _trdrop_Scope(void* vp);
 static void _trdrop_Sema(void* vp);
+static void _trdrop_RcSite(void* vp);
+static void _trdrop_RcFn(void* vp);
+static void _trdrop_RcCk(void* vp);
 static void _trdrop_Formatter(void* vp);
 static void _trdrop_DocItem(void* vp);
 static void _trdrop_DocModule(void* vp);
@@ -3037,6 +3043,105 @@ static void _trdrop_Sema(void* vp) {
 }
 #endif
 
+#ifndef RcSite_STRUCT_DEFINED
+#define RcSite_STRUCT_DEFINED
+typedef struct RcSite {
+    size_t __rc;
+    TrStr target;
+    List_ptr* args;
+    long long line;
+    bool in_loop;
+} RcSite;
+static void _trdrop_RcSite(void* vp) {
+    RcSite* self = (RcSite*)vp; (void)self;
+    _tr_str_release(self->target);
+}
+#endif
+
+#ifndef RcFn_STRUCT_DEFINED
+#define RcFn_STRUCT_DEFINED
+typedef struct RcFn {
+    size_t __rc;
+    TrStr name;
+    TrStr file;
+    long long line;
+    bool is_lib;
+    List_TrStr* params;
+    List_TrStr* ptypes;
+    List_TrStr* pinner;
+    List_TrStr* locals;
+    List_TrStr* ltn;
+    List_TrStr* ltt;
+    List_TrStr* touched;
+    List_bool* touched_w;
+    List_bool* touched_after;
+    List_i64* touched_line;
+    List_TrStr* calls;
+    List_ptr* sites;
+    List_TrStr* closures;
+    List_TrStr* shvars;
+    List_TrStr* wroot;
+    List_TrStr* wprop;
+    List_TrStr* mcrecv;
+    List_TrStr* mcname;
+    List_TrStr* msgs;
+} RcFn;
+static void _trdrop_RcFn(void* vp) {
+    RcFn* self = (RcFn*)vp; (void)self;
+    _tr_str_release(self->name);
+    _tr_str_release(self->file);
+    List_TrStr_free(self->ptypes);
+    List_TrStr_free(self->pinner);
+    List_TrStr_free(self->locals);
+    List_TrStr_free(self->ltn);
+    List_TrStr_free(self->ltt);
+    List_TrStr_free(self->touched);
+    List_bool_free(self->touched_w);
+    List_bool_free(self->touched_after);
+    List_i64_free(self->touched_line);
+    List_TrStr_free(self->calls);
+    List_ptr_free_obj(self->sites, _trdrop_RcSite);
+    List_TrStr_free(self->closures);
+    List_TrStr_free(self->shvars);
+    List_TrStr_free(self->wroot);
+    List_TrStr_free(self->wprop);
+    List_TrStr_free(self->mcrecv);
+    List_TrStr_free(self->mcname);
+    List_TrStr_free(self->msgs);
+}
+#endif
+
+#ifndef RcCk_STRUCT_DEFINED
+#define RcCk_STRUCT_DEFINED
+typedef struct RcCk {
+    size_t __rc;
+    List_ptr* fns;
+    List_ptr* classes;
+    List_bool* class_lib;
+    List_TrStr* gnames;
+    List_TrStr* gfiles;
+    List_bool* gsync;
+    List_TrStr* gtn;
+    RcFn* cur;
+    long long cur_line;
+    long long loop_depth;
+    bool seen_spawn;
+    List_TrStr* msgs;
+} RcCk;
+static void _trdrop_RcCk(void* vp) {
+    RcCk* self = (RcCk*)vp; (void)self;
+    List_ptr_free_obj(self->fns, _trdrop_RcFn);
+    List_ptr_free_obj(self->classes, _trdrop_ClassDef);
+    List_bool_free(self->class_lib);
+    List_TrStr_free(self->gnames);
+    List_TrStr_free(self->gfiles);
+    List_bool_free(self->gsync);
+    List_TrStr_free(self->gtn);
+    _tr_obj_release(self->cur, _trdrop_RcFn);
+    List_TrStr_free(self->msgs);
+}
+#endif
+
 #ifndef Formatter_STRUCT_DEFINED
 #define Formatter_STRUCT_DEFINED
 typedef struct Formatter {
@@ -4294,6 +4399,7 @@ __attribute__((hot)) bool Sema__is_rc_class(Sema* self, TrStr n);
 __attribute__((hot)) bool Sema__ty_reaches_plain_rc(Sema* self, AstType* ft, long long depth);
 __attribute__((hot)) bool Sema__sendable_reaches_plain_rc(Sema* self, TrStr tn, long long depth);
 __attribute__((hot)) bool Sema__is_unsafe_sendable(Sema* self, TrStr n);
+__attribute__((hot)) void Sema__check_chan_payload(Sema* self, AstType* et);
 __attribute__((hot)) void Sema__check_spawn_nested_rc(Sema* self, HirExpr* arg_expr);
 __attribute__((hot)) void Sema__collect_strong_edge(Sema* self, AstType* ft, List_TrStr* out);
 __attribute__((hot)) List_TrStr* Sema__node_edges(Sema* self, TrStr name);
@@ -4461,6 +4567,44 @@ __attribute__((hot)) bool _i_candidate(FunctionDef* f);
 __attribute__((hot)) void _i_collect(Program* prog, List_ptr* fns, List_TrStr* files, List_TrStr* decl_files, TrStr input_path);
 __attribute__((hot)) AstType** _i_box(AstType* t);
 __attribute__((hot)) List_TrStr* infer_return_types(Program* prog, List_TrStr* decl_files, bool strict_mode, bool no_heap, bool boxes, TrStr input_path);
+__attribute__((hot)) RcFn* _rc_new_fn(TrStr name, TrStr file, long long line, bool is_lib);
+__attribute__((hot)) bool _rc_sync_ty(TrStr n);
+__attribute__((hot)) bool _rc_mut_method(TrStr m);
+__attribute__((hot)) bool _rc_has(List_TrStr* v, TrStr s);
+__attribute__((hot)) bool _rc_nul(Expr* p);
+__attribute__((hot)) TrStr _rc_root(Expr* e);
+__attribute__((hot)) TrStr _rc_first_prop(Expr* e);
+__attribute__((hot)) TrStr _rc_ctor_name(Expr* v);
+__attribute__((hot)) bool _rc_is_lambda(Expr* v);
+__attribute__((hot)) TrStr RcCk_where(RcCk* self, long long line);
+__attribute__((hot)) TrStr RcCk_ltype(RcCk* self, RcFn* f, TrStr name);
+__attribute__((hot)) void RcCk_note(RcCk* self, TrStr name, bool w);
+__attribute__((hot)) void RcCk_wpath(RcCk* self, Expr* target);
+__attribute__((hot)) void RcCk_block(RcCk* self, Block* b);
+__attribute__((hot)) void RcCk_pblock(RcCk* self, Block** pb);
+__attribute__((hot)) void RcCk_declare(RcCk* self, TrStr name);
+__attribute__((hot)) void RcCk_lock_scan(RcCk* self, Block* b);
+__attribute__((hot)) void RcCk_stmt(RcCk* self, Stmt* sp);
+__attribute__((hot)) void RcCk_spawn_expr(RcCk* self, Expr* e);
+__attribute__((hot)) void RcCk_record_site(RcCk* self, TrStr target, List_ptr* args, long long skip);
+__attribute__((hot)) void RcCk_exprs(RcCk* self, List_ptr* v);
+__attribute__((hot)) void RcCk_comps(RcCk* self, Expr* element, List_ptr* gens);
+__attribute__((hot)) void RcCk_expr(RcCk* self, Expr* e);
+__attribute__((hot)) void RcCk_add_method(RcCk* self, FunctionDef* f, TrStr cls, TrStr file, bool lib);
+__attribute__((hot)) void RcCk_add_fn(RcCk* self, FunctionDef* f, TrStr file, bool lib);
+__attribute__((hot)) void RcCk_add_fn_named(RcCk* self, FunctionDef* f, TrStr nm, TrStr file, bool lib);
+__attribute__((hot)) void RcCk_add_global(RcCk* self, TrStr name, bool is_mut, bool is_const, AstType** ty, Expr* v, TrStr df);
+__attribute__((hot)) long long RcCk_find_fn(RcCk* self, TrStr name);
+__attribute__((hot)) long long RcCk_find_class(RcCk* self, TrStr name);
+__attribute__((hot)) bool RcCk_field_plain(RcCk* self, TrStr cn, TrStr prop);
+__attribute__((hot)) List_i64* RcCk_reach(RcCk* self, long long ti);
+__attribute__((hot)) void RcCk_analyze_site(RcCk* self, RcFn* f, RcSite* s);
+__attribute__((hot)) void RcCk_check_shared_writes(RcCk* self, RcFn* f, RcSite* s, RcFn* tf, long long ai, TrStr an);
+__attribute__((hot)) void RcCk_shared_msg(RcCk* self, RcFn* f, RcSite* s, RcFn* tf, TrStr cn, TrStr prop, TrStr an);
+__attribute__((hot)) TrStr RcCk_where2(RcCk* self, RcFn* f, long long line);
+__attribute__((hot)) bool _rc_path_lib(TrStr p);
+__attribute__((hot)) bool _rc_ifaces_sendable(ClassDef* c);
+__attribute__((hot)) List_TrStr* check_data_races(Program* prog, List_TrStr* decl_files, TrStr input_path);
 __attribute__((malloc,returns_nonnull,hot)) Formatter* Formatter_init(List_i64* c_lines, List_TrStr* c_texts, List_bool* c_trailing);
 __attribute__((hot)) TrStr Formatter_pad(Formatter* self);
 __attribute__((hot)) void Formatter_line(Formatter* self, TrStr text);
@@ -5370,6 +5514,7 @@ __attribute__((hot)) TrStr CGenerator__spawn_wrap_cast_ty_n(CGenerator* self, Tr
 __attribute__((hot)) void CGenerator_emit_spawn_wrapper_for_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) void CGenerator_prescan_block_spawns(CGenerator* self, HirBlock* block);
 __attribute__((hot)) void CGenerator_prescan_stmt_spawns(CGenerator* self, HirStmt* s);
+__attribute__((hot)) TrStr CGenerator__pool_spawn_packed(CGenerator* self, TrStr submit, TrStr obj_s, List_ptr* args);
 __attribute__((hot)) void CGenerator_prescan_await_all_in_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) void CGenerator_prescan_spawns(CGenerator* self, HirProgram* prog);
 __attribute__((hot)) void CGenerator_prescan_expr_awaits(CGenerator* self, HirExpr* e);
@@ -6541,6 +6686,60 @@ __attribute__((hot)) sema_Sema*** core_alloc_resize_sema_Sema_ptr(sema_Sema*** p
 __attribute__((hot)) void core_alloc_dealloc_sema_Sema_ptr(sema_Sema*** ptr);
 __attribute__((hot)) core_map_MapNode_str_sema_Sema** core_alloc_alloc_core_map_MapNode_str_sema_Sema(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_sema_Sema(core_map_MapNode_str_sema_Sema** ptr);
+
+typedef RcSite racecheck_RcSite;
+struct core_vec_Vec_racecheck_RcSite { racecheck_RcSite** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_racecheck_RcSite core_vec_Vec_racecheck_RcSite;
+struct core_vec_Vec_racecheck_RcSite_ptr { racecheck_RcSite*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_racecheck_RcSite_ptr core_vec_Vec_racecheck_RcSite_ptr;
+struct core_map_MapNode_str_racecheck_RcSite { char* key; racecheck_RcSite* value; struct core_map_MapNode_str_racecheck_RcSite* next; };
+typedef struct core_map_MapNode_str_racecheck_RcSite core_map_MapNode_str_racecheck_RcSite;
+struct core_map_Map_str_racecheck_RcSite { core_map_MapNode_str_racecheck_RcSite** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_racecheck_RcSite core_map_Map_str_racecheck_RcSite;
+__attribute__((hot)) racecheck_RcSite** core_alloc_alloc_racecheck_RcSite(long long count);
+__attribute__((hot)) racecheck_RcSite** core_alloc_resize_racecheck_RcSite(racecheck_RcSite** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_racecheck_RcSite(racecheck_RcSite** ptr);
+__attribute__((hot)) racecheck_RcSite*** core_alloc_alloc_racecheck_RcSite_ptr(long long count);
+__attribute__((hot)) racecheck_RcSite*** core_alloc_resize_racecheck_RcSite_ptr(racecheck_RcSite*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_racecheck_RcSite_ptr(racecheck_RcSite*** ptr);
+__attribute__((hot)) core_map_MapNode_str_racecheck_RcSite** core_alloc_alloc_core_map_MapNode_str_racecheck_RcSite(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_racecheck_RcSite(core_map_MapNode_str_racecheck_RcSite** ptr);
+
+typedef RcFn racecheck_RcFn;
+struct core_vec_Vec_racecheck_RcFn { racecheck_RcFn** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_racecheck_RcFn core_vec_Vec_racecheck_RcFn;
+struct core_vec_Vec_racecheck_RcFn_ptr { racecheck_RcFn*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_racecheck_RcFn_ptr core_vec_Vec_racecheck_RcFn_ptr;
+struct core_map_MapNode_str_racecheck_RcFn { char* key; racecheck_RcFn* value; struct core_map_MapNode_str_racecheck_RcFn* next; };
+typedef struct core_map_MapNode_str_racecheck_RcFn core_map_MapNode_str_racecheck_RcFn;
+struct core_map_Map_str_racecheck_RcFn { core_map_MapNode_str_racecheck_RcFn** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_racecheck_RcFn core_map_Map_str_racecheck_RcFn;
+__attribute__((hot)) racecheck_RcFn** core_alloc_alloc_racecheck_RcFn(long long count);
+__attribute__((hot)) racecheck_RcFn** core_alloc_resize_racecheck_RcFn(racecheck_RcFn** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_racecheck_RcFn(racecheck_RcFn** ptr);
+__attribute__((hot)) racecheck_RcFn*** core_alloc_alloc_racecheck_RcFn_ptr(long long count);
+__attribute__((hot)) racecheck_RcFn*** core_alloc_resize_racecheck_RcFn_ptr(racecheck_RcFn*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_racecheck_RcFn_ptr(racecheck_RcFn*** ptr);
+__attribute__((hot)) core_map_MapNode_str_racecheck_RcFn** core_alloc_alloc_core_map_MapNode_str_racecheck_RcFn(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_racecheck_RcFn(core_map_MapNode_str_racecheck_RcFn** ptr);
+
+typedef RcCk racecheck_RcCk;
+struct core_vec_Vec_racecheck_RcCk { racecheck_RcCk** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_racecheck_RcCk core_vec_Vec_racecheck_RcCk;
+struct core_vec_Vec_racecheck_RcCk_ptr { racecheck_RcCk*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_racecheck_RcCk_ptr core_vec_Vec_racecheck_RcCk_ptr;
+struct core_map_MapNode_str_racecheck_RcCk { char* key; racecheck_RcCk* value; struct core_map_MapNode_str_racecheck_RcCk* next; };
+typedef struct core_map_MapNode_str_racecheck_RcCk core_map_MapNode_str_racecheck_RcCk;
+struct core_map_Map_str_racecheck_RcCk { core_map_MapNode_str_racecheck_RcCk** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_racecheck_RcCk core_map_Map_str_racecheck_RcCk;
+__attribute__((hot)) racecheck_RcCk** core_alloc_alloc_racecheck_RcCk(long long count);
+__attribute__((hot)) racecheck_RcCk** core_alloc_resize_racecheck_RcCk(racecheck_RcCk** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_racecheck_RcCk(racecheck_RcCk** ptr);
+__attribute__((hot)) racecheck_RcCk*** core_alloc_alloc_racecheck_RcCk_ptr(long long count);
+__attribute__((hot)) racecheck_RcCk*** core_alloc_resize_racecheck_RcCk_ptr(racecheck_RcCk*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_racecheck_RcCk_ptr(racecheck_RcCk*** ptr);
+__attribute__((hot)) core_map_MapNode_str_racecheck_RcCk** core_alloc_alloc_core_map_MapNode_str_racecheck_RcCk(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_racecheck_RcCk(core_map_MapNode_str_racecheck_RcCk** ptr);
 
 typedef Formatter fmt_Formatter;
 struct core_vec_Vec_fmt_Formatter { fmt_Formatter** data; long long len; long long capacity; };

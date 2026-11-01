@@ -1,0 +1,17 @@
+# EXPECT: pass
+# Concurrency soundness: safe pattern (run under TSan during development).
+def spin(a: Atomic[int], n: int) -> void:
+    mut i = 0
+    while i < n:
+        mut done = false
+        while not done:
+            mut cur = a.load()
+            done = a.cas(cur, cur + 1)
+        i = i + 1
+async def main():
+    mut a: Atomic[int] = Atomic.new(0)
+    task_group:
+        spawn spin(a, 1000)
+        spawn spin(a, 1000)
+        spawn spin(a, 1000)
+    assert_eq(a.load(), 3000)

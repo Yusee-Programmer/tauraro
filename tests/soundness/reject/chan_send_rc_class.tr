@@ -1,0 +1,9 @@
+# EXPECT: [T-7]
+# A plain rc class sent over a channel crosses a thread with a non-atomic refcount.
+class Job implements Sendable:
+    pub id: int
+def main():
+    mut ch: Chan[Job] = Chan.init(2)
+    mut j = Job()
+    j.id = 1
+    ch.send(j)

@@ -1,0 +1,11 @@
+# EXPECT: pass
+# Each thread gets its own value (ints) and joins; no shared mutable state.
+def sq(n: int) -> void:
+    mut x = n * n
+    assert_ne(x, 0 - 1)
+def main():
+    mut t1 = Thread.spawn(sq, 3)
+    mut t2 = Thread.spawn(sq, 4)
+    t1.join()
+    t2.join()
+    print("ok")

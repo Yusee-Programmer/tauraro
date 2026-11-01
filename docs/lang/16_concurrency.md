@@ -35,6 +35,11 @@ Tauraro provides a layered concurrency model:
 | `[T-3]` | *(warning)* A `Sendable` class has a primitive field that may race if mutated from multiple threads — wrap it in `Atomic[T]` |
 | `[T-6]` | A borrow (`ref`/`mut ref`) crosses a thread boundary — it could dangle or race. Pass an owned value, `Shared[T]`, or `Mutex[T]` instead (like Rust's `thread::spawn` requiring `'static`) |
 | `[T-7]` | A **plain reference-counted class** crosses a thread boundary. Its refcount is non-atomic (`!Send`, exactly like Rust's `Rc`) so two threads retaining/releasing it would race the count. Checked **transitively** (through `Mutex`/`Vec`/`Dict`/fields). Use `Shared[T]` — the atomic `Arc` equivalent |
+| `[T-8]` | A **data race on plain shared state**: a spawned function (or anything it calls) touches a module-level `mut` that is not an `Atomic`/`Mutex`/`RwLock`/`Chan`, or mutates a plain field of an object several threads share (a `shared` handle, or one value passed to more than one `spawn`). `Shared[T]` makes only the refcount atomic, so field writes through it must go through `Atomic[T]`/`Mutex[T]` |
+| `[T-9]` | **Lock misuse** that deadlocks or is undefined, found in straight-line code: `Mutex.get()` twice with no `set()`/`unlock()` between, `RwLock.write()` while holding the read lock, `Thread.join()` twice |
+| `[T-10]` | A `shared` handle is passed to a worker whose parameter is the bare class — the thread would be handed the control block instead of the object. Declare the parameter `Shared[T]` |
+| `[T-6]` (closures) | Spawning a **closure value** (`f = lambda ...; spawn f(x)`) — it captures locals by reference into the spawning frame. Spawn a named `def` instead |
+| `[T-1]`/`[T-7]` (channels) | `Chan[T].send` of a non-`Sendable` payload (a `List`, `Dict`, plain data) or, under `--strict`, a plain rc class |
 
 > **The concurrency guarantee.** `[T-1]`+`[T-2]` (only Sendable data crosses) with
 > `[T-6]` (no borrows cross) and `[T-7]` (no non-atomic refcount crosses) mean that
@@ -638,7 +643,7 @@ extend Counter:
         c.value = Atomic.new(0)
         return c
 
-def increment_shared(c: Counter) -> void:
+def increment_shared(c: Shared[Counter]) -> void:    # a `shared` handle is received as Shared[T] ([T-10])
     c.value.add(1)
 
 def main():

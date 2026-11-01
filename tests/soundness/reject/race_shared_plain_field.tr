@@ -1,0 +1,15 @@
+# EXPECT: [T-8]
+# `Shared[T]` makes only the reference COUNT atomic. Mutating a plain field through a shared
+# handle from several threads is a data race.
+class Stats:
+    pub hits: int
+def hit(s: Shared[Stats]) -> void:
+    s.hits += 1
+async def main():
+    mut st = Stats()
+    st.hits = 0
+    shared a = st
+    shared b = a
+    task_group:
+        spawn hit(a)
+        spawn hit(b)

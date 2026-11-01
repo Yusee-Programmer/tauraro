@@ -1,0 +1,17 @@
+# EXPECT: pass
+# Concurrency soundness: safe pattern (run under TSan during development).
+def push(m: Mutex[List[int]], v: int) -> void:
+    mut l = m.get()
+    l.push(v)
+    m.unlock()
+async def main():
+    mut l: List[int] = []
+    mut m: Mutex[List[int]] = Mutex.init(l)
+    task_group:
+        spawn push(m, 1)
+        spawn push(m, 2)
+        spawn push(m, 3)
+    mut r = m.get()
+    mut n = len(r)
+    m.unlock()
+    assert_eq(n, 3)

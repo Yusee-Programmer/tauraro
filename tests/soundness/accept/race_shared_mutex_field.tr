@@ -1,0 +1,22 @@
+# EXPECT: pass
+# Concurrency soundness: safe pattern (run under TSan during development).
+class Account implements Sendable:
+    pub bal: Mutex[int]
+extend Account:
+    pub def init() -> Account:
+        mut a = Account()
+        a.bal = Mutex.init(0)
+        return a
+def dep(a: Shared[Account], n: int) -> void:
+    mut b = a.bal.get()
+    a.bal.set(b + n)
+async def main():
+    mut a = Account.init()
+    shared s = a
+    task_group:
+        spawn dep(s, 10)
+        spawn dep(s, 20)
+        spawn dep(s, 30)
+    mut r = s.bal.get()
+    s.bal.unlock()
+    assert_eq(r, 60)

@@ -13,6 +13,7 @@ from parser import Parser, _nth_source_line, _clip_line
 from diag import c_red, c_yellow, c_green, c_cyan, c_dim, c_bold, spaces, repeat_char, first_quoted, col_of, loc_file, loc_line
 from sema import Sema
 from infer import infer_return_types
+from racecheck import check_data_races
 from ast import Decl
 from fmt import Formatter
 from doc import run_doc
@@ -2357,6 +2358,11 @@ pub def main(args: Vec[str]):
     while infer_mi < infer_msgs.len:
         sema.errors.push(infer_msgs.get(infer_mi))
         infer_mi = infer_mi + 1
+    mut race_msgs = check_data_races(prog, sema.decl_files, input_path)
+    mut race_mi = 0
+    while race_mi < race_msgs.len:
+        sema.errors.push(race_msgs.get(race_mi))
+        race_mi = race_mi + 1
     mut hir = sema.analyze(prog)
     mut ng_i = 0
     while ng_i < sema.none_read_names.len:

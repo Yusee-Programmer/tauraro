@@ -1,0 +1,22 @@
+# EXPECT: pass
+def producer(ch: Chan[int]) -> void:
+    mut i = 1
+    while i <= 100:
+        ch.send(i)
+        i = i + 1
+    ch.close()
+def consumer(ch: Chan[int], out: Mutex[int]) -> void:
+    mut sum = 0
+    for v in ch:
+        sum = sum + v
+    out.set(sum)
+async def main():
+    mut ch: Chan[int] = Chan.init(8)
+    mut out: Mutex[int] = Mutex.init(0)
+    task_group:
+        spawn producer(ch)
+        spawn consumer(ch, out)
+    mut s = out.get()
+    out.unlock()
+    assert_eq(s, 5050)
+    print("ok")

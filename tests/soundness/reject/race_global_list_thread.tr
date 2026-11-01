@@ -1,0 +1,9 @@
+# EXPECT: [T-8]
+# Same rule through Thread.spawn and a mutating collection method on a global List.
+mut log: List[int] = []
+def work(i: int) -> void:
+    log.push(i)
+def main():
+    mut t = Thread.spawn(work, 1)
+    log.push(2)
+    t.join()

@@ -1,0 +1,20 @@
+# EXPECT: pass
+# Concurrency soundness: safe pattern (run under TSan during development).
+def prod(ch: Chan[int], base: int) -> void:
+    mut i = 0
+    while i < 50:
+        ch.send(base + i)
+        i = i + 1
+def cons(ch: Chan[int], total: Atomic[int], n: int) -> void:
+    mut i = 0
+    while i < n:
+        total.add(ch.recv())
+        i = i + 1
+async def main():
+    mut ch: Chan[int] = Chan.init(4)
+    mut total: Atomic[int] = Atomic.new(0)
+    task_group:
+        spawn prod(ch, 0)
+        spawn prod(ch, 1000)
+        spawn cons(ch, total, 100)
+    assert_eq(total.load(), 1225 + 50 * 1000 + 1225)

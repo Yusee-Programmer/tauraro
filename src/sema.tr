@@ -2846,6 +2846,17 @@ extend Sema:
             i = i + 1
         return false
 
+    # A value sent on a `Chan[T]` is handed to ANOTHER thread, so T must be Sendable
+    # (a List/Dict/plain data class has no synchronisation) and, under --strict, must not
+    # reach a plain (non-atomic) reference-counted class ([T-7], like Rust's `Rc: !Send`).
+    pub def _check_chan_payload(self, et: AstType):
+        if et.name == "" or et.name == "void": return
+        if not self.is_sendable_ty(et):
+            self.error("[T-1] Chan[" + et.name + "] carries a value of type '" + et.name + "' to another thread, but '" + et.name + "' is not Sendable (it has no internal synchronisation).\n      FIX: send an owned Sendable value (primitive, `Shared[T]`, a `Sendable` class), or wrap the data in `Mutex[" + et.name + "]`.")
+            return
+        if self.strict_mode and not self._is_unsafe_sendable(et.name) and self._ty_reaches_plain_rc(et, 0):
+            self.error("[T-7] Chan[" + et.name + "] carries a plain reference-counted class to another thread: its refcount is thread-local (non-atomic), so the sender and receiver would race on it (exactly why Rust's 'Rc' is '!Send').\n      FIX: send a `Shared[" + et.name + "]` (atomic refcount, like Rust's 'Arc') or plain data.")
+
     pub def _check_spawn_nested_rc(self, arg_expr: Pointer[HirExpr]):
         if not self.strict_mode: return
         if _is_invalid_ptr(arg_expr as usize): return
@@ -10046,6 +10057,8 @@ extend Sema:
                         ret_ty = AstType.init("void")
                 # Chan[T] method return types
                 elif hobj_ty.name == "Chan":
+                    if (method == "send" or method == "try_send" or method == "send_timeout") and hobj_ty.args.len > 0 and not self.cur_fn_is_lib:
+                        self._check_chan_payload(hobj_ty.args.get(0).read())
                     if method == "recv" or method == "try_recv":
                         if hobj_ty.args.len > 0: ret_ty = hobj_ty.args.get(0).read()
                         else: ret_ty = AstType.init("int")

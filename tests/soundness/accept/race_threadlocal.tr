@@ -1,0 +1,11 @@
+# EXPECT: pass
+# Concurrency soundness: safe pattern (run under TSan during development).
+def w(tl: ThreadLocal[int]) -> void:
+    tl.set(tl.get() + 5)
+    assert_eq(tl.get(), 5)
+def main():
+    mut tl: ThreadLocal[int] = ThreadLocal.new(0)
+    tl.set(100)
+    mut t = Thread.spawn(w, tl)
+    t.join()
+    assert_eq(tl.get(), 100)

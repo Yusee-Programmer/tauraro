@@ -10,7 +10,7 @@ __attribute__((hot)) long long _index_of(List_TrStr* names, TrStr s) {
 #line 24 "src/codegen/native/elf.tr"
     while ((i < names->len)) {
 #line 25 "src/codegen/native/elf.tr"
-        if (({ TrStr _cmpa_t8104 = (List_TrStr_get(names, i)); TrStr _cmpb_t8105 = (s); _Bool _cmpr_t8106 = _tr_str_eqv(_cmpa_t8104, _cmpb_t8105); _tr_str_release(_cmpa_t8104); _cmpr_t8106; })) {
+        if (({ TrStr _cmpa_t8301 = (List_TrStr_get(names, i)); TrStr _cmpb_t8302 = (s); _Bool _cmpr_t8303 = _tr_str_eqv(_cmpa_t8301, _cmpb_t8302); _tr_str_release(_cmpa_t8301); _cmpr_t8303; })) {
 #line 25 "src/codegen/native/elf.tr"
             return i;
         }
@@ -111,7 +111,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
 #line 74 "src/codegen/native/elf.tr"
         List_i64_append(str_off, rodata->len);
 #line 75 "src/codegen/native/elf.tr"
-        ({ TrStr _ord_t8107 = (List_TrStr_get(strings, sxi)); __auto_type _ord_t8108 = (List_i64_get(string_lens, sxi)); ByteBuf_cstr_len(rodata, _ord_t8107, _ord_t8108); _tr_str_release(_ord_t8107); });
+        ({ TrStr _ord_t8304 = (List_TrStr_get(strings, sxi)); __auto_type _ord_t8305 = (List_i64_get(string_lens, sxi)); ByteBuf_cstr_len(rodata, _ord_t8304, _ord_t8305); _tr_str_release(_ord_t8304); });
 #line 76 "src/codegen/native/elf.tr"
         sxi = (sxi + 1LL);
     }
@@ -158,7 +158,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
 #line 104 "src/codegen/native/elf.tr"
         long long noff = strtab->len;
 #line 105 "src/codegen/native/elf.tr"
-        ({ TrStr _apt_t8109 = _tr_str_retain(f2->name); ByteBuf_cstr(strtab, _apt_t8109); _tr_str_release(_apt_t8109); });
+        ({ TrStr _apt_t8306 = _tr_str_retain(f2->name); ByteBuf_cstr(strtab, _apt_t8306); _tr_str_release(_apt_t8306); });
 #line 106 "src/codegen/native/elf.tr"
         ByteBuf_u32(symtab, noff);
 #line 107 "src/codegen/native/elf.tr"
@@ -172,7 +172,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
 #line 111 "src/codegen/native/elf.tr"
         ByteBuf_u64(symtab, f2->code->len);
 #line 112 "src/codegen/native/elf.tr"
-        ({ TrStr _apt_t8110 = _tr_str_retain(f2->name); List_TrStr_append(sym_names, _apt_t8110); _tr_str_release(_apt_t8110); });
+        ({ TrStr _apt_t8307 = _tr_str_retain(f2->name); List_TrStr_append(sym_names, _apt_t8307); _tr_str_release(_apt_t8307); });
 #line 113 "src/codegen/native/elf.tr"
         fi = (fi + 1LL);
     }
@@ -229,7 +229,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
             ByteBuf_u64(rela, ((trr->str_idx * 8LL) - 4LL));
         } else if ((trr->kind == 4LL)) {
 #line 146 "src/codegen/native/elf.tr"
-            long long fsidx = ({ TrStr _apt_t8111 = _tr_str_retain(trr->sym); __auto_type _wr = ((_index_of(sym_names, _apt_t8111) + 3LL)); _tr_str_release(_apt_t8111); _wr; });
+            long long fsidx = ({ TrStr _apt_t8308 = _tr_str_retain(trr->sym); __auto_type _wr = ((_index_of(sym_names, _apt_t8308) + 3LL)); _tr_str_release(_apt_t8308); _wr; });
 #line 147 "src/codegen/native/elf.tr"
             ByteBuf_u64(rela, trr->roff);
 #line 148 "src/codegen/native/elf.tr"
@@ -238,7 +238,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
             ByteBuf_u64(rela, (0LL - 4LL));
         } else {
 #line 152 "src/codegen/native/elf.tr"
-            long long sidx = ({ TrStr _apt_t8112 = _tr_str_retain(trr->sym); __auto_type _wr = ((_index_of(sym_names, _apt_t8112) + 3LL)); _tr_str_release(_apt_t8112); _wr; });
+            long long sidx = ({ TrStr _apt_t8309 = _tr_str_retain(trr->sym); __auto_type _wr = ((_index_of(sym_names, _apt_t8309) + 3LL)); _tr_str_release(_apt_t8309); _wr; });
 #line 153 "src/codegen/native/elf.tr"
             ByteBuf_u64(rela, trr->roff);
 #line 154 "src/codegen/native/elf.tr"
@@ -392,7 +392,7 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
 #line 238 "src/codegen/native/elf.tr"
     _shdr(out, n_shstr, 3LL, 0LL, 0LL, shstr_off, shstr->len, 0LL, 0LL, 1LL, 0LL);
 #line 240 "src/codegen/native/elf.tr"
-    bool _trret1950 = ByteBuf_write_file(out, out_path);
+    bool _trret1956 = ByteBuf_write_file(out, out_path);
     _tr_obj_release(text, _trdrop_ByteBuf);
     List_ptr_free_obj(trelocs, _trdrop_TextReloc);
     List_i64_free(func_base);
@@ -403,6 +403,6 @@ __attribute__((hot)) bool write_elf_object(TrStr out_path, List_ptr* funcs, List
     _tr_obj_release(rela, _trdrop_ByteBuf);
     _tr_obj_release(shstr, _trdrop_ByteBuf);
     _tr_obj_release(out, _trdrop_ByteBuf);
-    return _trret1950;
+    return _trret1956;
 }
 

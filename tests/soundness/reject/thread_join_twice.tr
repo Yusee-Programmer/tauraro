@@ -1,0 +1,7 @@
+# EXPECT: [T-9]
+def w(i: int) -> void:
+    mut x = i
+def main():
+    mut t = Thread.spawn(w, 1)
+    t.join()
+    t.join()

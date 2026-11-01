@@ -1,0 +1,13 @@
+# EXPECT: [T-10]
+# A `shared` variable is a control-block handle (Shared[T]). Handing it to a worker whose
+# parameter is the bare class makes the thread read the control block as the object.
+class Counter implements Sendable:
+    pub value: Atomic[int]
+def bump(c: Counter) -> void:
+    c.value.add(1)
+async def main():
+    mut c = Counter()
+    c.value = Atomic.new(0)
+    shared s = c
+    task_group:
+        spawn bump(s)

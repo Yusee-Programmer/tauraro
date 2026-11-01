@@ -1,0 +1,14 @@
+# EXPECT: pass
+# get() ... set()/unlock() ... get() again is fine; RwLock read_unlock before write; join once each.
+def main():
+    mut m: Mutex[int] = Mutex.init(1)
+    mut a = m.get()
+    m.set(a + 1)
+    mut b = m.get()
+    m.unlock()
+    mut rw: RwLock[int] = RwLock.init(5)
+    mut r = rw.read()
+    rw.read_unlock()
+    mut old = rw.write()
+    rw.write_set(old + r)
+    print(a + b)

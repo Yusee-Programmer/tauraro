@@ -1,0 +1,6 @@
+# EXPECT: [T-9]
+def main():
+    mut rw: RwLock[int] = RwLock.init(1)
+    mut v = rw.read()
+    mut w = rw.write()
+    rw.write_set(v + w)

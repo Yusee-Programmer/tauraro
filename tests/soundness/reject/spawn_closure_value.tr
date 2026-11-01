@@ -1,0 +1,8 @@
+# EXPECT: [T-6]
+# A closure value captures its locals by reference into the spawning frame; a spawned
+# thread would race on (and outlive) them.
+async def main():
+    mut total = 0
+    mut f = lambda z: z + total
+    task_group:
+        spawn f(1)

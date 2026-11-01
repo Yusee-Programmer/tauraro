@@ -1,0 +1,18 @@
+# EXPECT: pass
+# Module-level state shared by threads is safe when it is an Atomic / Mutex handle.
+mut hits: Atomic[int] = Atomic.new(0)
+mut guard: Mutex[int] = Mutex.init(0)
+def worker(n: int) -> void:
+    hits.add(n)
+    mut cur = guard.get()
+    guard.set(cur + n)
+async def main():
+    task_group:
+        spawn worker(1)
+        spawn worker(2)
+        spawn worker(3)
+    mut g = guard.get()
+    guard.unlock()
+    assert_eq(hits.load(), 6)
+    assert_eq(g, 6)
+    print("ok")

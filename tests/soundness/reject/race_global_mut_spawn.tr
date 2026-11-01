@@ -1,0 +1,11 @@
+# EXPECT: [T-8]
+# A module-level `mut` is plain data shared by every thread: a spawned function that
+# writes it races with every other thread. Use Atomic / Mutex, or pass state explicitly.
+mut counter = 0
+def bump() -> void:
+    counter = counter + 1
+async def main():
+    task_group:
+        spawn bump()
+        spawn bump()
+    print(counter)

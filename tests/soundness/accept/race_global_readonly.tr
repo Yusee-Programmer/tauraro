@@ -1,0 +1,10 @@
+# EXPECT: pass
+# A module-level value that is only READ by the threads (never mutated after init) is race-free.
+LIMIT = 100
+def worker(n: int) -> void:
+    assert_le(n, LIMIT)
+async def main():
+    task_group:
+        spawn worker(1)
+        spawn worker(2)
+    print("ok")

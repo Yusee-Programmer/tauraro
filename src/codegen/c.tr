@@ -6770,6 +6770,11 @@ pub class CGenerator:
             if method == "auto":
                 return "_tr_threadpool_auto()"
             if method == "spawn":
+                # ThreadPool.spawn(fn, a, b, ...) - heap-pack the args like Thread.spawn does (slot 0 = result,
+                # slots 1..N = args); the wrapper emitted by prescan unpacks and frees the block. Before this the
+                # extra args were silently dropped and the multi-arg wrapper read a garbage block.
+                if args.len >= 3:
+                    return self._pool_spawn_packed("_tr_threadpool_spawn", obj_s, args)
                 # ThreadPool.spawn(fn, arg) - dispatch work item to the pool
                 if args.len >= 2:
                     mut tp_fn_s = self.gen_expr(args.get(0))
@@ -6810,6 +6815,8 @@ pub class CGenerator:
             if method == "auto":
                 return "_tr_asyncpool_new(_tr_threadpool_auto_n())"
             if method == "spawn":
+                if args.len >= 3:
+                    return self._pool_spawn_packed("_tr_asyncpool_spawn", obj_s, args)
                 # AsyncPool.spawn(fn, arg) -> AsyncTask - submit a not-yet-started
                 # top-level async call onto the pool's work-stealing queues.
                 if args.len >= 2:
@@ -9089,6 +9096,28 @@ pub class CGenerator:
             case _:
                 pass
 
+    # `pool.spawn(fn, a, b, ...)`: pack the arguments into a heap block (slot 0 = result, 1..N = args).
+    pub def _pool_spawn_packed(self, submit: str, obj_s: str, args: Vec[Pointer[HirExpr]]) -> str:
+        mut fn_nm = ""
+        match args.get(0).read():
+            case HirExpr.EIdent(pn, _, _): fn_nm = pn
+            case _: pass
+        mut tmp = self.next_temp()
+        mut r = "({ long long* _pb" + tmp + " = (long long*)_tr_checked_alloc(" + str(args.len) + " * sizeof(long long)); _pb" + tmp + "[0] = 0; "
+        mut ai = 1
+        while ai < args.len:
+            mut aty = hir_expr_type(args.get(ai)).name
+            if _is_int_type(aty) or aty == "bool" or aty == "char":
+                r = r + "_pb" + tmp + "[" + str(ai) + "] = (long long)(" + self.gen_expr(args.get(ai)) + "); "
+            else:
+                r = r + "_pb" + tmp + "[" + str(ai) + "] = (long long)(uintptr_t)(" + self.gen_expr(args.get(ai)) + "); "
+            ai = ai + 1
+        if fn_nm != "":
+            r = r + submit + "(" + obj_s + ", _tr_spawn_wrap_" + fn_nm + ", _pb" + tmp + "); })"
+        else:
+            r = r + submit + "(" + obj_s + ", (void*(*)(void*))(" + self.gen_expr(args.get(0)) + "), _pb" + tmp + "); })"
+        return r
+
     pub def prescan_await_all_in_expr(self, e: Pointer[HirExpr]):
         if _is_invalid_ptr(e as usize): return
         match e.read():
@@ -9135,6 +9164,11 @@ pub class CGenerator:
                     while aa_pi < aa_args.len:
                         self.emit_spawn_wrapper_for_expr(aa_args.get(aa_pi))
                         aa_pi = aa_pi + 1
+                else:
+                    mut aa_ri = 0
+                    while aa_ri < aa_args.len:
+                        self.prescan_await_all_in_expr(aa_args.get(aa_ri))
+                        aa_ri = aa_ri + 1
             case HirExpr.EMethodCall(pool_obj, pool_meth, pool_args, _):
                 # Thread.spawn(fn, arg) - emit spawn wrapper
                 if pool_meth == "spawn":
@@ -9241,6 +9275,12 @@ pub class CGenerator:
                 # never emitted (pool_meth == "detach", not "spawn", so none
                 # of the cases above fire for it).
                 self.prescan_await_all_in_expr(pool_obj)
+                # ... and into the arguments: `handles.push(Thread.spawn(fn, x))` nests the spawn as an
+                # ARGUMENT, whose wrapper was never emitted (use of undeclared `_tr_spawn_wrap_fn`).
+                mut pa_i = 0
+                while pa_i < pool_args.len:
+                    self.prescan_await_all_in_expr(pool_args.get(pa_i))
+                    pa_i = pa_i + 1
             case _: pass
 
     pub def prescan_spawns(self, prog: HirProgram):

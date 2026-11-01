@@ -1,0 +1,7 @@
+# EXPECT: [T-9]
+# get() takes the lock; a second get() with no set()/unlock() in between blocks forever.
+def main():
+    mut m: Mutex[int] = Mutex.init(0)
+    mut a = m.get()
+    mut b = m.get()
+    m.set(a + b)

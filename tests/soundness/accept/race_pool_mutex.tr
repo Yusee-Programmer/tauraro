@@ -1,0 +1,17 @@
+# EXPECT: pass
+# Concurrency soundness: safe pattern (run under TSan during development).
+def add(total: Mutex[int], n: int) -> void:
+    mut c = total.get()
+    total.set(c + n)
+def main():
+    mut total: Mutex[int] = Mutex.init(0)
+    mut pool: ThreadPool = ThreadPool.new(4)
+    mut i = 1
+    while i <= 50:
+        pool.spawn(add, total, i)
+        i = i + 1
+    pool.wait()
+    pool.free()
+    mut r = total.get()
+    total.unlock()
+    assert_eq(r, 1275)

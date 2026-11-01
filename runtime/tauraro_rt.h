@@ -2043,10 +2043,15 @@ _TR_XLINK _TrMutexBox* _tr_mutexbox_new_owned_coll(long long init, void (*cdrop)
 _TR_XLINK long long _tr_mutexbox_lock_get(_TrMutexBox* b) {
     _tr_mutex_hlock(b->mu); _tr_lstack_push(&_tr_tl_mu_stk, b); return b->data;
 }
+/* set(): when THIS thread holds the lock (a prior get()) store + release; otherwise it is a
+ * stand-alone locked store. Storing without the lock was a data race, and unlocking a mutex
+ * this thread never locked is undefined behaviour (pthread). */
 _TR_XLINK void _tr_mutexbox_set_unlock(_TrMutexBox* b, long long v) {
-    b->data = v; _tr_lstack_pop(&_tr_tl_mu_stk, b); _tr_mutex_hunlock(b->mu);
+    if (_tr_lstack_pop(&_tr_tl_mu_stk, b)) { b->data = v; _tr_mutex_hunlock(b->mu); }
+    else { _tr_mutex_hlock(b->mu); b->data = v; _tr_mutex_hunlock(b->mu); }
 }
-_TR_XLINK void _tr_mutexbox_unlock(_TrMutexBox* b) { _tr_lstack_pop(&_tr_tl_mu_stk, b); _tr_mutex_hunlock(b->mu); }
+/* unlock(): only releases a lock this thread actually holds. */
+_TR_XLINK void _tr_mutexbox_unlock(_TrMutexBox* b) { if (_tr_lstack_pop(&_tr_tl_mu_stk, b)) _tr_mutex_hunlock(b->mu); }
 _TR_XLINK void _tr_mutexbox_free(_TrMutexBox* b) {
     if (!b) return;
     /* Release the lock if still held (e.g. a `.get()` guard that relied on scope
@@ -2083,12 +2088,13 @@ _TR_XLINK _TrRWLBox* _tr_rwlbox_new(long long init) {
 _TR_XLINK long long _tr_rwlbox_read_get(_TrRWLBox* b) {
     _tr_rwl_read_lock(b->rw); _tr_lstack_push(&_tr_tl_rwl_r_stk, b); return b->data;
 }
-_TR_XLINK void _tr_rwlbox_read_unlock(_TrRWLBox* b) { _tr_lstack_pop(&_tr_tl_rwl_r_stk, b); _tr_rwl_read_unlock(b->rw); }
+_TR_XLINK void _tr_rwlbox_read_unlock(_TrRWLBox* b) { if (_tr_lstack_pop(&_tr_tl_rwl_r_stk, b)) _tr_rwl_read_unlock(b->rw); }
 _TR_XLINK long long _tr_rwlbox_write_get(_TrRWLBox* b) {
     _tr_rwl_write_lock(b->rw); _tr_lstack_push(&_tr_tl_rwl_w_stk, b); return b->data;
 }
 _TR_XLINK void _tr_rwlbox_write_set_unlock(_TrRWLBox* b, long long v) {
-    b->data = v; _tr_lstack_pop(&_tr_tl_rwl_w_stk, b); _tr_rwl_write_unlock(b->rw);
+    if (_tr_lstack_pop(&_tr_tl_rwl_w_stk, b)) { b->data = v; _tr_rwl_write_unlock(b->rw); }
+    else { _tr_rwl_write_lock(b->rw); b->data = v; _tr_rwl_write_unlock(b->rw); }
 }
 _TR_XLINK void _tr_rwlbox_free(_TrRWLBox* b) {
     if (!b) return; _tr_rwl_free(b->rw); TAURARO_FREE(b);
@@ -4895,9 +4901,11 @@ static _TrAsyncTask* _tr_pool_find_work(_TrAsyncPool* pool, _TrPoolWorker* self)
     return NULL;
 }
 
+static _Thread_local _TrPoolWorker* _tr_tl_pool_worker;
 static void* _tr_pool_worker_main(void* arg) {
     _TrPoolWorker* self = (_TrPoolWorker*)arg;
     _TrAsyncPool* pool = self->pool;
+    _tr_tl_pool_worker = self;
     for (;;) {
         _TrAsyncTask* t = _tr_pool_find_work(pool, self);
         if (t) { _tr_asynctask_run_and_complete(t); continue; }
@@ -4940,11 +4948,16 @@ static _TrAsyncPool* _tr_asyncpool_new(long long n) {
  * contention on the common un-full case); falls back to the shared
  * injector if the chosen worker's deque is momentarily full. Signals a
  * parked worker either way. */
+/* The worker deque is single-OWNER (Chase-Lev): only its own worker thread may push/pop the
+ * bottom. A submission from any OTHER thread (main, a user thread) therefore goes through the
+ * mutex-protected injector - pushing to a worker's deque from outside raced with that worker's
+ * pop (lost / double-run tasks) and with other submitters. */
 static _TrAsyncTask* _tr_asyncpool_spawn(_TrAsyncPool* pool, _tr_coro_fn fn, void* arg) {
     _TrAsyncTask* t = _tr_asynctask_new(fn, arg);
-    long long i = atomic_fetch_add_explicit(&pool->rr, 1, memory_order_relaxed) % pool->n_workers;
-    if (!_tr_deque_push(&pool->workers[i].dq, t))
-        _tr_chan_try_send(pool->injector, (long long)(uintptr_t)t);
+    _TrPoolWorker* me = _tr_tl_pool_worker;
+    if (!(me && me->pool == pool && _tr_deque_push(&me->dq, t))) {
+        _tr_chan_send(pool->injector, (long long)(uintptr_t)t);
+    }
     _tr_condmutex_lock(&pool->parkcv);
     _tr_condmutex_signal(&pool->parkcv);
     _tr_condmutex_unlock(&pool->parkcv);

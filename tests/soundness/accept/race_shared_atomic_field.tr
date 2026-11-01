@@ -1,0 +1,23 @@
+# EXPECT: pass
+# A Shared object whose mutable state is Atomic: every thread may mutate it.
+class Counter implements Sendable:
+    pub value: Atomic[int]
+    pub tag: int
+extend Counter:
+    pub def init() -> Counter:
+        mut c = Counter()
+        c.value = Atomic.new(0)
+        c.tag = 7
+        return c
+def bump(c: Shared[Counter]) -> void:
+    c.value.add(1)
+async def main():
+    mut c = Counter.init()
+    shared s1 = c
+    shared s2 = s1
+    task_group:
+        spawn bump(s1)
+        spawn bump(s2)
+        spawn bump(s1)
+    assert_eq(s1.value.load(), 3)
+    print("ok")
