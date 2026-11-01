@@ -81,18 +81,18 @@ model behind the M-series and L-1.
 
 **Message:** `'data' was moved and cannot be used again.`
 
-**Cause:** A variable was passed to a function/context that takes ownership
-(moves it), then used again afterward.
+**Cause:** A variable was moved into another binding (`b = a`), then used
+again afterward. (Calls do not move: only binding transfers do.)
 
 ```python
 # WRONG:
 data = load_bytes()
-send(data)           # data is moved here
+owner = data         # data is moved here
 print(len(data))     # M-1: data was moved and cannot be used again
 
 # RIGHT: use before moving, or clone
 print(len(data))
-send(data)
+owner = data
 ```
 
 **FIX:** Use the variable that now owns the value, or call `.clone()` to copy
@@ -109,8 +109,8 @@ borrow (`ref`/`mut_ref`/a `view`-style local) into it is still alive.
 
 ```python
 mut data = [1, 2, 3]
-view = ref data[0]
-consume(data)    # M-2: data is borrowed by 'view'
+view: ref List[int] = data
+owner = data     # M-2: data is borrowed by 'view'
 ```
 
 **FIX:** The borrow must end before `data` can be moved.
@@ -162,7 +162,7 @@ in general.
 ```python
 data = load_bytes()
 if flag:
-    send(data)        # moved on this branch only
+    owner = data      # moved on this branch only
 print(len(data))       # M-5: 'data' may have been moved on some code paths
 ```
 

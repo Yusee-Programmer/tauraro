@@ -1,0 +1,9 @@
+# EXPECT: [I-2]
+# A bare C() leaves collection fields null; using one before assignment is rejected.
+class C:
+    pub n: int
+    pub l: List[int]
+def main():
+    mut c = C()
+    c.l.append(1)
+    print(c.l.len())

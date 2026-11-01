@@ -1,0 +1,7 @@
+# EXPECT: pass
+# Element and container passed to two SHARED ref parameters.
+def f(r: ref str, xs: ref List[str]) -> int:
+    return r.len() + xs.len()
+def main():
+    mut xs: List[str] = ["a" + "b"]
+    print(f(xs[0], xs))

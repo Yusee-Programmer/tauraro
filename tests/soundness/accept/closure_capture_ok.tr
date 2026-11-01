@@ -1,0 +1,8 @@
+# EXPECT: pass
+# Using a capturing closure, then mutating its source after the last call.
+def main():
+    mut xs: List[int] = [1]
+    f = lambda: xs.len()
+    print(f())
+    xs.append(2)
+    print(xs.len())

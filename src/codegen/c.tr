@@ -2229,6 +2229,17 @@ pub class CGenerator:
     # constructor or builds a collection) are deferred to whichever export's
     # body actually references one of them — normally the export called AFTER
     # the allocator-bootstrap one in every nebula example's own convention.
+    # `g: List[T] = []`: the empty literal carries no element type of its own; give it the
+    # declared one so the right List_<sfx>_new() is built.
+    pub def typed_global_init(self, gty: AstType, gv: Pointer[HirExpr]) -> Pointer[HirExpr]:
+        if gv as usize == 0 as usize: return gv
+        if (gty.name == "List" or gty.name == "Vec") and gty.args.len > 0:
+            match gv.read():
+                case HirExpr.EList(g_items, _):
+                    if g_items.len == 0: return box_hirexpr(HirExpr.EList(g_items, gty))
+                case _: pass
+        return gv
+
     pub def global_init_names(self, prog: HirProgram, safe_names: Vec[str], risky_names: Vec[str]):
         if _is_invalid_ptr(prog as usize): return
         if _is_invalid_ptr(prog.top_level_stmts as usize): return
@@ -2271,7 +2282,8 @@ pub class CGenerator:
         while i < prog.top_level_stmts.len:
             mut _tlg = false
             match prog.top_level_stmts.get(i).read():
-                case HirStmt.SLet(gn, _, _, _, _, _, gv):
+                case HirStmt.SLet(gn, _, _, _, _, gty, gv0):
+                    mut gv = self.typed_global_init(gty, gv0)
                     if self.global_vars.contains(gn):
                         _tlg = true
                         mut _is_safe = gv as usize == 0 as usize or self.is_safe_global_init(gv)
@@ -8598,6 +8610,13 @@ pub class CGenerator:
                 mut _cty = self.type_to_c(val_ty.args.get(i).read())
                 self.w(pad + _cty + " " + vname + " = (" + _cty + ")(uintptr_t)" + tmp + ".data[" + i.to_str() + "];\n")
                 self.class_local_names.insert(names.get(i), true)
+            elif val_ty.args.len > i and (elem_ty_n == "List" or elem_ty_n == "Vec" or elem_ty_n == "Dict" or elem_ty_n == "Map" or elem_ty_n == "Set"):
+                # Collection slot: the tuple packer stored the raw pointer; read it back as a
+                # pointer of the collection's own C type (a `long long` made `a.len()` /
+                # `a->len` a C compile error). The slot's ownership stays with the tuple (a
+                # leak at worst, never a double free).
+                mut _ccty = self.type_to_c(val_ty.args.get(i).read())
+                self.w(pad + _ccty + " " + vname + " = (" + _ccty + ")(uintptr_t)" + tmp + ".data[" + i.to_str() + "];\n")
             else:
                 self.w(pad + "long long " + vname + " = " + tmp + ".data[" + i.to_str() + "];\n")
             self.decl_vars.insert(names.get(i), true)
@@ -12434,7 +12453,8 @@ pub class CGenerator:
         while i < prog.top_level_stmts.len:
             mut _tl_global = false
             match prog.top_level_stmts.get(i).read():
-                case HirStmt.SLet(tln, _, _, _, _, _, tlv):
+                case HirStmt.SLet(tln, _, _, _, _, tlty, tlv0):
+                    mut tlv = self.typed_global_init(tlty, tlv0)
                     if self.global_vars.contains(tln) and tlv as usize != 0 as usize:
                         self.w("    " + tln + " = " + self.gen_expr(tlv) + ";\n")
                         _tl_global = true
@@ -13379,7 +13399,8 @@ pub class CGenerator:
             while i < prog.top_level_stmts.len:
                 mut _tlg = false
                 match prog.top_level_stmts.get(i).read():
-                    case HirStmt.SLet(tln2, _, _, _, _, _, tlv2):
+                    case HirStmt.SLet(tln2, _, _, _, _, tlty2, tlv20):
+                        mut tlv2 = self.typed_global_init(tlty2, tlv20)
                         if self.global_vars.contains(tln2):
                             # File-scope global: initialize in main's boot path when it has
                             # a value; a value-less global (e.g. a `[u8; N]` arena) is already

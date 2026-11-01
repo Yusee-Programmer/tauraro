@@ -1,0 +1,10 @@
+# EXPECT: pass
+# Assigning a collection field before use.
+class C:
+    pub n: int
+    pub l: List[int]
+def main():
+    mut c = C()
+    c.l = []
+    c.l.append(1)
+    print(c.l.len())

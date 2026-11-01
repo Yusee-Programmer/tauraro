@@ -1,0 +1,8 @@
+# EXPECT: [B-1]
+# A List[ref T] borrows what is appended to it.
+def main():
+    mut s = "ab" + "c"
+    mut hold: List[ref str] = []
+    hold.append(s)
+    s = "z" + "z"
+    print(hold[0])

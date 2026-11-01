@@ -1,0 +1,9 @@
+# EXPECT: pass
+# A List[ref T] used before its source is overwritten.
+def main():
+    mut s = "ab" + "c"
+    mut hold: List[ref str] = []
+    hold.append(s)
+    print(hold[0])
+    s = "z" + "z"
+    print(s)

@@ -1,0 +1,6 @@
+# EXPECT: pass
+# Global declared g: List[str] = [] builds a str list.
+g: List[str] = []
+def main():
+    g.append("a")
+    print(g.len())

@@ -28,22 +28,25 @@ Every heap-allocated value has exactly one owner. The compiler tracks ownership 
 ```python
 a = make_data()    # a owns the data
 b = a              # b now owns the data — a is no longer valid
-print(a.len())     # M-2: a was moved into b
+print(a.len())     # M-1: a was moved into b
 ```
 
-### Rule 2: Passing to a function that "consumes" the value is a move
+### Rule 2: Passing to a function is always a borrow
+
+A call never moves its arguments - even a callee that stores the parameter in a
+field or a collection only takes its own reference-counted reference; the
+caller's variable stays valid.
 
 ```python
 def consume(data: List[int]) -> void:
-    # data is freed when this function returns
     print(len(data))
 
 mut items = [1, 2, 3]
-consume(items)          # items moved into consume
-print(len(items))       # M-2: items was moved
+consume(items)          # a borrow for the duration of the call
+print(len(items))       # OK
 ```
 
-### Rule 3: Passing to a function that only reads is a borrow
+### Rule 3: Reading through a function is a borrow too
 
 ```python
 def read_only(data: List[int]) -> int:
@@ -56,23 +59,14 @@ print(len(items))           # OK
 
 ### How the compiler decides: move vs. borrow
 
-The compiler uses the callee's parameter type and usage to infer:
-- If the function stores the parameter in a field or passes it to another consuming function, it is a **move**
-- If the function only reads the parameter and does not outlive the call, it is a **borrow**
-
-In practice, for simple functions, the compiler correctly infers borrow semantics for read-only use and move semantics when the value is stored or consumed. When in doubt, annotate explicitly with `borrow` or use `Shared[T]`.
+Only a *binding transfer* (`b = a`, `mut b = a`) moves. A callee that keeps its
+parameter (stores it in a field/collection, or hands it to another thread) takes
+its own reference, so no annotation is needed at the call site. Use `Shared[T]`
+when several owners must outlive one another across threads.
 
 ---
 
 ## Syntax Reference
-
-### Explicit Move
-
-```python
-move x into y    # explicitly transfer ownership from x to y
-```
-
-`x` is no longer valid after this line. This is the same as assignment (`y = x`) but makes intent visible in code that handles ownership carefully.
 
 ### Clone for Deep Copy
 
@@ -85,11 +79,11 @@ mut copy = clone(original)    # deep copy — original is still valid
 ### Borrow annotation
 
 ```python
-def read_only(borrow data: List[int]) -> int:
+def read_only(data: ref List[int]) -> int:
     return len(data)
 ```
 
-The `borrow` keyword on a parameter explicitly declares that this function borrows (does not consume) the value. The compiler verifies that the parameter is not stored or moved inside the function.
+A `ref T` parameter is a *shared* borrow (read-only, checked by `[B-3]` under `--strict`); `mut ref T` is an exclusive one.
 
 ---
 
@@ -168,15 +162,14 @@ task_group:
 ### Pattern: Passing ownership explicitly
 
 ```python
-# When you want to be explicit that ownership transfers:
-def process_and_free(move data: List[int]) -> int:
+# A binding transfer makes the hand-off explicit:
+def process(data: List[int]) -> int:
     return len(data)
-    # data freed here
 
 mut items = [1, 2, 3]
-move items into raw_data
-mut n = process_and_free(raw_data)
-# items and raw_data are both invalid after this
+raw_data = items            # items is moved into raw_data
+mut n = process(raw_data)
+# items is invalid after the transfer
 ```
 
 ### Pattern: Clone before passing to multiple consumers
@@ -192,28 +185,23 @@ def send_to_both(data: List[int]) -> void:
 
 ## Common Mistakes
 
-**Storing a borrowed value in a class field.** If a function borrows a parameter but then stores it in a field, the compiler will either reject this (if it can detect it statically) or produce a dangling reference at runtime. Use `Shared[T]` or clone.
+**Assuming a call consumes its argument.** Passing a value to a function, method, `append`, a field store or `Shared.init(...)` never invalidates the caller's variable: the receiver takes its own reference-counted reference. Only a binding transfer (`b = a`) moves.
 
 ```python
 class Cache:
-    pub data: List[int]    # owned
+    pub data: List[int]
 
 extend Cache:
-    # WRONG: borrowing data but storing it — data may be freed by caller
-    pub def set_borrow(self, borrow data: List[int]) -> void:
-        self.data = data    # M-2/M-4 depending on context
-
-    # RIGHT: take ownership
-    pub def set_owned(self, data: List[int]) -> void:
-        self.data = data    # data moved into self — correct
+    pub def set(self, data: List[int]) -> void:
+        self.data = data    # the field takes its own reference; the caller's `data` stays valid
 ```
 
-**Using a value after passing it to Shared.init().** `Shared.init(value)` *moves* the value in. The original binding is no longer valid.
+**Using a value after a binding transfer.**
 
 ```python
 mut items = [1, 2, 3]
-mut shared = Shared[List[int]].init(items)
-print(len(items))    # M-2: items was moved into shared
+mut other = items
+print(len(items))    # M-1: items was moved into other
 ```
 
 **Reaching for clone() before understanding the ownership flow.** `clone()` allocates memory. Many apparent "need to clone" situations are actually "need to reorder the calls so the borrow doesn't conflict."
@@ -226,7 +214,7 @@ print(len(items))    # M-2: items was moved into shared
 - **Use `Shared[T]` for shared state; avoid raw shared mutable globals.** Raw global mutable state has no protection and causes data races in concurrent code.
 - **Use `clone()` sparingly.** Each clone is a memory allocation. Measure before adding clones in hot paths.
 - **Use `Mutex[T]` or `RwLock[T]` inside `Shared[T]` for mutable shared state across threads.** `Shared[T]` alone is not a lock.
-- **The compiler's move detection is conservative.** If it emits M-2 and you believe it's a false positive, re-examine the data flow — in practice, the compiler is correct, and the fix is a structural change (reorder calls, use Shared, or clone).
+- **The compiler's move detection is conservative.** If it emits M-1 and you believe it's a false positive, re-examine the data flow — in practice, the compiler is correct, and the fix is a structural change (reorder calls, use Shared, or clone).
 
 ---
 
@@ -235,4 +223,4 @@ See also:
 - [16 — Concurrency](../16_concurrency.md)
 - [01 — Lifetimes](01_lifetimes.md)
 - [06 — Sendable](06_sendable.md)
-- [Compiler Error M-2](../19_compiler_errors.md#m-2-use-after-move)
+- [Compiler Error M-1](../19_compiler_errors.md#m-1-use-after-move)

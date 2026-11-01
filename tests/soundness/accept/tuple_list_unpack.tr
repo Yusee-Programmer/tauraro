@@ -1,0 +1,9 @@
+# EXPECT: pass
+# A (List, int) tuple returned and unpacked yields a usable list.
+def f() -> (List[int], int):
+    mut x: List[int] = [1, 2]
+    return (x, 2)
+def main():
+    a, b = f()
+    a.append(5)
+    print(a.len() + b)

@@ -1,0 +1,8 @@
+# EXPECT: [M-4]
+# Iterating a list while a callee takes it as mut ref and grows it.
+def grow(xs: mut ref List[int]):
+    xs.append(1)
+def main():
+    mut xs: List[int] = [1, 2, 3]
+    for x in xs:
+        grow(xs)

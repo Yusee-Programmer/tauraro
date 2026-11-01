@@ -1,0 +1,11 @@
+# EXPECT: [B-1]
+# A ref field borrows what is stored into it.
+class V from r:
+    pub s: ref str from r
+    pub n: int
+def main():
+    mut xs: List[str] = ["ab" + "c"]
+    mut v = V()
+    v.s = xs[0]
+    xs.clear()
+    print(v.s)

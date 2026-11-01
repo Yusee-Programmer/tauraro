@@ -1,0 +1,8 @@
+# EXPECT: pass
+# Reading through an alias of a shared ref parameter.
+def f(a: ref List[int]) -> int:
+    mut b = a
+    return b.len()
+def main():
+    mut x: List[int] = []
+    print(f(x))

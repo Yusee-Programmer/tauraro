@@ -1,0 +1,9 @@
+# EXPECT: [B-3]
+# A shared ref parameter cannot be handed to a mut ref parameter.
+def g(a: mut ref List[int]):
+    a.append(1)
+def f(a: ref List[int]):
+    g(a)
+def main():
+    mut x: List[int] = []
+    f(x)

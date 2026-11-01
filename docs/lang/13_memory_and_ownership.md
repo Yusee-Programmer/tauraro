@@ -102,29 +102,31 @@ This rule prevents accessing a variable after its ownership has been transferred
 
 ```python
 data = load_bytes()
-send(data)              # data moved into send — send takes ownership
+owner = data            # ownership moves to `owner` (a binding transfer)
 print(len(data))        # ERROR [M-1]: 'data' was moved and cannot be used again
 ```
 
 **Compiler message:** `'data' was moved and cannot be used again.`
 **FIX:** *Use the variable that now owns it, or call `.clone()` to copy before moving.*
 
-The compiler traces the control-flow graph. If `send` is defined as taking an `Own` parameter, every path after the call is checked to ensure `data` is not accessed.
+**What counts as a move.** A move is a *binding transfer* of a non-`Copy` value: `b = a`, `mut b = a`, or `a = b` where the right-hand side is a plain variable. Calls do **not** move: passing a value to a function or method, `append`ing it to a collection, storing it in a field, or handing it to `Thread.spawn` *borrows* it for the call; whoever stores it takes its own (reference-counted) reference, so the caller's variable stays valid. (Cross-thread transfers are policed separately by `[T-1]`/`[T-7]`.) A move inside a loop body is checked as well: moving an outer variable on every iteration is `[M-1]` unless the body reassigns it first or ends with `break`/`return`. A `defer` statement reads its variables at function exit, so moving such a variable away is `[M-1]` too.
+
+The compiler traces the control-flow graph: every path after a move is checked to ensure the moved-from variable is not accessed.
 
 **Fix patterns:**
 
 ```python
 # Option 1: Use the value before moving it
 print(len(data))         # use first
-send(data)               # then move
+owner = data             # then move
 
 # Option 2: Deep copy with clone()
 mut copy = clone(data)
-send(data)               # move the original
+owner = data             # move the original
 print(len(copy))         # use the copy
 
-# Option 3: Pass by reference — send does not consume ownership
-send_ref(&data)
+# Option 3: Pass it to a function — calls borrow, they do not move
+send(data)
 print(len(data))         # data still valid
 ```
 
@@ -133,7 +135,7 @@ print(len(data))         # data still valid
 ```python
 # WRONG: Accessing a variable after passing it to a consuming function
 mut buf = Buffer.init(1024)
-compress(buf)         # buf moved
+packed = buf          # buf moved
 write(buf)            # ERROR [M-1]
 ```
 
@@ -141,7 +143,7 @@ write(buf)            # ERROR [M-1]
 
 - Use the value fully before passing it to a consuming function.
 - Use `clone(x)` when you need the value both before and after a move.
-- Prefer borrow semantics (`&data`, pointer parameters) in hot loops where cloning would be expensive.
+- Prefer passing values to functions (a call borrows) or `ref` bindings in hot loops where cloning would be expensive.
 
 ---
 
@@ -155,8 +157,8 @@ This rule prevents moving a variable away while another binding currently holds 
 
 ```python
 mut data = load_bytes()
-view = &data            # view borrows data
-send(data)               # ERROR [M-2]: Cannot move 'data' while it is borrowed
+view: ref List[int] = data   # view borrows data
+owner = data             # ERROR [M-2]: Cannot move 'data' while it is borrowed
 ```
 
 **Compiler message:** `Cannot move 'data' while it is borrowed.`
@@ -167,8 +169,8 @@ send(data)               # ERROR [M-2]: Cannot move 'data' while it is borrowed
 ```python
 # WRONG: moving a value while a borrow of it is still in scope
 mut buf = Buffer.init(1024)
-view = &buf
-compress(buf)    # ERROR [M-2]: buf is borrowed by 'view'
+view: ref Buffer = buf
+packed = buf     # ERROR [M-2]: buf is borrowed by 'view'
 ```
 
 ### Best Practices
@@ -260,7 +262,7 @@ This is the flow-sensitive counterpart to [M-1]: it fires when a variable was mo
 ```python
 mut data = load_bytes()
 if flag:
-    send(data)        # move on the true branch only
+    owner = data      # move on the true branch only
 print(len(data))      # ERROR [M-5]: 'data' may have been moved on some code
                        # paths, making this use unsafe
 ```
@@ -273,16 +275,16 @@ print(len(data))      # ERROR [M-5]: 'data' may have been moved on some code
 ```python
 # WRONG: using a variable after a conditional move
 if flag:
-    send(data)
+    a = data
 else:
-    log(data)          # 'data' moved on both branches here too, but...
-print(len(data))        # ERROR [M-5]: still flagged at the join point
+    b = data           # 'data' moved on both branches here too, but...
+print(len(data))        # ERROR [M-1]: moved on every path
 
-# RIGHT: move both branches into the use, or move after
+# RIGHT: keep the use before the move, or return after moving
 if flag:
-    send(data)
+    a = data
     return
-log_and_send(data)       # single move on the remaining path
+b = data                 # single move on the remaining path
 ```
 
 ### Best Practices
@@ -540,7 +542,7 @@ Use `clone(x)` when you need an independent copy of an owned value — for examp
 ```python
 mut original = Buffer.init(1024)
 mut copy = clone(original)
-send(original)             # original moved
+moved = original           # original moved
 process(copy)              # copy is fully independent — safe to use
 ```
 

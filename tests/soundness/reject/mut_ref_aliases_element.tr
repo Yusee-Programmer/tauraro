@@ -1,0 +1,8 @@
+# EXPECT: [M-3]
+# An element of xs passed next to xs itself where a parameter is mut ref.
+def f(r: ref str, xs: mut ref List[str]):
+    xs.clear()
+    print(r)
+def main():
+    mut xs: List[str] = ["a" + "b"]
+    f(xs[0], xs)

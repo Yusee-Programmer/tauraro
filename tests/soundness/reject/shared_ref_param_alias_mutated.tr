@@ -1,0 +1,8 @@
+# EXPECT: [B-3]
+# Mutating an alias of a shared ref parameter is mutating the parameter.
+def f(a: ref List[int]):
+    mut b = a
+    b.append(1)
+def main():
+    mut x: List[int] = []
+    f(x)

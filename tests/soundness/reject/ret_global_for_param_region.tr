@@ -1,0 +1,8 @@
+# EXPECT: [L-4]
+# Returning a global where the declared region is a parameter.
+g: List[int] = [1]
+def f(a: ref List[int]) -> ref List[int] from a:
+    return g
+def main():
+    mut x: List[int] = [2]
+    print(f(x).len())
