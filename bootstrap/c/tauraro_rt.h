@@ -626,6 +626,28 @@ _TR_XLINK void* _tr_checked_alloc(size_t sz) {
     return p;
 }
 
+/* Reference counts and threads. Plain `rc++` / `--rc` loses updates when two threads retain or
+ * release the SAME string / object concurrently (a `str` field of a `Shared[T]`, a list element a
+ * worker reads, the compiler's own parallel job table): the count drifts to 0 early, the buffer is
+ * freed under live users and a later malloc trips glibc's "unaligned fastbin chunk" check. x86's
+ * strong ordering hides most of it, arm64 does not. So once ANY extra thread has been started
+ * (`_tr_mt_active`, set before the first pthread_create / CreateThread) every retain/release is an
+ * atomic RMW; single-threaded programs keep the plain, branch-predicted fast path. */
+#ifdef _TR_MAIN
+int _tr_mt_active = 0;
+#else
+extern int _tr_mt_active;
+#endif
+#if defined(__GNUC__) || defined(__clang__)
+#  define _TR_MT_ON() __atomic_store_n(&_tr_mt_active, 1, __ATOMIC_SEQ_CST)
+#  define _TR_RC_INC(p) do { if (__builtin_expect(__atomic_load_n(&_tr_mt_active, __ATOMIC_RELAXED), 0)) __atomic_add_fetch((p), 1, __ATOMIC_RELAXED); else (*(p))++; } while (0)
+#  define _TR_RC_DEC(p) (__builtin_expect(__atomic_load_n(&_tr_mt_active, __ATOMIC_RELAXED), 0) ? __atomic_sub_fetch((p), 1, __ATOMIC_ACQ_REL) : --(*(p)))
+#else
+#  define _TR_MT_ON() (_tr_mt_active = 1)
+#  define _TR_RC_INC(p) ((*(p))++)
+#  define _TR_RC_DEC(p) (--(*(p)))
+#endif
+
 /* ── Class-instance ARC ──────────────────────────────────────────────────────
  * A heap class instance carries a refcount as its FIRST member (`size_t __rc`,
  * so it sits at offset 0). Instances are shared by retain/released by scope-exit
@@ -640,13 +662,13 @@ static inline void* _tr_obj_alloc(size_t sz) {
     return p;
 }
 static inline void* _tr_obj_retain(void* p) {
-    if (p) (*(size_t*)p)++;
+    if (p) _TR_RC_INC((size_t*)p);
     return p;
 }
 /* `drop` releases the instance's owned fields (generated per class). NULL for a
  * class with no droppable fields — the struct is still freed. */
 static inline void _tr_obj_release(void* p, void (*drop)(void*)) {
-    if (p && --(*(size_t*)p) == 0) {
+    if (p && _TR_RC_DEC((size_t*)p) == 0) {
         if (drop) drop(p);
         _TR_MEMCOUNT_DEC();
         TAURARO_FREE(p);
@@ -759,13 +781,13 @@ static inline TrStr _tr_str_new(size_t len) {
 }
 
 static inline TrStr _tr_str_retain(TrStr s) {
-    if (s.rc) { (*s.rc)++; }
+    if (s.rc) { _TR_RC_INC(s.rc); }
     return s;
 }
 
 static inline void _tr_str_release(TrStr s) {
     if (s.rc) {
-        if (--(*s.rc) == 0) {
+        if (_TR_RC_DEC(s.rc) == 0) {
             _TR_MEMCOUNT_STR_DEC();
             _tr_free(s.data);
             _tr_free((void*)s.rc);
@@ -1252,7 +1274,7 @@ _TR_XLINK _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
     _TrWin32StartArg* s = (_TrWin32StartArg*)malloc(sizeof(_TrWin32StartArg));
     s->fn = fn; s->arg = arg; s->result = NULL;
     SIZE_T ss = (SIZE_T)TAURARO_THREAD_STACK_SIZE;
-    return CreateThread(NULL, ss, _tr_thread_start_trampoline, s, 0, NULL);
+    _TR_MT_ON(); return CreateThread(NULL, ss, _tr_thread_start_trampoline, s, 0, NULL);
 }
 _TR_XLINK void _tr_thread_detach(_TrThread t) { CloseHandle(t); }
 _TR_XLINK void _tr_thread_join_wait(_TrThread t) { WaitForSingleObject(t, INFINITE); CloseHandle(t); }
@@ -1334,7 +1356,7 @@ _TR_XLINK _TrThread _tr_thread_start(void*(*fn)(void*), void* arg) {
     if (TAURARO_THREAD_STACK_SIZE > 0)
         pthread_attr_setstacksize(&attr, (size_t)TAURARO_THREAD_STACK_SIZE);
     pthread_attr_setguardsize(&attr, 4096);  /* one-page guard against overflow */
-    pthread_t t; pthread_create(&t, &attr, _tr_posix_thread_trampoline, s);
+    _TR_MT_ON(); pthread_t t; pthread_create(&t, &attr, _tr_posix_thread_trampoline, s);
     pthread_attr_destroy(&attr); return t;
 }
 _TR_XLINK void _tr_thread_detach(_TrThread t) { pthread_detach(t); }
@@ -1581,12 +1603,12 @@ static DWORD WINAPI _tr_timer_thread_fn(LPVOID arg) {
 static _TrTimerState* _tr_timer_new(long long ms, _TrChan* ch) {
     _TrTimerState* s=(_TrTimerState*)calloc(1,sizeof(_TrTimerState)); s->ch=ch; s->ms=ms;
     InitializeCriticalSection(&s->stop_mu);
-    HANDLE t=CreateThread(NULL,0,_tr_timer_thread_fn,s,0,NULL); CloseHandle(t); return s;
+    _TR_MT_ON(); HANDLE t=CreateThread(NULL,0,_tr_timer_thread_fn,s,0,NULL); CloseHandle(t); return s;
 }
 static _TrTimerState* _tr_ticker_new(long long ms, _TrChan* ch) {
     _TrTimerState* s=(_TrTimerState*)calloc(1,sizeof(_TrTimerState)); s->ch=ch; s->ms=ms; s->periodic=1;
     InitializeCriticalSection(&s->stop_mu);
-    HANDLE t=CreateThread(NULL,0,_tr_timer_thread_fn,s,0,NULL); CloseHandle(t); return s;
+    _TR_MT_ON(); HANDLE t=CreateThread(NULL,0,_tr_timer_thread_fn,s,0,NULL); CloseHandle(t); return s;
 }
 static void _tr_timer_stop(_TrTimerState* s) {
     if(!s)return; EnterCriticalSection(&s->stop_mu); s->stopped=1; LeaveCriticalSection(&s->stop_mu);
@@ -1963,12 +1985,12 @@ static void* _tr_timer_thread_fn(void* arg) {
 static _TrTimerState* _tr_timer_new(long long ms, _TrChan* ch) {
     _TrTimerState* s=(_TrTimerState*)calloc(1,sizeof(_TrTimerState)); s->ch=ch; s->ms=ms;
     pthread_mutex_init(&s->stop_mu,NULL);
-    pthread_t t; pthread_create(&t,NULL,_tr_timer_thread_fn,s); pthread_detach(t); return s;
+    _TR_MT_ON(); pthread_t t; pthread_create(&t,NULL,_tr_timer_thread_fn,s); pthread_detach(t); return s;
 }
 static _TrTimerState* _tr_ticker_new(long long ms, _TrChan* ch) {
     _TrTimerState* s=(_TrTimerState*)calloc(1,sizeof(_TrTimerState)); s->ch=ch; s->ms=ms; s->periodic=1;
     pthread_mutex_init(&s->stop_mu,NULL);
-    pthread_t t; pthread_create(&t,NULL,_tr_timer_thread_fn,s); pthread_detach(t); return s;
+    _TR_MT_ON(); pthread_t t; pthread_create(&t,NULL,_tr_timer_thread_fn,s); pthread_detach(t); return s;
 }
 static void _tr_timer_stop(_TrTimerState* s) {
     if(!s)return; pthread_mutex_lock(&s->stop_mu); s->stopped=1; pthread_mutex_unlock(&s->stop_mu);
@@ -2232,7 +2254,7 @@ static inline _TrThread _tr_thread_start_result(void*(*fn)(void*), void* arg, _T
     _TrWin32StartArg* s = (_TrWin32StartArg*)malloc(sizeof(_TrWin32StartArg));
     s->fn = fn; s->arg = arg; s->result = res;
     SIZE_T ss = (SIZE_T)TAURARO_THREAD_STACK_SIZE;
-    return CreateThread(NULL, ss, _tr_thread_start_trampoline, s, 0, NULL);
+    _TR_MT_ON(); return CreateThread(NULL, ss, _tr_thread_start_trampoline, s, 0, NULL);
 }
 #elif !defined(TAURARO_NO_THREADS)
 static inline _TrThread _tr_thread_start_result(void*(*fn)(void*), void* arg, _TrSpawnResult* res) {
@@ -2242,7 +2264,7 @@ static inline _TrThread _tr_thread_start_result(void*(*fn)(void*), void* arg, _T
     if (TAURARO_THREAD_STACK_SIZE > 0)
         pthread_attr_setstacksize(&attr, (size_t)TAURARO_THREAD_STACK_SIZE);
     pthread_attr_setguardsize(&attr, 4096);
-    pthread_t t; pthread_create(&t, &attr, _tr_posix_thread_trampoline, s);
+    _TR_MT_ON(); pthread_t t; pthread_create(&t, &attr, _tr_posix_thread_trampoline, s);
     pthread_attr_destroy(&attr); return t;
 }
 #else

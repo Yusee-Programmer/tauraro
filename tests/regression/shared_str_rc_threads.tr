@@ -1,0 +1,58 @@
+# tests/regression/shared_str_rc_threads.tr
+# Regression: str/class reference counts were plain (non-atomic) `rc++` / `--rc`. A `str` field of a
+# Shared[T] read by several threads at once (here as a call argument, which retains the buffer for
+# the duration of the call) lost updates, the count reached 0 early, the buffer and its refcount
+# cell were freed while still in use, and a later malloc died with glibc's "unaligned fastbin
+# chunk detected". This was the intermittent arm64-only CI crash in the compiler's own parallel C
+# job table (src/pjobs.tr: pj_line(job.blob, i)). The runtime now switches to atomic retain/release
+# as soon as a second thread is started.
+
+from std.test import TestRunner
+
+pub class Job implements Sendable:
+    pub blob: str
+    pub done: Atomic[int]
+
+extend Job:
+    pub def init(blob: str) -> Job:
+        mut j = Job()
+        j.blob = blob
+        j.done = Atomic.new(0)
+        return j
+
+def first_char(s: str, i: int) -> int:
+    mut t2 = s + "x"
+    return t2.len() + i % 2
+
+def hammer(job: Shared[Job]):
+    mut acc = 0
+    mut i = 0
+    while i < 200000:
+        acc = acc + first_char(job.blob, i)
+        i = i + 1
+    job.done.add(1)
+
+def main():
+    mut t = TestRunner.init("shared_str_rc_threads")
+
+    t.section("concurrent retain/release of one shared str")
+    mut base = "abcdefghij"
+    mut k = 0
+    while k < 5:
+        base = base + base
+        k = k + 1
+    mut full = base + "-end"
+    shared job = Job.init(full)
+    mut th0 = Thread.spawn(hammer, job)
+    mut th1 = Thread.spawn(hammer, job)
+    mut th2 = Thread.spawn(hammer, job)
+    mut th3 = Thread.spawn(hammer, job)
+    th0.join()
+    th1.join()
+    th2.join()
+    th3.join()
+    t.assert_eq_int(job.done.load(), 4, "all workers finished")
+    t.assert_eq_int(job.blob.len(), 324, "shared str intact")
+    t.assert_true(job.blob.ends_with("-end"), "shared str content intact")
+
+    t.summary()

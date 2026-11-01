@@ -239,6 +239,19 @@ jobs:
           BOOTSTRAP_BIN: ""
         run: bash scripts/run_tests.sh
 
+      # glibc heap-hardening tunables: tcache off (freed chunks go to fastbins, whose fd pointers
+      # are checked on every malloc) + freed/new memory poisoned. A use-after-free / racy refcount
+      # that x86's layout hides then aborts with "unaligned fastbin chunk detected" on EVERY
+      # platform, instead of surfacing only as an intermittent arm64 failure.
+      - name: Regression suite under fastbin-forcing glibc tunables (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          BOOTSTRAP_BIN: ""
+          GLIBC_TUNABLES: "glibc.malloc.tcache_count=0"
+          MALLOC_PERTURB_: "165"
+        run: bash scripts/run_tests.sh tests/regression/*.tr
+
       - name: Run regression test suite (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
