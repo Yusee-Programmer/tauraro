@@ -225,6 +225,7 @@ def _stmt_alias_assigns(s: Pointer[Stmt], out: Map[str, bool]):
             if tgt as usize != 0 as usize:
                 match tgt.read():
                     case Expr.EIdent(tn):
+                        out.insert("=" + tn, true)    # ANY reassignment of local `tn` (closure capture-by-value analysis)
                         if _rhs_is_alias(val): out.insert(tn, true)
                     case _: pass
         case Stmt.SIf(_, then_b, elifs, else_b):
@@ -361,6 +362,11 @@ def _ty_has_borrow(t: AstType, depth: int) -> bool:
             if _ty_has_borrow(t.args.get(i).read(), depth + 1): return true
         i = i + 1
     return false
+
+def _single_hir(e: Pointer[HirExpr]) -> Vec[Pointer[HirExpr]]:
+    mut v = Vec[Pointer[HirExpr]].init(1)
+    v.push(e)
+    return v
 
 pub class Sema:
     pub sendable_tparams:   Vec[str]        # type parameters of the generic class whose Sendable fields are being checked (treated as Sendable)
@@ -3031,7 +3037,6 @@ extend Sema:
         if sym.kind != SymbolKind.SVariable: return false
         if sym.is_param: return false
         if sym.ty as usize == 0 as usize: return false
-        if sym.defer_used: return false
         # A `shared` (Shared[T]/Rc) local owns one strong reference to a control
         # block; auto-drop it (`_tr_shared_drop`) at scope exit so the refcount is
         # released and the payload reclaimed at count 0 (codegen routes SAutoDrop for
@@ -3374,6 +3379,12 @@ extend Sema:
                 self.collect_idents(obj, out)
                 self.collect_idents(idx, out)
             case HirExpr.ECast(inner, _): self.collect_idents(inner, out)
+            case HirExpr.EClosure(_, _, _, _, ccaps):
+                # a closure reads every local it captures (the env is built when the closure is)
+                mut cci = 0
+                while cci < ccaps.len:
+                    if ccaps.get(cci).name != "@heap": out.push(ccaps.get(cci).name)
+                    cci = cci + 1
             case HirExpr.ETryExpr(inner, _): self.collect_idents(inner, out)
             case HirExpr.EIfElse(c, t, f, _):
                 self.collect_idents(c, out)
@@ -3827,9 +3838,15 @@ extend Sema:
                 self.mark_escaped_coll_args(inner)
             case HirExpr.ECall(callee, args, _):
                 self.mark_escaped_coll_args(callee)
+                # builtin `len(coll)` only reads the length: the collection does not escape
+                mut _len_builtin = false
+                match callee.read():
+                    case HirExpr.EIdent(_lbn, _, _):
+                        if _lbn == "len" and not self.fn_defs.contains("len") and not self.is_local_var("len"): _len_builtin = true
+                    case _: pass
                 mut i = 0
                 while i < args.len:
-                    self.mark_coll_arg(args.get(i))
+                    if not _len_builtin: self.mark_coll_arg(args.get(i))
                     self.mark_escaped_coll_args(args.get(i))
                     i = i + 1
             case HirExpr.EMethodCall(obj, method, args, _):
@@ -5009,19 +5026,6 @@ extend Sema:
             case HirStmt.SWith(_, _, wb): return self._param_consumed_in_block(pname, wb)
             case HirStmt.STaskGroup(tb): return self._param_consumed_in_block(pname, tb)
             case HirStmt.SDefer(ds):
-                # The deferred body runs after the scope-exit drops: a local it mentions must
-                # outlive them, so treat any mention as consuming (never dropped here).
-                mut _dfn = Vec[str].init(4)
-                match ds.read():
-                    case HirStmt.SExpr(_dfe): self.collect_idents(_dfe, _dfn)
-                    case HirStmt.SAssign(_dft, _dfv):
-                        self.collect_idents(_dft, _dfn)
-                        self.collect_idents(_dfv, _dfn)
-                    case _: pass
-                mut _dfi = 0
-                while _dfi < _dfn.len:
-                    if _dfn.get(_dfi) == pname: return true
-                    _dfi = _dfi + 1
                 return self._param_consumed_in_stmt(pname, ds)
             case HirStmt.STry(tb, catches, fb):
                 if self._param_consumed_in_block(pname, tb): return true
@@ -6288,6 +6292,7 @@ extend Sema:
         # exit_scope so the collection escape gate (coll_droppable_by_sema) can read
         # live symbols.
         self.apply_mir_if_drops(hf)
+        self._esc_closure_block(hf.body)
         self.exit_scope()
         # Restore async context and lifetime context
         self.in_async_fn = saved_async
@@ -7696,7 +7701,6 @@ extend Sema:
                 self.in_defer = true
                 mut _df_lowered = self.lower_stmt(inner)
                 self.in_defer = sd_saved
-                self.mark_defer_used(_df_lowered)
                 return box_hirstmt(HirStmt.SDefer(_df_lowered))
             case Stmt.SWith(items, aliases, body):
                 self.enter_scope()
@@ -8124,6 +8128,118 @@ extend Sema:
 
     # Collect every identifier referenced anywhere in a HIR block — used for
     # closure free-variable / capture analysis.
+    # Names assigned (`x = ...`, `x += ...`, multi-let targets) anywhere in a lowered block.
+    # Types whose by-value copy is indistinguishable from the original while the
+    # variable itself is never reassigned: scalars, str and heap-class pointers.
+    pub def _cap_copy_safe(self, t: AstType) -> bool:
+        if t.name == "str" or self._is_pure_scalar(t.name): return true
+        if self.classes.contains(t.name):
+            mut c = self.classes.get(t.name)
+            return c.is_class and c.generics.len == 0
+        return false
+
+    # [L-5] A closure that ESCAPES its frame (returned, stored in a field / element, appended)
+    # must not capture a REASSIGNED local by reference: the reference points into the dead
+    # frame. (Never-reassigned captures are copied and retained, so they are safe.)
+    pub def _esc_closure_check(self, e: Pointer[HirExpr]):
+        if _is_invalid_ptr(e as usize): return
+        if e as usize == 0 as usize: return
+        match e.read():
+            case HirExpr.EClosure(_, _, _, _, caps):
+                mut ci = 0
+                while ci < caps.len:
+                    mut cp = caps.get(ci)
+                    if cp.name != "@heap" and not cp.by_val:
+                        self.error("[L-5] this closure escapes the function (returned / stored / appended) but captures '" + cp.name + "' by reference, and '" + cp.name + "' is reassigned - the reference would dangle once the frame is gone.\n      FIX: do not reassign '" + cp.name + "' (capture a never-reassigned copy), or keep the state in an object / collection the closure captures.")
+                        return
+                    ci = ci + 1
+            case _: pass
+
+    pub def _esc_closure_block(self, b: HirBlock):
+        mut i = 0
+        while i < b.stmts.len:
+            self._esc_closure_stmt(b.stmts.get(i))
+            i = i + 1
+
+    pub def _esc_closure_stmt(self, s: Pointer[HirStmt]):
+        if s as usize == 0 as usize: return
+        match s.read():
+            case HirStmt.SReturn(v): self._esc_closure_check(v)
+            case HirStmt.SAssign(t, v):
+                match t.read():
+                    case HirExpr.EPropAccess(_, _, _): self._esc_closure_check(v)
+                    case HirExpr.EIndex(_, _, _): self._esc_closure_check(v)
+                    case _: pass
+            case HirStmt.SExpr(ex):
+                match ex.read():
+                    case HirExpr.EMethodCall(_, m, args, _):
+                        if m == "append" or m == "push" or m == "insert" or m == "set" or m == "put":
+                            mut ai = 0
+                            while ai < args.len:
+                                self._esc_closure_check(args.get(ai))
+                                ai = ai + 1
+                    case _: pass
+            case HirStmt.SIf(_, tb, eb):
+                self._esc_closure_block(tb)
+                self._esc_closure_block(eb)
+            case HirStmt.SWhile(_, b2): self._esc_closure_block(b2)
+            case HirStmt.SFor(_, _, b2): self._esc_closure_block(b2)
+            case HirStmt.SForUnpack(_, _, b2): self._esc_closure_block(b2)
+            case HirStmt.SUnsafe(b2): self._esc_closure_block(b2)
+            case HirStmt.SWith(_, _, b2): self._esc_closure_block(b2)
+            case HirStmt.SMatch(_, arms):
+                mut ai2 = 0
+                while ai2 < arms.len:
+                    self._esc_closure_block(arms.get(ai2).body)
+                    ai2 = ai2 + 1
+            case HirStmt.STry(tb, catches, fb):
+                self._esc_closure_block(tb)
+                self._esc_closure_block(fb)
+                mut ci2 = 0
+                while ci2 < catches.len:
+                    self._esc_closure_block(catches.get(ci2).read().body)
+                    ci2 = ci2 + 1
+            case _: pass
+
+    pub def collect_block_assigns(self, b: HirBlock, out: Vec[str]):
+        mut i = 0
+        while i < b.stmts.len:
+            self.collect_stmt_assigns(b.stmts.get(i), out)
+            i = i + 1
+
+    pub def collect_stmt_assigns(self, s: Pointer[HirStmt], out: Vec[str]):
+        if s as usize == 0 as usize: return
+        match s.read():
+            case HirStmt.SAssign(t, _): self.collect_idents(t, out)
+            case HirStmt.SMultiLet(ns, _, _):
+                mut ni = 0
+                while ni < ns.len:
+                    out.push(ns.get(ni))
+                    ni = ni + 1
+            case HirStmt.SIf(_, tb, eb):
+                self.collect_block_assigns(tb, out)
+                self.collect_block_assigns(eb, out)
+            case HirStmt.SWhile(_, b2): self.collect_block_assigns(b2, out)
+            case HirStmt.SFor(_, _, b2): self.collect_block_assigns(b2, out)
+            case HirStmt.SForUnpack(_, _, b2): self.collect_block_assigns(b2, out)
+            case HirStmt.SUnsafe(b2): self.collect_block_assigns(b2, out)
+            case HirStmt.SWith(_, _, b2): self.collect_block_assigns(b2, out)
+            case HirStmt.STaskGroup(b2): self.collect_block_assigns(b2, out)
+            case HirStmt.SDefer(d2): self.collect_stmt_assigns(d2, out)
+            case HirStmt.SMatch(_, arms):
+                mut ai = 0
+                while ai < arms.len:
+                    self.collect_block_assigns(arms.get(ai).body, out)
+                    ai = ai + 1
+            case HirStmt.STry(tb, catches, fb):
+                self.collect_block_assigns(tb, out)
+                self.collect_block_assigns(fb, out)
+                mut ci = 0
+                while ci < catches.len:
+                    self.collect_block_assigns(catches.get(ci).read().body, out)
+                    ci = ci + 1
+            case _: pass
+
     pub def collect_block_refs(self, b: HirBlock, out: Vec[str]):
         mut i = 0
         while i < b.stmts.len:
@@ -9167,7 +9283,9 @@ extend Sema:
                             ret_ty = _fsym.ty.read()
                             # Calling through a function-pointer value (def(...)->R):
                             # the call result is the signature's return type (last arg).
-                            if ret_ty.name == "def" and ret_ty.args.len > 0:
+                            # (A FUNCTION whose declared return type is `def(...) -> R` yields that
+                            # callable itself - it is only a pointer-value call for a variable.)
+                            if ret_ty.name == "def" and ret_ty.args.len > 0 and _fsym.kind != SymbolKind.SFunction:
                                 if _fsym.kind == SymbolKind.SVariable: self.check_callable_value_args(n, ret_ty, hl)
                                 ret_ty = ret_ty.args.get(ret_ty.args.len - 1).read()
                             # Calling a closure value (type `lambda`): the result is the closure's
@@ -9484,6 +9602,35 @@ extend Sema:
                         case _: pass
                     if _nh_rn == "List" or _nh_rn == "Vec" or _nh_rn == "Dict" or _nh_rn == "Map" or _nh_rn == "Set":
                         self.check_no_heap(_nh_rn + "." + method + "() (a growable heap collection)", "use a fixed-size array [T; N] (stack), or parallel fixed arrays for a map")
+                # `Shared[T].init(x)` / `.new(x)`: the documented constructor of the atomic
+                # refcounted handle - the same box `shared s = x` makes (a fresh T transfers its
+                # rc=1, an existing variable/field is retained so the box co-owns it).
+                if (method == "init" or method == "new") and args.len == 1 and obj as usize != 0 as usize:
+                    match obj.read():
+                        case Expr.EIndex(_shb, _shi):
+                            if _shb as usize != 0 as usize and _shi as usize != 0 as usize:
+                                mut _sh_base = ""
+                                match _shb.read():
+                                    case Expr.EIdent(_shn): _sh_base = _shn
+                                    case _: pass
+                                mut _sh_tn = ""
+                                match _shi.read():
+                                    case Expr.EIdent(_shtn): _sh_tn = _shtn
+                                    case _: pass
+                                if _sh_base == "Shared" and _sh_tn != "" and self.classes.contains(_sh_tn) and self.resolve("Shared").kind != SymbolKind.SVariable:
+                                    mut _sh_x = self.lower_expr(args.get(0))
+                                    mut _sh_xv = _sh_x
+                                    match _sh_x.read():
+                                        case HirExpr.EIdent(_, _, _): _sh_xv = box_hirexpr(HirExpr.ECall(box_hirexpr(HirExpr.EIdent("_tr_obj_retain", AstType.init("void"), false)), _single_hir(_sh_x), AstType.init("void")))
+                                        case HirExpr.EPropAccess(_, _, _): _sh_xv = box_hirexpr(HirExpr.ECall(box_hirexpr(HirExpr.EIdent("_tr_obj_retain", AstType.init("void"), false)), _single_hir(_sh_x), AstType.init("void")))
+                                        case _: pass
+                                    mut _sh_ty = AstType.init("Shared")
+                                    _sh_ty.args.push(box_asttype(AstType.init(_sh_tn)))
+                                    mut _sh_args = Vec[Pointer[HirExpr]].init(2)
+                                    _sh_args.push(_sh_xv)
+                                    _sh_args.push(box_hirexpr(HirExpr.EIdent("_trdrop_" + _sh_tn, AstType.init("void"), false)))
+                                    return box_hirexpr(HirExpr.ECall(box_hirexpr(HirExpr.EIdent("_tr_shared_new", AstType.init("void"), false)), _sh_args, _sh_ty))
+                        case _: pass
                 mut hl = Vec[Pointer[HirExpr]].init(4)
                 mut k = 0
                 while k < args.len:
@@ -9669,7 +9816,7 @@ extend Sema:
                         mut _cf_prop = box_hirexpr(HirExpr.EPropAccess(hobj, method, _cf_ty))
                         return box_hirexpr(HirExpr.ECall(_cf_prop, hl, _cf_ret))
                 # error if mutating a container that has an active borrow
-                if method == "push" or method == "pop" or method == "insert" or method == "remove":
+                if method == "push" or method == "pop" or method == "insert" or method == "remove" or method == "clear":
                     mut pc_obj_nm = ""
                     match obj.read():
                         case Expr.EIdent(pc_src): pc_obj_nm = pc_src
@@ -10730,6 +10877,8 @@ extend Sema:
                 # them as by-reference captures for codegen's env.
                 mut clo_refs = Vec[str].init(8)
                 self.collect_block_refs(clo_body, clo_refs)
+                mut clo_assigned = Vec[str].init(4)
+                self.collect_block_assigns(clo_body, clo_assigned)
                 mut clo_caps = Vec[HirParam].init(4)
                 mut clo_seen = Map[str, bool].init(8)
                 mut cri = 0
@@ -10758,6 +10907,17 @@ extend Sema:
                                 # escaping closure no longer dangles into a dead frame. Skipped
                                 # for value-type classes (a struct copy would detach field writes).
                                 ccp.by_val = not cap_mut
+                                # A `mut` local that is NEVER reassigned (only mutated through its
+                                # fields / methods) cannot change identity, so a copy is equivalent -
+                                # and unlike a pointer to the frame slot it survives an escaping
+                                # closure. Reassigned ones stay by-reference.
+                                if cap_mut and not self.alias_assigned.contains("=" + rn) and self._cap_copy_safe(ccp.ty):
+                                    mut _cl_as = false
+                                    mut _cla = 0
+                                    while _cla < clo_assigned.len:
+                                        if clo_assigned.get(_cla) == rn: _cl_as = true
+                                        _cla = _cla + 1
+                                    if not _cl_as: ccp.by_val = true
                                 if ccp.by_val and self.classes.contains(ccp.ty.name):
                                     if not self.classes.get(ccp.ty.name).is_class: ccp.by_val = false
                                 clo_caps.push(ccp)

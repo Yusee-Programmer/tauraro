@@ -1,0 +1,13 @@
+# EXPECT: [L-5]
+# An escaping closure may not capture a REASSIGNED local by reference: the reference
+# points into the frame that is gone once the closure is stored / returned.
+class Holder:
+    pub f: def() -> int
+def make() -> Holder:
+    mut n = 1
+    mut h = Holder()
+    h.f = lambda: n + 1
+    n = 2
+    return h
+def main():
+    print(1)

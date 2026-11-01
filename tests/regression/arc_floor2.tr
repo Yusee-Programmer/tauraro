@@ -1,0 +1,74 @@
+# tests/regression/arc_floor2.tr
+# Second batch of ARC-floor regressions (run under scripts/asan_check.sh):
+#   * Weak.upgrade() hands back an OWNED reference (still valid after the strong owner is dropped)
+#   * `defer` inside a nested block only runs if that block was reached
+#   * `case Option.Some(x)` on an Option[UserClass] binds a typed object
+#   * a function returning `def(int) -> int` is called, not treated as a function-pointer value
+#   * Shared[T].init(x), tuple element of a class type, Dict/List mutation releasing displaced values
+from std.test import TestRunner
+
+class Node:
+    pub name: str
+    pub next: Option[Node]
+
+class Holder:
+    pub s: Shared[Node]
+
+def mk(n: str) -> Node:
+    mut x = Node()
+    x.name = n
+    return x
+
+def make_adder(base: int) -> def(int) -> int:
+    return lambda x: x + base
+
+def upgraded_name() -> str:
+    shared p = mk("kept")
+    mut w = p.downgrade()
+    mut o = w.upgrade()
+    mut q = o.unwrap()
+    return q.name
+
+def nested_defer(x: int) -> int:
+    mut n = 0
+    if x == 1:
+        defer n = n + 100
+        n = n + 1
+    return n
+
+def first_name(h: Node) -> str:
+    match h.next:
+        case Option.Some(x):
+            return x.name
+        case _:
+            return "none"
+
+def main():
+    mut t = TestRunner.init("arc_floor2")
+    t.assert_eq_str(upgraded_name(), "kept", "upgrade() result usable")
+    t.assert_eq_int(nested_defer(0), 0, "defer in an un-taken branch does not run")
+    mut a = mk("a")
+    a.next = Option.Some(mk("b"))
+    t.assert_eq_str(first_name(a), "b", "Option[Class] payload binding is typed")
+    mut f = make_adder(10)
+    t.assert_eq_int(f(1), 11, "function returning def(int)->int")
+    mut s = Shared[Node].init(mk("sh"))
+    t.assert_eq_str(s.name, "sh", "Shared[T].init")
+    mut pair = (mk("tp"), 3)
+    t.assert_eq_str(pair[0].name, "tp", "class element of a tuple")
+    mut d: Dict[str, Node] = {}
+    d["k"] = mk("v1")
+    d["k"] = mk("v2")
+    t.assert_eq_str(d["k"].name, "v2", "dict overwrite")
+    d.remove("k")
+    d["z"] = mk("v3")
+    d.clear()
+    t.assert_eq_int(len(d), 0, "dict clear")
+    mut l: List[Node] = []
+    l.append(mk("l1"))
+    l.append(mk("l2"))
+    l.remove(0)
+    t.assert_eq_str(l[0].name, "l2", "list remove")
+    l.clear()
+    t.assert_eq_int(len(l), 0, "list clear")
+    t.summary()

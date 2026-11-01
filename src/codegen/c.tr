@@ -351,6 +351,7 @@ pub class CGenerator:
     pub overloaded_sigs:  Map[str, bool]          # "ClassName_method" keys where multiple overloads exist
     pub type_alias_map:   Map[str, str]           # alias_name -> resolved C type string
     pub type_alias_tr:    Map[str, str]           # alias_name -> target TAURARO type name (for scalar-alias resolution)
+    pub fn_uses_ar:       bool                    # the function being generated made a Weak.upgrade() (needs the autorelease-stack mark)
     pub defer_stack:      Vec[str]                # deferred C statements for current function (LIFO)
     pub defers_pre_flushed: bool                  # the defers were already emitted (before the local auto-drops of a function-exit path); the exit itself must not emit them again
     pub func_body_blk:    usize                   # address of the function body HirBlock being generated (its trailing auto-drops are a function exit)
@@ -441,6 +442,7 @@ pub class CGenerator:
         g.defer_stack     = Vec[str].init(0)
         g.defers_pre_flushed = false
         g.func_body_blk   = 0
+        g.fn_uses_ar      = false
         g.wrap_temp_decls = Vec[str].init(0)
         g.wrap_temp_names = Vec[str].init(0)
         g.wrap_obj_names = Vec[str].init(0)
@@ -466,9 +468,23 @@ pub class CGenerator:
     pub def gen_func_body(self, body: HirBlock, indent: int):
         self.reset_defer_stack()
         self.defers_pre_flushed = false
+        # Generate the body first: `defer` flags (one per defer statement, set when the
+        # statement is EXECUTED) are declared at the top of the function afterwards.
+        mut _db_saved = self.buf
+        self.buf = StringBuilder.init(1024)
         self.func_body_blk = body as usize
         self.gen_block(body, indent)
         self.func_body_blk = 0
+        mut _db_text = self.buf.to_string().as_str()
+        self.buf = _db_saved
+        mut _db_k = 0
+        while _db_k < self.defer_stack.len:
+            self.w(_indent_str(indent) + "int _tr_df" + _db_k.to_str() + " = 0;\n")
+            _db_k = _db_k + 1
+        if self.fn_uses_ar:
+            self.w(_indent_str(indent) + "size_t _tr_armark __attribute__((cleanup(_tr_ar_cleanup))) = _tr_ar_mark();\n")
+            self.fn_uses_ar = false
+        self.w(_db_text)
         mut ends_in_return = false
         if body.stmts.len > 0:
             match body.stmts.get(body.stmts.len - 1).read():
@@ -3392,6 +3408,10 @@ pub class CGenerator:
                 return "long long " + bind_c + " = (long long)(intptr_t)(" + slot + ");\n"
             if _is_str_type(pay_n):
                 return "TrStr " + bind_c + " = _tr_str_retain(_tr_str_unbox(" + slot + "));\n"
+            # A heap-class payload is a (borrowed) object pointer: type the binding so field /
+            # method access on it compiles (a bare `__auto_type` over the void* slot is `void*`).
+            if self.is_heap_class_tn(self.resolve_generic_tyname(pay_n)):
+                return self.resolve_generic_tyname(pay_n) + "* " + bind_c + " = (" + self.resolve_generic_tyname(pay_n) + "*)(" + slot + ");\n"
         return "__auto_type " + bind_c + " = " + slot + ";\n"
 
     pub def gen_match_expr(self, subj: Pointer[HirExpr], arms: Vec[HirMatchArm], ty: AstType) -> str:
@@ -4257,6 +4277,9 @@ pub class CGenerator:
             case HirExpr.EMethodCall(recv, m, _, _):
                 mut rt = hir_expr_type(recv).name
                 if (rt == "Vec" or rt == "List" or rt == "Dict" or rt == "Map" or rt == "Set") and (m == "get" or m == "first" or m == "last"): return false
+                # Builtin Option/Result/Weak accessors (`opt.unwrap()`, `res.unwrap()`, ...) are not
+                # compiled .tr bodies either: their payload is a plain borrow, nothing retained it.
+                if rt == "Option" or rt == "Result" or rt == "Weak": return false
                 return true
             case _: return false
 
@@ -4286,6 +4309,25 @@ pub class CGenerator:
         return false
 
     # Assignment target is a `Weak[T]` class FIELD (not a `ref` borrow field).
+    # `obj.f = <str>` where obj is a plain refcounted heap-class instance reached through a
+    # side-effect-free path (so the field lvalue may be evaluated twice).
+    pub def _str_field_target_ok(self, t: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(t as usize): return false
+        match t.read():
+            case HirExpr.EPropAccess(o, _, _):
+                if not self._pure_path(o): return false
+                mut on = self.resolve_generic_tyname(hir_expr_type(o).name)
+                if not self.is_heap_class_tn(on): return false
+                return not self.value_types.contains(on)
+            case _: return false
+
+    pub def _pure_path(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return false
+        match e.read():
+            case HirExpr.EIdent(_, _, _): return true
+            case HirExpr.EPropAccess(o, _, _): return self._pure_path(o)
+            case _: return false
+
     pub def _store_is_weak_field(self, t: Pointer[HirExpr]) -> bool:
         if _is_invalid_ptr(t as usize): return false
         match t.read():
@@ -6075,6 +6117,38 @@ pub class CGenerator:
     # its own scope-exit auto-drop, now that mark_escaped_str_args no longer
     # excludes Dict/Map value args - see sema.tr); the box's retain is the
     # independent reference the dict needs.
+    # How a Dict/Map receiver's VALUES are owned: "" (plain scalars - nothing to release),
+    # "str" (boxed TrStr) or "obj" (retained heap-class instance, released with its drop fn).
+    pub def _dict_val_kind(self, o: Pointer[HirExpr]) -> str:
+        mut t = hir_expr_type(o)
+        if (t.name == "Dict" or t.name == "Map") and t.args.len > 1:
+            mut vt = self.resolve_generic_tyname(t.args.get(1).read().name)
+            if _is_str_type(self.resolve_generic_prim(vt)): return "str"
+            if self.is_heap_class_tn(vt) and not self.has_method(vt, "free"): return "obj"
+        return ""
+
+    pub def _dict_val_drop(self, o: Pointer[HirExpr]) -> str:
+        mut t = hir_expr_type(o)
+        return self.obj_drop_fn(self.resolve_generic_tyname(t.args.get(1).read().name))
+
+    # `d[k] = v` / `d.set(k, v)` / `d.remove(k)` / `d.clear()` on a Dict/Map: release the value it displaces.
+    pub def dict_set_call(self, o: Pointer[HirExpr], obj_s: str, is_idict: bool, key_s: str, val_s: str) -> str:
+        mut k = self._dict_val_kind(o)
+        mut pre = "_tr_dict"
+        if is_idict: pre = "_tr_idict"
+        if k == "str": return pre + "_set_str(" + obj_s + ", " + key_s + ", " + val_s + ")"
+        if k == "obj": return pre + "_set_obj(" + obj_s + ", " + key_s + ", " + val_s + ", " + self._dict_val_drop(o) + ")"
+        return pre + "_set(" + obj_s + ", " + key_s + ", " + val_s + ")"
+
+    # Drop fn of a List/Vec receiver's heap-class element type ("" when elements are not
+    # co-owned refcounted instances).
+    pub def _list_elem_obj_drop(self, o: Pointer[HirExpr]) -> str:
+        mut t = hir_expr_type(o)
+        if (t.name == "List" or t.name == "Vec") and t.args.len > 0:
+            mut et = self.resolve_generic_tyname(t.args.get(0).read().name)
+            if self.is_heap_class_tn(et) and not self.has_method(et, "free") and not self.interfaces.contains(et): return self.obj_drop_fn(et)
+        return ""
+
     pub def dict_val_arg(self, e: Pointer[HirExpr]) -> str:
         mut e_s = self.gen_expr(e)
         # resolve_generic_prim: inside a monomorphized generic method body, a
@@ -6462,6 +6536,9 @@ pub class CGenerator:
                 return "_tr_str_retain(_tr_str_unbox((void*)(uintptr_t)" + _tslot + "))"
             if _is_float_type(call_ty.name):
                 return "_tr_ptr_to_f64((void*)(uintptr_t)" + _tslot + ")"
+            mut _tcn = self.resolve_generic_tyname(call_ty.name)
+            if self.is_heap_class_tn(_tcn):
+                return "((" + _tcn + "*)(uintptr_t)" + _tslot + ")"
             return _tslot
 
         # Fallback: when HIR stores void for an EPropAccess type (cross-module field lookup,
@@ -6499,6 +6576,15 @@ pub class CGenerator:
             if method == "upgrade":
                 # Option[T]: Some(payload) while the strong target is alive, else None.
                 # A borrow-style upgrade (no refcount change) — sound single-threaded.
+                # The payload is RETAINED (parked on the autorelease stack until the calling
+                # function exits) so a later drop of the last strong owner cannot free it
+                # under the caller (upgrade must hand back an owned reference).
+                mut _wk_t = hir_expr_type(obj)
+                if _wk_t.args.len > 0:
+                    mut _wk_tn = self.resolve_generic_tyname(_wk_t.args.get(0).read().name)
+                    if self.is_heap_class_tn(_wk_tn) and not self.has_method(_wk_tn, "free"):
+                        self.fn_uses_ar = true
+                        return "({ _TrWeakBox* _wu = (" + obj_s + "); _tr_weak_is_alive(_wu) ? ((Option){.tag=Option_Some, .data.Some.val=_tr_ar_retain(_wu->box->data, " + self.obj_drop_fn(_wk_tn) + ")}) : ((Option){.tag=Option_None}); })"
                 return "({ _TrWeakBox* _wu = (" + obj_s + "); _tr_weak_is_alive(_wu) ? ((Option){.tag=Option_Some, .data.Some.val=(void*)(_wu->box->data)}) : ((Option){.tag=Option_None}); })"
             if method == "drop" or method == "free": return "_tr_weak_drop(" + obj_s + ")"
         # Shared var: unwrap _TrSharedBox* -> (TypeName*)obj->data for method dispatch
@@ -7663,10 +7749,15 @@ pub class CGenerator:
             if method == "new" or method == "init":
                 return "(void*)List_" + lsfx + "_new()"
             if method == "remove":
+                # Heap-class elements are co-owned by the list: release the one removed.
+                if lsfx == "ptr" and args.len == 1 and self._list_elem_obj_drop(obj) != "":
+                    return "({ List_ptr* _rl = " + obj_s + "; long long _ri = (long long)(" + self.gen_expr(args.get(0)) + "); void* _ro = (_rl && _ri >= 0 && (size_t)_ri < _rl->len) ? _rl->data[_ri] : (void*)0; List_ptr_remove(_rl, _ri); if (_ro) _tr_obj_release(_ro, " + self._list_elem_obj_drop(obj) + "); })"
                 return "List_" + lsfx + "_remove(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "swap":
                 return "List_" + lsfx + "_swap(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "clear":
+                if lsfx == "ptr" and self._list_elem_obj_drop(obj) != "":
+                    return "({ List_ptr* _cl = " + obj_s + "; if (_cl) { for (size_t _ci = 0; _ci < _cl->len; _ci++) _tr_obj_release(_cl->data[_ci], " + self._list_elem_obj_drop(obj) + "); } List_ptr_clear(_cl); })"
                 return "List_" + lsfx + "_clear(" + obj_s + ")"
             if method == "reserve":
                 # Pre-size to an exact capacity in one allocation (calloc-style) so a
@@ -7950,13 +8041,19 @@ pub class CGenerator:
                     return "((" + c_ty_c + ")(uintptr_t)" + mget_r + ")"
                 return mget_r
             if method == "set" or method == "insert":
-                if is_idict: return "_tr_idict_set(" + obj_s + ", " + self.gen_expr(args.get(0)) + ", " + self.dict_val_arg(args.get(1)) + ")"
-                return "_tr_dict_set(" + obj_s + ", " + self.dict_key_arg(args.get(0)) + ", " + self.dict_val_arg(args.get(1)) + ")"
+                if is_idict: return self.dict_set_call(obj, obj_s, true, self.gen_expr(args.get(0)), self.dict_val_arg(args.get(1)))
+                return self.dict_set_call(obj, obj_s, false, self.dict_key_arg(args.get(0)), self.dict_val_arg(args.get(1)))
             if method == "contains" or method == "has":
                 if is_idict: return "_tr_idict_contains(" + obj_s + ", " + self.gen_args(args) + ")"
                 return "_tr_dict_contains(" + obj_s + ", " + self.dict_key_arg(args.get(0)) + ")"
             if method == "remove":
-                if is_idict: return "_tr_idict_remove(" + obj_s + ", " + self.gen_args(args) + ")"
+                mut _rk = self._dict_val_kind(obj)
+                if is_idict:
+                    if _rk == "str": return "_tr_idict_remove_str(" + obj_s + ", " + self.gen_args(args) + ")"
+                    if _rk == "obj": return "_tr_idict_remove_obj(" + obj_s + ", " + self.gen_args(args) + ", " + self._dict_val_drop(obj) + ")"
+                    return "_tr_idict_remove(" + obj_s + ", " + self.gen_args(args) + ")"
+                if _rk == "str": return "_tr_dict_remove_str(" + obj_s + ", " + self.dict_key_arg(args.get(0)) + ")"
+                if _rk == "obj": return "_tr_dict_remove_obj(" + obj_s + ", " + self.dict_key_arg(args.get(0)) + ", " + self._dict_val_drop(obj) + ")"
                 return "_tr_dict_remove(" + obj_s + ", " + self.dict_key_arg(args.get(0)) + ")"
             if method == "len" or method == "length":
                 if is_idict: return "_tr_idict_len(" + obj_s + ")"
@@ -7987,7 +8084,13 @@ pub class CGenerator:
                 return "_tr_dict_update(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             # clear() - remove all entries
             if method == "clear":
-                if is_idict: return "_tr_idict_clear(" + obj_s + ")"
+                mut _ck = self._dict_val_kind(obj)
+                if is_idict:
+                    if _ck == "str": return "_tr_idict_clear_str(" + obj_s + ")"
+                    if _ck == "obj": return "_tr_idict_clear_obj(" + obj_s + ", " + self._dict_val_drop(obj) + ")"
+                    return "_tr_idict_clear(" + obj_s + ")"
+                if _ck == "str": return "_tr_dict_clear_str(" + obj_s + ")"
+                if _ck == "obj": return "_tr_dict_clear_obj(" + obj_s + ", " + self._dict_val_drop(obj) + ")"
                 return "_tr_dict_clear(" + obj_s + ")"
             # is_empty() - true if len == 0
             if method == "is_empty":
@@ -8945,6 +9048,12 @@ pub class CGenerator:
                 addr2 = "__env->p_" + sn2
             if kp2.by_val:
                 crt = crt + " __c->v_" + sn2 + " = *(" + addr2 + "); __c->p_" + sn2 + " = &__c->v_" + sn2 + ";"
+                # The heap env may outlive the creating frame: it must CO-OWN what it copied
+                # (the env is never freed, so this trades a use-after-free for a bounded leak).
+                if _is_str_type(kp2.ty.name):
+                    crt = crt + " (void)_tr_str_retain(__c->v_" + sn2 + ");"
+                elif self.is_heap_class_tn(self.resolve_generic_tyname(kp2.ty.name)) and not self.has_method(self.resolve_generic_tyname(kp2.ty.name), "free"):
+                    crt = crt + " (void)_tr_obj_retain(__c->v_" + sn2 + ");"
             else:
                 crt = crt + " __c->p_" + sn2 + " = " + addr2 + ";"
             kj = kj + 1
@@ -9449,7 +9558,10 @@ pub class CGenerator:
                 self.gen_stmt(inner_defer, indent)
                 mut deferred_c = self.buf.to_string().as_str()
                 self.buf = saved_buf
-                self.defer_stack.push(deferred_c)
+                # A defer only runs if its statement was reached: guard it with a flag set here.
+                mut _df_idx = self.defer_stack.len
+                self.w(pad + "_tr_df" + _df_idx.to_str() + " = 1;\n")
+                self.defer_stack.push("if (_tr_df" + _df_idx.to_str() + ") {\n" + deferred_c + "}\n")
             case HirStmt.SReturn(e):
                 # Flush deferred statements in LIFO order before returning (unless
                 # gen_block already ran them ahead of this exit's local auto-drops).
@@ -9542,6 +9654,19 @@ pub class CGenerator:
                         else:
                             self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=(void*)(" + ret_s + ")});\n")
                     else:
+                        # `return p.downgrade()` of a `shared` local: sema keeps `p` out of this exit's
+                        # drops (the return expression reads it), which leaked the strong ref. Build the
+                        # weak handle FIRST, then release `p`'s own strong reference.
+                        match e.read():
+                            case HirExpr.EMethodCall(_dg_recv, _dg_m, _, _):
+                                if _dg_m == "downgrade":
+                                    match _dg_recv.read():
+                                        case HirExpr.EIdent(_dg_n, _, _):
+                                            if self.shared_vars.contains(_dg_n):
+                                                self.w(pad + "{ _TrWeakBox* _dg_w = _tr_weak_new(" + _safe_c_varname(_dg_n) + "); _tr_shared_drop(" + _safe_c_varname(_dg_n) + "); return _dg_w; }\n")
+                                                return
+                                        case _: pass
+                            case _: pass
                         mut ret_s2 = ""
                         mut ret_is_none = false
                         match e.read():
@@ -10138,9 +10263,9 @@ pub class CGenerator:
                                         _di_int_key = true
                                 mut _di_set = ""
                                 if _di_int_key:
-                                    _di_set = "_tr_idict_set(" + _di_obj + ", " + self.gen_expr(mc_args.get(0)) + ", " + self.dict_val_arg(v) + ")"
+                                    _di_set = self.dict_set_call(mc_obj, _di_obj, true, self.gen_expr(mc_args.get(0)), self.dict_val_arg(v))
                                 else:
-                                    _di_set = "_tr_dict_set(" + _di_obj + ", " + self.dict_key_arg(mc_args.get(0)) + ", " + self.dict_val_arg(v) + ")"
+                                    _di_set = self.dict_set_call(mc_obj, _di_obj, false, self.dict_key_arg(mc_args.get(0)), self.dict_val_arg(v))
                                 self.w(pad + self.flush_wraps(_di_set, true) + ";\n")
                                 return
                             # Fixed-size array index-assign a[i] = v -> a.data[i] = v (bounds-checked lvalue).
@@ -10334,6 +10459,15 @@ pub class CGenerator:
                                         if _fi_ixn == "List" or _fi_ixn == "Vec" or _fi_ixn == "Array":
                                             _assign_rhs = "_tr_str_retain(" + _assign_rhs + ")"
                                     case _: pass
+                                if self._str_field_target_ok(t):
+                                    # The field OWNS its str: release the value it displaces (after the
+                                    # store, so `self.s = self.s + "x"` / `a.f = a.f` stay valid).
+                                    mut _sfo = "_sfo" + self.next_temp()
+                                    mut _sfl = self.gen_expr(t)
+                                    self.w(pad + "TrStr " + _sfo + " = " + _sfl + ";\n")
+                                    self.w(pad + _sfl + " = " + _assign_rhs + ";\n")
+                                    self.w(pad + "_tr_str_release(" + _sfo + ");\n")
+                                    return
                         case _: pass
                 elif hir_expr_type(t).name == "Shared":
                     match t.read():
@@ -11028,6 +11162,16 @@ pub class CGenerator:
             self.w(pad + "    " + elem_c + " " + cvar + " = (" + elem_c + ")" + tmp + "_col->data[" + tmp + "_i];\n")
         self.gen_block(body, indent + 2)
         self.w(pad + "  }\n")
+        # `for x in [a, b, c]`: the list literal is a fresh temporary nothing else owns -
+        # release it (and the elements it co-owns) once the loop is done.
+        mut _lit_free = false
+        match iter.read():
+            case HirExpr.EList(_, _): _lit_free = true
+            case _: pass
+        if _lit_free and (iter_ty.name == "List" or iter_ty.name == "Vec") and iter_ty.args.len > 0:
+            mut _lf_et = self.resolve_generic_tyname(iter_ty.args.get(0).read().name)
+            if self.is_heap_class_tn(_lf_et) and not self.has_method(_lf_et, "free") and not self.interfaces.contains(_lf_et) and elem_c != "__auto_type" and elem_c != "TrStr":
+                self.w(pad + "  List_ptr_free_obj((List_ptr*)" + tmp + "_col, " + self.obj_drop_fn(_lf_et) + ");\n")
         self.w(pad + "}\n")
 
     pub def gen_for_unpack(self, vars: Vec[str], iter: Pointer[HirExpr], body: HirBlock, indent: int):

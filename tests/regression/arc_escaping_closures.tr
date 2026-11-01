@@ -1,0 +1,52 @@
+# tests/regression/arc_escaping_closures.tr
+# A closure that outlives its creating frame must co-own what it captured. Before the
+# fix: a `mut` local was captured BY REFERENCE (pointer into the dead frame) and an
+# immutable class/str local was copied WITHOUT a retain (freed at frame exit) - both
+# use-after-free in safe code (found by scripts/asan_check.sh-style ASan runs).
+from std.test import TestRunner
+
+class Counter:
+    pub n: int
+    pub name: str
+
+class Holder:
+    pub f: def() -> int
+
+def mk(i: int) -> Counter:
+    mut c = Counter()
+    c.n = i
+    c.name = "c" + i.to_str()
+    return c
+
+def reg(fs: List[def() -> int]):
+    c = mk(5)
+    fs.append(lambda: c.n)
+
+def reg_mut(fs: List[def() -> int]):
+    mut c = mk(6)
+    fs.append(lambda: c.n)
+
+def make_holder() -> Holder:
+    c = mk(7)
+    h = Holder()
+    h.f = lambda: c.n
+    return h
+
+def make_holder_mut() -> Holder:
+    mut c = mk(8)
+    mut h = Holder()
+    h.f = lambda: c.n
+    return h
+
+def main():
+    mut t = TestRunner.init("arc_escaping_closures")
+    mut fs: List[def() -> int] = []
+    reg(fs)
+    reg_mut(fs)
+    t.assert_eq_int(fs[0](), 5, "immutable class capture appended to a list outlives its frame")
+    t.assert_eq_int(fs[1](), 6, "mut-but-never-reassigned class capture outlives its frame")
+    mut h = make_holder()
+    t.assert_eq_int(h.f(), 7, "closure stored in a returned object's field")
+    mut h2 = make_holder_mut()
+    t.assert_eq_int(h2.f(), 8, "mut capture stored in a returned object's field")
+    t.summary()

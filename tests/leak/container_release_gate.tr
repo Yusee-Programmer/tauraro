@@ -1,0 +1,77 @@
+# Leak gate: values displaced from containers/fields are released - str field overwrite,
+# Dict set-overwrite / remove / clear, List remove / clear, `for x in [literal]`, and
+# `return p.downgrade()`. Run by scripts/leak_check.sh.
+extern "C":
+    def _tr_mem_live() -> int
+
+class Thing:
+    pub v: int
+    pub name: str
+
+def mk(v: int) -> Thing:
+    mut t = Thing()
+    t.v = v
+    t.name = "t" + v.to_str()
+    return t
+
+def str_field() -> int:
+    mut t = mk(1)
+    t.name = "a" + "b"
+    t.name = "c" + "d"
+    return t.v
+
+def dict_ops() -> int:
+    mut d: Dict[str, Thing] = {}
+    d["a"] = mk(1)
+    d["a"] = mk(2)
+    d["b"] = mk(3)
+    d.remove("b")
+    d["c"] = mk(4)
+    d.clear()
+    mut s: Dict[str, str] = {}
+    s["x"] = "p" + "q"
+    s["x"] = "r" + "s"
+    s.remove("x")
+    s["y"] = "t" + "u"
+    s.clear()
+    return d.len()
+
+def list_ops() -> int:
+    mut l: List[Thing] = []
+    l.append(mk(1))
+    l.append(mk(2))
+    l.append(mk(3))
+    l.remove(0)
+    l.clear()
+    return l.len()
+
+def literal_loop() -> int:
+    mut n = 0
+    for x in [mk(1), mk(2)]:
+        n = n + x.v
+    return n
+
+def weak_ret() -> Weak[Thing]:
+    shared p = mk(9)
+    return p.downgrade()
+
+def workload():
+    str_field()
+    dict_ops()
+    list_ops()
+    literal_loop()
+    mut w = weak_ret()
+    w.is_alive()
+
+def main():
+    workload()
+    mut before = _tr_mem_live()
+    mut r = 0
+    while r < 100:
+        workload()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    if leaked <= 0:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str())
