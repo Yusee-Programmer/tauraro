@@ -1,0 +1,22 @@
+# EXPECT: pass
+# `defer` runs at function exit while the function's locals are still alive: the
+# deferred statement reads `a` and `n`, which must not have been auto-dropped yet.
+class N:
+    pub v: int
+    pub s: List[int]
+def work(flag: bool) -> int:
+    mut a = N()
+    a.v = 7
+    mut n = N()
+    n.v = 9
+    defer print(a.v + n.v)
+    if flag:
+        return 1
+    return 2
+def main():
+    print(work(true))
+    print(work(false))
+    mut m = N()
+    m.v = 5
+    defer print(m.v)
+    print(0)

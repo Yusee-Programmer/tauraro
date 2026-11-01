@@ -1,0 +1,11 @@
+# EXPECT: [M-1]
+# A deferred statement reads `a` at function exit; moving `a` away first lets the
+# new owner release it before the deferred read.
+class N:
+    pub v: int
+    pub s: List[int]
+def main():
+    mut a = N()
+    defer print(a.v)
+    mut b = a
+    print(b.v)

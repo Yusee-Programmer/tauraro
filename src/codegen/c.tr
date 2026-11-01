@@ -342,6 +342,8 @@ pub class CGenerator:
     pub type_alias_map:   Map[str, str]           # alias_name -> resolved C type string
     pub type_alias_tr:    Map[str, str]           # alias_name -> target TAURARO type name (for scalar-alias resolution)
     pub defer_stack:      Vec[str]                # deferred C statements for current function (LIFO)
+    pub defers_pre_flushed: bool                  # the defers were already emitted (before the local auto-drops of a function-exit path); the exit itself must not emit them again
+    pub func_body_blk:    usize                   # address of the function body HirBlock being generated (its trailing auto-drops are a function exit)
     pub wrap_temp_decls:  Vec[str]                # pending "TrStr _wtN = (_tr_str_wrap(...))" decls for the current top-level expr
     pub wrap_temp_names:  Vec[str]                # names of the above, to _tr_str_release after the expr is consumed
     pub wrap_obj_names:   Vec[str]                # fresh-owned heap-class arg temps (decls in wrap_temp_decls) to _tr_obj_release after the expr
@@ -427,6 +429,8 @@ pub class CGenerator:
         g.type_alias_map  = Map[str, str].init(16)
         g.type_alias_tr   = Map[str, str].init(16)
         g.defer_stack     = Vec[str].init(0)
+        g.defers_pre_flushed = false
+        g.func_body_blk   = 0
         g.wrap_temp_decls = Vec[str].init(0)
         g.wrap_temp_names = Vec[str].init(0)
         g.wrap_obj_names = Vec[str].init(0)
@@ -451,14 +455,17 @@ pub class CGenerator:
     # exit; a void function that falls off the end must still run its defers.
     pub def gen_func_body(self, body: HirBlock, indent: int):
         self.reset_defer_stack()
+        self.defers_pre_flushed = false
+        self.func_body_blk = body as usize
         self.gen_block(body, indent)
+        self.func_body_blk = 0
         mut ends_in_return = false
         if body.stmts.len > 0:
             match body.stmts.get(body.stmts.len - 1).read():
                 case HirStmt.SReturn(_): ends_in_return = true
                 case _: pass
         if self.defer_stack.len > 0:
-            if not ends_in_return:
+            if not ends_in_return and not self.defers_pre_flushed:
                 mut fdi = self.defer_stack.len - 1
                 while fdi >= 0:
                     self.w(self.defer_stack.get(fdi))
@@ -6134,6 +6141,17 @@ pub class CGenerator:
             case HirExpr.EWhileExpr(_, _, _, _fwty): return _is_str_type(_fwty.name)
             case _: return false
 
+    # True for a `str`-typed expression that READS an existing mutable place without owning it:
+    # a list/dict element (`xs[i]`), a field (`o.f`), a global, or a `-> ref` call result.
+    pub def _is_str_place_expr(self, e: Pointer[HirExpr]) -> bool:
+        match e.read():
+            case HirExpr.EIndex(_, _, _): return true
+            case HirExpr.EPropAccess(_, _, _): return true
+            case HirExpr.EIdent(gn, _, _): return self.global_vars.contains(gn)
+            case HirExpr.ECall(_, _, pc_bty): return pc_bty.is_borrow
+            case HirExpr.EMethodCall(_, _, _, pm_bty): return pm_bty.is_borrow
+            case _: return false
+
     # True if `e` is a call to a `-> ref` function/method: its result is a BORROW
     # (the callee did NOT retain it), so any owner-position use must retain to own it.
     pub def _expr_is_borrow_call(self, e: Pointer[HirExpr]) -> bool:
@@ -6214,6 +6232,16 @@ pub class CGenerator:
                 self.wrap_temp_decls.push("TrStr " + tmp + " = (" + a_s + ")")
                 self.wrap_temp_names.push(tmp)
                 a_s = tmp
+                did_hoist = true
+            elif _is_str_type(self.resolve_generic_prim(hir_expr_type(a).name)) and self._is_str_place_expr(a):
+                # A `str` read straight out of a place the callee can mutate (list element, dict
+                # value, field, global) is passed at +0: if the callee clears/reassigns that
+                # place the buffer is freed under its feet (use-after-free in SAFE code). Hold
+                # a reference of our own for the duration of the call; flush_wraps releases it.
+                mut ptmp = "_apt" + self.next_temp()
+                self.wrap_temp_decls.push("TrStr " + ptmp + " = _tr_str_retain(" + a_s + ")")
+                self.wrap_temp_names.push(ptmp)
+                a_s = ptmp
                 did_hoist = true
             elif self._is_fresh_obj_expr(a):
                 mut otmp = "_aot" + self.next_temp()
@@ -9356,8 +9384,11 @@ pub class CGenerator:
                 self.buf = saved_buf
                 self.defer_stack.push(deferred_c)
             case HirStmt.SReturn(e):
-                # Flush deferred statements in LIFO order before returning.
-                if self.defer_stack.len > 0:
+                # Flush deferred statements in LIFO order before returning (unless
+                # gen_block already ran them ahead of this exit's local auto-drops).
+                if self.defers_pre_flushed:
+                    self.defers_pre_flushed = false
+                elif self.defer_stack.len > 0:
                     mut di2 = self.defer_stack.len - 1
                     while di2 >= 0:
                         self.w(self.defer_stack.get(di2))
@@ -10856,7 +10887,7 @@ pub class CGenerator:
             case _: pass
 
         # Generic iteration over a collection
-        iter_s = self.gen_expr(iter)
+        iter_s = self.flush_wraps(self.gen_expr(iter), false)
         mut tmp = self.next_temp()
         mut iter_ty = hir_expr_type(iter)
         mut iter_ty_n: str = iter_ty.name
@@ -10943,7 +10974,7 @@ pub class CGenerator:
                     case HirExpr.EIdent(eu_n, _, _):
                         if eu_n == "enumerate" and eu_args.len == 1 and vars.len >= 2:
                             mut eu_col = eu_args.get(0)
-                            mut eu_col_s = self.gen_expr(eu_col)
+                            mut eu_col_s = self.flush_wraps(self.gen_expr(eu_col), false)
                             mut eu_ty = hir_expr_type(eu_col)
                             mut eu_elem_c = "__auto_type"
                             if (eu_ty.name == "List" or eu_ty.name == "Vec") and eu_ty.args.len > 0:
@@ -10968,8 +10999,8 @@ pub class CGenerator:
                         if eu_n == "zip" and eu_args.len == 2 and vars.len >= 2:
                             mut za_col = eu_args.get(0)
                             mut zb_col = eu_args.get(1)
-                            mut za_s = self.gen_expr(za_col)
-                            mut zb_s = self.gen_expr(zb_col)
+                            mut za_s = self.flush_wraps(self.gen_expr(za_col), false)
+                            mut zb_s = self.flush_wraps(self.gen_expr(zb_col), false)
                             mut za_ty = hir_expr_type(za_col)
                             mut zb_ty = hir_expr_type(zb_col)
                             mut za_c = "__auto_type"
@@ -11008,7 +11039,7 @@ pub class CGenerator:
         match iter.read():
             case HirExpr.EMethodCall(di_obj, di_meth, _, _):
                 if di_meth == "items":
-                    mut di_s = self.gen_expr(di_obj)
+                    mut di_s = self.flush_wraps(self.gen_expr(di_obj), false)
                     mut di_ty = hir_expr_type(di_obj)
                     mut di_idict = false
                     if di_ty.args.len > 0:
@@ -11062,7 +11093,7 @@ pub class CGenerator:
             case _: pass
 
         # -- Generic fallback: List_ptr* of TrTuple* --------------------------
-        mut fu_iter_s = self.gen_expr(iter)
+        mut fu_iter_s = self.flush_wraps(self.gen_expr(iter), false)
         self.w(pad + "{ __auto_type " + tmp + "_col = " + fu_iter_s + ";\n")
         self.w(pad + "  for (long long " + tmp + "_i = 0; " + tmp + "_i < (long long)" + tmp + "_col->len; " + tmp + "_i++) {\n")
         self.w(pad + "    TrTuple* " + tmp + "_pair = (TrTuple*)" + tmp + "_col->data[" + tmp + "_i];\n")
@@ -11259,6 +11290,35 @@ pub class CGenerator:
             si = si + 1
         mut i = 0
         while i < b.stmts.len:
+            # `defer` runs at function exit while the locals are still alive: when this is
+            # the run of auto-drops that precedes a `return` (or ends the function body),
+            # emit the defers BEFORE the drops (they would read freed locals otherwise).
+            if self.defer_stack.len > 0 and not self.defers_pre_flushed:
+                match b.stmts.get(i).read():
+                    case HirStmt.SAutoDrop(_, _):
+                        mut dj = i
+                        while dj < b.stmts.len:
+                            mut dj_skip = false
+                            match b.stmts.get(dj).read():
+                                case HirStmt.SAutoDrop(_, _): dj_skip = true
+                                case HirStmt.SLineMarker(_): dj_skip = true
+                                case _: pass
+                            if not dj_skip: break
+                            dj = dj + 1
+                        mut dj_exit = false
+                        if dj < b.stmts.len:
+                            match b.stmts.get(dj).read():
+                                case HirStmt.SReturn(_): dj_exit = true
+                                case _: pass
+                        elif (b as usize) == self.func_body_blk:
+                            dj_exit = true
+                        if dj_exit:
+                            mut fdk = self.defer_stack.len - 1
+                            while fdk >= 0:
+                                self.w(self.defer_stack.get(fdk))
+                                fdk = fdk - 1
+                            self.defers_pre_flushed = true
+                    case _: pass
             self.gen_stmt(b.stmts.get(i), indent)
             i = i + 1
         mut ri = snaps.len - 1

@@ -7,7 +7,7 @@ from core.alloc import alloc, dealloc
 from std.core.io import _tr_exit, write_file, append_file, read_file
 from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension, ChanSelectArm, GenericConstraint, ElifClause, unify_generic, type_mentions
 from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type, HirChanSelectArm
-from mir import mir_if_drop_plan, DropSite, mir_proven_borrows, mir_borrow_conflicts, mir_shared_ref_param_violations
+from mir import mir_if_drop_plan, DropSite, mir_proven_borrows, mir_borrow_conflicts, mir_shared_ref_param_violations, mir_shared_ref_param_field_writes
 
 
 pub enum SymbolKind:
@@ -255,8 +255,116 @@ def _stmt_alias_assigns(s: Pointer[Stmt], out: Map[str, bool]):
         case Stmt.SDefer(inner): _stmt_alias_assigns(inner, out)
         case _: pass
 
+# ---- iterator-invalidation pre-scan ([M-4]) ------------------------------------------------
+# `for x in xs:` iterates the live container; a body that grows/shrinks/clears/replaces `xs`
+# invalidates the iteration (infinite loop, skipped or freed elements). True iff the block
+# contains such a statement. A mutation immediately followed by `break`/`return`/`raise` ends
+# the iteration, so it is exempt. Nested function bodies are not entered.
+def _is_coll_mutator(m: str) -> bool:
+    return m == "append" or m == "push" or m == "insert" or m == "remove" or m == "pop" or m == "clear" or m == "extend" or m == "add" or m == "put" or m == "push_front" or m == "pop_front"
+
+def _expr_is_mut_call_on(e: Pointer[Expr], name: str) -> bool:
+    if e as usize == 0 as usize: return false
+    match e.read():
+        case Expr.EMethodCall(obj, m, _):
+            if obj as usize == 0 as usize: return false
+            if not _is_coll_mutator(m): return false
+            match obj.read():
+                case Expr.EIdent(on): return on == name
+                case _: return false
+        case _: return false
+
+def _stmt_is_direct_mutation(s: Pointer[Stmt], name: str) -> bool:
+    if s as usize == 0 as usize: return false
+    match s.read():
+        case Stmt.SExpr(e): return _expr_is_mut_call_on(e, name)
+        case Stmt.SLet(_, _, _, _, _, _, v): return _expr_is_mut_call_on(v, name)
+        case Stmt.SAssign(tgt, v):
+            if _expr_is_mut_call_on(v, name): return true
+            if tgt as usize != 0 as usize:
+                match tgt.read():
+                    case Expr.EIdent(tn): return tn == name
+                    case _: return false
+            return false
+        case _: return false
+
+def _stmt_ends_iteration(s: Pointer[Stmt]) -> bool:
+    if s as usize == 0 as usize: return false
+    match s.read():
+        case Stmt.SBreak(_): return true
+        case Stmt.SReturn(_): return true
+        case Stmt.SRaise(_): return true
+        case _: return false
+
+def _block_invalidates_iter(b: Block, name: str) -> bool:
+    mut i = 0
+    while i < b.stmts.len:
+        mut st = b.stmts.get(i)
+        if _stmt_is_direct_mutation(st, name):
+            mut j = i + 1
+            while j < b.stmts.len:
+                mut is_line = false
+                match b.stmts.get(j).read():
+                    case Stmt.SLine(_): is_line = true
+                    case _: pass
+                if not is_line: break
+                j = j + 1
+            mut exempt = false
+            if j < b.stmts.len: exempt = _stmt_ends_iteration(b.stmts.get(j))
+            if not exempt: return true
+        elif _stmt_nested_invalidates_iter(st, name):
+            return true
+        i = i + 1
+    return false
+
+def _pblock_invalidates_iter(pb: Pointer[Block], name: str) -> bool:
+    if pb as usize == 0 as usize: return false
+    return _block_invalidates_iter(pb.read(), name)
+
+def _stmt_nested_invalidates_iter(s: Pointer[Stmt], name: str) -> bool:
+    if s as usize == 0 as usize: return false
+    match s.read():
+        case Stmt.SIf(_, then_b, elifs, else_b):
+            if _block_invalidates_iter(then_b, name): return true
+            mut i = 0
+            while i < elifs.len:
+                if _pblock_invalidates_iter(elifs.get(i).body, name): return true
+                i = i + 1
+            return _block_invalidates_iter(else_b, name)
+        case Stmt.SWhile(_, body, _): return _block_invalidates_iter(body, name)
+        case Stmt.SFor(_, _, body, _, _): return _block_invalidates_iter(body, name)
+        case Stmt.SForUnpack(_, _, body): return _block_invalidates_iter(body, name)
+        case Stmt.SUnsafe(body): return _block_invalidates_iter(body, name)
+        case Stmt.SWith(_, _, body): return _block_invalidates_iter(body, name)
+        case Stmt.SMatch(_, arms):
+            mut i = 0
+            while i < arms.len:
+                if _pblock_invalidates_iter(arms.get(i).body, name): return true
+                i = i + 1
+            return false
+        case Stmt.STry(try_body, catches, finally_b):
+            if _block_invalidates_iter(try_body, name): return true
+            mut i = 0
+            while i < catches.len:
+                if _pblock_invalidates_iter(catches.get(i).read().body, name): return true
+                i = i + 1
+            return _block_invalidates_iter(finally_b, name)
+        case _: return false
+
+def _ty_has_borrow(t: AstType, depth: int) -> bool:
+    if t.is_borrow: return true
+    if depth > 6: return false
+    mut i = 0
+    while i < t.args.len:
+        if t.args.get(i) as usize != 0 as usize:
+            if _ty_has_borrow(t.args.get(i).read(), depth + 1): return true
+        i = i + 1
+    return false
+
 pub class Sema:
     pub sendable_tparams:   Vec[str]        # type parameters of the generic class whose Sendable fields are being checked (treated as Sendable)
+    pub in_defer:           bool            # lowering the statement of a `defer`
+    pub defer_names:        Map[str, bool]  # names read by a `defer` statement of the function being lowered
     pub alias_assigned:     Map[str, bool]  # locals of the function being lowered that are ever re-pointed at an alias (see _block_alias_assigns)
     pub globals:            Map[str, Symbol]
     pub scopes:             Vec[Scope]
@@ -471,6 +579,8 @@ extend Sema:
         s.in_recv_pos       = false
         s.container_borrows = Map[str, str].init(16)
         s.alias_assigned = Map[str, bool].init(8)
+        s.in_defer = false
+        s.defer_names = Map[str, bool].init(4)
         s.sendable_tparams = Vec[str].init(0)
         s.capturing_moves   = false
         s.branch_moved_buf  = Vec[str].init(0)
@@ -2223,6 +2333,85 @@ extend Sema:
             case _: return hv
 
     # -- Ownership / borrow tracking -------------------------------
+
+    # [M-3] helper: true iff parameters `i` and `j` of the free function `callee` are both
+    # declared as SHARED `ref T` borrows (read-only), so passing one variable for both is fine.
+    pub def _m3_both_shared_ref(self, callee: Pointer[Expr], i: int, j: int) -> bool:
+        if callee as usize == 0 as usize: return false
+        mut cn = ""
+        match callee.read():
+            case Expr.EIdent(c_n): cn = c_n
+            case _: return false
+        if not self.fn_sigs.contains(cn): return false
+        mut sig = self.fn_sigs.get(cn)
+        if i < 0 or j < 0 or i >= sig.args.len - 1 or j >= sig.args.len - 1: return false
+        mut pi = sig.args.get(i)
+        mut pj = sig.args.get(j)
+        if pi as usize == 0 as usize or pj as usize == 0 as usize: return false
+        mut ti = pi.read()
+        mut tj = pj.read()
+        return ti.is_borrow and not ti.is_mut_borrow and tj.is_borrow and not tj.is_mut_borrow
+
+    # [L-3] helper: report returning an owned local of this function through a borrow-typed return.
+    pub def _check_ret_local_borrow(self, e: Pointer[Expr]):
+        if e as usize == 0 as usize: return
+        match e.read():
+            case Expr.EIdent(rl_nm):
+                mut rl_sym = self.resolve(rl_nm)
+                if rl_sym.name != "" and rl_sym.ty as usize != 0 as usize and not rl_sym.ty.read().is_borrow and not self.globals.contains(rl_nm) and (self.is_droppable_sym(rl_sym) or (rl_sym.kind == SymbolKind.SVariable and not rl_sym.is_param and self.is_primitive(rl_sym.ty.read()))):
+                    self.error("[L-3] borrow-returning function returns '" + rl_nm + "', a local it owns, as a borrow: '" + rl_nm + "' is freed when the function returns, so the borrow would dangle.\n      FIX: return an owned value (drop the `ref` from the return type), or return a borrow of a `ref` parameter with `from <param>`.")
+            case Expr.ETuple(rl_items):
+                mut rl_i = 0
+                while rl_i < rl_items.len:
+                    self._check_ret_local_borrow(rl_items.get(rl_i))
+                    rl_i = rl_i + 1
+            case Expr.EList(rl_litems):
+                mut rl_j = 0
+                while rl_j < rl_litems.len:
+                    self._check_ret_local_borrow(rl_litems.get(rl_j))
+                    rl_j = rl_j + 1
+            case Expr.ECall(rl_callee, rl_args):
+                if rl_callee as usize != 0 as usize:
+                    match rl_callee.read():
+                        case Expr.EIdent(rl_cn):
+                            if rl_cn == "Some" or rl_cn == "Ok":
+                                mut rl_k = 0
+                                while rl_k < rl_args.len:
+                                    self._check_ret_local_borrow(rl_args.get(rl_k))
+                                    rl_k = rl_k + 1
+                        case _: pass
+            case _: pass
+
+    # [M-1] A variable declared OUTSIDE a loop that the body moves out of on every iteration
+    # (and does not give a new value before the body ends) is used again, already moved, by the
+    # next iteration. `by_block`: `limit` is the loop body's block id (while loops share the
+    # enclosing scope); else `limit` is the loop's scope index (for loops own a scope).
+    pub def check_loop_moves(self, names: Vec[str], body: HirBlock, by_block: bool, limit: int):
+        if self.block_ends_in_jump(body): return
+        mut lm_i = 0
+        while lm_i < names.len:
+            mut lm_nm = names.get(lm_i)
+            mut lm_sym = self.resolve(lm_nm)
+            if lm_sym.name != "" and lm_sym.is_moved and not lm_sym.is_freed:
+                mut lm_outer = false
+                if by_block:
+                    lm_outer = lm_sym.decl_block_id < limit
+                else:
+                    mut lm_k = self.scopes.len - 1
+                    while lm_k >= 0:
+                        if self.scopes.get(lm_k).variables.contains(lm_nm):
+                            lm_outer = lm_k < limit
+                            break
+                        lm_k = lm_k - 1
+                if lm_outer:
+                    self.error("[M-1] '" + lm_nm + "' is moved inside a loop and used again by the next iteration: it was already moved in the previous one.\n      FIX: move a `clone()` of it, give '" + lm_nm + "' a new value before the end of the loop body, or `break` right after the move.")
+            lm_i = lm_i + 1
+
+    # [M-1] a `defer` statement reads `name` when the function exits; moving `name` away first
+    # leaves the deferred statement reading a value its new owner may already have released.
+    pub def check_defer_capture_moved(self, name: str):
+        if self.defer_names.contains(name):
+            self.error("[M-1] '" + name + "' is read by a `defer` statement of this function and is moved here; the deferred statement would run after its new owner released it.\n      FIX: move a `clone()` instead, or do not move '" + name + "' after deferring a use of it.")
 
     pub def mark_moved(self, name: str):
         mut i = self.scopes.len - 1
@@ -5936,10 +6125,13 @@ extend Sema:
         self.cur_func_borrowers = Vec[str].init(2)
         self.cur_func_sources   = Vec[str].init(2)
         mut saved_alias_assigned = self.alias_assigned
+        mut saved_defer_names = self.defer_names
+        self.defer_names = Map[str, bool].init(4)
         self.alias_assigned = Map[str, bool].init(8)
         _block_alias_assigns(f.body, self.alias_assigned)
         hf.body = self.lower_block(f.body)
         self.alias_assigned = saved_alias_assigned
+        self.defer_names = saved_defer_names
         hf.borrow_borrowers = self.cur_func_borrowers
         hf.borrow_sources   = self.cur_func_sources
         # Outlives engine result: which ref-borrow locals are PROVEN-safe to elide.
@@ -5959,6 +6151,11 @@ extend Sema:
             while _b3i < _b3.len:
                 self.error("[B-3] " + _b3.get(_b3i) + ".\n      A shared `ref T` parameter cannot be mutated — declare it `mut ref T` for an exclusive (mutable) borrow.")
                 _b3i = _b3i + 1
+            mut _b3w = mir_shared_ref_param_field_writes(hf, self.mutating_methods)
+            mut _b3wi = 0
+            while _b3wi < _b3w.len:
+                self.error("[B-3] " + _b3w.get(_b3wi) + ".\n      A shared `ref T` parameter cannot be mutated — declare it `mut ref T` for an exclusive (mutable) borrow.")
+                _b3wi = _b3wi + 1
         hf.decorators = f.decorators
         hf.is_async = f.is_async
         hf.is_extern = f.is_extern
@@ -6497,6 +6694,12 @@ extend Sema:
                                     if not l3_in:
                                         self.error("[L-4] borrow-returning function returns a borrow of region '" + l3_eff + "', but its return is declared 'from " + self.current_func_ret_from + "'.\n      FIX: add '" + l3_eff + "' to the 'from' list, declare 'where " + l3_eff + " outlives " + self.current_func_ret_from + "', or return a borrow of a declared region.")
                         case _: pass
+                # [L-3] generalised (--strict): a function whose return type carries a borrow
+                # (`ref T`, or `ref` inside a tuple / Option / List) must not hand back a borrow
+                # of one of its OWN owned locals - the local dies at function exit.
+                if self.strict_mode and e as usize != 0 as usize and self.closure_depth == 0 and self.cur_fn_ret as usize != 0 as usize and not self.current_func_ret_borrow_str:
+                    if _ty_has_borrow(self.cur_fn_ret.read(), 0):
+                        self._check_ret_local_borrow(e)
                 # Gap 1: [L-1] escape check - returning a LOCAL-region Pointer without 'from' annotation
                 if e as usize != 0 as usize and not self.in_unsafe and self.current_func_ret_from == "":
                     match e.read():
@@ -6583,7 +6786,13 @@ extend Sema:
                 # Skip for shared lets (shared = clone via refcount, not a move)
                 # plain variable-to-variable move (mut newvar = old_obj)
                 # Field/index access is NOT a move in Tauraro (C value semantics copy fields)
-                if val_ptr as usize != 0 as usize and not is_shared:
+                # A `ref`/`mut ref` declared binding (`r: ref List[int] = xs`) is a BORROW of
+                # `xs`, not a hand-off: the owner stays valid (the borrow checker below
+                # governs the aliasing), so it must not be marked moved.
+                mut m1_is_borrow_decl = false
+                if ty_ptr as usize != 0 as usize:
+                    if ty_ptr.read().is_borrow: m1_is_borrow_decl = true
+                if val_ptr as usize != 0 as usize and not is_shared and not m1_is_borrow_decl:
                     match val_ptr.read():
                         case Expr.EIdent(m1_src):
                             mut m1_sym = self.resolve(m1_src)
@@ -6592,6 +6801,7 @@ extend Sema:
                             if not self.is_primitive(m1_ty) and not self.is_copy_class(m1_ty.name) and m1_sym.name != "" and not m1_sym.is_shared:
                                 self.check_not_moved(m1_src, m1_ty.name)
                                 self.check_no_active_borrows(m1_src, m1_ty.name)
+                                self.check_defer_capture_moved(m1_src)
                                 self.mark_moved(m1_src)
                             elif self.class_has_free(m1_ty.name) and m1_sym.name != "" and not m1_sym.is_shared:
                                 # A destructor class whose fields all look copy-like (e.g. Url:
@@ -6953,6 +7163,7 @@ extend Sema:
                             mut sa_is_known = self.classes.contains(sa_ty.name) or self.enums.contains(sa_ty.name)
                             if sa_is_known and not self.is_primitive(sa_ty) and not self.is_copy_class(sa_ty.name) and sa_sym.name != "" and not sa_sym.is_shared:
                                 self.check_no_active_borrows(sa_src, sa_ty.name)
+                                self.check_defer_capture_moved(sa_src)
                                 self.mark_moved(sa_src)
                             elif sa_is_known and self.class_has_free(sa_ty.name) and sa_sym.name != "" and not sa_sym.is_shared:
                                 self.mark_moved(sa_src)   # see the SLet case: single owner for auto-drop
@@ -7145,6 +7356,7 @@ extend Sema:
                 self.loop_blk_scope.pop()
                 mut sw_loop_moved = self.branch_moved_buf
                 mut sw_loop_inited = self.branch_init_buf
+                self.check_loop_moves(sw_loop_moved, sw_body, true, sw_block_id)
                 self.capturing_moves = sw_outer_cap_m
                 self.branch_moved_buf = sw_outer_buf_m
                 self.capturing_inits = sw_outer_cap_i
@@ -7168,6 +7380,14 @@ extend Sema:
                 self.check_iterable(h_iter_for)
                 mut var_ty_for = AstType.init("int")
                 mut iter_hn = hir_expr_type(h_iter_for).name
+                # [M-4] iterator invalidation: the body must not grow/shrink/replace the
+                # collection it is iterating.
+                if iter_hn == "List" or iter_hn == "Vec" or iter_hn == "Dict" or iter_hn == "Map" or iter_hn == "Set":
+                    match iter.read():
+                        case Expr.EIdent(m4_coll):
+                            if _block_invalidates_iter(body, m4_coll):
+                                self.error("[M-4] Cannot mutate '" + m4_coll + "' while iterating over it (`for " + var + " in " + m4_coll + "`): adding/removing/clearing elements invalidates the iteration.\n      FIX: collect the changes in a separate list and apply them after the loop, iterate over a copy (`for " + var + " in " + m4_coll + ".clone()`), or `break`/`return` right after the mutation.")
+                        case _: pass
                 mut iter_hal = hir_expr_type(h_iter_for).args.len
                 if (iter_hn == "List" or iter_hn == "Vec") and iter_hal > 0:
                     var_ty_for = hir_expr_type(h_iter_for).args.get(0).read()
@@ -7219,6 +7439,7 @@ extend Sema:
                 self.loop_blk_scope.pop()
                 mut sf_loop_moved = self.branch_moved_buf
                 mut sf_loop_inited = self.branch_init_buf
+                self.check_loop_moves(sf_loop_moved, sf_body, false, self.scopes.len - 1)
                 self.capturing_moves = sf_outer_cap_m
                 self.branch_moved_buf = sf_outer_buf_m
                 self.capturing_inits = sf_outer_cap_i
@@ -7396,7 +7617,10 @@ extend Sema:
                 self.check_bool_ctx(_as_c, "an assert condition")
                 return box_hirstmt(HirStmt.SAssert(_as_c, self.lower_expr(msg)))
             case Stmt.SDefer(inner):
+                mut sd_saved = self.in_defer
+                self.in_defer = true
                 mut _df_lowered = self.lower_stmt(inner)
+                self.in_defer = sd_saved
                 self.mark_defer_used(_df_lowered)
                 return box_hirstmt(HirStmt.SDefer(_df_lowered))
             case Stmt.SWith(items, aliases, body):
@@ -8401,6 +8625,7 @@ extend Sema:
                 # value carries its def(...)->R signature (not its return type).
                 if self.fn_sigs.contains(name) and sym.kind == SymbolKind.SFunction:
                     return box_hirexpr(HirExpr.EIdent(name, self.fn_sigs.get(name), false))
+                if self.in_defer and sym.name != "": self.defer_names.insert(name, true)
                 # [M-6] use-after-free: dealloc() was called on this pointer
                 if sym.is_freed and sym.name != "":
                     self.error("[M-6] '" + name + "' was freed by 'dealloc()' and can no longer be used.\n      FIX: Remove all uses of '" + name + "' after 'dealloc()', or restructure so the pointer is freed only when no longer needed.")
@@ -8646,6 +8871,7 @@ extend Sema:
                 # iterate AST args - mark borrows and detect aliasing
                 mut p23_borrow_names = Vec[str].init(4)
                 mut p23_seen = Map[str, bool].init(4)
+                mut p23_seen_idx = Map[str, int].init(4)
                 mut p23_k = 0
                 while p23_k < args.len:
                     mut p23_arg = args.get(p23_k)
@@ -8659,8 +8885,11 @@ extend Sema:
                         if not self.is_primitive(p23_sym.ty.read()) and p23_sym.name != "":
                             self.mark_borrow(p23_nm)
                             p23_borrow_names.push(p23_nm)
-                            if p23_seen.contains(p23_nm):
+                            if p23_seen.contains(p23_nm) and self._m3_both_shared_ref(callee, p23_seen_idx.get(p23_nm), p23_k):
+                                pass   # two SHARED `ref` params may alias freely (read-only on both sides)
+                            elif p23_seen.contains(p23_nm):
                                 self.error("[M-3] '" + p23_nm + "' appears twice in the same call, creating aliased mutable access.\n      FIX: Clone one of the arguments: " + p23_nm + ".clone()")
+                            if not p23_seen.contains(p23_nm): p23_seen_idx.insert(p23_nm, p23_k)
                             p23_seen.insert(p23_nm, true)
                     p23_k = p23_k + 1
                 mut hl = Vec[Pointer[HirExpr]].init(4)

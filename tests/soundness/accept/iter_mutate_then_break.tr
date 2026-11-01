@@ -1,0 +1,12 @@
+# EXPECT: pass
+# Mutating the iterated list is fine when the loop ends right after (break/return),
+# and mutating a DIFFERENT list while iterating is fine.
+def main():
+    mut xs: List[int] = [1, 2, 3]
+    mut ys: List[int] = []
+    for x in xs:
+        ys.append(x)
+        if x == 2:
+            xs.append(9)
+            break
+    print(xs.len() + ys.len())

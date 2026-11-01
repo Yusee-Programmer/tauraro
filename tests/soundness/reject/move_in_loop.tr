@@ -1,0 +1,13 @@
+# EXPECT: [M-1]
+# Moving a variable declared outside the loop, on every iteration, uses it again
+# already-moved on the next iteration.
+class N:
+    pub v: int
+    pub s: List[int]
+def main():
+    mut a = N()
+    mut i = 0
+    while i < 3:
+        mut b = a
+        print(b.v)
+        i = i + 1

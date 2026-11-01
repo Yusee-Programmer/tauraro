@@ -1,0 +1,12 @@
+# EXPECT: [B-3]
+# A shared `ref T` parameter is read-only all the way down: writing one of its
+# fields (or elements, or calling a mutating method on one) needs `mut ref T`.
+class C:
+    pub n: int
+    pub l: List[int]
+def f(c: ref C):
+    c.n = 4
+def main():
+    mut c = C()
+    c.l = []
+    f(c)

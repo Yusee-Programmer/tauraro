@@ -1,0 +1,7 @@
+# EXPECT: [L-3]
+# Same escape through a wrapper type: `Option[ref str]` carrying a local.
+def f() -> Option[ref str]:
+    mut s = "a" + "b"
+    return Some(s)
+def main():
+    print(f().is_some())

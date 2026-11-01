@@ -1,0 +1,7 @@
+# EXPECT: pass
+# Two SHARED `ref` parameters may alias: the same variable can be passed for both.
+def two(a: ref List[int], b: ref List[int]) -> int:
+    return a.len() + b.len()
+def main():
+    mut x: List[int] = [1, 2]
+    print(two(x, x))

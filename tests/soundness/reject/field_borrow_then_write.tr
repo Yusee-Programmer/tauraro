@@ -1,0 +1,12 @@
+# EXPECT: [B-1]
+# A `ref` borrow of a FIELD keeps the field's old value alive: overwriting that
+# field while the borrow is still used afterwards is rejected.
+class C:
+    pub name: str
+    pub l: List[int]
+def main():
+    mut c = C()
+    c.name = "x" + "y"
+    r: ref str = c.name
+    c.name = "p" + "q"
+    print(r)

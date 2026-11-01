@@ -22,10 +22,57 @@ from hir import HirProgram, HirFunction, HirBlock, HirStmt, HirExpr, hir_expr_ty
 from core.vec import Vec
 from core.map import Map
 
+# Place paths for field-/element-granular borrow checking. `c.a.b` -> root "c", path "a.b";
+# an index step is the wildcard segment "[]" (indices are not distinguished: conservative).
+def _pl_root(e: Pointer[HirExpr]) -> str:
+    mut cur = e
+    mut guard = 0
+    while cur as usize != 0 as usize and guard < 64:
+        match cur.read():
+            case HirExpr.EIdent(n, _, _): return n
+            case HirExpr.EPropAccess(o, _, _): cur = o
+            case HirExpr.EIndex(o, _, _): cur = o
+            case _: return ""
+        guard = guard + 1
+    return ""
+
+def _pl_path(e: Pointer[HirExpr]) -> str:
+    mut segs = Vec[str].init(4)
+    mut cur = e
+    mut guard = 0
+    while cur as usize != 0 as usize and guard < 64:
+        match cur.read():
+            case HirExpr.EPropAccess(o, prop, _):
+                segs.push(prop)
+                cur = o
+            case HirExpr.EIndex(o, _, _):
+                segs.push("[]")
+                cur = o
+            case _: cur = 0 as Pointer[HirExpr]
+        guard = guard + 1
+    mut out = ""
+    mut i = segs.len - 1
+    while i >= 0:
+        if out != "": out = out + "."
+        out = out + segs.get(i)
+        i = i - 1
+    return out
+
+# Two places of the same root overlap iff one path is a prefix of the other (or either is the
+# whole object). Disjoint fields (`c.a` vs `c.b`) do not overlap.
+def _pl_overlap(a: str, b: str) -> bool:
+    if a == "" or b == "": return true
+    if a == b: return true
+    if a.starts_with(b + "."): return true
+    if b.starts_with(a + "."): return true
+    return false
+
 # True if `val` is directly a MUTATING method call on `source` — `source.m(...)` where
 # "Type.m" is in `mm` (a method that stores into self.<field>). Used by the borrow
 # checker to treat such a call as a write to `source` (implicit `&mut` of the receiver).
-def _is_mutating_call_on(val: Pointer[HirExpr], source: str, mm: Map[str, bool]) -> bool:
+# `bpath` is the borrowed sub-place ("" = whole object); a call on a DISJOINT field path
+# (`c.l.append(..)` while `c.name` is borrowed) is not a conflict.
+def _is_mutating_call_on(val: Pointer[HirExpr], source: str, mm: Map[str, bool], bpath: str) -> bool:
     if val as usize == 0 as usize: return false
     match val.read():
         case HirExpr.EMethodCall(obj, method, _, _):
@@ -37,6 +84,13 @@ def _is_mutating_call_on(val: Pointer[HirExpr], source: str, mm: Map[str, bool])
                     if method == "push" or method == "append" or method == "insert" or method == "set" or method == "remove" or method == "pop" or method == "clear" or method == "extend" or method == "add" or method == "put":
                         return true
                     return mm.contains(hir_expr_type(obj).name + "." + method)
+                case HirExpr.EPropAccess(_, _, _):
+                    if _pl_root(obj) != source: return false
+                    if not _pl_overlap(_pl_path(obj), bpath): return false
+                    mut tn = hir_expr_type(obj).name
+                    if tn == "List" or tn == "Vec" or tn == "Dict" or tn == "Map" or tn == "Set":
+                        return method == "push" or method == "append" or method == "insert" or method == "remove" or method == "pop" or method == "clear" or method == "extend" or method == "add" or method == "put" or method == "set"
+                    return mm.contains(tn + "." + method)
                 case _: return false
         case _: return false
 
@@ -91,11 +145,20 @@ pub class BorrowEdge:
     pub source:   str
     pub decl_block: int   # the block where the borrow is created (for per-point checks)
     pub is_exclusive: bool # a `mut x: ref T` (exclusive/mutable borrow) vs `x: ref T` (shared/read-only)
+    pub path: str          # borrowed sub-place of `source` ("" = the whole object; "name" for `c.name`)
     pub via_collection: bool # borrows a COLLECTION ELEMENT (`ref T = coll.get(k)` / `coll[i]`):
                              # eliding the retain is sound only if `source` is also never
                              # MUTATED while the borrower is live (a mutation can free the
                              # element). compute_borrow_outlives proves liveness; the extra
                              # mutation-freedom proof lives in mir_proven_borrows.
+
+# A write THROUGH a place (`c.name = v`, `xs[i] = v`): the MIR keeps only the value as an opaque
+# `MEval` statement, so the written place is recorded on the side as (block, stmt index, root, path).
+pub class PWrite:
+    pub block: int
+    pub idx:   int
+    pub root:  str
+    pub path:  str
 
 pub class MirFunction:
     pub name:   str
@@ -106,6 +169,7 @@ pub class MirFunction:
                                    # the drop schedule (dev may raw-alias them; HIR
                                    # owns their scope-exit drop)
     pub borrows: Vec[BorrowEdge]   # outlives engine: ref-borrow edges (borrower←source)
+    pub pwrites: Vec[PWrite]       # partial (field/element) writes, see PWrite
     # True iff every statement in the body was fully lowered into the CFG (no
     # `case _: pass` fallthrough). Only COMPLETE functions may drive MIR-based
     # codegen / drop insertion — for incomplete ones the analysis is unsound
@@ -130,6 +194,7 @@ pub class MirBuilder:
     pub loop_continue: Vec[int] # block to TGoto on `continue` (innermost loop header)
     pub loop_break:    Vec[int] # block to TGoto on `break` (innermost loop exit)
     pub borrows: Vec[BorrowEdge]   # outlives engine: ref-borrow edges recorded here
+    pub pwrites: Vec[PWrite]
 
 extend MirBuilder:
     pub def init() -> MirBuilder:
@@ -143,6 +208,7 @@ extend MirBuilder:
         b.loop_continue = Vec[int].init(4)
         b.loop_break    = Vec[int].init(4)
         b.borrows       = Vec[BorrowEdge].init(2)
+        b.pwrites       = Vec[PWrite].init(2)
         return b
 
     # Outlives engine: record that `borrower` is a ref-borrow aliasing `source`.
@@ -152,6 +218,7 @@ extend MirBuilder:
         e.source   = source
         e.decl_block = self.cur
         e.is_exclusive = exclusive
+        e.path = ""
         e.via_collection = false
         self.borrows.push(e)
 
@@ -162,8 +229,32 @@ extend MirBuilder:
         e.source   = source
         e.decl_block = self.cur
         e.is_exclusive = exclusive
+        e.path = ""
         e.via_collection = true
         self.borrows.push(e)
+
+    # Borrow of a sub-place (`ref T = c.name`): behaves like a collection-element borrow
+    # (the retain is elided only if `c` is never touched while the borrower lives) but a
+    # write to a DISJOINT field of `c` is not a conflict.
+    pub def record_path_borrow(self, borrower: str, source: str, path: str, exclusive: bool):
+        mut e = BorrowEdge()
+        e.borrower = borrower
+        e.source   = source
+        e.decl_block = self.cur
+        e.is_exclusive = exclusive
+        e.path = path
+        e.via_collection = true
+        self.borrows.push(e)
+
+    # Record a write through `root.path` performed by the statement just pushed.
+    pub def record_pwrite(self, root: str, path: str):
+        if self.cur < 0: return
+        mut w = PWrite()
+        w.block = self.cur
+        w.idx = self.blocks.get(self.cur).stmts.len - 1
+        w.root = root
+        w.path = path
+        self.pwrites.push(w)
 
     # Create a fresh block, return its id.
     pub def new_block(self) -> int:
@@ -235,6 +326,10 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                                 match mobj.read():
                                     case HirExpr.EIdent(cnm, _, _): b.record_coll_borrow(nm, cnm, _slet_mut or slet_ty.is_mut_borrow)
                                     case _: pass
+                        case HirExpr.EPropAccess(_, _, _):
+                            # `ref T = c.name` borrows the sub-place `c.name`.
+                            mut pb_root = _pl_root(val)
+                            if pb_root != "": b.record_path_borrow(nm, pb_root, _pl_path(val), _slet_mut or slet_ty.is_mut_borrow)
                         case HirExpr.EIndex(iobj, _, _):
                             # `ref T = coll[i]` borrows the indexed element.
                             match iobj.read():
@@ -246,7 +341,10 @@ def lower_stmts(b: MirBuilder, hb: HirBlock):
                 # can track def/use; field/index targets stay opaque (eval).
                 match tgt.read():
                     case HirExpr.EIdent(tn, _, _): b.push_stmt(MirStmt.MAssign(tn, val))
-                    case _: b.push_stmt(MirStmt.MEval(val))
+                    case _:
+                        b.push_stmt(MirStmt.MEval(val))
+                        mut pw_root = _pl_root(tgt)
+                        if pw_root != "": b.record_pwrite(pw_root, _pl_path(tgt))
             case HirStmt.SExpr(e):
                 b.push_stmt(MirStmt.MEval(e))
             case HirStmt.SReturn(v):
@@ -485,6 +583,7 @@ pub def lower_function(hf: HirFunction) -> MirFunction:
     mf.if_bodies = b.if_bodies
     mf.unsafe_pinned = b.unsafe_pinned
     mf.borrows = b.borrows
+    mf.pwrites = b.pwrites
     # Outlives engine: append cross-fn borrow edges collected by sema (parallel
     # arrays on the HIR fn) — these are the edges the MIR can't detect itself
     # because it has no function signatures (`mut r = f(args)` borrows an arg).
@@ -492,9 +591,18 @@ pub def lower_function(hf: HirFunction) -> MirFunction:
     if (hf.borrow_borrowers as usize) == 0 as usize: return mf   # fields unset → done
     if (hf.borrow_sources as usize) == 0 as usize: return mf
     while hbi < hf.borrow_borrowers.len and hbi < hf.borrow_sources.len:
+        mut he_dup = false
+        mut hdi = 0
+        while hdi < mf.borrows.len:
+            if mf.borrows.get(hdi).borrower == hf.borrow_borrowers.get(hbi) and mf.borrows.get(hdi).source == hf.borrow_sources.get(hbi): he_dup = true
+            hdi = hdi + 1
+        if he_dup:
+            hbi = hbi + 1
+            continue
         mut he = BorrowEdge()
         he.borrower = hf.borrow_borrowers.get(hbi)
         he.source   = hf.borrow_sources.get(hbi)
+        he.path = ""
         he.decl_block = -1   # sema doesn't know the MIR block → skip per-point, use
                              # only the (always-valid) cross-block liveness check
         mf.borrows.push(he)
@@ -1142,6 +1250,7 @@ pub def mir_proven_borrows(hf: HirFunction) -> Vec[str]:
                                 collect_uses(val, uses)
                                 if ap == edge.source: set_add(uses, edge.source)
                             case MirStmt.MEval(val): collect_uses(val, uses)
+                        if _pwrite_hits(mf.pwrites, bn, si, edge.source, edge.path): set_add(uses, edge.source)
                         if set_contains(uses, edge.source) and borrower_live_after(blk, si, edge.borrower, lo):
                             proven = false
                     si = si + 1
@@ -1150,6 +1259,55 @@ pub def mir_proven_borrows(hf: HirFunction) -> Vec[str]:
             out.push(edge.borrower)
         i = i + 1
     return out
+
+def _pwrite_hits(pws: Vec[PWrite], blk: int, idx: int, root: str, bpath: str) -> bool:
+    mut i = 0
+    while i < pws.len:
+        mut w = pws.get(i)
+        if w.block == blk and w.idx == idx and w.root == root and _pl_overlap(w.path, bpath): return true
+        i = i + 1
+    return false
+
+# Blocks reachable from `start` through at least one CFG edge (so `start` itself only when it
+# lies on a cycle).
+def _reach_from(mf: MirFunction, start: int) -> Vec[bool]:
+    mut seen = Vec[bool].init(mf.blocks.len)
+    mut k = 0
+    while k < mf.blocks.len:
+        seen.push(false)
+        k = k + 1
+    mut work = Vec[int].init(4)
+    work.push(start)
+    mut first = true
+    while work.len > 0:
+        mut cur = work.get(work.len - 1)
+        work.pop()
+        mut succ = Vec[int].init(2)
+        match mf.blocks.get(cur).term.read():
+            case MirTerm.TGoto(t): succ.push(t)
+            case MirTerm.TBranch(_, t2, e2):
+                succ.push(t2)
+                succ.push(e2)
+            case _: pass
+        mut si = 0
+        while si < succ.len:
+            mut nx = succ.get(si)
+            if nx >= 0 and nx < seen.len and not seen.get(nx):
+                seen.set(nx, true)
+                work.push(nx)
+            si = si + 1
+    return seen
+
+# Index of the statement in `blk` that declares `name` (-1 if none).
+def _decl_index(blk: MirBlock, name: str) -> int:
+    mut i = 0
+    while i < blk.stmts.len:
+        match blk.stmts.get(i).read():
+            case MirStmt.MDeclare(dn, _):
+                if dn == name: return i
+            case _: pass
+        i = i + 1
+    return -1
 
 # NLL liveness query: is `name` LIVE strictly AFTER statement `after_idx` of block `blk`?
 # True if used in a later statement, in the terminator, or live at the block's exit (`lo`
@@ -1192,6 +1350,12 @@ pub def mir_borrow_conflicts(hf: HirFunction, mutating_methods: Map[str, bool]) 
     mut k = 0
     while k < mf.borrows.len:
         mut be = mf.borrows.get(k)
+        # A statement can only violate the borrow if it runs AFTER the borrow is created.
+        mut be_reach = Vec[bool].init(0)
+        mut be_didx = -1
+        if be.decl_block >= 0 and be.decl_block < mf.blocks.len:
+            be_reach = _reach_from(mf, be.decl_block)
+            be_didx = _decl_index(mf.blocks.get(be.decl_block), be.borrower)
         mut bn = 0
         while bn < mf.blocks.len:
             mut blk = mf.blocks.get(bn)
@@ -1199,6 +1363,13 @@ pub def mir_borrow_conflicts(hf: HirFunction, mutating_methods: Map[str, bool]) 
             mut si = 0
             while si < blk.stmts.len:
                 mut stmt = blk.stmts.get(si)
+                mut after_creation = true
+                if be_reach.len > 0 and be_didx >= 0:
+                    after_creation = be_reach.get(bn)
+                    if bn == be.decl_block and si > be_didx: after_creation = true
+                if not after_creation:
+                    si = si + 1
+                    continue
                 mut invalid_desc = ""
                 mut sval = 0 as Pointer[HirExpr]
                 match stmt.read():
@@ -1207,8 +1378,10 @@ pub def mir_borrow_conflicts(hf: HirFunction, mutating_methods: Map[str, bool]) 
                         if wp == be.source: invalid_desc = "assign to"
                     case MirStmt.MDeclare(_, dv): sval = dv
                     case MirStmt.MEval(ev): sval = ev
-                if invalid_desc == "" and _is_mutating_call_on(sval, be.source, mutating_methods):
+                if invalid_desc == "" and _is_mutating_call_on(sval, be.source, mutating_methods, be.path):
                     invalid_desc = "call a mutating method on"
+                if invalid_desc == "" and _pwrite_hits(mf.pwrites, bn, si, be.source, be.path):
+                    invalid_desc = "assign to a part of"
                 if invalid_desc != "":
                     if borrower_live_after(blk, si, be.borrower, lo):
                         out.push("cannot " + invalid_desc + " '" + be.source + "' while it is borrowed by '" + be.borrower + "' — the borrow is still live")
@@ -1296,13 +1469,102 @@ pub def mir_shared_ref_param_violations(hf: HirFunction, mutating_methods: Map[s
                         if wp == pn: desc = "reassign"
                     case MirStmt.MDeclare(_, dv): sval = dv
                     case MirStmt.MEval(ev): sval = ev
-                if desc == "" and _is_mutating_call_on(sval, pn, mutating_methods):
+                if desc == "" and _is_mutating_call_on(sval, pn, mutating_methods, ""):
                     desc = "call a mutating method on"
                 if desc != "":
                     out.push("cannot " + desc + " '" + pn + "' — it is a SHARED `ref` parameter (read-only)")
                 si = si + 1
             bn = bn + 1
         sk = sk + 1
+    return out
+
+# ---- [B-3] writes THROUGH a shared `ref` parameter's fields / elements ------------------------
+# The MIR drops field/index assignment targets, so `c.n = 4`, `a[0] = 1`, `c.l.append(1)` on a
+# shared `ref` parameter were invisible to mir_shared_ref_param_violations. This direct HIR walk
+# closes the hole. Closure bodies are not entered.
+def _b3_root_ident(e: Pointer[HirExpr]) -> str:
+    mut cur = e
+    mut guard = 0
+    while cur as usize != 0 as usize and guard < 64:
+        match cur.read():
+            case HirExpr.EIdent(n, _, _): return n
+            case HirExpr.EPropAccess(o, _, _): cur = o
+            case HirExpr.EIndex(o, _, _): cur = o
+            case _: return ""
+        guard = guard + 1
+    return ""
+
+def _b3_is_plain_ident(e: Pointer[HirExpr]) -> bool:
+    if e as usize == 0 as usize: return false
+    match e.read():
+        case HirExpr.EIdent(_, _, _): return true
+        case _: return false
+
+def _b3_nested_mut_call(e: Pointer[HirExpr], pn: str, mm: Map[str, bool]) -> bool:
+    if e as usize == 0 as usize: return false
+    match e.read():
+        case HirExpr.EMethodCall(obj, method, _, _):
+            if obj as usize == 0 as usize: return false
+            if _b3_is_plain_ident(obj): return false
+            if _b3_root_ident(obj) != pn: return false
+            mut tn = hir_expr_type(obj).name
+            if tn == "List" or tn == "Vec" or tn == "Dict" or tn == "Map" or tn == "Set":
+                return method == "push" or method == "append" or method == "insert" or method == "remove" or method == "pop" or method == "clear" or method == "extend" or method == "add" or method == "put" or method == "set"
+            return mm.contains(tn + "." + method)
+        case _: return false
+
+def _b3_block(b: HirBlock, pn: str, mm: Map[str, bool], out: Vec[str]):
+    if b as usize == 0 as usize: return
+    mut i = 0
+    while i < b.stmts.len:
+        _b3_stmt(b.stmts.get(i), pn, mm, out)
+        i = i + 1
+
+def _b3_stmt(s: Pointer[HirStmt], pn: str, mm: Map[str, bool], out: Vec[str]):
+    if s as usize == 0 as usize: return
+    match s.read():
+        case HirStmt.SAssign(tgt, val):
+            if tgt as usize != 0 as usize and not _b3_is_plain_ident(tgt) and _b3_root_ident(tgt) == pn:
+                out.push("cannot assign through '" + pn + "' — it is a SHARED `ref` parameter (read-only)")
+            elif _b3_nested_mut_call(val, pn, mm):
+                out.push("cannot call a mutating method on a part of '" + pn + "' — it is a SHARED `ref` parameter (read-only)")
+        case HirStmt.SExpr(e):
+            if _b3_nested_mut_call(e, pn, mm):
+                out.push("cannot call a mutating method on a part of '" + pn + "' — it is a SHARED `ref` parameter (read-only)")
+        case HirStmt.SLet(_, _, _, _, _, _, v):
+            if _b3_nested_mut_call(v, pn, mm):
+                out.push("cannot call a mutating method on a part of '" + pn + "' — it is a SHARED `ref` parameter (read-only)")
+        case HirStmt.SIf(_, tb, eb):
+            _b3_block(tb, pn, mm, out)
+            _b3_block(eb, pn, mm, out)
+        case HirStmt.SWhile(_, body): _b3_block(body, pn, mm, out)
+        case HirStmt.SFor(_, _, body): _b3_block(body, pn, mm, out)
+        case HirStmt.SForUnpack(_, _, body): _b3_block(body, pn, mm, out)
+        case HirStmt.SUnsafe(body): _b3_block(body, pn, mm, out)
+        case HirStmt.SWith(_, _, body): _b3_block(body, pn, mm, out)
+        case HirStmt.SMatch(_, arms):
+            mut i = 0
+            while i < arms.len:
+                _b3_block(arms.get(i).body, pn, mm, out)
+                i = i + 1
+        case HirStmt.STry(tb, catches, fb):
+            _b3_block(tb, pn, mm, out)
+            mut i = 0
+            while i < catches.len:
+                _b3_block(catches.get(i).read().body, pn, mm, out)
+                i = i + 1
+            _b3_block(fb, pn, mm, out)
+        case HirStmt.SDefer(inner): _b3_stmt(inner, pn, mm, out)
+        case _: pass
+
+pub def mir_shared_ref_param_field_writes(hf: HirFunction, mm: Map[str, bool]) -> Vec[str]:
+    mut out = Vec[str].init(2)
+    mut pi = 0
+    while pi < hf.params.len:
+        mut pty = hf.params.get(pi).ty
+        if pty.is_borrow and not pty.is_mut_borrow:
+            _b3_block(hf.body, hf.params.get(pi).name, mm, out)
+        pi = pi + 1
     return out
 
 pub def mir_if_drop_plan(hf: HirFunction) -> Vec[DropSite]:

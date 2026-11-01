@@ -1,0 +1,17 @@
+# EXPECT: pass
+# A `str` read straight out of a list element / field list is passed to a callee that
+# clears the list: the caller must keep the buffer alive for the duration of the call.
+class Bag:
+    pub items: List[str]
+def peek(b: Bag, r: str):
+    b.items.clear()
+    print(r)
+def peek2(r: str, xs: List[str]):
+    xs.clear()
+    print(r)
+def main():
+    mut b = Bag()
+    b.items = ["a" + "b"]
+    peek(b, b.items[0])
+    mut xs: List[str] = ["c" + "d"]
+    peek2(xs[0], xs)

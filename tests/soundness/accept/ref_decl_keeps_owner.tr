@@ -1,0 +1,9 @@
+# EXPECT: pass
+# `r: ref List[int] = xs` BORROWS xs (it is not a hand-off): xs stays usable, and
+# once the borrow is dead it can be mutated again.
+def main():
+    mut xs: List[int] = [1]
+    r: ref List[int] = xs
+    print(r.len())
+    xs.append(2)
+    print(xs.len())

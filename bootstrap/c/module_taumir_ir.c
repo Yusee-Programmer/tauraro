@@ -95,7 +95,7 @@ __attribute__((hot)) long long LFunc_new_block(LFunc* self) {
 #line 165 "src/taumir/ir.tr"
     long long id = self->blocks->len;
 #line 166 "src/taumir/ir.tr"
-    ({ LBlock* _ord_t6791 = (LBlock_init(id)); List_ptr_append(self->blocks, _tr_obj_retain(_ord_t6791)); _tr_obj_release(_ord_t6791, _trdrop_LBlock); });
+    ({ LBlock* _ord_t7262 = (LBlock_init(id)); List_ptr_append(self->blocks, _tr_obj_retain(_ord_t7262)); _tr_obj_release(_ord_t7262, _trdrop_LBlock); });
 #line 167 "src/taumir/ir.tr"
     return id;
 }
@@ -107,29 +107,29 @@ __attribute__((hot)) void LFunc_set_cur(LFunc* self, long long id) {
 
 __attribute__((hot)) void LFunc_emit(LFunc* self, LInst i) {
 #line 173 "src/taumir/ir.tr"
-    ({ __auto_type _ord_t6792 = (box_linst(i)); List_ptr_append(((LBlock*)List_ptr_get(self->blocks, self->cur))->insts, _ord_t6792); });
+    ({ __auto_type _ord_t7263 = (box_linst(i)); List_ptr_append(((LBlock*)List_ptr_get(self->blocks, self->cur))->insts, _ord_t7263); });
 }
 
 __attribute__((hot)) void LFunc_set_term(LFunc* self, LTerm t) {
 #line 179 "src/taumir/ir.tr"
     LBlock* b = ((LBlock*)List_ptr_get(self->blocks, self->cur));
 #line 180 "src/taumir/ir.tr"
-    __auto_type _t6793 = b->term;
-    if (_t6793.tag == LTerm_TUnset) {
+    __auto_type _t7264 = b->term;
+    if (_t7264.tag == LTerm_TUnset) {
         b->term = t;
     } else if (1) {
-        __auto_type _ = _t6793;
+        __auto_type _ = _t7264;
         /* pass */
     }
 }
 
 __attribute__((hot)) bool LFunc_cur_terminated(LFunc* self) {
 #line 185 "src/taumir/ir.tr"
-    __auto_type _t6794 = ((LBlock*)List_ptr_get(self->blocks, self->cur))->term;
-    if (_t6794.tag == LTerm_TUnset) {
+    __auto_type _t7265 = ((LBlock*)List_ptr_get(self->blocks, self->cur))->term;
+    if (_t7265.tag == LTerm_TUnset) {
         return false;
     } else if (1) {
-        __auto_type _ = _t6794;
+        __auto_type _ = _t7265;
         return true;
     }
 }
@@ -171,7 +171,7 @@ __attribute__((hot)) void LFunc_add_var(LFunc* self, TrStr name) {
 #line 205 "src/taumir/ir.tr"
     while ((i < self->vars->len)) {
 #line 206 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6795 = (List_TrStr_get(self->vars, i)); TrStr _cmpb_t6796 = (name); _Bool _cmpr_t6797 = _tr_str_eqv(_cmpa_t6795, _cmpb_t6796); _tr_str_release(_cmpa_t6795); _cmpr_t6797; })) {
+        if (({ TrStr _cmpa_t7266 = (List_TrStr_get(self->vars, i)); TrStr _cmpb_t7267 = (name); _Bool _cmpr_t7268 = _tr_str_eqv(_cmpa_t7266, _cmpb_t7267); _tr_str_release(_cmpa_t7266); _cmpr_t7268; })) {
 #line 206 "src/taumir/ir.tr"
             return;
         }
@@ -196,7 +196,7 @@ __attribute__((hot)) long long LFunc_var_index(LFunc* self, TrStr name) {
 #line 216 "src/taumir/ir.tr"
     while ((i < self->vars->len)) {
 #line 217 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6798 = (List_TrStr_get(self->vars, i)); TrStr _cmpb_t6799 = (name); _Bool _cmpr_t6800 = _tr_str_eqv(_cmpa_t6798, _cmpb_t6799); _tr_str_release(_cmpa_t6798); _cmpr_t6800; })) {
+        if (({ TrStr _cmpa_t7269 = (List_TrStr_get(self->vars, i)); TrStr _cmpb_t7270 = (name); _Bool _cmpr_t7271 = _tr_str_eqv(_cmpa_t7269, _cmpb_t7270); _tr_str_release(_cmpa_t7269); _cmpr_t7271; })) {
 #line 217 "src/taumir/ir.tr"
             return i;
         }
@@ -319,7 +319,7 @@ __attribute__((hot)) long long LFunc_capture_index(LFunc* self, TrStr name) {
 #line 271 "src/taumir/ir.tr"
     while ((i < self->captures->len)) {
 #line 272 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6801 = (List_TrStr_get(self->captures, i)); TrStr _cmpb_t6802 = (name); _Bool _cmpr_t6803 = _tr_str_eqv(_cmpa_t6801, _cmpb_t6802); _tr_str_release(_cmpa_t6801); _cmpr_t6803; })) {
+        if (({ TrStr _cmpa_t7272 = (List_TrStr_get(self->captures, i)); TrStr _cmpb_t7273 = (name); _Bool _cmpr_t7274 = _tr_str_eqv(_cmpa_t7272, _cmpb_t7273); _tr_str_release(_cmpa_t7272); _cmpr_t7274; })) {
 #line 272 "src/taumir/ir.tr"
             return i;
         }
@@ -355,7 +355,7 @@ __attribute__((hot)) long long ClassLayout_field_index(ClassLayout* self, TrStr 
 #line 300 "src/taumir/ir.tr"
     while ((i < self->fields->len)) {
 #line 301 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6804 = (List_TrStr_get(self->fields, i)); TrStr _cmpb_t6805 = (fname); _Bool _cmpr_t6806 = _tr_str_eqv(_cmpa_t6804, _cmpb_t6805); _tr_str_release(_cmpa_t6804); _cmpr_t6806; })) {
+        if (({ TrStr _cmpa_t7275 = (List_TrStr_get(self->fields, i)); TrStr _cmpb_t7276 = (fname); _Bool _cmpr_t7277 = _tr_str_eqv(_cmpa_t7275, _cmpb_t7276); _tr_str_release(_cmpa_t7275); _cmpr_t7277; })) {
 #line 301 "src/taumir/ir.tr"
             return i;
         }
@@ -488,7 +488,7 @@ __attribute__((hot)) bool LModule_is_overloaded(LModule* self, TrStr cls, TrStr 
 #line 418 "src/taumir/ir.tr"
     while ((i < self->overloaded_sigs->len)) {
 #line 419 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6807 = (List_TrStr_get(self->overloaded_sigs, i)); TrStr _cmpb_t6808 = (key); _Bool _cmpr_t6809 = _tr_str_eqv(_cmpa_t6807, _cmpb_t6808); _tr_str_release(_cmpa_t6807); _cmpr_t6809; })) {
+        if (({ TrStr _cmpa_t7278 = (List_TrStr_get(self->overloaded_sigs, i)); TrStr _cmpb_t7279 = (key); _Bool _cmpr_t7280 = _tr_str_eqv(_cmpa_t7278, _cmpb_t7279); _tr_str_release(_cmpa_t7278); _cmpr_t7280; })) {
 #line 419 "src/taumir/ir.tr"
             _tr_str_release(key);
             return true;
@@ -523,10 +523,10 @@ __attribute__((hot)) TrStr LModule_resolve_method_ov(LModule* self, TrStr cls, T
 #line 433 "src/taumir/ir.tr"
             if (LModule_is_user_fn(self, mm)) {
 #line 433 "src/taumir/ir.tr"
-                TrStr _trret1566 = _tr_str_retain(mm);
+                TrStr _trret1588 = _tr_str_retain(mm);
                 _tr_str_release(cur);
                 _tr_str_release(mm);
-                return _trret1566;
+                return _trret1588;
             }
         }
 #line 434 "src/taumir/ir.tr"
@@ -534,15 +534,15 @@ __attribute__((hot)) TrStr LModule_resolve_method_ov(LModule* self, TrStr cls, T
 #line 435 "src/taumir/ir.tr"
         if (LModule_is_user_fn(self, mangled)) {
 #line 435 "src/taumir/ir.tr"
-            TrStr _trret1567 = _tr_str_retain(mangled);
+            TrStr _trret1589 = _tr_str_retain(mangled);
             _tr_str_release(cur);
             _tr_str_release(mangled);
-            return _trret1567;
+            return _trret1589;
         }
 #line 436 "src/taumir/ir.tr"
-        TrStr _strtmp_t6810 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
+        TrStr _strtmp_t7281 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
         _tr_str_release(cur);
-        cur = _strtmp_t6810;
+        cur = _strtmp_t7281;
 #line 437 "src/taumir/ir.tr"
         if (((((unsigned long long)(((char*)(_tr_strz(cur))))) == ((unsigned long long)(0LL))) || _tr_str_eqv((cur), (_tr_str_lit_len("", 0LL))))) {
 #line 437 "src/taumir/ir.tr"
@@ -565,7 +565,7 @@ __attribute__((hot)) long long LModule_add_global(LModule* self, TrStr name, lon
 #line 444 "src/taumir/ir.tr"
     while ((i < self->globals->len)) {
 #line 445 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6811 = (List_TrStr_get(self->globals, i)); TrStr _cmpb_t6812 = (name); _Bool _cmpr_t6813 = _tr_str_eqv(_cmpa_t6811, _cmpb_t6812); _tr_str_release(_cmpa_t6811); _cmpr_t6813; })) {
+        if (({ TrStr _cmpa_t7282 = (List_TrStr_get(self->globals, i)); TrStr _cmpb_t7283 = (name); _Bool _cmpr_t7284 = _tr_str_eqv(_cmpa_t7282, _cmpb_t7283); _tr_str_release(_cmpa_t7282); _cmpr_t7284; })) {
 #line 445 "src/taumir/ir.tr"
             return i;
         }
@@ -608,7 +608,7 @@ __attribute__((hot)) long long LModule_global_index(LModule* self, TrStr name) {
 #line 464 "src/taumir/ir.tr"
     while ((i < self->globals->len)) {
 #line 465 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6814 = (List_TrStr_get(self->globals, i)); TrStr _cmpb_t6815 = (name); _Bool _cmpr_t6816 = _tr_str_eqv(_cmpa_t6814, _cmpb_t6815); _tr_str_release(_cmpa_t6814); _cmpr_t6816; })) {
+        if (({ TrStr _cmpa_t7285 = (List_TrStr_get(self->globals, i)); TrStr _cmpb_t7286 = (name); _Bool _cmpr_t7287 = _tr_str_eqv(_cmpa_t7285, _cmpb_t7286); _tr_str_release(_cmpa_t7285); _cmpr_t7287; })) {
 #line 465 "src/taumir/ir.tr"
             return i;
         }
@@ -642,7 +642,7 @@ __attribute__((hot)) long long LModule_fn_ret_tag(LModule* self, TrStr name) {
 #line 480 "src/taumir/ir.tr"
     while ((i < self->fn_names->len)) {
 #line 481 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6817 = (List_TrStr_get(self->fn_names, i)); TrStr _cmpb_t6818 = (name); _Bool _cmpr_t6819 = _tr_str_eqv(_cmpa_t6817, _cmpb_t6818); _tr_str_release(_cmpa_t6817); _cmpr_t6819; })) {
+        if (({ TrStr _cmpa_t7288 = (List_TrStr_get(self->fn_names, i)); TrStr _cmpb_t7289 = (name); _Bool _cmpr_t7290 = _tr_str_eqv(_cmpa_t7288, _cmpb_t7289); _tr_str_release(_cmpa_t7288); _cmpr_t7290; })) {
 #line 481 "src/taumir/ir.tr"
             return List_i64_get(self->fn_ret, i);
         }
@@ -659,7 +659,7 @@ __attribute__((hot)) long long LModule_add_string(LModule* self, TrStr s, long l
 #line 494 "src/taumir/ir.tr"
     while ((i < self->strings->len)) {
 #line 495 "src/taumir/ir.tr"
-        if (((List_i64_get(self->string_lens, i) == blen) && ({ TrStr _at_t6820 = (List_TrStr_get(self->strings, i)); __auto_type _wr = (_ir_bytes_eq(_at_t6820, s, blen)); _tr_str_release(_at_t6820); _wr; }))) {
+        if (((List_i64_get(self->string_lens, i) == blen) && ({ TrStr _at_t7291 = (List_TrStr_get(self->strings, i)); __auto_type _wr = (_ir_bytes_eq(_at_t7291, s, blen)); _tr_str_release(_at_t7291); _wr; }))) {
 #line 496 "src/taumir/ir.tr"
             return i;
         }
@@ -680,7 +680,7 @@ __attribute__((hot)) void LModule_add_extern(LModule* self, TrStr name) {
 #line 504 "src/taumir/ir.tr"
     while ((i < self->externs->len)) {
 #line 505 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6821 = (List_TrStr_get(self->externs, i)); TrStr _cmpb_t6822 = (name); _Bool _cmpr_t6823 = _tr_str_eqv(_cmpa_t6821, _cmpb_t6822); _tr_str_release(_cmpa_t6821); _cmpr_t6823; })) {
+        if (({ TrStr _cmpa_t7292 = (List_TrStr_get(self->externs, i)); TrStr _cmpb_t7293 = (name); _Bool _cmpr_t7294 = _tr_str_eqv(_cmpa_t7292, _cmpb_t7293); _tr_str_release(_cmpa_t7292); _cmpr_t7294; })) {
 #line 505 "src/taumir/ir.tr"
             return;
         }
@@ -697,7 +697,7 @@ __attribute__((hot)) bool LModule_is_user_fn(LModule* self, TrStr name) {
 #line 511 "src/taumir/ir.tr"
     while ((i < self->fn_names->len)) {
 #line 512 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6824 = (List_TrStr_get(self->fn_names, i)); TrStr _cmpb_t6825 = (name); _Bool _cmpr_t6826 = _tr_str_eqv(_cmpa_t6824, _cmpb_t6825); _tr_str_release(_cmpa_t6824); _cmpr_t6826; })) {
+        if (({ TrStr _cmpa_t7295 = (List_TrStr_get(self->fn_names, i)); TrStr _cmpb_t7296 = (name); _Bool _cmpr_t7297 = _tr_str_eqv(_cmpa_t7295, _cmpb_t7296); _tr_str_release(_cmpa_t7295); _cmpr_t7297; })) {
 #line 512 "src/taumir/ir.tr"
             return true;
         }
@@ -714,7 +714,7 @@ __attribute__((hot)) bool LModule_is_extern_fn(LModule* self, TrStr name) {
 #line 518 "src/taumir/ir.tr"
     while ((i < self->extfn_names->len)) {
 #line 519 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6827 = (List_TrStr_get(self->extfn_names, i)); TrStr _cmpb_t6828 = (name); _Bool _cmpr_t6829 = _tr_str_eqv(_cmpa_t6827, _cmpb_t6828); _tr_str_release(_cmpa_t6827); _cmpr_t6829; })) {
+        if (({ TrStr _cmpa_t7298 = (List_TrStr_get(self->extfn_names, i)); TrStr _cmpb_t7299 = (name); _Bool _cmpr_t7300 = _tr_str_eqv(_cmpa_t7298, _cmpb_t7299); _tr_str_release(_cmpa_t7298); _cmpr_t7300; })) {
 #line 519 "src/taumir/ir.tr"
             return true;
         }
@@ -731,7 +731,7 @@ __attribute__((hot)) long long LModule_extern_ret_tag(LModule* self, TrStr name)
 #line 525 "src/taumir/ir.tr"
     while ((i < self->extfn_names->len)) {
 #line 526 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6830 = (List_TrStr_get(self->extfn_names, i)); TrStr _cmpb_t6831 = (name); _Bool _cmpr_t6832 = _tr_str_eqv(_cmpa_t6830, _cmpb_t6831); _tr_str_release(_cmpa_t6830); _cmpr_t6832; })) {
+        if (({ TrStr _cmpa_t7301 = (List_TrStr_get(self->extfn_names, i)); TrStr _cmpb_t7302 = (name); _Bool _cmpr_t7303 = _tr_str_eqv(_cmpa_t7301, _cmpb_t7302); _tr_str_release(_cmpa_t7301); _cmpr_t7303; })) {
 #line 526 "src/taumir/ir.tr"
             return List_i64_get(self->extfn_ret, i);
         }
@@ -748,7 +748,7 @@ __attribute__((hot)) void LModule_mark_fn_owned(LModule* self, TrStr name) {
 #line 533 "src/taumir/ir.tr"
     while ((i < self->fn_owned_names->len)) {
 #line 534 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6833 = (List_TrStr_get(self->fn_owned_names, i)); TrStr _cmpb_t6834 = (name); _Bool _cmpr_t6835 = _tr_str_eqv(_cmpa_t6833, _cmpb_t6834); _tr_str_release(_cmpa_t6833); _cmpr_t6835; })) {
+        if (({ TrStr _cmpa_t7304 = (List_TrStr_get(self->fn_owned_names, i)); TrStr _cmpb_t7305 = (name); _Bool _cmpr_t7306 = _tr_str_eqv(_cmpa_t7304, _cmpb_t7305); _tr_str_release(_cmpa_t7304); _cmpr_t7306; })) {
 #line 534 "src/taumir/ir.tr"
             return;
         }
@@ -765,7 +765,7 @@ __attribute__((hot)) bool LModule_fn_ret_owned(LModule* self, TrStr name) {
 #line 542 "src/taumir/ir.tr"
     while ((i < self->fn_owned_names->len)) {
 #line 543 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6836 = (List_TrStr_get(self->fn_owned_names, i)); TrStr _cmpb_t6837 = (name); _Bool _cmpr_t6838 = _tr_str_eqv(_cmpa_t6836, _cmpb_t6837); _tr_str_release(_cmpa_t6836); _cmpr_t6838; })) {
+        if (({ TrStr _cmpa_t7307 = (List_TrStr_get(self->fn_owned_names, i)); TrStr _cmpb_t7308 = (name); _Bool _cmpr_t7309 = _tr_str_eqv(_cmpa_t7307, _cmpb_t7308); _tr_str_release(_cmpa_t7307); _cmpr_t7309; })) {
 #line 543 "src/taumir/ir.tr"
             return true;
         }
@@ -787,7 +787,7 @@ __attribute__((hot)) long long LModule_unavail_index(LModule* self, TrStr name) 
 #line 551 "src/taumir/ir.tr"
     while ((i < self->unavail_names->len)) {
 #line 552 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6839 = (List_TrStr_get(self->unavail_names, i)); TrStr _cmpb_t6840 = (name); _Bool _cmpr_t6841 = _tr_str_eqv(_cmpa_t6839, _cmpb_t6840); _tr_str_release(_cmpa_t6839); _cmpr_t6841; })) {
+        if (({ TrStr _cmpa_t7310 = (List_TrStr_get(self->unavail_names, i)); TrStr _cmpb_t7311 = (name); _Bool _cmpr_t7312 = _tr_str_eqv(_cmpa_t7310, _cmpb_t7311); _tr_str_release(_cmpa_t7310); _cmpr_t7312; })) {
 #line 552 "src/taumir/ir.tr"
             return i;
         }
@@ -919,15 +919,15 @@ __attribute__((hot)) TrStr LModule_resolve_method(LModule* self, TrStr cls, TrSt
 #line 611 "src/taumir/ir.tr"
         if (LModule_is_user_fn(self, mangled)) {
 #line 611 "src/taumir/ir.tr"
-            TrStr _trret1568 = _tr_str_retain(mangled);
+            TrStr _trret1590 = _tr_str_retain(mangled);
             _tr_str_release(cur);
             _tr_str_release(mangled);
-            return _trret1568;
+            return _trret1590;
         }
 #line 612 "src/taumir/ir.tr"
-        TrStr _strtmp_t6842 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
+        TrStr _strtmp_t7313 = _tr_str_retain(((ClassLayout*)List_ptr_get(self->classes, ci))->base);
         _tr_str_release(cur);
-        cur = _strtmp_t6842;
+        cur = _strtmp_t7313;
 #line 613 "src/taumir/ir.tr"
         if (((((unsigned long long)(((char*)(_tr_strz(cur))))) == ((unsigned long long)(0LL))) || _tr_str_eqv((cur), (_tr_str_lit_len("", 0LL))))) {
 #line 613 "src/taumir/ir.tr"
@@ -1051,7 +1051,7 @@ __attribute__((hot)) bool LModule_is_iface(LModule* self, TrStr name) {
 #line 664 "src/taumir/ir.tr"
     while ((i < self->ifaces->len)) {
 #line 665 "src/taumir/ir.tr"
-        if (({ TrStr _cmpa_t6843 = (List_TrStr_get(self->ifaces, i)); TrStr _cmpb_t6844 = (name); _Bool _cmpr_t6845 = _tr_str_eqv(_cmpa_t6843, _cmpb_t6844); _tr_str_release(_cmpa_t6843); _cmpr_t6845; })) {
+        if (({ TrStr _cmpa_t7314 = (List_TrStr_get(self->ifaces, i)); TrStr _cmpb_t7315 = (name); _Bool _cmpr_t7316 = _tr_str_eqv(_cmpa_t7314, _cmpb_t7315); _tr_str_release(_cmpa_t7314); _cmpr_t7316; })) {
 #line 665 "src/taumir/ir.tr"
             return true;
         }
@@ -1083,7 +1083,7 @@ __attribute__((hot)) bool _ir_bytes_eq(TrStr a, TrStr b, long long n) {
 #line 71 "src/taumir/ir.tr"
     while ((i < n)) {
 #line 72 "src/taumir/ir.tr"
-        if (({ __auto_type _ord_t6846 = ((*(pa + i))); __auto_type _wr = ((_ord_t6846 != (*(pb + i)))); _wr; })) {
+        if (({ __auto_type _ord_t7317 = ((*(pa + i))); __auto_type _wr = ((_ord_t7317 != (*(pb + i)))); _wr; })) {
 #line 72 "src/taumir/ir.tr"
             return false;
         }

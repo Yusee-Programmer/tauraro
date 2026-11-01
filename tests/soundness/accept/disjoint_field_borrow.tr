@@ -1,0 +1,12 @@
+# EXPECT: pass
+# Borrowing one field and writing a DIFFERENT field of the same object is fine.
+class C:
+    pub name: str
+    pub n: int
+def main():
+    mut c = C()
+    c.name = "x" + "y"
+    r: ref str = c.name
+    c.n = 5
+    print(r)
+    print(c.n)

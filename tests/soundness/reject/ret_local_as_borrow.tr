@@ -1,0 +1,8 @@
+# EXPECT: [L-3]
+# A function returning `ref T` must not return a borrow of one of its own owned
+# locals: the local is released when the function returns.
+def f() -> ref List[int]:
+    mut xs: List[int] = [1]
+    return xs
+def main():
+    print(f().len())

@@ -1,0 +1,11 @@
+# EXPECT: [B-3]
+# Mutating a collection reached THROUGH a shared `ref` parameter is a write to it.
+class C:
+    pub n: int
+    pub l: List[int]
+def f(c: ref C):
+    c.l.append(1)
+def main():
+    mut c = C()
+    c.l = []
+    f(c)

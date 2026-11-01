@@ -53,6 +53,7 @@ typedef struct HirProgram HirProgram;
 typedef struct MirBlock MirBlock;
 typedef struct DropSite DropSite;
 typedef struct BorrowEdge BorrowEdge;
+typedef struct PWrite PWrite;
 typedef struct MirFunction MirFunction;
 typedef struct MirProgram MirProgram;
 typedef struct MirBuilder MirBuilder;
@@ -150,6 +151,7 @@ static void _trdrop_HirProgram(void* vp);
 static void _trdrop_MirBlock(void* vp);
 static void _trdrop_DropSite(void* vp);
 static void _trdrop_BorrowEdge(void* vp);
+static void _trdrop_PWrite(void* vp);
 static void _trdrop_MirFunction(void* vp);
 static void _trdrop_MirProgram(void* vp);
 static void _trdrop_MirBuilder(void* vp);
@@ -2624,12 +2626,30 @@ typedef struct BorrowEdge {
     TrStr source;
     long long decl_block;
     bool is_exclusive;
+    TrStr path;
     bool via_collection;
 } BorrowEdge;
 static void _trdrop_BorrowEdge(void* vp) {
     BorrowEdge* self = (BorrowEdge*)vp; (void)self;
     _tr_str_release(self->borrower);
     _tr_str_release(self->source);
+    _tr_str_release(self->path);
+}
+#endif
+
+#ifndef PWrite_STRUCT_DEFINED
+#define PWrite_STRUCT_DEFINED
+typedef struct PWrite {
+    size_t __rc;
+    long long block;
+    long long idx;
+    TrStr root;
+    TrStr path;
+} PWrite;
+static void _trdrop_PWrite(void* vp) {
+    PWrite* self = (PWrite*)vp; (void)self;
+    _tr_str_release(self->root);
+    _tr_str_release(self->path);
 }
 #endif
 
@@ -2643,6 +2663,7 @@ typedef struct MirFunction {
     List_ptr* if_bodies;
     LiveSet* unsafe_pinned;
     List_ptr* borrows;
+    List_ptr* pwrites;
     bool complete;
 } MirFunction;
 static void _trdrop_MirFunction(void* vp) {
@@ -2678,6 +2699,7 @@ typedef struct MirBuilder {
     List_i64* loop_continue;
     List_i64* loop_break;
     List_ptr* borrows;
+    List_ptr* pwrites;
 } MirBuilder;
 static void _trdrop_MirBuilder(void* vp) {
     MirBuilder* self = (MirBuilder*)vp; (void)self;
@@ -2763,6 +2785,8 @@ static void _trdrop_Scope(void* vp) {
 typedef struct Sema {
     size_t __rc;
     List_TrStr* sendable_tparams;
+    bool in_defer;
+    TrMap* defer_names;
     TrMap* alias_assigned;
     TrMap* globals;
     List_ptr* scopes;
@@ -3171,6 +3195,8 @@ typedef struct CGenerator {
     TrMap* type_alias_map;
     TrMap* type_alias_tr;
     List_TrStr* defer_stack;
+    bool defers_pre_flushed;
+    unsigned long long func_body_blk;
     List_TrStr* wrap_temp_decls;
     List_TrStr* wrap_temp_names;
     List_TrStr* wrap_obj_names;
@@ -3965,12 +3991,17 @@ __attribute__((hot)) HirExpr* box_hirexpr(HirExpr e);
 __attribute__((hot)) HirStmt* box_hirstmt(HirStmt s);
 __attribute__((hot)) AstType* hir_expr_type(HirExpr* e);
 __attribute__((hot)) long long _tr_str_len(TrStr s);
-__attribute__((hot)) bool _is_mutating_call_on(HirExpr* val, TrStr source, TrMap* mm);
+__attribute__((hot)) TrStr _pl_root(HirExpr* e);
+__attribute__((hot)) TrStr _pl_path(HirExpr* e);
+__attribute__((hot)) bool _pl_overlap(TrStr a, TrStr b);
+__attribute__((hot)) bool _is_mutating_call_on(HirExpr* val, TrStr source, TrMap* mm, TrStr bpath);
 __attribute__((hot)) MirStmt* box_mirstmt(MirStmt s);
 __attribute__((hot)) MirTerm* box_mirterm(MirTerm t);
 __attribute__((malloc,returns_nonnull,hot)) MirBuilder* MirBuilder_init();
 __attribute__((hot)) void MirBuilder_record_borrow(MirBuilder* self, TrStr borrower, TrStr source, bool exclusive);
 __attribute__((hot)) void MirBuilder_record_coll_borrow(MirBuilder* self, TrStr borrower, TrStr source, bool exclusive);
+__attribute__((hot)) void MirBuilder_record_path_borrow(MirBuilder* self, TrStr borrower, TrStr source, TrStr path, bool exclusive);
+__attribute__((hot)) void MirBuilder_record_pwrite(MirBuilder* self, TrStr root, TrStr path);
 __attribute__((hot)) long long MirBuilder_new_block(MirBuilder* self);
 __attribute__((hot)) void MirBuilder_push_stmt(MirBuilder* self, MirStmt s);
 __attribute__((hot)) void MirBuilder_set_term(MirBuilder* self, MirTerm t);
@@ -4010,9 +4041,18 @@ __attribute__((hot)) List_bool* compute_borrow_outlives(MirFunction* mf, List_pt
 __attribute__((hot)) bool is_if_body(MirFunction* mf, HirBlock* hb);
 __attribute__((hot)) DropSite* site_for(List_ptr* out, HirBlock* hb);
 __attribute__((hot)) List_TrStr* mir_proven_borrows(HirFunction* hf);
+__attribute__((hot)) bool _pwrite_hits(List_ptr* pws, long long blk, long long idx, TrStr root, TrStr bpath);
+__attribute__((hot)) List_bool* _reach_from(MirFunction* mf, long long start);
+__attribute__((hot)) long long _decl_index(MirBlock* blk, TrStr name);
 __attribute__((hot)) bool borrower_live_after(MirBlock* blk, long long after_idx, TrStr name, LiveSet* lo);
 __attribute__((hot)) List_TrStr* mir_borrow_conflicts(HirFunction* hf, TrMap* mutating_methods);
 __attribute__((hot)) List_TrStr* mir_shared_ref_param_violations(HirFunction* hf, TrMap* mutating_methods);
+__attribute__((hot)) TrStr _b3_root_ident(HirExpr* e);
+__attribute__((hot)) bool _b3_is_plain_ident(HirExpr* e);
+__attribute__((hot)) bool _b3_nested_mut_call(HirExpr* e, TrStr pn, TrMap* mm);
+__attribute__((hot)) void _b3_block(HirBlock* b, TrStr pn, TrMap* mm, List_TrStr* out);
+__attribute__((hot)) void _b3_stmt(HirStmt* s, TrStr pn, TrMap* mm, List_TrStr* out);
+__attribute__((hot)) List_TrStr* mir_shared_ref_param_field_writes(HirFunction* hf, TrMap* mm);
 __attribute__((hot)) List_ptr* mir_if_drop_plan(HirFunction* hf);
 __attribute__((hot)) TrStr set_str(List_TrStr* v);
 __attribute__((hot)) TrStr term_str(MirTerm* t);
@@ -4033,6 +4073,14 @@ __attribute__((hot)) bool _rhs_is_alias(Expr* e);
 __attribute__((hot)) void _block_alias_assigns(Block* b, TrMap* out);
 __attribute__((hot)) void _pblock_alias_assigns(Block** pb, TrMap* out);
 __attribute__((hot)) void _stmt_alias_assigns(Stmt* s, TrMap* out);
+__attribute__((hot)) bool _is_coll_mutator(TrStr m);
+__attribute__((hot)) bool _expr_is_mut_call_on(Expr* e, TrStr name);
+__attribute__((hot)) bool _stmt_is_direct_mutation(Stmt* s, TrStr name);
+__attribute__((hot)) bool _stmt_ends_iteration(Stmt* s);
+__attribute__((hot)) bool _block_invalidates_iter(Block* b, TrStr name);
+__attribute__((hot)) bool _pblock_invalidates_iter(Block** pb, TrStr name);
+__attribute__((hot)) bool _stmt_nested_invalidates_iter(Stmt* s, TrStr name);
+__attribute__((hot)) bool _ty_has_borrow(AstType* t, long long depth);
 __attribute__((hot)) AstType** Sema_build_ast_type(Sema* self, Expr* e);
 __attribute__((hot)) AstType** Sema__targ_of(Sema* self, Expr* e);
 __attribute__((malloc,returns_nonnull,hot)) Sema* Sema_init();
@@ -4098,6 +4146,10 @@ __attribute__((hot)) bool Sema__expr_is_shared(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_check_spawn_sendable(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_check_class_sendable_fields(Sema* self, ClassDef* c);
 __attribute__((hot)) HirExpr* Sema__patch_empty_dict_hint(Sema* self, HirExpr* hv, AstType* hint_ty);
+__attribute__((hot)) bool Sema__m3_both_shared_ref(Sema* self, Expr* callee, long long i, long long j);
+__attribute__((hot)) void Sema__check_ret_local_borrow(Sema* self, Expr* e);
+__attribute__((hot)) void Sema_check_loop_moves(Sema* self, List_TrStr* names, HirBlock* body, bool by_block, long long limit);
+__attribute__((hot)) void Sema_check_defer_capture_moved(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_mark_moved(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_mark_freed(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_check_not_moved(Sema* self, TrStr name, TrStr ty_name);
@@ -5162,6 +5214,7 @@ __attribute__((hot)) TrStr CGenerator_dict_key_arg(CGenerator* self, HirExpr* e)
 __attribute__((hot)) TrStr CGenerator_dict_val_arg(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_gen_args_extern(CGenerator* self, List_ptr* args);
 __attribute__((hot)) bool CGenerator__is_fresh_str_expr(CGenerator* self, HirExpr* e);
+__attribute__((hot)) bool CGenerator__is_str_place_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__expr_is_borrow_call(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__is_fresh_obj_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_gen_args(CGenerator* self, List_ptr* args);
@@ -6174,6 +6227,24 @@ __attribute__((hot)) mir_BorrowEdge*** core_alloc_resize_mir_BorrowEdge_ptr(mir_
 __attribute__((hot)) void core_alloc_dealloc_mir_BorrowEdge_ptr(mir_BorrowEdge*** ptr);
 __attribute__((hot)) core_map_MapNode_str_mir_BorrowEdge** core_alloc_alloc_core_map_MapNode_str_mir_BorrowEdge(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_mir_BorrowEdge(core_map_MapNode_str_mir_BorrowEdge** ptr);
+
+typedef PWrite mir_PWrite;
+struct core_vec_Vec_mir_PWrite { mir_PWrite** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_PWrite core_vec_Vec_mir_PWrite;
+struct core_vec_Vec_mir_PWrite_ptr { mir_PWrite*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_mir_PWrite_ptr core_vec_Vec_mir_PWrite_ptr;
+struct core_map_MapNode_str_mir_PWrite { char* key; mir_PWrite* value; struct core_map_MapNode_str_mir_PWrite* next; };
+typedef struct core_map_MapNode_str_mir_PWrite core_map_MapNode_str_mir_PWrite;
+struct core_map_Map_str_mir_PWrite { core_map_MapNode_str_mir_PWrite** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_mir_PWrite core_map_Map_str_mir_PWrite;
+__attribute__((hot)) mir_PWrite** core_alloc_alloc_mir_PWrite(long long count);
+__attribute__((hot)) mir_PWrite** core_alloc_resize_mir_PWrite(mir_PWrite** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_PWrite(mir_PWrite** ptr);
+__attribute__((hot)) mir_PWrite*** core_alloc_alloc_mir_PWrite_ptr(long long count);
+__attribute__((hot)) mir_PWrite*** core_alloc_resize_mir_PWrite_ptr(mir_PWrite*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_mir_PWrite_ptr(mir_PWrite*** ptr);
+__attribute__((hot)) core_map_MapNode_str_mir_PWrite** core_alloc_alloc_core_map_MapNode_str_mir_PWrite(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_mir_PWrite(core_map_MapNode_str_mir_PWrite** ptr);
 
 typedef MirFunction mir_MirFunction;
 struct core_vec_Vec_mir_MirFunction { mir_MirFunction** data; long long len; long long capacity; };
