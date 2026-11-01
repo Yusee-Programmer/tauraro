@@ -1,0 +1,12 @@
+# EXPECT: [L-1]
+# Writing the address of a local through an out-parameter dangles.
+def fill(out: Pointer[Pointer[int]]) -> void:
+    mut x = 5
+    unsafe:
+        out.write(&x)
+
+def main():
+    unsafe:
+        mut pp: Pointer[Pointer[int]] = alloc[Pointer[Pointer[int]]](1)
+        fill(pp)
+        dealloc(pp)

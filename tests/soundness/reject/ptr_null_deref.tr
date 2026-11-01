@@ -1,0 +1,6 @@
+# EXPECT: [P-3]
+# Dereferencing a pointer that is null on every path.
+def main():
+    unsafe:
+        mut p: Pointer[int] = 0 as Pointer[int]
+        print(p.read())

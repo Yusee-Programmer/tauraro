@@ -1,0 +1,6 @@
+# EXPECT: [P-2]
+# Dereferencing a raw pointer with * outside unsafe.
+def main():
+    mut x = 5
+    mut p: Pointer[int] = &x
+    print(*p)

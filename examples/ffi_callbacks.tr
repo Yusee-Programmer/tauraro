@@ -27,7 +27,8 @@ def with_closure():
     mut total = 0
     mut cb = def(ev: c_int):
         total = total + (ev as int)
-    run_events(c_callback(cb), cb as Pointer[void], 10, 20, 12)
+    unsafe:
+        run_events(c_callback(cb), cb as Pointer[void], 10, 20, 12)
     print(total)                       # 42
 
 # ---- Pattern 2: explicit fn + Pointer[T] userdata (fully sound, C-idiomatic) -------------
@@ -46,7 +47,8 @@ def on_event(ev: c_int, ud: Pointer[Acc]):
 def with_userdata():
     mut acc = Acc()
     acc.total = 0
-    run_events(on_event as Pointer[void], (&acc) as Pointer[void], 10, 20, 12)
+    unsafe:
+        run_events(on_event as Pointer[void], (&acc) as Pointer[void], 10, 20, 12)
     print(acc.total)                   # 42
 
 def main():

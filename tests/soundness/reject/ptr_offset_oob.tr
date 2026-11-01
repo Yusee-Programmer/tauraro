@@ -1,0 +1,7 @@
+# EXPECT: [P-3]
+# A constant offset outside the alloc[T](n) block.
+def main():
+    unsafe:
+        mut p: Pointer[int] = alloc[int](4)
+        p.offset(100).write(5)
+        dealloc(p)

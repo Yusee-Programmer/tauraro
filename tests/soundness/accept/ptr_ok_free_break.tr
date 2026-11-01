@@ -1,0 +1,9 @@
+def main():
+    unsafe:
+        mut p: Pointer[int] = alloc[int](4)
+        mut i = 0
+        while i < 10:
+            if i == 3:
+                dealloc(p)
+                break
+            i += 1

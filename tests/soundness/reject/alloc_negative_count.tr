@@ -1,0 +1,6 @@
+# EXPECT: [P-3]
+# alloc with a negative literal element count.
+def main():
+    unsafe:
+        mut p: Pointer[int] = alloc[int](-1)
+        dealloc(p)

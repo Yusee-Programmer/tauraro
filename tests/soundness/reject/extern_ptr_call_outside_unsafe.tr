@@ -1,0 +1,8 @@
+# EXPECT: [P-5]
+# An extern C function taking a raw Pointer cannot be called from safe code.
+extern "C":
+    def free(p: Pointer[void]) -> void
+
+def main():
+    mut x = 5
+    free(&x)

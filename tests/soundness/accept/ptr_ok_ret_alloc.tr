@@ -1,0 +1,10 @@
+def mk() -> Pointer[int]:
+    unsafe:
+        mut p: Pointer[int] = alloc[int](2)
+        p.write(3)
+        return p
+def main():
+    unsafe:
+        mut p = mk()
+        print(p.read())
+        dealloc(p)

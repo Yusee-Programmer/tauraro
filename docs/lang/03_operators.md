@@ -210,6 +210,8 @@ a ^ b     # bitwise XOR
 ~a        # bitwise NOT (complement)
 a << n    # left shift by n bits
 a >> n    # right shift by n bits (arithmetic on signed, logical on unsigned)
+# The shift count is masked to the operand width (63 for 64-bit, 31 for narrower types), so a
+# count >= the width or a negative count is defined (never C undefined behaviour): 1 << 64 == 1.
 ```
 
 ```python

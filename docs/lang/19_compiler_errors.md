@@ -19,7 +19,7 @@ category, with its cause, a triggering example, and the fix.
 | [M-3] | Memory | Aliased mutable access in a call |
 | [M-4] | Memory | Mutation while borrowed |
 | [M-5] | Memory | Use of a possibly-moved value (flow-sensitive) |
-| [M-6] | Memory | Use after `dealloc()` |
+| [M-6] | Memory | Use after `dealloc()` / double `dealloc()` — followed through aliases, branches, loops, field paths and calls that free their parameter |
 | [M-7] | Memory | `none` assigned to a non-`Option` type |
 | [M-8] | Memory | Assign to immutable binding |
 | [T-1] | Concurrency | Type crossing a thread boundary is not `Sendable` |
@@ -62,9 +62,12 @@ category, with its cause, a triggering example, and the fix.
 | [I-1] | Interface / Init | (1) `implements` an undefined interface; (2) variable used before assignment |
 | [I-2] | Interface / Init | (1) Class missing an interface method; (2) variable not initialized on all paths |
 | [I-3] | Interface | Method signature doesn't match the interface |
-| [L-1] | Lifetime | Local pointer may not outlive its function |
+| [L-1] | Lifetime | Local pointer may not outlive its function (returned, or stored into a parameter / field / global / container / out-pointer) |
 | [P-1] | Unsafe | `.write()` on a `Pointer` outside `unsafe:` |
-| [P-2] | Unsafe | `.read()` (deref) or `.offset()` (pointer arithmetic) on a raw `Pointer` outside `unsafe:` — **on by default**, no `--strict` needed |
+| [P-2] | Unsafe | `.read()`, `*p`, `p[i]` (deref/index) or `.offset()` / `p + n` (pointer arithmetic) on a raw `Pointer` outside `unsafe:` — **on by default**, no `--strict` needed |
+| [P-3] | Unsafe | Statically certain raw-pointer misuse: null dereference, constant offset/index outside an `alloc[T](n)` block, `dealloc` of a stack address or null, negative `alloc` count |
+| [P-5] | Unsafe | Calling an `extern` function that has a raw `Pointer` parameter outside `unsafe:` (`--strict` only) |
+| [P-4] | Unsafe | (warning) an `alloc[]` block that is never `dealloc`'d / returned / stored on some path (leak) |
 | [U-1] | Unsafe | `alloc`/`dealloc`/`alloc_array` outside `unsafe:` (with `--strict`) |
 
 See [13 — Memory and Ownership](13_memory_and_ownership.md) for the conceptual
@@ -1047,6 +1050,41 @@ it.
 
 **FIX:** Wrap the deref/arithmetic in `unsafe:` — or, better, use a safe abstraction
 (`List[T]`, `str`, `StrView`, a slice) that does the bounds checking for you.
+
+---
+
+### [P-3] Statically Certain Raw-Pointer Misuse
+
+**Message:** one of
+`'.read()' on 'p', which is a null pointer here`, `'p.offset(100).write()' is outside the 4-element block 'p' was allocated with`,
+`index 4 is outside the 4-element block`, `dealloc() of a pointer to the stack local 'x'`,
+`alloc with a negative element count`.
+
+**Cause:** the compiler tracks, per path, which pointers are *definitely* null and which locals are bound to
+a literal `alloc[T](n)` block (until they are re-assigned, freed or joined with a path that disagrees), and
+rejects a dereference / constant offset / constant index that is certain to be wrong. Anything it cannot
+prove is left to the programmer (and to `--debug`, which adds ASan/UBSan).
+
+```python
+unsafe:
+    mut p: Pointer[int] = alloc[int](4)
+    p.offset(100).write(5)     # P-3: outside the 4-element block
+    dealloc(p)
+```
+
+**FIX:** keep constant offsets in `0 .. n-1` (or `n` for a one-past-the-end pointer that is not
+dereferenced), allocate before dereferencing, and only `dealloc` memory returned by `alloc[T]`.
+
+---
+
+### [P-4] `alloc` Block Leaks on a Path (warning)
+
+**Message:** `the alloc[] block held by 'p' (allocated at line N) is not dealloc'd on this path ...: it leaks.`
+
+**Cause:** a local that owns an `alloc[T]` block is neither `dealloc`'d, returned, stored into a field /
+global / container, nor passed to a call before a `return`, a `raise`, the end of the function, or its
+re-assignment. This is a *warning* (a leak is not memory-unsafe); `defer dealloc(p)` or a class with
+`init`/`drop` silences it.
 
 ---
 

@@ -1,0 +1,12 @@
+def f(c: int) -> int:
+    unsafe:
+        mut p: Pointer[int] = alloc[int](4)
+        if c > 0:
+            dealloc(p)
+            return 1
+        p.write(2)
+        dealloc(p)
+    return 0
+def main():
+    print(f(1))
+    print(f(0))

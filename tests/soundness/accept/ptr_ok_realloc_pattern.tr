@@ -1,0 +1,12 @@
+def main():
+    unsafe:
+        mut p: Pointer[int] = alloc[int](4)
+        p.write(1)
+        p.offset(3).write(9)
+        mut q = p.offset(1)
+        q.write(2)
+        dealloc(p)
+        p = alloc[int](2)
+        p.write(5)
+        print(p.read())
+        dealloc(p)

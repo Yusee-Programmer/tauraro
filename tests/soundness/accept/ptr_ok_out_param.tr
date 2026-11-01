@@ -1,0 +1,9 @@
+def fill(out: Pointer[int]) -> void:
+    unsafe:
+        out.write(7)
+def main():
+    mut x = 5
+    unsafe:
+        mut p: Pointer[int] = &x
+        fill(p)
+    print(x)

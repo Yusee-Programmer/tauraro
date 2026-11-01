@@ -1,0 +1,9 @@
+def on(ev: int, ud: Pointer[int]) -> void:
+    unsafe:
+        ud.write(ud.read() + ev)
+def main():
+    mut acc = 0
+    unsafe:
+        on(5, &acc)
+        on(6, &acc)
+    print(acc)

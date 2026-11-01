@@ -1,0 +1,10 @@
+def main():
+    mut c = 1
+    unsafe:
+        mut p: Pointer[int] = alloc[int](4)
+        p.write(1)
+        if c > 0:
+            dealloc(p)
+            p = alloc[int](4)
+        p.write(2)
+        dealloc(p)

@@ -225,3 +225,6 @@ as you're back in normal Tauraro code.
 - [14 — Unsafe and Pointers](14_unsafe_and_pointers.md) — `unsafe:`, `Pointer[T]`, `alloc`/`dealloc`.
 - [17 — Extern and FFI](17_extern_and_ffi.md) — `c_*` types, struct layout, callbacks.
 - [22 — Compiling & Cross-Compilation](22_compiling_and_cross_compilation.md) — `--no-heap`, bare-metal.
+
+
+> Float to integer casts (`f as int`, `int(f)`, `f as u8`) are defined: NaN becomes 0 and out-of-range values saturate to the target type's min/max. String indexing `s[i]` is bounds-checked and traps like `List` indexing.

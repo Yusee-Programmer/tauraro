@@ -1,0 +1,13 @@
+# EXPECT: [L-1]
+# Storing the address of a local into a parameter's field dangles.
+class H:
+    pub p: Pointer[int]
+
+def fill(h: H) -> void:
+    mut x = 5
+    unsafe:
+        h.p = &x
+
+def main():
+    mut h = H()
+    fill(h)

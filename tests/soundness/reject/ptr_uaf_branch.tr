@@ -1,0 +1,12 @@
+# EXPECT: [M-6]
+# A dealloc on only one path still leaves the pointer maybe-freed after the join.
+def f(c: int) -> int:
+    unsafe:
+        mut p: Pointer[int] = alloc[int](4)
+        p.write(1)
+        if c > 0:
+            dealloc(p)
+        return p.read()
+
+def main():
+    print(f(0))

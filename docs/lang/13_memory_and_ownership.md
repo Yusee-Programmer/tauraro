@@ -324,6 +324,7 @@ unsafe:
 ### Best Practices
 
 - Structure code so every allocation has exactly one `dealloc`, as the last thing done with that pointer.
+- `[M-6]` is flow-sensitive: it follows aliases (`q = p`, `p.offset(k)`, `p as Pointer[U]`), branches (a `dealloc` on one path makes the pointer *maybe freed* afterwards), loops (a `dealloc` of a pointer allocated outside the loop is a double free on the next iteration; `dealloc(p)` followed by `break`/`return` is fine), field paths (`h.p`) and calls to free functions that `dealloc` one of their `Pointer` parameters.
 - Set the pointer to a sentinel/none-equivalent (or let it go out of scope) immediately after `dealloc` if you must keep the binding around.
 
 ---

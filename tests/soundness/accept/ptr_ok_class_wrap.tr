@@ -1,0 +1,16 @@
+class Buffer:
+    pub ptr:  Pointer[int]
+    pub size: int
+extend Buffer:
+    pub def init(n: int) -> Buffer:
+        mut b = Buffer()
+        b.size = n
+        unsafe:
+            b.ptr = alloc[int](n)
+        return b
+    pub def drop(self) -> void:
+        unsafe:
+            dealloc(self.ptr)
+def main():
+    mut b = Buffer.init(4)
+    b.drop()

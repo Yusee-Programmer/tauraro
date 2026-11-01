@@ -1,0 +1,9 @@
+# EXPECT: [M-6]
+# A dealloc in a loop of a pointer allocated outside it frees twice on iteration 2.
+def main():
+    unsafe:
+        mut p: Pointer[int] = alloc[int](4)
+        mut i = 0
+        while i < 3:
+            dealloc(p)
+            i += 1

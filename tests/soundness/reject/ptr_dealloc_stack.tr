@@ -1,0 +1,7 @@
+# EXPECT: [P-3]
+# dealloc() of the address of a stack local.
+def main():
+    mut x = 5
+    unsafe:
+        mut p: Pointer[int] = &x
+        dealloc(p)

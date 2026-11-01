@@ -8,6 +8,7 @@ from std.core.io import _tr_exit, write_file, append_file, read_file
 from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, FunctionDef, ClassDef, EnumDef, InterfaceDef, Param, Decorator, FStringPart, Ownership, CatchClause, Comprehension, ChanSelectArm, GenericConstraint, ElifClause, unify_generic, type_mentions
 from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type, HirChanSelectArm
 from mir import mir_if_drop_plan, DropSite, mir_proven_borrows, mir_borrow_conflicts, mir_shared_ref_param_violations, mir_shared_ref_param_field_writes
+from ptrflow import ptrflow_check
 
 
 pub enum SymbolKind:
@@ -433,6 +434,11 @@ pub class Sema:
     pub container_borrows: Map[str, str] # container_var -> borrowing_var
     pub capturing_moves: bool           # Fix 1: branch snapshot - are we tracking move deltas?
     pub branch_moved_buf: Vec[str]      # Fix 1: names moved in current branch
+    pub pf_fns: Vec[HirFunction]        # raw-pointer flow analysis ([M-6]/[L-1], ptrflow.tr): lowered non-trusted functions
+    pub pf_files: Vec[str]
+    pub pf_lines: Vec[int]
+    pub extern_ptr_names: Map[str, bool]   # extern fns with a raw Pointer parameter (calls need `unsafe:`)
+    pub pf_trigger: bool                # some non-trusted function deallocs / takes an address -> run the pass
     pub capturing_inits: bool           # Fix 4: branch snapshot for init deltas
     pub branch_init_buf: Vec[str]       # Fix 4: names init'd in current branch
     pub copy_classes: Map[str, bool]    # Fix 3: auto-inferred Copy classes (all-primitive fields)
@@ -584,6 +590,11 @@ extend Sema:
         s.sendable_tparams = Vec[str].init(0)
         s.capturing_moves   = false
         s.branch_moved_buf  = Vec[str].init(0)
+        s.pf_fns            = Vec[HirFunction].init(0)
+        s.pf_files          = Vec[str].init(0)
+        s.pf_lines          = Vec[int].init(0)
+        s.pf_trigger        = false
+        s.extern_ptr_names  = Map[str, bool].init(4)
         s.capturing_inits   = false
         s.branch_init_buf   = Vec[str].init(0)
         s.copy_classes           = Map[str, bool].init(32)
@@ -4500,6 +4511,7 @@ extend Sema:
         # suppressed for locals that are only BORROWED (never consumed) by their callees.
         self.apply_borrow_drops(hp)
         self.check_free_fn_method_c_name_collisions(hp)
+        self.run_ptrflow(hp)
         return hp
 
     # [Bug: free-fn/class-method C-namespace collision] A free (module-level,
@@ -5693,6 +5705,49 @@ extend Sema:
                 if bc.base_classes.len > 0: cur = bc.base_classes.get(0)
                 else: cur = ""
 
+    # Flow-sensitive raw-pointer analysis (ptrflow.tr): [M-6] use/double free through aliases, branches,
+    # loops and calls; [L-1] escape of a stack address. Runs only when a non-trusted function deallocs
+    # or takes an address.
+    pub def run_ptrflow(self, hp: HirProgram):
+        mut fns = self.pf_fns
+        mut tf = HirFunction()
+        tf.name = "<top-level>"
+        tf.class_name = ""
+        tf.params = Vec[HirParam].init(0)
+        tf.ret_ty = AstType.init("void")
+        tf.body = HirBlock.init()
+        mut ti = 0
+        while ti < hp.top_level_stmts.len:
+            tf.body.push(hp.top_level_stmts.get(ti))
+            ti = ti + 1
+        fns.push(tf)
+        mut res = ptrflow_check(fns, Map[str, bool].init(1))
+        if self.strict_mode: res = ptrflow_check(fns, self.extern_ptr_names)
+        mut sv_file = self.current_file
+        mut sv_line = self.current_line
+        mut ri = 0
+        while ri < res.len:
+            mut r = res.get(ri)
+            mut at = r.index_of("@")
+            mut bar = r.index_of("|")
+            mut fi = r.slice(0, at).to_int()
+            mut ln = r.slice(at + 1, bar).to_int()
+            if fi < self.pf_files.len:
+                self.current_file = self.pf_files.get(fi)
+                if ln <= 0: ln = self.pf_lines.get(fi)
+            self.current_line = ln
+            mut rmsg = r.slice(bar + 1, r.len())
+            if rmsg.starts_with("[P-4]"):
+                mut wloc = ""
+                if self.current_file.len() > 0: wloc = self.current_file + ":"
+                if ln > 0: wloc = wloc + str(ln) + ": "
+                self.warnings.push(wloc + rmsg)
+            else:
+                self.error(rmsg)
+            ri = ri + 1
+        self.current_file = sv_file
+        self.current_line = sv_line
+
     # [E-9] A class / enum / interface name used as a value (`mut y = Point`): there is no such
     # runtime value; the generated C used to be `expected expression before 'Point'`.
     pub def check_not_type_value(self, e: Pointer[Expr]):
@@ -5851,6 +5906,11 @@ extend Sema:
                     self.declare(f.name, SymbolKind.SFunction, _e_ret, false)
                     self.extern_names.insert(f.name, true)   # [N-3] allowlist
                     self.extern_defs.insert(f.name, f)
+                    mut _epi = 0
+                    while _epi < f.params.len:
+                        if f.params.get(_epi).ty as usize != 0 as usize and f.params.get(_epi).ty.read().name == "Pointer":
+                            self.extern_ptr_names.insert(f.name, true)
+                        _epi = _epi + 1
                     ei = ei + 1
             case Decl.DDecoratorDef(f):
                 self.decorator_names.insert(f.name, true)
@@ -5933,6 +5993,10 @@ extend Sema:
         self.open_seq = sv_seq
         self.open_hints = sv_hints
         self.open_pass2 = sv_p2
+        if not f.is_lib and f.body.stmts.len > 0 and not f.is_extern:
+            self.pf_fns.push(hf)
+            self.pf_files.push(self.current_file)
+            self.pf_lines.push(f.line)
         return hf
 
     pub def lower_func_once(self, f: FunctionDef) -> HirFunction:
@@ -7771,6 +7835,7 @@ extend Sema:
                 # Gap 6: track unsafe boundary
                 mut saved_unsafe = self.in_unsafe
                 self.in_unsafe = true
+                if not self.cur_fn_is_lib: self.pf_trigger = true
                 mut unsafe_hir = self.lower_block(body)
                 self.in_unsafe = saved_unsafe
                 return box_hirstmt(HirStmt.SUnsafe(unsafe_hir))
@@ -8627,7 +8692,8 @@ extend Sema:
                     return box_hirexpr(HirExpr.EIdent(name, self.fn_sigs.get(name), false))
                 if self.in_defer and sym.name != "": self.defer_names.insert(name, true)
                 # [M-6] use-after-free: dealloc() was called on this pointer
-                if sym.is_freed and sym.name != "":
+                # (reported by the flow-sensitive pass in ptrflow.tr, which also sees aliases / branches / loops / calls)
+                if sym.is_freed and sym.name != "" and self.cur_fn_is_lib:
                     self.error("[M-6] '" + name + "' was freed by 'dealloc()' and can no longer be used.\n      FIX: Remove all uses of '" + name + "' after 'dealloc()', or restructure so the pointer is freed only when no longer needed.")
                 # use-after-definite-move (hard error)
                 elif sym.is_moved and not self.in_assign_target_plain and not self.is_primitive(ty) and not self.is_copy_class(ty.name) and sym.name != "" and not sym.is_shared:
@@ -8769,6 +8835,7 @@ extend Sema:
                 mut inner_ty = hir_expr_type(hexpr_inner)
                 mut un_ty = inner_ty
                 if op == "&":
+                    if not self.cur_fn_is_lib: self.pf_trigger = true
                     mut addr_ty = AstType.init("Pointer")
                     addr_ty.args.push(box_asttype(inner_ty))
                     un_ty = addr_ty
@@ -9159,6 +9226,7 @@ extend Sema:
                             case Expr.EIdent(gn):
                                 self.check_explicit_type_arg_count(gn, idx)
                                 if gn == "alloc" or gn == "dealloc":
+                                    if not self.cur_fn_is_lib: self.pf_trigger = true
                                     match idx.read():
                                         case Expr.EIdent(tn):
                                             ret_ty = AstType.init("Pointer")
@@ -9348,6 +9416,16 @@ extend Sema:
                                     aa_i = aa_i + 1
                         case _: pass
                 # [M-6] dealloc tracking: mark pointer as freed to catch use-after-free and double-free
+                if callee as usize != 0 as usize and not self.cur_fn_is_lib:
+                    match callee.read():
+                        case Expr.EIdent(_pf_nm):
+                            if _pf_nm == "dealloc": self.pf_trigger = true
+                        case Expr.EIndex(_pf_b, _):
+                            match _pf_b.read():
+                                case Expr.EIdent(_pf_nm2):
+                                    if _pf_nm2 == "dealloc": self.pf_trigger = true
+                                case _: pass
+                        case _: pass
                 if callee as usize != 0 as usize:
                     match callee.read():
                         case Expr.EIdent(df_nm):

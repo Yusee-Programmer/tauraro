@@ -1,0 +1,946 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
+# src/ptrflow.tr — flow-sensitive raw-pointer misuse analysis over the lowered HIR.
+#
+# [M-6] use-after-dealloc / double-dealloc, tracked through
+#   * aliases        (`q = p`, `q = p.offset(1)`, `q = p as Pointer[U]`),
+#   * branches       (a dealloc on ONE path makes the pointer "maybe freed" after the join),
+#   * loops          (a dealloc in a loop body of a pointer allocated outside it is a
+#                     double free on the next iteration; a `break` right after is fine),
+#   * field paths    (`h.p`),
+#   * calls          (a function that deallocs one of its Pointer parameters frees the
+#                     caller's argument: whole-program summary, two rounds).
+# [L-1] escape of a pointer to a stack local through `return`, a store into a parameter /
+#   field / global, or a container insert / `.write(...)` through a pointer that outlives the call.
+#
+# The analysis is conservative in the "report" direction only for things that are certain on
+# some path; it is skipped for trusted std/core functions.
+
+from hir import HirProgram, HirFunction, HirBlock, HirStmt, HirExpr, HirParam, HirMatchArm, hir_expr_type
+from core.vec import Vec
+from core.map import Map
+
+pub class PfState:
+    pub freed: Vec[str]     # paths (`p`, `h.p`) that may have been deallocated
+    pub pa:    Vec[str]     # alias pairs (pa[i] <-> pb[i]); both orders stored
+    pub pb:    Vec[str]
+    pub stk:   Vec[str]     # names that may hold the address of a stack local
+    pub own:   Vec[str]     # locals that (maybe) own a live alloc[] block made in this function
+    pub nul:   Vec[str]     # paths that are DEFINITELY null here (intersection at joins)
+    pub sz:    Vec[str]     # "p=N": p is DEFINITELY a literal alloc[T](N) block (intersection)
+    pub dead:  bool         # unreachable (after return / raise / break / continue)
+
+extend PfState:
+    pub def init() -> PfState:
+        mut s = PfState()
+        s.freed = Vec[str].init(2)
+        s.pa    = Vec[str].init(2)
+        s.pb    = Vec[str].init(2)
+        s.stk   = Vec[str].init(2)
+        s.own   = Vec[str].init(2)
+        s.nul   = Vec[str].init(2)
+        s.sz    = Vec[str].init(2)
+        s.dead  = false
+        return s
+
+    pub def copy(self) -> PfState:
+        mut s = PfState.init()
+        mut i = 0
+        while i < self.freed.len:
+            s.freed.push(self.freed.get(i))
+            i = i + 1
+        i = 0
+        while i < self.pa.len:
+            s.pa.push(self.pa.get(i))
+            s.pb.push(self.pb.get(i))
+            i = i + 1
+        i = 0
+        while i < self.stk.len:
+            s.stk.push(self.stk.get(i))
+            i = i + 1
+        s.own = pf_vcopy(self.own)
+        s.nul = pf_vcopy(self.nul)
+        s.sz = pf_vcopy(self.sz)
+        s.dead = self.dead
+        return s
+
+def pf_has(v: Vec[str], s: str) -> bool:
+    mut i = 0
+    while i < v.len:
+        if v.get(i) == s: return true
+        i = i + 1
+    return false
+
+def pf_add(v: Vec[str], s: str):
+    if not pf_has(v, s): v.push(s)
+
+# path `n` or any `n.<field>...` extension of it
+def pf_under(p: str, n: str) -> bool:
+    if p == n: return true
+    return p.starts_with(n + ".")
+
+def pf_vcopy(v: Vec[str]) -> Vec[str]:
+    mut o = Vec[str].init(2)
+    mut i = 0
+    while i < v.len:
+        o.push(v.get(i))
+        i = i + 1
+    return o
+
+def pf_inter(a: Vec[str], b: Vec[str]) -> Vec[str]:
+    mut o = Vec[str].init(1)
+    mut i = 0
+    while i < a.len:
+        if pf_has(b, a.get(i)): o.push(a.get(i))
+        i = i + 1
+    return o
+
+def pf_assign_from(into: PfState, o: PfState):
+    into.freed = pf_vcopy(o.freed)
+    into.pa = pf_vcopy(o.pa)
+    into.pb = pf_vcopy(o.pb)
+    into.stk = pf_vcopy(o.stk)
+    into.own = pf_vcopy(o.own)
+    into.nul = pf_vcopy(o.nul)
+    into.sz = pf_vcopy(o.sz)
+    into.dead = o.dead
+
+def pf_has_pair(st: PfState, a: str, b: str) -> bool:
+    mut i = 0
+    while i < st.pa.len:
+        if st.pa.get(i) == a and st.pb.get(i) == b: return true
+        i = i + 1
+    return false
+
+# `into` becomes the join of `into` and `o` (union: "maybe freed on SOME path")
+def pf_merge(into: PfState, o: PfState):
+    if o.dead: return
+    if into.dead:
+        pf_assign_from(into, o)
+        return
+    mut i = 0
+    while i < o.freed.len:
+        pf_add(into.freed, o.freed.get(i))
+        i = i + 1
+    i = 0
+    while i < o.pa.len:
+        if not pf_has_pair(into, o.pa.get(i), o.pb.get(i)):
+            into.pa.push(o.pa.get(i))
+            into.pb.push(o.pb.get(i))
+        i = i + 1
+    i = 0
+    while i < o.stk.len:
+        pf_add(into.stk, o.stk.get(i))
+        i = i + 1
+    i = 0
+    while i < o.own.len:
+        pf_add(into.own, o.own.get(i))
+        i = i + 1
+    into.nul = pf_inter(into.nul, o.nul)
+    into.sz = pf_inter(into.sz, o.sz)
+
+pub class PfCtx:
+    pub errs:       Vec[str]            # "<line>|<message>"
+    pub line:       int
+    pub fn_name:    str
+    pub ret_from:   bool                # return type carries a `from` region
+    pub is_main:    bool
+    pub params:     Vec[str]
+    pub locals:     Vec[str]
+    pub summaries:  Map[str, Vec[int]]  # free function -> indexes of parameters it deallocs
+    pub ret_acc:    PfState             # join of the states at every return
+    pub ret_seen:   bool
+    pub brk:        Vec[PfState]        # break states of the innermost loop(s)
+    pub brk_base:   Vec[int]
+    pub cnt:        Vec[PfState]        # continue states
+    pub cnt_base:   Vec[int]
+    pub report:     bool
+    pub alloc_line: Map[str, int]       # local -> line of its latest alloc[]
+    pub noesc:      bool                # visiting a `.read()` / `.write()` receiver: not an escape of its base
+    pub in_defer:   bool
+    pub unsafe_depth: int
+    pub externs:    Map[str, bool]      # extern functions with a raw Pointer parameter
+
+extend PfCtx:
+    pub def init(summaries: Map[str, Vec[int]]) -> PfCtx:
+        mut c = PfCtx()
+        c.errs = Vec[str].init(2)
+        c.line = 0
+        c.fn_name = ""
+        c.ret_from = false
+        c.is_main = false
+        c.params = Vec[str].init(2)
+        c.locals = Vec[str].init(8)
+        c.summaries = summaries
+        c.ret_acc = PfState.init()
+        c.ret_acc.dead = true
+        c.ret_seen = false
+        c.brk = Vec[PfState].init(2)
+        c.brk_base = Vec[int].init(2)
+        c.cnt = Vec[PfState].init(2)
+        c.cnt_base = Vec[int].init(2)
+        c.report = true
+        c.alloc_line = Map[str, int].init(4)
+        c.noesc = false
+        c.in_defer = false
+        c.unsafe_depth = 0
+        c.externs = Map[str, bool].init(2)
+        return c
+
+    pub def err(self, msg: str):
+        if not self.report: return
+        mut e = str(self.line) + "|" + msg
+        if not pf_has(self.errs, e): self.errs.push(e)
+
+# --- expression helpers ------------------------------------------------------
+
+def pf_null(e: Pointer[HirExpr]) -> bool:
+    return (e as usize) == 0 as usize
+
+# `p` / `h.p` as a tracked path, else "".
+def pf_path(e: Pointer[HirExpr]) -> str:
+    if pf_null(e): return ""
+    match e.read():
+        case HirExpr.EIdent(nm, _, _): return nm
+        case HirExpr.EPropAccess(o, p, _):
+            mut po = pf_path(o)
+            if po != "": return po + "." + p
+            return ""
+        case _: return ""
+
+# The tracked path a pointer-valued expression is DERIVED from (`p`, `p as T`, `p.offset(k)`).
+def pf_root(e: Pointer[HirExpr]) -> str:
+    if pf_null(e): return ""
+    match e.read():
+        case HirExpr.EIdent(nm, _, _): return nm
+        case HirExpr.EPropAccess(o, p, _): return pf_path(e)
+        case HirExpr.ECast(x, _): return pf_root(x)
+        case HirExpr.EMethodCall(o, m, _, _):
+            if m == "offset" or m == "add" or m == "sub" or m == "cast": return pf_root(o)
+            return ""
+        case _: return ""
+
+def pf_is_dealloc(callee: Pointer[HirExpr]) -> bool:
+    if pf_null(callee): return false
+    match callee.read():
+        case HirExpr.EIdent(nm, _, _): return nm == "dealloc"
+        case HirExpr.EIndex(o, _, _):
+            match o.read():
+                case HirExpr.EIdent(nm, _, _): return nm == "dealloc"
+                case _: return false
+        case _: return false
+
+def pf_callee_name(callee: Pointer[HirExpr]) -> str:
+    if pf_null(callee): return ""
+    match callee.read():
+        case HirExpr.EIdent(nm, _, _): return nm
+        case _: return ""
+
+# Does the expression produce the address of a stack local?  Returns the local's name or "".
+def pf_stack_src(e: Pointer[HirExpr], st: PfState, cx: PfCtx) -> str:
+    if pf_null(e): return ""
+    match e.read():
+        case HirExpr.EUnaryOp(op, x, _):
+            if op == "&" and not pf_null(x):
+                match x.read():
+                    case HirExpr.EIdent(nm, _, _):
+                        if nm != "self" and (pf_has(cx.locals, nm) or pf_has(cx.params, nm)): return nm
+                    case _: pass
+            return ""
+        case HirExpr.EIdent(nm, _, _):
+            if pf_has(st.stk, nm): return nm
+            return ""
+        case HirExpr.ECast(x, _): return pf_stack_src(x, st, cx)
+        case HirExpr.EMethodCall(o, m, _, _):
+            if m == "offset" or m == "add" or m == "sub" or m == "cast": return pf_stack_src(o, st, cx)
+            return ""
+        case _: return ""
+
+def pf_lit(e: Pointer[HirExpr]) -> int:
+    # literal integer value, or a sentinel (-4611686018427387904) when `e` is not one
+    if pf_null(e): return -4611686018427387904
+    match e.read():
+        case HirExpr.ELitInt(v, _): return v
+        case HirExpr.EUnaryOp(op, x, _):
+            if op == "-" and not pf_null(x):
+                match x.read():
+                    case HirExpr.ELitInt(v2, _): return 0 - v2
+                    case _: return -4611686018427387904
+            return -4611686018427387904
+        case _: return -4611686018427387904
+
+def pf_is_lit(e: Pointer[HirExpr]) -> bool:
+    return pf_lit(e) != -4611686018427387904
+
+def pf_named_call(callee: Pointer[HirExpr], want: str) -> bool:
+    if pf_null(callee): return false
+    match callee.read():
+        case HirExpr.EIdent(nm, _, _): return nm == want
+        case HirExpr.EIndex(o, _, _):
+            match o.read():
+                case HirExpr.EIdent(nm, _, _): return nm == want
+                case _: return false
+        case _: return false
+
+def pf_is_alloc(val: Pointer[HirExpr]) -> bool:
+    if pf_null(val): return false
+    match val.read():
+        case HirExpr.ECall(callee, _, _): return pf_named_call(callee, "alloc")
+        case _: return false
+
+def pf_alloc_n(val: Pointer[HirExpr]) -> int:
+    match val.read():
+        case HirExpr.ECall(_, args, _):
+            if args.len == 1: return pf_lit(args.get(0))
+            return -4611686018427387904
+        case _: return -4611686018427387904
+
+# `0 as Pointer[T]` / `none` / `null`
+def pf_is_null_lit(val: Pointer[HirExpr]) -> bool:
+    if pf_null(val): return false
+    match val.read():
+        case HirExpr.ELitNone(_): return true
+        case HirExpr.ELitInt(v, ty): return v == 0 and ty.name == "Pointer"
+        case HirExpr.ECast(x, ty):
+            if pf_null(x) or ty.name != "Pointer": return false
+            match x.read():
+                case HirExpr.ELitInt(v, _): return v == 0
+                case _: return false
+        case _: return false
+
+def pf_size_of(st: PfState, path: str) -> int:
+    mut i = 0
+    while i < st.sz.len:
+        mut e = st.sz.get(i)
+        mut eq = e.index_of("=")
+        if e.slice(0, eq) == path: return e.slice(eq + 1, e.len()).to_int()
+        i = i + 1
+    return -1
+
+# --- state operations --------------------------------------------------------
+
+def pf_kill(st: PfState, path: str):
+    mut nf = Vec[str].init(2)
+    mut i = 0
+    while i < st.freed.len:
+        if not pf_under(st.freed.get(i), path): nf.push(st.freed.get(i))
+        i = i + 1
+    st.freed = nf
+    mut na = Vec[str].init(2)
+    mut nb = Vec[str].init(2)
+    i = 0
+    while i < st.pa.len:
+        if not pf_under(st.pa.get(i), path) and not pf_under(st.pb.get(i), path):
+            na.push(st.pa.get(i))
+            nb.push(st.pb.get(i))
+        i = i + 1
+    st.pa = na
+    st.pb = nb
+    mut ns = Vec[str].init(2)
+    i = 0
+    while i < st.stk.len:
+        if not pf_under(st.stk.get(i), path): ns.push(st.stk.get(i))
+        i = i + 1
+    st.stk = ns
+    st.own = pf_drop_under(st.own, path)
+    st.nul = pf_drop_under(st.nul, path)
+    mut nz = Vec[str].init(1)
+    i = 0
+    while i < st.sz.len:
+        mut e = st.sz.get(i)
+        mut eq = e.index_of("=")
+        if not pf_under(e.slice(0, eq), path): nz.push(e)
+        i = i + 1
+    st.sz = nz
+
+def pf_drop_under(v: Vec[str], path: str) -> Vec[str]:
+    mut o = Vec[str].init(1)
+    mut i = 0
+    while i < v.len:
+        if not pf_under(v.get(i), path): o.push(v.get(i))
+        i = i + 1
+    return o
+
+# a call that receives `path` (or a value containing it) may re-initialise its fields
+def pf_kill_fields(st: PfState, path: str):
+    mut nf = Vec[str].init(2)
+    mut i = 0
+    while i < st.freed.len:
+        mut f = st.freed.get(i)
+        if not (f != path and pf_under(f, path)): nf.push(f)
+        i = i + 1
+    st.freed = nf
+
+def pf_link(st: PfState, a: str, b: str):
+    if a == b: return
+    if not pf_has_pair(st, a, b):
+        st.pa.push(a)
+        st.pb.push(b)
+    if not pf_has_pair(st, b, a):
+        st.pa.push(b)
+        st.pb.push(a)
+
+# mark `path` and everything aliasing it as freed
+def pf_free(st: PfState, path: str):
+    pf_add(st.freed, path)
+    mut changed = true
+    mut guard = 0
+    while changed and guard < 8:
+        changed = false
+        guard = guard + 1
+        mut i = 0
+        while i < st.pa.len:
+            if pf_has(st.freed, st.pa.get(i)) and not pf_has(st.freed, st.pb.get(i)):
+                st.freed.push(st.pb.get(i))
+                changed = true
+            i = i + 1
+
+# Is `path` (or a prefix like `h` of `h.p`) freed?
+def pf_is_freed(st: PfState, path: str) -> str:
+    mut i = 0
+    while i < st.freed.len:
+        mut f = st.freed.get(i)
+        if f == path: return f
+        i = i + 1
+    return ""
+
+# --- expression walk ---------------------------------------------------------
+
+def pf_zeroish(e: Pointer[HirExpr]) -> bool:
+    if pf_null(e): return false
+    if pf_is_null_lit(e): return true
+    match e.read():
+        case HirExpr.ELitInt(v, _): return v == 0
+        case HirExpr.ECast(x, _): return pf_zeroish(x)
+        case _: return false
+
+# `p == null` / `p != 0 as usize` style test: "==:p" / "!=:p" ("" when cond is not one)
+def pf_nulltest(cond: Pointer[HirExpr]) -> str:
+    if pf_null(cond): return ""
+    match cond.read():
+        case HirExpr.EBinOp(op, l, r, _):
+            if op != "==" and op != "!=": return ""
+            mut pth = ""
+            if pf_zeroish(r): pth = pf_root(l)
+            elif pf_zeroish(l): pth = pf_root(r)
+            if pth == "": return ""
+            return op + ":" + pth
+        case _: return ""
+
+# Refine the null facts of the state for the branch where `test` holds (taken) / does not hold.
+def pf_refine(st: PfState, test: str, taken: bool):
+    if test == "": return
+    mut op = test.slice(0, 2)
+    mut pth = test.slice(3, test.len())
+    mut is_null_here = (op == "==") == taken
+    if not is_null_here: st.nul = pf_drop_under(st.nul, pth)
+
+def pf_block(cx: PfCtx, b: HirBlock, st: PfState):
+    mut i = 0
+    while i < b.stmts.len:
+        pf_stmt(cx, b.stmts.get(i), st)
+        i = i + 1
+
+def pf_use_msg(cx: PfCtx, name: str):
+    cx.err("[M-6] '" + name + "' was freed by 'dealloc()' and can no longer be used.\n      FIX: Remove all uses of '" + name + "' after 'dealloc()', or restructure so the pointer is freed only when no longer needed (or re-assign it a fresh value first). A pointer that is deallocated on only some paths, or in a previous loop iteration, counts as freed.")
+
+def pf_exprs(cx: PfCtx, v: Vec[Pointer[HirExpr]], st: PfState):
+    mut i = 0
+    while i < v.len:
+        pf_expr(cx, v.get(i), st)
+        i = i + 1
+
+def pf_branchy_block(cx: PfCtx, b: HirBlock, st: PfState):
+    # a block embedded in an expression: may or may not run / run once -> join its effect
+    mut c = st.copy()
+    pf_block(cx, b, c)
+    pf_merge(st, c)
+
+def pf_ptr_checks(cx: PfCtx, st: PfState, o: Pointer[HirExpr], m: str, args: Vec[Pointer[HirExpr]]):
+    mut np = pf_path(o)
+    if np != "" and (m == "read" or m == "write"):
+        if pf_has(st.nul, np):
+            cx.err("[P-3] '." + m + "()' on '" + np + "', which is a null pointer here (null dereference).\n      FIX: allocate it (alloc[T](n)) or check it for null before dereferencing.")
+        elif pf_size_of(st, np) == 0:
+            cx.err("[P-3] '." + m + "()' on '" + np + "', which was allocated with 0 elements (out of bounds).\n      FIX: allocate at least one element, or do not dereference an empty block.")
+    if m == "offset" and np != "" and args.len == 1:
+        mut sz = pf_size_of(st, np)
+        mut k = pf_lit(args.get(0))
+        if sz >= 0 and pf_is_lit(args.get(0)) and (k < 0 or k > sz):
+            cx.err("[P-3] '" + np + ".offset(" + str(k) + ")' moves outside the " + str(sz) + "-element block '" + np + "' was allocated with (undefined behaviour even before it is dereferenced).\n      FIX: keep the offset in 0 .. n (one-past-the-end) of the alloc[T](n) block.")
+    if (m == "read" or m == "write") and not pf_null(o):
+        match o.read():
+            case HirExpr.EMethodCall(bo, bm, bargs, _):
+                if bm == "offset" and bargs.len == 1:
+                    mut bp = pf_path(bo)
+                    mut bsz = -1
+                    if bp != "": bsz = pf_size_of(st, bp)
+                    mut bk = pf_lit(bargs.get(0))
+                    if bsz >= 0 and pf_is_lit(bargs.get(0)) and (bk < 0 or bk >= bsz):
+                        cx.err("[P-3] '" + bp + ".offset(" + str(bk) + ")." + m + "()' is outside the " + str(bsz) + "-element block '" + bp + "' was allocated with (out-of-bounds access).\n      FIX: keep the offset in 0 .. n-1 of the alloc[T](n) block, or use a List[T] (bounds-checked).")
+            case _: pass
+
+def pf_expr(cx: PfCtx, e: Pointer[HirExpr], st: PfState):
+    if pf_null(e): return
+    match e.read():
+        case HirExpr.EIdent(nm, _, _):
+            if pf_has(st.freed, nm):
+                pf_use_msg(cx, nm)
+                pf_kill(st, nm)
+            if not cx.noesc and pf_has(st.own, nm): st.own = pf_drop_under(st.own, nm)
+        case HirExpr.EPropAccess(o, p, _):
+            mut pp = pf_path(e)
+            if pp != "" and pf_has(st.freed, pp):
+                pf_use_msg(cx, pp)
+                pf_kill(st, pp)
+            pf_expr(cx, o, st)
+        case HirExpr.EBinOp(bop, l, r, _):
+            if cx.unsafe_depth == 0 and (bop == "+" or bop == "-") and not pf_null(l) and hir_expr_type(l).name == "Pointer":
+                cx.err("[P-2] pointer arithmetic with '" + bop + "' can create an out-of-bounds pointer and must be inside an 'unsafe:' block.\n      FIX: wrap it in 'unsafe:', or use a safe slice / List[T] instead of pointer math.")
+            pf_expr(cx, l, st)
+            pf_expr(cx, r, st)
+        case HirExpr.EUnaryOp(uop, x, _):
+            if cx.unsafe_depth == 0 and (uop == "*" or uop == "deref") and not pf_null(x) and hir_expr_type(x).name == "Pointer":
+                cx.err("[P-2] '*' dereferences a raw pointer (may read freed or invalid memory) and must be inside an 'unsafe:' block.\n      FIX: wrap it in 'unsafe:', or hold the value in a safe Box[T] / List[T] / class reference instead of a raw pointer.")
+            pf_expr(cx, x, st)
+        case HirExpr.ECall(callee, args, _):
+            if pf_is_dealloc(callee):
+                if args.len > 0:
+                    mut dp = pf_root(args.get(0))
+                    if dp != "" and pf_has(st.freed, dp):
+                        cx.err("[M-6] '" + dp + "' is deallocated twice (double free): it was already freed by 'dealloc()' on this or another path (an alias, a call, or the previous loop iteration).\n      FIX: dealloc each allocation exactly once; clear or re-assign the pointer after dealloc, and break out of the loop right after freeing.")
+                        pf_kill(st, dp)
+                    mut dss = pf_stack_src(args.get(0), st, cx)
+                    if dss != "":
+                        cx.err("[P-3] dealloc() of a pointer to the stack local '" + dss + "': only memory returned by alloc[T] may be deallocated.\n      FIX: remove the dealloc, or allocate the block with alloc[T] instead of taking the address of a local.")
+                    elif dp != "" and pf_has(st.nul, dp):
+                        cx.err("[P-3] dealloc() of '" + dp + "', which is null here — there is nothing to free.\n      FIX: remove the dealloc (or guard it with a null check on a pointer that may be non-null).")
+                    pf_expr(cx, args.get(0), st)
+                    if dp != "" and not cx.in_defer: pf_free(st, dp)
+                    if dp != "": st.own = pf_drop_under(st.own, dp)
+                return
+            mut cn = pf_callee_name(callee)
+            if cn != "" and cx.unsafe_depth == 0 and cx.externs.contains(cn):
+                cx.err("[P-5] extern function '" + cn + "' takes a raw Pointer; C cannot check it, so the call must be inside an 'unsafe:' block.\n      FIX: wrap the call in 'unsafe:' (ideally inside a small safe wrapper function that validates its arguments).")
+            if cn == "":
+                pf_expr(cx, callee, st)
+            pf_exprs(cx, args, st)
+            mut ki = 0
+            while ki < args.len:
+                mut kp = pf_path(args.get(ki))
+                if kp != "": pf_kill_fields(st, kp)
+                ki = ki + 1
+            if cn != "" and cx.summaries.contains(cn):
+                mut fr = cx.summaries.get(cn)
+                mut k = 0
+                while k < fr.len:
+                    if fr.get(k) < args.len:
+                        mut ap = pf_root(args.get(fr.get(k)))
+                        if ap != "": pf_free(st, ap)
+                    k = k + 1
+        case HirExpr.EMethodCall(o, m, args, _):
+            if m == "read" or m == "write" or m == "offset":
+                pf_ptr_checks(cx, st, o, m, args)
+            if m == "read" or m == "write":
+                cx.noesc = true
+                pf_expr(cx, o, st)
+                cx.noesc = false
+            else:
+                pf_expr(cx, o, st)
+            pf_exprs(cx, args, st)
+            mut mkp = pf_path(o)
+            if mkp != "": pf_kill_fields(st, mkp)
+            if not cx.is_main:
+                # a container insert / `.write(...)` of a stack address into storage that outlives the call
+                if m == "push" or m == "append" or m == "insert" or m == "add" or m == "set" or m == "write" or m == "send" or m == "put":
+                    mut ai = 0
+                    while ai < args.len:
+                        mut ss = pf_stack_src(args.get(ai), st, cx)
+                        if ss != "":
+                            mut rp = pf_path(o)
+                            mut r0 = rp
+                            mut dot = r0.index_of(".")
+                            if dot >= 0: r0 = r0.slice(0, dot)
+                            if r0 == "" or not pf_has(cx.locals, r0) or r0 == "self":
+                                if r0 != "" or m == "write":
+                                    cx.err("[L-1] the address of local '" + ss + "' is stored (via '." + m + "()') into memory that outlives this call of '" + cx.fn_name + "' — it dangles once the function returns.\n      FIX: store an owned value, or heap-allocate the data with alloc[T] (and dealloc it when its owner is done) instead of pointing at a stack local.")
+                        ai = ai + 1
+        case HirExpr.EIndex(o, i, _):
+            if cx.unsafe_depth == 0 and not pf_null(o) and hir_expr_type(o).name == "Pointer":
+                cx.err("[P-2] indexing a raw Pointer reads or writes unchecked memory and must be inside an 'unsafe:' block.\n      FIX: wrap it in 'unsafe:', or use a List[T] (bounds-checked).")
+            mut ip = pf_path(o)
+            if ip != "":
+                if pf_has(st.nul, ip):
+                    cx.err("[P-3] indexing '" + ip + "', which is a null pointer here.\n      FIX: allocate it (alloc[T](n)) or check it for null before use.")
+                else:
+                    mut isz = pf_size_of(st, ip)
+                    mut ik = pf_lit(i)
+                    if isz >= 0 and pf_is_lit(i) and (ik < 0 or ik >= isz):
+                        cx.err("[P-3] index " + str(ik) + " is outside the " + str(isz) + "-element block '" + ip + "' was allocated with.\n      FIX: keep indexes in 0 .. n-1 of the alloc[T](n) block, or use a List[T] (bounds-checked).")
+            cx.noesc = true
+            pf_expr(cx, o, st)
+            cx.noesc = false
+            pf_expr(cx, i, st)
+        case HirExpr.ECast(x, _): pf_expr(cx, x, st)
+        case HirExpr.EFString(parts, _):
+            mut pi = 0
+            while pi < parts.len:
+                mut part = parts.get(pi)
+                if part.is_expr:
+                    pf_expr(cx, part.expr, st)
+                    pf_exprs(cx, part.spec_args, st)
+                pi = pi + 1
+        case HirExpr.ETryExpr(x, _): pf_expr(cx, x, st)
+        case HirExpr.EClosure(_, _, body, _, caps):
+            mut cpi = 0
+            while cpi < caps.len:
+                st.own = pf_drop_under(st.own, caps.get(cpi).name)
+                cpi = cpi + 1
+            mut c = st.copy()
+            pf_block(cx, body, c)
+        case HirExpr.ESuperMethodCall(_, _, args, _): pf_exprs(cx, args, st)
+        case HirExpr.EList(items, _): pf_exprs(cx, items, st)
+        case HirExpr.ESet(items, _): pf_exprs(cx, items, st)
+        case HirExpr.ETuple(items, _): pf_exprs(cx, items, st)
+        case HirExpr.EDict(keys, vals, _):
+            pf_exprs(cx, keys, st)
+            pf_exprs(cx, vals, st)
+        case HirExpr.EListComp(el, gens, _):
+            mut gi = 0
+            while gi < gens.len:
+                pf_expr(cx, gens.get(gi).read().iter, st)
+                gi = gi + 1
+        case HirExpr.ESlice(a, b, c, _):
+            pf_expr(cx, a, st)
+            pf_expr(cx, b, st)
+            pf_expr(cx, c, st)
+        case HirExpr.EAwait(x, _): pf_expr(cx, x, st)
+        case HirExpr.EAwaitTimeout(x, t, _):
+            pf_expr(cx, x, st)
+            pf_expr(cx, t, st)
+        case HirExpr.EYield(x, _): pf_expr(cx, x, st)
+        case HirExpr.ERange(a, b, _, _):
+            pf_expr(cx, a, st)
+            pf_expr(cx, b, st)
+        case HirExpr.EIfElse(c, t, f, _):
+            pf_expr(cx, c, st)
+            mut s1 = st.copy()
+            mut s2 = st.copy()
+            pf_expr(cx, t, s1)
+            pf_expr(cx, f, s2)
+            s1.dead = false
+            s2.dead = false
+            pf_assign_from(st, s1)
+            pf_merge(st, s2)
+        case HirExpr.EDo(body, _): pf_branchy_block(cx, body, st)
+        case HirExpr.ELoop(body, _): pf_branchy_block(cx, body, st)
+        case HirExpr.EWhileExpr(c, body, eb, _):
+            pf_expr(cx, c, st)
+            pf_branchy_block(cx, body, st)
+            pf_branchy_block(cx, eb, st)
+        case HirExpr.EMatchExpr(subj, arms, _):
+            pf_expr(cx, subj, st)
+            mut ai = 0
+            while ai < arms.len:
+                mut a = arms.get(ai)
+                mut c = st.copy()
+                pf_expr(cx, a.guard, c)
+                pf_block(cx, a.body, c)
+                pf_merge(st, c)
+                ai = ai + 1
+        case HirExpr.ETry(tb, catches, fb, _):
+            pf_branchy_block(cx, tb, st)
+            mut ci = 0
+            while ci < catches.len:
+                pf_branchy_block(cx, catches.get(ci).read().body, st)
+                ci = ci + 1
+            pf_branchy_block(cx, fb, st)
+        case _: pass
+
+# --- statements --------------------------------------------------------------
+
+def pf_leak_warn(cx: PfCtx, name: str, why: str):
+    if cx.fn_name.starts_with("<"): return
+    mut ln = 0
+    if cx.alloc_line.contains(name): ln = cx.alloc_line.get(name)
+    mut at = ""
+    if ln > 0: at = " (allocated at line " + str(ln) + ")"
+    cx.err("[P-4] the alloc[] block held by '" + name + "'" + at + " is " + why + ": it leaks.\n      FIX: dealloc(" + name + ") on every path, return/store the pointer so a caller owns it, or wrap the pair in a class with init/drop.")
+
+def pf_leak_check(cx: PfCtx, st: PfState, why: str):
+    if st.dead: return
+    mut i = 0
+    while i < st.own.len:
+        pf_leak_warn(cx, st.own.get(i), why)
+        i = i + 1
+
+# value-driven facts about a freshly (re)bound path
+def pf_bind(cx: PfCtx, st: PfState, path: str, val: Pointer[HirExpr], simple: bool):
+    if pf_is_alloc(val):
+        if simple:
+            pf_add(st.own, path)
+            cx.alloc_line.insert(path, cx.line)
+        mut n = pf_alloc_n(val)
+        if n != -4611686018427387904:
+            if n < 0:
+                cx.err("[P-3] alloc with a negative element count (" + str(n) + ").\n      FIX: pass a non-negative element count.")
+            else:
+                st.sz.push(path + "=" + str(n))
+    elif pf_is_null_lit(val):
+        pf_add(st.nul, path)
+    else:
+        mut r = pf_root(val)
+        if r != "" and pf_has(st.nul, r) and r != path: pf_add(st.nul, path)
+
+def pf_declare(cx: PfCtx, st: PfState, name: str, val: Pointer[HirExpr]):
+    if pf_has(st.own, name): pf_leak_warn(cx, name, "overwritten by a new declaration before it is dealloc'd")
+    pf_kill(st, name)
+    if not pf_has(cx.locals, name): cx.locals.push(name)
+    mut r = pf_root(val)
+    if r != "" and r != name: pf_link(st, name, r)
+    mut ss = pf_stack_src(val, st, cx)
+    if ss != "": pf_add(st.stk, name)
+    pf_bind(cx, st, name, val, true)
+
+def pf_assign(cx: PfCtx, st: PfState, tgt: Pointer[HirExpr], val: Pointer[HirExpr]):
+    pf_expr(cx, val, st)
+    mut tp = pf_path(tgt)
+    if tp == "":
+        pf_expr(cx, tgt, st)
+        return
+    match tgt.read():
+        case HirExpr.EPropAccess(o, _, _): pf_expr(cx, o, st)
+        case _: pass
+    mut ss = pf_stack_src(val, st, cx)
+    mut root0 = tp
+    mut dot = root0.index_of(".")
+    if dot >= 0: root0 = root0.slice(0, dot)
+    mut outlives = false
+    if dot >= 0:
+        # `x.f = &local`: x is a parameter / `self` / global (not a local of this call)
+        if not pf_has(cx.locals, root0) or root0 == "self": outlives = true
+    elif not pf_has(cx.locals, root0) and not pf_has(cx.params, root0):
+        outlives = true   # a global
+    if ss != "" and outlives and not cx.is_main:
+        cx.err("[L-1] the address of local '" + ss + "' is stored into '" + tp + "', which outlives this call of '" + cx.fn_name + "' — it dangles once the function returns.\n      FIX: store an owned value, or heap-allocate the data with alloc[T] (and dealloc it when its owner is done) instead of pointing at a stack local.")
+    if dot < 0 and pf_has(st.own, tp): pf_leak_warn(cx, tp, "overwritten before it is dealloc'd")
+    pf_kill(st, tp)
+    mut r = pf_root(val)
+    if r != "" and r != tp and not pf_under(r, tp): pf_link(st, tp, r)
+    if ss != "" and dot < 0: pf_add(st.stk, tp)
+    pf_bind(cx, st, tp, val, dot < 0 and pf_has(cx.locals, tp))
+
+def pf_exit_loop_ctx(cx: PfCtx, brk_out: PfState, cnt_out: PfState):
+    mut bb = cx.brk_base.get(cx.brk_base.len - 1)
+    cx.brk_base.pop()
+    while cx.brk.len > bb:
+        pf_merge(brk_out, cx.brk.get(cx.brk.len - 1))
+        cx.brk.pop()
+    mut cb = cx.cnt_base.get(cx.cnt_base.len - 1)
+    cx.cnt_base.pop()
+    while cx.cnt.len > cb:
+        pf_merge(cnt_out, cx.cnt.get(cx.cnt.len - 1))
+        cx.cnt.pop()
+
+# Loop: condition `cond` (may be null), per-iteration `pre` var to kill (may be ""), body.
+def pf_loop(cx: PfCtx, st: PfState, cond: Pointer[HirExpr], lv: str, body: HirBlock, always: bool):
+    mut entry = st.copy()
+    mut head = entry.copy()
+    mut pass_i = 0
+    mut exit_st = PfState.init()
+    exit_st.dead = true
+    while pass_i < 2:
+        mut s = head.copy()
+        pf_expr(cx, cond, s)
+        mut after_cond = s.copy()
+        mut ltest = pf_nulltest(cond)
+        pf_refine(s, ltest, true)
+        pf_refine(after_cond, ltest, false)
+        if lv != "": pf_kill(s, lv)
+        cx.brk_base.push(cx.brk.len)
+        cx.cnt_base.push(cx.cnt.len)
+        pf_block(cx, body, s)
+        mut bo = PfState.init()
+        bo.dead = true
+        mut co = PfState.init()
+        co.dead = true
+        pf_exit_loop_ctx(cx, bo, co)
+        mut back = s.copy()
+        pf_merge(back, co)
+        if pass_i == 0:
+            head = entry.copy()
+            pf_merge(head, back)
+        else:
+            if not always: pf_merge(exit_st, after_cond)
+            pf_merge(exit_st, bo)
+        pass_i = pass_i + 1
+    pf_assign_from(st, exit_st)
+
+def pf_stmt(cx: PfCtx, sp: Pointer[HirStmt], st: PfState):
+    if st.dead: return
+    match sp.read():
+        case HirStmt.SLineMarker(n): cx.line = n
+        case HirStmt.SExpr(e): pf_expr(cx, e, st)
+        case HirStmt.SLet(nm, _, _, _, _, _, val):
+            pf_expr(cx, val, st)
+            pf_declare(cx, st, nm, val)
+        case HirStmt.SMultiLet(names, _, val):
+            pf_expr(cx, val, st)
+            mut ni = 0
+            while ni < names.len:
+                pf_kill(st, names.get(ni))
+                if not pf_has(cx.locals, names.get(ni)): cx.locals.push(names.get(ni))
+                ni = ni + 1
+        case HirStmt.SAssign(tgt, val): pf_assign(cx, st, tgt, val)
+        case HirStmt.SReturn(v):
+            pf_expr(cx, v, st)
+            if not cx.ret_from and not cx.is_main:
+                mut ss = pf_stack_src(v, st, cx)
+                if ss != "":
+                    cx.err("[L-1] returning the address of local '" + ss + "': the local dies when '" + cx.fn_name + "' returns, so the pointer dangles.\n      FIX: return an owned value, heap-allocate with alloc[T] (the caller must dealloc it), or annotate the return type with 'from <param>' when the pointer borrows from a parameter.")
+            pf_leak_check(cx, st, "not dealloc'd on this path before the return")
+            pf_merge(cx.ret_acc, st)
+            cx.ret_seen = true
+            st.dead = true
+        case HirStmt.SRaise(v):
+            pf_expr(cx, v, st)
+            pf_leak_check(cx, st, "not dealloc'd on this path before the raise")
+            st.dead = true
+        case HirStmt.SDefer(ds):
+            cx.in_defer = true
+            pf_stmt(cx, ds, st)
+            cx.in_defer = false
+        case HirStmt.SBreak(v):
+            pf_expr(cx, v, st)
+            if cx.brk_base.len > 0: cx.brk.push(st.copy())
+            st.dead = true
+        case HirStmt.SContinue:
+            if cx.cnt_base.len > 0: cx.cnt.push(st.copy())
+            st.dead = true
+        case HirStmt.SUnsafe(body):
+            cx.unsafe_depth = cx.unsafe_depth + 1
+            pf_block(cx, body, st)
+            cx.unsafe_depth = cx.unsafe_depth - 1
+        case HirStmt.SIf(cond, tb, eb):
+            pf_expr(cx, cond, st)
+            mut s1 = st.copy()
+            mut s2 = st.copy()
+            mut ntest = pf_nulltest(cond)
+            pf_refine(s1, ntest, true)
+            pf_refine(s2, ntest, false)
+            pf_block(cx, tb, s1)
+            pf_block(cx, eb, s2)
+            pf_assign_from(st, s1)
+            pf_merge(st, s2)
+        case HirStmt.SWhile(cond, body):
+            mut always = false
+            if not pf_null(cond):
+                match cond.read():
+                    case HirExpr.ELitBool(bv, _): always = bv
+                    case _: pass
+            pf_loop(cx, st, cond, "", body, always)
+        case HirStmt.SFor(var, it, body):
+            pf_expr(cx, it, st)
+            if not pf_has(cx.locals, var): cx.locals.push(var)
+            pf_loop(cx, st, Pointer[HirExpr](0), var, body, false)
+        case HirStmt.SForUnpack(vars, it, body):
+            pf_expr(cx, it, st)
+            mut vi = 0
+            while vi < vars.len:
+                if not pf_has(cx.locals, vars.get(vi)): cx.locals.push(vars.get(vi))
+                vi = vi + 1
+            pf_loop(cx, st, Pointer[HirExpr](0), "", body, false)
+        case HirStmt.SMatch(subj, arms):
+            pf_expr(cx, subj, st)
+            mut acc = PfState.init()
+            acc.dead = true
+            mut ai = 0
+            while ai < arms.len:
+                mut a = arms.get(ai)
+                mut c = st.copy()
+                pf_expr(cx, a.guard, c)
+                pf_block(cx, a.body, c)
+                pf_merge(acc, c)
+                ai = ai + 1
+            if arms.len > 0:
+                pf_assign_from(st, acc)
+        case HirStmt.STry(tb, catches, fb):
+            mut entry = st.copy()
+            mut s1 = st.copy()
+            pf_block(cx, tb, s1)
+            mut acc = s1.copy()
+            mut hs = entry.copy()
+            pf_merge(hs, s1)
+            hs.dead = false
+            mut ci = 0
+            while ci < catches.len:
+                mut cs = hs.copy()
+                pf_block(cx, catches.get(ci).read().body, cs)
+                pf_merge(acc, cs)
+                ci = ci + 1
+            pf_block(cx, fb, acc)
+            pf_assign_from(st, acc)
+        case HirStmt.SAssert(c, m):
+            pf_expr(cx, c, st)
+            pf_expr(cx, m, st)
+        case HirStmt.SWith(items, _, body):
+            pf_exprs(cx, items, st)
+            pf_block(cx, body, st)
+        case HirStmt.SSpawn(e): pf_expr(cx, e, st)
+        case HirStmt.STaskGroup(body): pf_branchy_block(cx, body, st)
+        case HirStmt.SGpuBlock(body): pf_branchy_block(cx, body, st)
+        case _: pass
+
+# --- driver ------------------------------------------------------------------
+
+def pf_run_fn(hf: HirFunction, summaries: Map[str, Vec[int]], externs: Map[str, bool], report: bool, errs: Vec[str]) -> Vec[int]:
+    mut cx = PfCtx.init(summaries)
+    cx.externs = externs
+    cx.report = report
+    cx.fn_name = hf.name
+    cx.is_main = hf.name == "main" and hf.class_name == ""
+    cx.ret_from = hf.ret_ty.from_param != ""
+    mut pi = 0
+    while pi < hf.params.len:
+        cx.params.push(hf.params.get(pi).name)
+        pi = pi + 1
+    mut st = PfState.init()
+    pf_block(cx, hf.body, st)
+    pf_leak_check(cx, st, "not dealloc'd on the path that falls off the end of the function")
+    pf_merge(cx.ret_acc, st)
+    mut out = Vec[int].init(1)
+    pi = 0
+    while pi < hf.params.len:
+        if pf_has(cx.ret_acc.freed, hf.params.get(pi).name) and hf.params.get(pi).ty.name == "Pointer": out.push(pi)
+        pi = pi + 1
+    mut ei = 0
+    while ei < cx.errs.len:
+        errs.push(cx.errs.get(ei))
+        ei = ei + 1
+    return out
+
+# Whole-program entry: `fns` are the (non-trusted) lowered functions. Returns "<line>|<msg>" entries
+# paired with the index of the function they belong to ("<idx>@<line>|<msg>").
+pub def ptrflow_check(fns: Vec[HirFunction], externs: Map[str, bool]) -> Vec[str]:
+    mut out = Vec[str].init(2)
+    mut summaries = Map[str, Vec[int]].init(8)
+    mut rnd = 0
+    while rnd < 2:
+        mut fi = 0
+        while fi < fns.len:
+            mut hf = fns.get(fi)
+            if hf.class_name == "":
+                mut sink = Vec[str].init(1)
+                mut fr = pf_run_fn(hf, summaries, externs, false, sink)
+                if fr.len > 0: summaries.insert(hf.name, fr)
+            fi = fi + 1
+        rnd = rnd + 1
+    mut fi2 = 0
+    while fi2 < fns.len:
+        mut errs = Vec[str].init(2)
+        pf_run_fn(fns.get(fi2), summaries, externs, true, errs)
+        mut ei = 0
+        while ei < errs.len:
+            out.push(str(fi2) + "@" + errs.get(ei))
+            ei = ei + 1
+        fi2 = fi2 + 1
+    return out

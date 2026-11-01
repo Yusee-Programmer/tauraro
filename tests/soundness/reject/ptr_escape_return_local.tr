@@ -1,0 +1,11 @@
+# EXPECT: [L-1]
+# Returning the address of a local (through a pointer variable) dangles.
+def f() -> Pointer[int]:
+    mut x = 5
+    unsafe:
+        mut p: Pointer[int] = &x
+        return p
+
+def main():
+    unsafe:
+        print(f().read())

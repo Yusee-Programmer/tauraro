@@ -1,0 +1,12 @@
+def main():
+    mut maybe: Pointer[int] = 0 as Pointer[int]
+    unsafe:
+        if maybe as usize == 0 as usize:
+            print(0)
+        else:
+            print(maybe.read())
+        mut p: Pointer[int] = alloc[int](2)
+        if p as usize != 0 as usize:
+            p.write(4)
+            print(p.read())
+        dealloc(p)

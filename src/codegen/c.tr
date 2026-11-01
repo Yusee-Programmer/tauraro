@@ -52,6 +52,16 @@ pub def _is_invalid_ptr(addr: usize) -> bool:
 pub def _is_str_type(n: str) -> bool:
     return n == "str" or n == "String"
 
+pub def _tr_int_bits(n: str) -> str:
+    if n == "i32" or n == "u32": return "32"
+    if n == "i16" or n == "u16": return "16"
+    if n == "i8" or n == "u8": return "8"
+    return "64"
+
+pub def _tr_int_signed(n: str) -> str:
+    if n == "u64" or n == "u32" or n == "u16" or n == "u8" or n == "usize": return "0"
+    return "1"
+
 pub def _is_int_type(n: str) -> bool:
     if n == "int" or n == "i64" or n == "i32" or n == "i16" or n == "i8": return true
     if n == "u64" or n == "u32" or n == "u16" or n == "u8": return true
@@ -3142,6 +3152,12 @@ pub class CGenerator:
                 # (TrStr is a struct, can't C-cast it directly to a pointer).
                 if _is_str_type(self.resolve_generic_prim(hir_expr_type(expr).name)):
                     return "((" + self.type_to_c(target_ty) + ")(" + self.strz(self.gen_expr(expr)) + "))"
+                # float -> integer: a plain C cast is UB when the value is NaN / out of range.
+                # Use the saturating helpers (NaN -> 0, clamp to the target range).
+                if _is_float_type(self.resolve_generic_prim(hir_expr_type(expr).name)) and _is_int_type(target_ty.name):
+                    mut _fc_t = target_ty.name
+                    if _fc_t == "u64" or _fc_t == "usize": return "((" + self.type_to_c(target_ty) + ")_tr_f2u((double)(" + self.gen_expr(expr) + ")))"
+                    return "((" + self.type_to_c(target_ty) + ")_tr_f2i((double)(" + self.gen_expr(expr) + "), " + _tr_int_bits(_fc_t) + ", " + _tr_int_signed(_fc_t) + "))"
                 return "((" + self.type_to_c(target_ty) + ")(" + self.gen_expr(expr) + "))"
             case HirExpr.EFString(parts, _): return self.gen_fstring(parts)
             case HirExpr.ETryExpr(expr, ok_ty):
@@ -4824,10 +4840,20 @@ pub class CGenerator:
             return "(strcmp(" + self.strz(ls) + ", " + self.strz(rs) + ") " + op + " 0)"
         if self.enums.contains(lt_n) and (op == "==" or op == "!="):
             return "(" + ls + ".tag " + op + " " + rs + ".tag)"
+        if (op == "<<" or op == ">>") and (lt_n == "int" or lt_n == "i64" or lt_n == "u64" or lt_n == "usize" or lt_n == "isize" or lt_n == "i32" or lt_n == "u32" or lt_n == "i16" or lt_n == "u16" or lt_n == "i8" or lt_n == "u8") and _is_int_type(rt_n):
+            # Shift counts are DEFINED: the count is masked to the operand width (like Rust's
+            # release-mode `wrapping_shl`), so a count >= the width or a negative count is never C
+            # undefined behaviour (a plain `x << 64` / `x << -1` is UB the optimizer may exploit).
+            mut _sh_m = "31"
+            if lt_n == "int" or lt_n == "i64" or lt_n == "u64" or lt_n == "usize" or lt_n == "isize": _sh_m = "63"
+            mut _sh_c = "((" + rs + ") & " + _sh_m + ")"
+            if op == "<<" and (lt_n == "int" or lt_n == "i64"):
+                # `int` is a signed 64-bit C long long: a plain signed `<<` is UB once the
+                # result leaves the type's range (x >= 2^31 << 32, 255 << 56). Shift on the
+                # unsigned representation and cast back (two's-complement wrap).
+                return "((long long)((unsigned long long)(" + ls + ") << " + _sh_c + "))"
+            return "(" + ls + " " + op + " " + _sh_c + ")"
         if op == "<<" and (lt_n == "int" or lt_n == "i64"):
-            # `int` is a signed 64-bit C long long: a plain signed `<<` is UB once the
-            # result leaves the type's range (x >= 2^31 << 32, 255 << 56). Shift on the
-            # unsigned representation and cast back (two's-complement wrap).
             return "((long long)((unsigned long long)(" + ls + ") << (" + rs + ")))"
         return "(" + ls + " " + op + " " + rs + ")"
 
@@ -4959,7 +4985,7 @@ pub class CGenerator:
                 return self.cls_method_c_call(ty_n, "__getitem__", os, is_idx)
             return ty_n + "_get_index(" + os + ", " + is_idx + ")"
         if _is_str_type(ty_n):
-            return self.strz(os) + "[" + is_idx + "]"
+            return "_tr_str_at(" + self.strv(os) + ", (long long)(" + is_idx + "))"
         return os + "[" + is_idx + "]"
 
     # True when a call arg is a `Shared[T]` handle (a `shared` var — typed as its
@@ -5307,6 +5333,7 @@ pub class CGenerator:
         if base_callee == "int" or base_callee == "_tr_fn_int":
             if args.len > 0:
                 if _is_str_type(self.resolve_generic_prim(hir_expr_type(args.get(0)).name)): return "_tr_str_to_int(" + self.strz(self.gen_expr(args.get(0))) + ")"
+                if _is_float_type(self.resolve_generic_prim(hir_expr_type(args.get(0)).name)): return "_tr_f2i((double)(" + self.gen_expr(args.get(0)) + "), 64, 1)"
                 return "(long long)(" + self.gen_expr(args.get(0)) + ")"
             return "0LL"
         if base_callee == "float" or base_callee == "_tr_fn_float":

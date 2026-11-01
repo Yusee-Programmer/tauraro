@@ -1,0 +1,10 @@
+def release(p: Pointer[int]) -> void:
+    unsafe:
+        dealloc(p)
+def main():
+    unsafe:
+        mut p: Pointer[int] = alloc[int](2)
+        release(p)
+        p = alloc[int](1)
+        p.write(1)
+        release(p)

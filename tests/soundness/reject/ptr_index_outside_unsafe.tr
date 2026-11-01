@@ -1,0 +1,6 @@
+# EXPECT: [P-2]
+# Indexing a raw pointer (here a List decayed to a pointer) outside unsafe is unchecked.
+def main():
+    mut l: List[int] = [1, 2, 3]
+    mut p = l as Pointer[int]
+    print(p[7])

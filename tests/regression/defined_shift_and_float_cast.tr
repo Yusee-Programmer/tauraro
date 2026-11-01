@@ -1,0 +1,32 @@
+# Shift counts are masked to the operand width and float -> int casts saturate
+# (NaN -> 0): neither is C undefined behaviour in the generated code.
+from std.test import TestRunner
+
+def main():
+    mut t = TestRunner.init("defined_shift_and_float_cast")
+
+    t.section("shift count masking")
+    mut one = 1
+    mut c64 = 64
+    mut c65 = 65
+    mut neg = -1
+    t.assert_eq_int(one << c64, 1, "1 << 64 wraps the count to 0")
+    t.assert_eq_int(one << c65, 2, "1 << 65 == 1 << 1")
+    t.assert_eq_int(one << neg, -9223372036854775807 - 1, "1 << -1 == 1 << 63")
+    t.assert_eq_int(8 >> c64, 8, "8 >> 64 wraps the count")
+    mut u: u32 = 1
+    mut c33: u32 = 33
+    t.assert_eq_int((u << c33) as int, 2, "u32 count masked to 5 bits")
+
+    t.section("float to int saturates")
+    mut big = 1e30
+    mut nan = 0.0
+    nan = nan / nan
+    mut negf = -1.5
+    mut f300 = 300.5
+    t.assert_eq_int(int(big), 9223372036854775807, "int(1e30) saturates")
+    t.assert_eq_int(int(nan), 0, "int(NaN) == 0")
+    t.assert_eq_int(int(negf), -1, "int(-1.5) truncates")
+    t.assert_eq_int((f300 as u8) as int, 255, "300.5 as u8 saturates")
+    t.assert_eq_int((negf as u8) as int, 0, "-1.5 as u8 clamps to 0")
+    t.summary()

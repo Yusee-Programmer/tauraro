@@ -185,7 +185,8 @@ extern "C":
 mut total = 0
 mut cb = def(ev: c_int):
     total = total + (ev as int)
-run_events(c_callback(cb), cb as Pointer[void], 10, 20, 12)   # total == 42
+unsafe:
+    run_events(c_callback(cb), cb as Pointer[void], 10, 20, 12)   # total == 42
 ```
 
 Captures are **by reference** into the current frame, so this is sound for callbacks invoked
@@ -203,7 +204,8 @@ def on_event(ev: c_int, ud: Pointer[Acc]):
         a.total = a.total + (ev as int)
         ud.write(a)
 
-run_events(on_event as Pointer[void], (&acc) as Pointer[void], 10, 20, 12)
+unsafe:
+    run_events(on_event as Pointer[void], (&acc) as Pointer[void], 10, 20, 12)
 ```
 
 A **non-capturing** callback needs neither — pass the top-level function directly (see the
@@ -863,7 +865,7 @@ class Stat:
 1. **Group related declarations.** One `extern "C":` block per library.
 2. **Wrap C calls in safe functions.** Don't call `extern "C"` functions directly from main logic — wrap them in Tauraro functions that handle errors.
 3. **Match types exactly.** Use `u32` for `uint32_t`, `usize` for `size_t`, `Pointer[void]` for `void*`.
-4. **Use `unsafe:` for all C pointer operations.** Any code that passes raw pointers or dereferences C-returned pointers should be in `unsafe:`.
+4. **Use `unsafe:` for all C pointer operations.** Calling an `extern` function that has a raw `Pointer` parameter outside `unsafe:` is error `[P-5]` under `--strict`. Any code that passes raw pointers or dereferences C-returned pointers should be in `unsafe:`.
 5. **Check return values.** Most C library functions signal errors via return codes. Check every one.
 6. **Verify struct layouts.** Compare `sizeof(YourClass)` against the expected C struct size before using it in FFI.
 

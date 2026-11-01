@@ -1,0 +1,8 @@
+# EXPECT: [M-6]
+# dealloc() through an alias of an already-freed pointer is a double free.
+def main():
+    unsafe:
+        mut p: Pointer[int] = alloc[int](4)
+        mut q: Pointer[int] = p
+        dealloc(p)
+        dealloc(q)

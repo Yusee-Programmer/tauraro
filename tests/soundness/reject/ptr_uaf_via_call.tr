@@ -1,0 +1,11 @@
+# EXPECT: [M-6]
+# A callee that deallocs its Pointer parameter frees the caller's pointer.
+def release(p: Pointer[int]) -> void:
+    unsafe:
+        dealloc(p)
+
+def main():
+    unsafe:
+        mut p: Pointer[int] = alloc[int](4)
+        release(p)
+        print(p.read())

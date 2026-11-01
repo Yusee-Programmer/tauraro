@@ -1,0 +1,11 @@
+# EXPECT: [M-6]
+# Double dealloc of a struct field pointer.
+class H:
+    pub p: Pointer[int]
+
+def main():
+    mut h = H()
+    unsafe:
+        h.p = alloc[int](4)
+        dealloc(h.p)
+        dealloc(h.p)
