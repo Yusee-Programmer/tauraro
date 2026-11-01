@@ -1,0 +1,46 @@
+name: arm64-debug
+on: workflow_dispatch
+jobs:
+  dbg:
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build stage0 + compiler
+        run: |
+          gcc -O2 -w -fno-strict-aliasing -Ibootstrap/c -std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700 bootstrap/c/main.c bootstrap/c/module_*.c $(find bootstrap/c/include -name '*.c') -o s0 -lm -lpthread -lrt
+          CC=gcc CFLAGS="-O2 -std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700" LDFLAGS="-lm -lpthread -lrt" ./s0 src/main.tr -o ./tauraroc --link runtime/tauraro_llvm.c
+          ls -la tauraroc
+      - name: Stress release (compile and run separately, fastbin tunables)
+        continue-on-error: true
+        run: |
+          export GLIBC_TUNABLES=glibc.malloc.tcache_count=0 MALLOC_CHECK_=3 MALLOC_PERTURB_=165
+          for t in tests/lang/140_font tests/lang/42_aes tests/lang/137_qr_color tests/regression/dict_coll_value_borrow; do
+            b=$(basename $t)
+            cf=0; rf=0
+            for i in $(seq 1 15); do
+              ./tauraroc $t.tr -o /tmp/$b.bin > /tmp/c.txt 2>&1 || { cf=$((cf+1)); echo "COMPILE FAIL $b"; tail -5 /tmp/c.txt; }
+              [ -x /tmp/$b.bin ] && { /tmp/$b.bin > /tmp/r.txt 2>&1 || { rf=$((rf+1)); echo "RUN FAIL $b"; tail -5 /tmp/r.txt; }; }
+            done
+            echo "RESULT $b compile_fails=$cf run_fails=$rf"
+          done
+      - name: Stress ASan test programs
+        continue-on-error: true
+        run: |
+          export ASAN_OPTIONS=detect_leaks=0:abort_on_error=0
+          for t in tests/lang/140_font tests/lang/42_aes tests/lang/137_qr_color tests/regression/dict_coll_value_borrow; do
+            b=$(basename $t)
+            ./tauraroc $t.tr --debug -o /tmp/$b.dbg > /tmp/c.txt 2>&1 || tail -20 /tmp/c.txt
+            for i in 1 2 3 4 5; do /tmp/$b.dbg > /tmp/r.txt 2>&1 || { echo "ASAN RUN FAIL $b"; head -60 /tmp/r.txt; break; }; done
+            echo "ASAN done $b"
+          done
+      - name: Build ASan compiler and compile tests with it
+        continue-on-error: true
+        run: |
+          export ASAN_OPTIONS=detect_leaks=0
+          ./tauraroc src/main.tr --debug -o ./tauraroc_asan --link runtime/tauraro_llvm.c > /tmp/a.txt 2>&1 || tail -20 /tmp/a.txt
+          for t in tests/lang/140_font tests/lang/42_aes tests/lang/137_qr_color tests/regression/dict_coll_value_borrow; do
+            b=$(basename $t)
+            for i in 1 2 3; do ./tauraroc_asan $t.tr -o /tmp/$b.x > /tmp/c.txt 2>&1 || { echo "ASAN COMPILER FAIL $b"; head -80 /tmp/c.txt; break; }; done
+            echo "asan-compiler done $b"
+          done
