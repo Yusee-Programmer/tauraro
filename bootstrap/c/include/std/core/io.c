@@ -22,7 +22,7 @@ __attribute__((hot)) TrStr read_file(TrStr path) {
 #line 27 "./std/core/io.tr"
     _tr_c_fread(((void*)(buffer)), 1LL, size, fp);
 #line 28 "./std/core/io.tr"
-    (*(buffer + size) = '\0');
+    (*_TR_PTR_OFF(buffer, size) = '\0');
 #line 29 "./std/core/io.tr"
     _tr_c_fclose(fp);
 #line 30 "./std/core/io.tr"

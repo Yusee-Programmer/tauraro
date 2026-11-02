@@ -15,7 +15,7 @@ __attribute__((malloc,returns_nonnull,hot)) Lexer* Lexer_init(TrStr source) {
 #line 164 "src/lexer.tr"
     char* p = lx->src;
 #line 165 "src/lexer.tr"
-    while ((((long long)((*(p + src_len)))) != 0LL)) {
+    while ((((long long)((*_TR_PTR_OFF(p, src_len)))) != 0LL)) {
 #line 166 "src/lexer.tr"
         src_len = (src_len + 1LL);
     }
@@ -67,7 +67,7 @@ __attribute__((hot)) long long Lexer_peek(Lexer* self) {
 #line 197 "src/lexer.tr"
     /* unsafe block */
 #line 198 "src/lexer.tr"
-    return ((long long)((*(self->src + self->pos))));
+    return ((long long)((*_TR_PTR_OFF(self->src, self->pos))));
 }
 
 __attribute__((hot)) long long Lexer_peek_at(Lexer* self, long long offset) {
@@ -81,7 +81,7 @@ __attribute__((hot)) long long Lexer_peek_at(Lexer* self, long long offset) {
 #line 204 "src/lexer.tr"
     /* unsafe block */
 #line 205 "src/lexer.tr"
-    return ((long long)((*(self->src + p))));
+    return ((long long)((*_TR_PTR_OFF(self->src, p))));
 }
 
 __attribute__((hot)) bool Lexer__at_eol_after_ws(Lexer* self) {
@@ -207,7 +207,7 @@ __attribute__((hot)) double Lexer_float_from_text(Lexer* self, long long start) 
 #line 272 "src/lexer.tr"
     while ((i < self->pos)) {
 #line 273 "src/lexer.tr"
-        long long c = ((long long)((*(self->src + i))));
+        long long c = ((long long)((*_TR_PTR_OFF(self->src, i))));
 #line 274 "src/lexer.tr"
         if ((c != 95LL)) {
 #line 274 "src/lexer.tr"
@@ -1850,14 +1850,14 @@ __attribute__((hot)) bool _peek_next_line_dot(char* src, long long pos, long lon
 #line 906 "src/lexer.tr"
     while ((i < src_len)) {
 #line 907 "src/lexer.tr"
-        long long c = ((long long)((*(src + i))));
+        long long c = ((long long)((*_TR_PTR_OFF(src, i))));
 #line 908 "src/lexer.tr"
         if (((c == 32LL) || (c == 9LL))) {
 #line 909 "src/lexer.tr"
             i = (i + 1LL);
         } else if ((c == 35LL)) {
 #line 911 "src/lexer.tr"
-            while (((i < src_len) && (((long long)((*(src + i)))) != 10LL))) {
+            while (((i < src_len) && (((long long)((*_TR_PTR_OFF(src, i)))) != 10LL))) {
 #line 912 "src/lexer.tr"
                 i = (i + 1LL);
             }
@@ -1868,7 +1868,7 @@ __attribute__((hot)) bool _peek_next_line_dot(char* src, long long pos, long lon
 #line 916 "src/lexer.tr"
             i = (i + 1LL);
 #line 917 "src/lexer.tr"
-            if (((i < src_len) && (((long long)((*(src + i)))) == 10LL))) {
+            if (((i < src_len) && (((long long)((*_TR_PTR_OFF(src, i)))) == 10LL))) {
 #line 918 "src/lexer.tr"
                 i = (i + 1LL);
             }

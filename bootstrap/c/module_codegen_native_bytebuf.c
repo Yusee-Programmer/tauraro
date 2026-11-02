@@ -25,7 +25,7 @@ __attribute__((hot)) void ByteBuf_grow(ByteBuf* self) {
 #line 31 "src/codegen/native/bytebuf.tr"
     self->data = ((unsigned char*)(raw_realloc(((char*)(self->data)), ncap)));
 #line 32 "src/codegen/native/bytebuf.tr"
-    raw_zero(((char*)((self->data + self->cap))), (ncap - self->cap));
+    raw_zero(((char*)(_TR_PTR_OFF(self->data, self->cap))), (ncap - self->cap));
 #line 33 "src/codegen/native/bytebuf.tr"
     self->cap = ncap;
 }
@@ -39,7 +39,7 @@ __attribute__((hot)) void ByteBuf_u8(ByteBuf* self, long long v) {
         ByteBuf_grow(self);
     }
 #line 39 "src/codegen/native/bytebuf.tr"
-    (*(self->data + self->len) = ((unsigned char)((v & 255LL))));
+    (*_TR_PTR_OFF(self->data, self->len) = ((unsigned char)((v & 255LL))));
 #line 40 "src/codegen/native/bytebuf.tr"
     self->len = (self->len + 1LL);
 }
@@ -77,9 +77,9 @@ __attribute__((hot)) void ByteBuf_cstr(ByteBuf* self, TrStr s) {
 #line 60 "src/codegen/native/bytebuf.tr"
     long long i = 0LL;
 #line 61 "src/codegen/native/bytebuf.tr"
-    while ((((long long)((*(p + i)))) != 0LL)) {
+    while ((((long long)((*_TR_PTR_OFF(p, i)))) != 0LL)) {
 #line 62 "src/codegen/native/bytebuf.tr"
-        ByteBuf_u8(self, ((long long)((*(p + i)))));
+        ByteBuf_u8(self, ((long long)((*_TR_PTR_OFF(p, i)))));
 #line 63 "src/codegen/native/bytebuf.tr"
         i = (i + 1LL);
     }
@@ -97,7 +97,7 @@ __attribute__((hot)) void ByteBuf_cstr_len(ByteBuf* self, TrStr s, long long ble
 #line 78 "src/codegen/native/bytebuf.tr"
     while ((i < blen)) {
 #line 79 "src/codegen/native/bytebuf.tr"
-        ByteBuf_u8(self, ((long long)((*(p + i)))));
+        ByteBuf_u8(self, ((long long)((*_TR_PTR_OFF(p, i)))));
 #line 80 "src/codegen/native/bytebuf.tr"
         i = (i + 1LL);
     }
@@ -125,7 +125,7 @@ __attribute__((hot)) void ByteBuf_append_buf(ByteBuf* self, ByteBuf* o) {
 #line 93 "src/codegen/native/bytebuf.tr"
     while ((i < o->len)) {
 #line 94 "src/codegen/native/bytebuf.tr"
-        ByteBuf_u8(self, ((long long)((*(o->data + i)))));
+        ByteBuf_u8(self, ((long long)((*_TR_PTR_OFF(o->data, i)))));
 #line 95 "src/codegen/native/bytebuf.tr"
         i = (i + 1LL);
     }
@@ -135,13 +135,13 @@ __attribute__((hot)) void ByteBuf_patch_u32(ByteBuf* self, long long off, long l
 #line 99 "src/codegen/native/bytebuf.tr"
     /* unsafe block */
 #line 100 "src/codegen/native/bytebuf.tr"
-    (*(self->data + off) = ((unsigned char)((v & 255LL))));
+    (*_TR_PTR_OFF(self->data, off) = ((unsigned char)((v & 255LL))));
 #line 101 "src/codegen/native/bytebuf.tr"
-    (*(self->data + (off + 1LL)) = ((unsigned char)(((v >> ((8LL) & 63)) & 255LL))));
+    (*_TR_PTR_OFF(self->data, (off + 1LL)) = ((unsigned char)(((v >> ((8LL) & 63)) & 255LL))));
 #line 102 "src/codegen/native/bytebuf.tr"
-    (*(self->data + (off + 2LL)) = ((unsigned char)(((v >> ((16LL) & 63)) & 255LL))));
+    (*_TR_PTR_OFF(self->data, (off + 2LL)) = ((unsigned char)(((v >> ((16LL) & 63)) & 255LL))));
 #line 103 "src/codegen/native/bytebuf.tr"
-    (*(self->data + (off + 3LL)) = ((unsigned char)(((v >> ((24LL) & 63)) & 255LL))));
+    (*_TR_PTR_OFF(self->data, (off + 3LL)) = ((unsigned char)(((v >> ((24LL) & 63)) & 255LL))));
 }
 
 __attribute__((hot)) void ByteBuf_align_to(ByteBuf* self, long long align) {

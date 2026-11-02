@@ -2739,6 +2739,7 @@ typedef struct PfState {
     List_TrStr* pa;
     List_TrStr* pb;
     List_TrStr* stk;
+    List_TrStr* inval;
     List_TrStr* own;
     List_TrStr* nul;
     List_TrStr* sz;
@@ -2772,6 +2773,7 @@ typedef struct PfCtx {
     bool noesc;
     bool in_defer;
     long long unsafe_depth;
+    TrMap* origin;
     TrMap* externs;
 } PfCtx;
 static void _trdrop_PfCtx(void* vp) {
@@ -2785,6 +2787,7 @@ static void _trdrop_PfCtx(void* vp) {
     List_ptr_free_obj(self->cnt, _trdrop_PfState);
     List_i64_free(self->cnt_base);
     Dict_free(self->alloc_line);
+    Dict_free_strval(self->origin);
 }
 #endif
 

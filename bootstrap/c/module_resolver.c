@@ -70,7 +70,7 @@ __attribute__((hot)) TrStr ModuleResolver_dir_of_path(ModuleResolver* self, TrSt
 #line 111 "src/resolver.tr"
     long long n = 0LL;
 #line 112 "src/resolver.tr"
-    while ((((long long)((*(p + n)))) != 0LL)) {
+    while ((((long long)((*_TR_PTR_OFF(p, n)))) != 0LL)) {
 #line 112 "src/resolver.tr"
         n = (n + 1LL);
     }
@@ -81,7 +81,7 @@ __attribute__((hot)) TrStr ModuleResolver_dir_of_path(ModuleResolver* self, TrSt
 #line 115 "src/resolver.tr"
     while ((i < n)) {
 #line 116 "src/resolver.tr"
-        long long c = ((long long)((*(p + i))));
+        long long c = ((long long)((*_TR_PTR_OFF(p, i))));
 #line 117 "src/resolver.tr"
         if (((c == 47LL) || (c == 92LL))) {
 #line 117 "src/resolver.tr"
@@ -105,7 +105,7 @@ __attribute__((hot)) TrStr ModuleResolver_base_of_path(ModuleResolver* self, TrS
 #line 125 "src/resolver.tr"
     long long n = 0LL;
 #line 126 "src/resolver.tr"
-    while ((((long long)((*(p + n)))) != 0LL)) {
+    while ((((long long)((*_TR_PTR_OFF(p, n)))) != 0LL)) {
 #line 126 "src/resolver.tr"
         n = (n + 1LL);
     }
@@ -116,7 +116,7 @@ __attribute__((hot)) TrStr ModuleResolver_base_of_path(ModuleResolver* self, TrS
 #line 129 "src/resolver.tr"
     while ((i < n)) {
 #line 130 "src/resolver.tr"
-        long long c = ((long long)((*(p + i))));
+        long long c = ((long long)((*_TR_PTR_OFF(p, i))));
 #line 131 "src/resolver.tr"
         if (((c == 47LL) || (c == 92LL))) {
 #line 131 "src/resolver.tr"
@@ -137,9 +137,9 @@ __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, 
 #line 145 "src/resolver.tr"
     char* mp = ((char*)(_tr_strz(main_path)));
 #line 146 "src/resolver.tr"
-    while ((((long long)((*(mp + ci)))) != 0LL)) {
+    while ((((long long)((*_TR_PTR_OFF(mp, ci)))) != 0LL)) {
 #line 147 "src/resolver.tr"
-        long long ch = ((long long)((*(mp + ci))));
+        long long ch = ((long long)((*_TR_PTR_OFF(mp, ci))));
 #line 148 "src/resolver.tr"
         if (((ch == 47LL) || (ch == 92LL))) {
 #line 149 "src/resolver.tr"
@@ -167,9 +167,9 @@ __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, 
 #line 162 "src/resolver.tr"
         char* dp = ((char*)(_tr_strz(dir_str)));
 #line 163 "src/resolver.tr"
-        while ((((long long)((*(dp + pj)))) != 0LL)) {
+        while ((((long long)((*_TR_PTR_OFF(dp, pj)))) != 0LL)) {
 #line 164 "src/resolver.tr"
-            long long dch = ((long long)((*(dp + pj))));
+            long long dch = ((long long)((*_TR_PTR_OFF(dp, pj))));
 #line 165 "src/resolver.tr"
             if (((dch == 47LL) || (dch == 92LL))) {
 #line 165 "src/resolver.tr"
@@ -197,9 +197,9 @@ __attribute__((hot)) Program* ModuleResolver_resolve_main(ModuleResolver* self, 
 #line 179 "src/resolver.tr"
             char* gp_p = ((char*)(_tr_strz(parent_dir)));
 #line 180 "src/resolver.tr"
-            while ((((long long)((*(gp_p + gj)))) != 0LL)) {
+            while ((((long long)((*_TR_PTR_OFF(gp_p, gj)))) != 0LL)) {
 #line 181 "src/resolver.tr"
-                long long gch = ((long long)((*(gp_p + gj))));
+                long long gch = ((long long)((*_TR_PTR_OFF(gp_p, gj))));
 #line 182 "src/resolver.tr"
                 if (((gch == 47LL) || (gch == 92LL))) {
 #line 182 "src/resolver.tr"
@@ -473,7 +473,7 @@ __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, TrSt
 #line 297 "src/resolver.tr"
         long long slen = 0LL;
 #line 298 "src/resolver.tr"
-        while ((((long long)((*(p_ptr + slen)))) != 0LL)) {
+        while ((((long long)((*_TR_PTR_OFF(p_ptr, slen)))) != 0LL)) {
 #line 299 "src/resolver.tr"
             slen = (slen + 1LL);
         }
@@ -482,11 +482,11 @@ __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, TrSt
 #line 301 "src/resolver.tr"
         if ((slen >= 3LL)) {
 #line 302 "src/resolver.tr"
-            if ((((long long)((*(p_ptr + (slen - 3LL))))) == 46LL)) {
+            if ((((long long)((*_TR_PTR_OFF(p_ptr, (slen - 3LL))))) == 46LL)) {
 #line 303 "src/resolver.tr"
-                if ((((long long)((*(p_ptr + (slen - 2LL))))) == 116LL)) {
+                if ((((long long)((*_TR_PTR_OFF(p_ptr, (slen - 2LL))))) == 116LL)) {
 #line 304 "src/resolver.tr"
-                    if ((((long long)((*(p_ptr + (slen - 1LL))))) == 114LL)) {
+                    if ((((long long)((*_TR_PTR_OFF(p_ptr, (slen - 1LL))))) == 114LL)) {
 #line 305 "src/resolver.tr"
                         has_tr = true;
                     }
@@ -518,7 +518,7 @@ __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, TrSt
 #line 315 "src/resolver.tr"
     while ((nul_i < nul_n)) {
 #line 316 "src/resolver.tr"
-        if ((((long long)((*(nul_p + nul_i)))) == 0LL)) {
+        if ((((long long)((*_TR_PTR_OFF(nul_p, nul_i)))) == 0LL)) {
 #line 317 "src/resolver.tr"
             nul_at = nul_i;
 #line 318 "src/resolver.tr"
@@ -927,7 +927,7 @@ __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* sel
 #line 525 "src/resolver.tr"
     char* p = ((char*)(_tr_strz(mod_path)));
 #line 526 "src/resolver.tr"
-    while ((((long long)((*(p + n)))) != 0LL)) {
+    while ((((long long)((*_TR_PTR_OFF(p, n)))) != 0LL)) {
 #line 526 "src/resolver.tr"
         n = (n + 1LL);
     }
@@ -940,11 +940,11 @@ __attribute__((hot)) void ModuleResolver_resolve_module_path(ModuleResolver* sel
 #line 530 "src/resolver.tr"
     while ((j < n)) {
 #line 531 "src/resolver.tr"
-        if ((((long long)((*(bp + j)))) == 46LL)) {
+        if ((((long long)((*_TR_PTR_OFF(bp, j)))) == 46LL)) {
 #line 532 "src/resolver.tr"
             /* unsafe block */
 #line 532 "src/resolver.tr"
-            (*(bp + j) = ((char)(47LL)));
+            (*_TR_PTR_OFF(bp, j) = ((char)(47LL)));
         }
 #line 533 "src/resolver.tr"
         j = (j + 1LL);

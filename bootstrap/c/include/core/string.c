@@ -20,7 +20,7 @@ __attribute__((malloc,returns_nonnull,hot)) StringObj* StringObj_init(TrStr s) {
 #line 37 "std/core/string.tr"
     /* unsafe block */
 #line 37 "std/core/string.tr"
-    (*(obj->data + slen) = '\0');
+    (*_TR_PTR_OFF(obj->data, slen) = '\0');
 #line 38 "std/core/string.tr"
     return obj;
 }
@@ -46,13 +46,13 @@ __attribute__((hot)) void StringObj_append(StringObj* self, TrStr other) {
         self->data = _tr_c_realloc(self->data, self->capacity);
     }
 #line 49 "std/core/string.tr"
-    _tr_c_memcpy((self->data + self->len), ((char*)(_tr_strz(other))), slen);
+    _tr_c_memcpy(_TR_PTR_OFF(self->data, self->len), ((char*)(_tr_strz(other))), slen);
 #line 50 "std/core/string.tr"
     self->len = (self->len + slen);
 #line 51 "std/core/string.tr"
     /* unsafe block */
 #line 51 "std/core/string.tr"
-    (*(self->data + self->len) = '\0');
+    (*_TR_PTR_OFF(self->data, self->len) = '\0');
 }
 
 __attribute__((hot)) void StringObj_destroy(StringObj* self) {
@@ -87,7 +87,7 @@ __attribute__((malloc,returns_nonnull,hot)) StringBuilder* StringBuilder_init(lo
 #line 71 "std/core/string.tr"
     /* unsafe block */
 #line 71 "std/core/string.tr"
-    (*(sb->buf->data + 0LL) = '\0');
+    (*_TR_PTR_OFF(sb->buf->data, 0LL) = '\0');
 #line 72 "std/core/string.tr"
     return sb;
 }
@@ -108,13 +108,13 @@ __attribute__((hot)) void StringBuilder_append_char(StringBuilder* self, long lo
 #line 81 "std/core/string.tr"
     /* unsafe block */
 #line 81 "std/core/string.tr"
-    (*(self->buf->data + self->buf->len) = ((char)(c)));
+    (*_TR_PTR_OFF(self->buf->data, self->buf->len) = ((char)(c)));
 #line 82 "std/core/string.tr"
     self->buf->len = (self->buf->len + 1LL);
 #line 83 "std/core/string.tr"
     /* unsafe block */
 #line 83 "std/core/string.tr"
-    (*(self->buf->data + self->buf->len) = '\0');
+    (*_TR_PTR_OFF(self->buf->data, self->buf->len) = '\0');
 }
 
 __attribute__((hot)) void StringBuilder_append_int(StringBuilder* self, long long n) {
@@ -169,13 +169,13 @@ __attribute__((hot)) void StringBuilder_append_int(StringBuilder* self, long lon
 #line 110 "std/core/string.tr"
         /* unsafe block */
 #line 111 "std/core/string.tr"
-        long long a = (*(self->buf->data + lo));
+        long long a = (*_TR_PTR_OFF(self->buf->data, lo));
 #line 112 "std/core/string.tr"
-        long long b = (*(self->buf->data + hi));
+        long long b = (*_TR_PTR_OFF(self->buf->data, hi));
 #line 113 "std/core/string.tr"
-        (*(self->buf->data + lo) = b);
+        (*_TR_PTR_OFF(self->buf->data, lo) = b);
 #line 114 "std/core/string.tr"
-        (*(self->buf->data + hi) = a);
+        (*_TR_PTR_OFF(self->buf->data, hi) = a);
 #line 115 "std/core/string.tr"
         lo = (lo + 1LL);
 #line 116 "std/core/string.tr"
@@ -223,7 +223,7 @@ __attribute__((hot)) void StringBuilder_clear(StringBuilder* self) {
 #line 139 "std/core/string.tr"
     /* unsafe block */
 #line 139 "std/core/string.tr"
-    (*(self->buf->data + 0LL) = '\0');
+    (*_TR_PTR_OFF(self->buf->data, 0LL) = '\0');
 }
 
 __attribute__((hot)) void StringBuilder__tr_fn_free(StringBuilder* self) {

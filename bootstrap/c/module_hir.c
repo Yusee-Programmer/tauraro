@@ -271,7 +271,7 @@ __attribute__((hot)) long long _tr_str_len(TrStr s) {
 #line 342 "src/hir.tr"
     long long i = 0LL;
 #line 343 "src/hir.tr"
-    while ((((long long)((*(p + i)))) != 0LL)) {
+    while ((((long long)((*_TR_PTR_OFF(p, i)))) != 0LL)) {
 #line 344 "src/hir.tr"
         i = (i + 1LL);
     }

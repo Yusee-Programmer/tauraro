@@ -4924,13 +4924,13 @@ __attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw, long lo
 #line 2636 "src/parser.tr"
     while ((i < raw_blen)) {
 #line 2637 "src/parser.tr"
-        long long c = ((long long)((*(p + i))));
+        long long c = ((long long)((*_TR_PTR_OFF(p, i))));
 #line 2638 "src/parser.tr"
         long long c_next = 0LL;
 #line 2639 "src/parser.tr"
         if (((i + 1LL) < raw_blen)) {
 #line 2639 "src/parser.tr"
-            c_next = ((long long)((*(p + (i + 1LL)))));
+            c_next = ((long long)((*_TR_PTR_OFF(p, (i + 1LL)))));
         }
 #line 2641 "src/parser.tr"
         if ((((c == 123LL) && (c_next == 123LL)) || ((c == 125LL) && (c_next == 125LL)))) {
@@ -4955,7 +4955,7 @@ __attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw, long lo
 #line 2654 "src/parser.tr"
             while (((depth > 0LL) && (i < raw_blen))) {
 #line 2655 "src/parser.tr"
-                long long ec = ((long long)((*(p + i))));
+                long long ec = ((long long)((*_TR_PTR_OFF(p, i))));
 #line 2656 "src/parser.tr"
                 if (((ec == 34LL) || (ec == 39LL))) {
 #line 2659 "src/parser.tr"
@@ -4963,9 +4963,9 @@ __attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw, long lo
 #line 2660 "src/parser.tr"
                     i = (i + 1LL);
 #line 2661 "src/parser.tr"
-                    while (((i < raw_blen) && (((long long)((*(p + i)))) != ec))) {
+                    while (((i < raw_blen) && (((long long)((*_TR_PTR_OFF(p, i)))) != ec))) {
 #line 2662 "src/parser.tr"
-                        long long sc = ((long long)((*(p + i))));
+                        long long sc = ((long long)((*_TR_PTR_OFF(p, i))));
 #line 2663 "src/parser.tr"
                         StringBuilder_append_char(expr_sb, sc);
 #line 2664 "src/parser.tr"
@@ -4973,7 +4973,7 @@ __attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw, long lo
 #line 2665 "src/parser.tr"
                         if (((sc == 92LL) && (i < raw_blen))) {
 #line 2666 "src/parser.tr"
-                            StringBuilder_append_char(expr_sb, ((long long)((*(p + i)))));
+                            StringBuilder_append_char(expr_sb, ((long long)((*_TR_PTR_OFF(p, i)))));
 #line 2667 "src/parser.tr"
                             i = (i + 1LL);
                         }
@@ -5100,7 +5100,7 @@ __attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw, long lo
             _tr_obj_release(lexer, _trdrop_Lexer);
         } else if (((c == 92LL) && ((i + 1LL) < raw_blen))) {
 #line 2715 "src/parser.tr"
-            long long esc = ((long long)((*(p + (i + 1LL)))));
+            long long esc = ((long long)((*_TR_PTR_OFF(p, (i + 1LL)))));
 #line 2716 "src/parser.tr"
             if ((esc == 110LL)) {
 #line 2716 "src/parser.tr"
@@ -5143,7 +5143,7 @@ __attribute__((hot)) Expr* Parser_parse_fstring(Parser* self, TrStr raw, long lo
 #line 2730 "src/parser.tr"
                 while ((fk < fnd)) {
 #line 2731 "src/parser.tr"
-                    fhv = ((fhv * 16LL) + lex_hex_val(((long long)((*(p + ((i + 2LL) + fk)))))));
+                    fhv = ((fhv * 16LL) + lex_hex_val(((long long)((*_TR_PTR_OFF(p, ((i + 2LL) + fk)))))));
 #line 2732 "src/parser.tr"
                     fk = (fk + 1LL);
                 }
@@ -7268,7 +7268,7 @@ __attribute__((hot)) TrStr _nth_source_line(TrStr src, long long n) {
 #line 56 "src/parser.tr"
         /* unsafe block */
 #line 57 "src/parser.tr"
-        c = ((long long)((*(p + i))));
+        c = ((long long)((*_TR_PTR_OFF(p, i))));
 #line 58 "src/parser.tr"
         if ((c == 0LL)) {
 #line 58 "src/parser.tr"
@@ -7402,7 +7402,7 @@ __attribute__((hot)) bool _fstr_hex_ok(char* p, long long at, long long n, long 
 #line 3758 "src/parser.tr"
     while ((k < nd)) {
 #line 3759 "src/parser.tr"
-        long long h = lex_hex_val(((long long)((*(p + (at + k))))));
+        long long h = lex_hex_val(((long long)((*_TR_PTR_OFF(p, (at + k))))));
 #line 3760 "src/parser.tr"
         if ((h < 0LL)) {
 #line 3760 "src/parser.tr"

@@ -139,7 +139,7 @@ __attribute__((hot)) TrStr _ll_str_escape(TrStr s, long long blen) {
 #line 66 "src/codegen/llvm/lltype.tr"
     while ((i < blen)) {
 #line 67 "src/codegen/llvm/lltype.tr"
-        long long c = ((long long)((*(p + i))));
+        long long c = ((long long)((*_TR_PTR_OFF(p, i))));
 #line 68 "src/codegen/llvm/lltype.tr"
         long long b = (c & 255LL);
 #line 69 "src/codegen/llvm/lltype.tr"
