@@ -2,7 +2,7 @@
 # AddressSanitizer sweep over the .tr regression tests (C backend): each test is
 # emitted to C, built with -fsanitize=address and run; any ASan report fails it.
 # The normal suite cannot see heap/stack misuse that happens not to crash.
-# Usage: scripts/asan_check.sh [test.tr ...]   (default: tests/lang + tests/regression)
+# Usage: [LEAKS=1] scripts/asan_check.sh [test.tr ...]   (default: tests/lang + tests/regression)
 #        JOBS=4 to build/run in parallel.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
@@ -15,7 +15,9 @@ one() {
     local d="$WORK/$n"; mkdir -p "$d"; cd "$d" || return
     "$TAURAROC" "$ROOT/$f" --emit c >/dev/null 2>"$d/emit.err" || { echo "EMITFAIL $n"; return; }
     $CC -g -O1 -fsanitize=address -w -I build/include -o a.exe $(find build -name '*.c') -lm -lpthread 2>"$d/cc.err" || { echo "CCFAIL $n"; return; }
-    ASAN_OPTIONS=detect_leaks=0 timeout 120 ./a.exe >"$d/out.txt" 2>&1
+    # LEAKS=1 also reports leaks. use_stacks/use_registers=0: a leaked object still referenced from
+    # a DEAD stack slot (main's locals after return) would otherwise count as reachable and hide.
+    LSAN_OPTIONS=use_stacks=0:use_registers=0 ASAN_OPTIONS=detect_leaks=${LEAKS:-0} timeout 120 ./a.exe >"$d/out.txt" 2>&1
     if grep -q 'AddressSanitizer' "$d/out.txt"; then echo "BAD $n"; grep -m1 'ERROR: AddressSanitizer' "$d/out.txt"; else echo "OK $n"; fi
 }
 export -f one; export ROOT TAURAROC CC WORK

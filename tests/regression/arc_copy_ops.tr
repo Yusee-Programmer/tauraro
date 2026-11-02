@@ -1,0 +1,55 @@
+# tests/regression/arc_copy_ops.tr
+# Container operations that COPY elements between containers must give the copy its own
+# reference. They used to copy the raw pointers, so dropping/clearing the source left the copy
+# dangling (use-after-free / double release at scope exit). Run under scripts/asan_check.sh.
+from std.test import TestRunner
+
+class Item:
+    pub name: str
+
+def mk(n: str) -> Item:
+    mut x = Item()
+    x.name = n
+    return x
+
+def main():
+    mut t = TestRunner.init("arc_copy_ops")
+    mut a: List[Item] = [mk("a1"), mk("a2")]
+    mut c1: List[Item] = []
+    c1.extend(a)
+    mut c2 = a.copy()
+    mut c3 = a.reversed()
+    mut c4 = [x for x in a]
+    mut b: List[Item] = [mk("b1")]
+    mut c5 = a + b
+    a.clear()
+    b.clear()
+    t.assert_eq_str(c1[0].name, "a1", "extend copy survives source clear")
+    t.assert_eq_str(c2[1].name, "a2", "copy() survives source clear")
+    t.assert_eq_str(c3[0].name, "a2", "reversed() survives source clear")
+    t.assert_eq_str(c4[0].name, "a1", "comprehension survives source clear")
+    t.assert_eq_int(len(c5), 3, "list + list")
+    t.assert_eq_str(c5[2].name, "b1", "concat survives source clear")
+
+    mut d: Dict[str, Item] = {}
+    d["k"] = mk("v1")
+    mut e: Dict[str, Item] = {}
+    e.update(d)
+    mut f = d.copy()
+    mut vs = d.values()
+    d.clear()
+    t.assert_eq_str(e["k"].name, "v1", "dict.update copy survives source clear")
+    t.assert_eq_str(f["k"].name, "v1", "dict.copy survives source clear")
+    t.assert_eq_str(vs[0].name, "v1", "dict.values survives source clear")
+
+    mut s1: Dict[str, str] = {}
+    s1["x"] = "p" + "q"
+    mut s2: Dict[str, str] = {}
+    s2.update(s1)
+    s1.clear()
+    t.assert_eq_str(s2["x"], "pq", "str-valued dict.update survives source clear")
+
+    mut h = Shared[Item].init(mk("sh"))
+    mut h2 = h.clone()
+    t.assert_eq_str(h2.name, "sh", "Shared handle local clone")
+    t.summary()

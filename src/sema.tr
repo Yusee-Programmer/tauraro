@@ -67,6 +67,7 @@ pub class Symbol:
     pub decl_block_id: int    # auto-drop: id of the innermost if/while C block open at declaration within the current scope; 0 = scope top-level
     pub str_escaped: bool     # auto-drop: a `str` local passed as a call/method-call ARGUMENT - may be aliased into a legacy List_str/Dict/Set (#52 not yet migrated); excluded from auto-drop to avoid UAF
     pub defer_used: bool      # auto-drop: referenced by a `defer` body, which runs AFTER the scope-exit drops - dropping it would be a use-after-free, so it is never auto-dropped (a leak, not a UAF)
+    pub shared_handle: bool   # auto-drop: a plain local holding an OWNED Shared[T] handle (`Shared[T].init(..)` / `.clone()`): one strong ref to release at scope exit
     pub coll_escaped: bool    # auto-drop: a List/Vec/Dict/Map/Set local that is ever read in a non-receiver position (call/method arg, assigned to another var, returned, stored in a literal) - raw unrefcounted pointer, so any alias must disable auto-free to avoid UAF
     pub firm_ty: AstType      # the FULL declared / inferred type this variable is certain to have (name == "" when unsure)
     pub firm_cls: str         # class name this variable is CERTAIN to hold ("" when unsure); lets field / method result kinds be known
@@ -101,6 +102,7 @@ extend Symbol:
         s.str_escaped = false
         s.coll_escaped = false
         s.defer_used = false
+        s.shared_handle = false
         s.borrows_region = ""
         s.open_coll = false
         s.open_key = ""
@@ -2847,6 +2849,7 @@ extend Sema:
         if n == "i8" or n == "i16" or n == "i32" or n == "i64": return true
         if n == "u8" or n == "u16" or n == "u32" or n == "u64" or n == "usize": return true
         if n == "f32" or n == "f64": return true
+        if n == "Weak": return true   # List[Weak[T]]: freed with List_ptr_free_weak (each slot owns a handle)
         # A refcounted heap-class element: the collection co-owns each element
         # (insert retains), and its typed free releases them (codegen gates the
         # actual release on is_heap_class_tn, so raw pointer-aliased element types
@@ -3128,6 +3131,10 @@ extend Sema:
         # released and the payload reclaimed at count 0 (codegen routes SAutoDrop for
         # a shared_vars name to _tr_shared_drop). A `Weak[T]` local likewise releases
         # its weak handle. Both were previously leaked (manual `.drop()` only).
+        if sym.shared_handle:
+            if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
+            if not sym.is_init or sym.is_maybe_init: return false
+            return true
         if sym.is_shared:
             if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
             if not sym.is_init or sym.is_maybe_init: return false
@@ -3914,10 +3921,15 @@ extend Sema:
         if e as usize == 0 as usize: return
         if _is_invalid_ptr(e as usize): return
         match e.read():
-            case HirExpr.EBinOp(_, l, r, _):
-                self.mark_coll_arg(l)
+            case HirExpr.EBinOp(bop, l, r, _):
+                # `a + b` on two lists builds a NEW list (each element retained): neither operand escapes.
+                mut _lcat = false
+                if bop == "+":
+                    mut _blt = hir_expr_type(l).name
+                    if (_blt == "List" or _blt == "Vec") and (hir_expr_type(r).name == "List" or hir_expr_type(r).name == "Vec"): _lcat = true
+                if not _lcat: self.mark_coll_arg(l)
                 self.mark_escaped_coll_args(l)
-                self.mark_coll_arg(r)
+                if not _lcat: self.mark_coll_arg(r)
                 self.mark_escaped_coll_args(r)
             case HirExpr.EUnaryOp(_, inner, _):
                 self.mark_coll_arg(inner)
@@ -3975,7 +3987,12 @@ extend Sema:
                 self.mark_escaped_coll_args(obj)
                 mut i = 0
                 while i < args.len:
-                    if not _coll_static_call: self.mark_coll_arg(args.get(i))
+                    # `dst.extend(src)` / `dst.update(src)` COPY src's elements (each retained): src does not escape.
+                    mut _copy_arg = false
+                    if method == "extend" or method == "update":
+                        mut _cot = hir_expr_type(obj).name
+                        if _cot == "List" or _cot == "Vec" or _cot == "Dict" or _cot == "Map": _copy_arg = true
+                    if not _coll_static_call and not _copy_arg: self.mark_coll_arg(args.get(i))
                     self.mark_escaped_coll_args(args.get(i))
                     i = i + 1
             case HirExpr.EPropAccess(obj, _, _): self.mark_escaped_coll_args(obj)
@@ -4163,6 +4180,10 @@ extend Sema:
     # heap classes. User-`free()` classes, collections, locks ... keep their old behaviour.
     pub def _early_exit_drop_ok(self, tn: str) -> bool:
         if tn == "str": return true
+        # Collections / Shared handles that reach here already passed is_droppable_sym (no escape,
+        # no alias, definitely initialised), so releasing one the exit expression merely READ is
+        # safe when the expression value was computed first (primitive return) or on break/continue.
+        if tn == "List" or tn == "Vec" or tn == "Dict" or tn == "Map" or tn == "Set" or tn == "Shared": return true
         if not self.classes.contains(tn): return false
         if tn == "Vec" or tn == "Map" or tn == "List" or tn == "Dict" or tn == "Set" or ((tn == "Box") and not self.classes.contains("Box")) or tn == "Mutex" or tn == "RwLock" or tn == "Atomic" or tn == "Shared" or tn == "Weak" or tn == "Option" or tn == "Result" or tn == "Chan" or tn == "StringBuilder" or tn == "StringObj": return false
         if self.class_has_free(tn): return false
@@ -7146,6 +7167,31 @@ extend Sema:
                             self.clo_let_scopes.push(self.scopes.len - 1)
                         case _: pass
                 hval = self.retype_none(hval, ty)
+                if not is_shared and hval as usize != 0 as usize and not _is_invalid_ptr(hval as usize):
+                    mut _sh_owned = false
+                    match hval.read():
+                        case HirExpr.ECall(_shc, _, _):
+                            match _shc.read():
+                                case HirExpr.EIdent(_shcn, _, _):
+                                    if _shcn == "_tr_shared_new": _sh_owned = true
+                                case _: pass
+                        case HirExpr.EMethodCall(_shr, _shm, _, _):
+                            if _shm == "clone":
+                                if hir_expr_type(_shr).name == "Shared": _sh_owned = true
+                                match _shr.read():
+                                    case HirExpr.EIdent(_shrn, _, _):
+                                        if self.resolve(_shrn).shared_handle: _sh_owned = true
+                                    case _: pass
+                        case _: pass
+                    if _sh_owned:
+                        mut _shi = self.scopes.len - 1
+                        while _shi >= 0:
+                            if self.scopes.get(_shi).variables.contains(name):
+                                mut _sh_sym = self.scopes.get(_shi).variables.get(name)
+                                _sh_sym.shared_handle = true
+                                self.scopes.get(_shi).variables.insert(name, _sh_sym)
+                                break
+                            _shi = _shi - 1
                 return box_hirstmt(HirStmt.SLet(name, ownership, is_mut, is_const, is_shared, ty, hval))
             case Stmt.SAssign(target, val):
                 self.check_not_type_value(val)
@@ -10076,6 +10122,7 @@ extend Sema:
                     else: ret_ty = AstType.init("void")
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "reversed" or method == "reversed_copy"): ret_ty = hobj_ty
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "clone" or method == "copy" or method == "slice"): ret_ty = hobj_ty
+                elif (hobj_ty.name == "Dict" or hobj_ty.name == "Map") and (method == "clone" or method == "copy") and args.len == 0: ret_ty = hobj_ty
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and method == "reverse": ret_ty = AstType.init("void")
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and (method == "index_of" or method == "last_index_of" or method == "count"): ret_ty = AstType.init("int")
                 elif (hobj_ty.name == "List" or hobj_ty.name == "Vec") and method == "join": ret_ty = AstType.init("str")

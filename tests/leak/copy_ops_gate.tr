@@ -1,0 +1,60 @@
+# Leak gate: copies between containers own their references and are all released; a local
+# Shared[T] handle is dropped. Run by scripts/leak_check.sh.
+extern "C":
+    def _tr_mem_live() -> int
+
+class Item:
+    pub name: str
+
+def mk(n: str) -> Item:
+    mut x = Item()
+    x.name = n
+    return x
+
+def lists() -> int:
+    mut a: List[Item] = [mk("a1"), mk("a2")]
+    mut c1: List[Item] = []
+    c1.extend(a)
+    mut c2 = a.copy()
+    mut c3 = a.reversed()
+    mut c4 = [x for x in a]
+    mut c5 = a + c1
+    a.clear()
+    return len(c1) + len(c2) + len(c3) + len(c4) + len(c5)
+
+def dicts() -> int:
+    mut d: Dict[str, Item] = {}
+    d["k"] = mk("v")
+    mut e: Dict[str, Item] = {}
+    e.update(d)
+    mut f = d.copy()
+    mut vs = d.values()
+    d.clear()
+    mut s1: Dict[str, str] = {}
+    s1["x"] = "p" + "q"
+    mut s2: Dict[str, str] = {}
+    s2.update(s1)
+    return len(e) + len(f) + len(vs) + len(s2)
+
+def handles() -> int:
+    mut h = Shared[Item].init(mk("sh"))
+    mut h2 = h.clone()
+    return len(h2.name)
+
+def workload():
+    lists()
+    dicts()
+    handles()
+
+def main():
+    workload()
+    mut before = _tr_mem_live()
+    mut r = 0
+    while r < 100:
+        workload()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    if leaked <= 0:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str())

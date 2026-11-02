@@ -4765,6 +4765,15 @@ pub class CGenerator:
         # CONCRETE type (T=str -> _tr_str_cmp/concat, not raw C `>`/`+` on TrStr).
         mut lt_n: str = self.resolve_generic_prim(hir_expr_type(l).name)
         mut rt_n: str = self.resolve_generic_prim(hir_expr_type(r).name)
+        if op == "+" and (lt_n == "List" or lt_n == "Vec") and (rt_n == "List" or rt_n == "Vec"):
+            # `a + b`: a NEW list; each heap-class element it holds is its own retained reference.
+            mut _lt = hir_expr_type(l)
+            mut _lsfx = "ptr"
+            if _lt.args.len > 0: _lsfx = self.list_sfx(self.list_elem_suffix(_lt.args.get(0).read().name))
+            mut _ret = ""
+            if _lsfx == "ptr" and _lt.args.len > 0 and self.is_heap_class_tn(self.resolve_generic_tyname(_lt.args.get(0).read().name)):
+                _ret = " for (size_t _pi = 0; _pi < _pr->len; _pi++) _tr_obj_retain(_pr->data[_pi]);"
+            return "({ __auto_type _pr = _tr_list_clone_" + _lsfx + "(" + ls + "); List_" + _lsfx + "_extend(_pr, " + rs + ");" + _ret + " _pr; })"
         if op == "+" and (_is_str_type(lt_n) or _is_str_type(rt_n)):
             # `_tr_str_wrap(...)` always produces a freshly-owned, unique
             # TrStr (rc=1, not aliased to any other variable) - e.g. from
@@ -7687,6 +7696,12 @@ pub class CGenerator:
                     mut _ael = self.obj_retain_wrap(args.get(0), self.gen_expr(args.get(0)), false)
                     if self._obj_store_needs_retain(args.get(0)): _ael = "_tr_obj_retain(" + _ael + ")"
                     return "List_" + lsfx + "_append(" + obj_s + ", " + _ael + ")"
+                # List[Weak[T]]: each slot owns ONE weak handle - a fresh `x.downgrade()` transfers
+                # its handle, any other Weak (local / field / element) is cloned.
+                if args.len > 0 and hir_expr_type(args.get(0)).name == "Weak":
+                    if self._is_downgrade_call(args.get(0)):
+                        return "List_" + lsfx + "_append(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                    return "List_" + lsfx + "_append(" + obj_s + ", _tr_weak_clone(" + self.gen_expr(args.get(0)) + "))"
                 # Call gen_args_strify ONLY when its result is actually used.
                 # gen_args_strify has a side effect for a str-typed arg: it
                 # runs the argument expression through strz(), which (for a
@@ -7778,6 +7793,8 @@ pub class CGenerator:
             if method == "is_empty":
                 return "List_" + lsfx + "_is_empty(" + obj_s + ")"
             if method == "extend":
+                if lsfx == "ptr" and self._list_elem_obj_drop(obj) != "":
+                    return "({ List_ptr* _xd = " + obj_s + "; size_t _xn = _xd ? _xd->len : 0; List_ptr_extend(_xd, " + self.gen_args(args) + "); if (_xd) for (size_t _xi = _xn; _xi < _xd->len; _xi++) _tr_obj_retain(_xd->data[_xi]); })"
                 return "List_" + lsfx + "_extend(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "insert" and args.len == 2:
                 # list.insert(i, v): v is stored like an append (retain an alias; a fresh value moves in)
@@ -7848,12 +7865,16 @@ pub class CGenerator:
                 return "_tr_trstr_join((List_TrStr*)" + obj_s + ", " + self.strz(sep_s) + ")"
             # reversed_copy() - return a new reversed list
             if method == "reversed" or method == "reversed_copy":
+                if lsfx == "ptr" and self._list_elem_obj_drop(obj) != "":
+                    return "({ List_ptr* _rr = _tr_list_reversed_ptr(" + obj_s + "); if (_rr) for (size_t _ri2 = 0; _ri2 < _rr->len; _ri2++) _tr_obj_retain(_rr->data[_ri2]); _rr; })"
                 return "_tr_list_reversed_" + lsfx + "(" + obj_s + ")"
             # reverse in place
             if method == "reverse":
                 return "_tr_list_reverse_" + lsfx + "(" + obj_s + ")"
             # clone: shallow copy with a fresh backing buffer
             if method == "clone" or method == "copy":
+                if lsfx == "ptr" and self._list_elem_obj_drop(obj) != "":
+                    return "({ List_ptr* _cr = _tr_list_clone_ptr(" + obj_s + "); if (_cr) for (size_t _ci2 = 0; _ci2 < _cr->len; _ci2++) _tr_obj_retain(_cr->data[_ci2]); _cr; })"
                 return "_tr_list_clone_" + lsfx + "(" + obj_s + ")"
 
         # Set[T] method dispatch - backed by _TrSet (hash set via TrMap with bool values)
@@ -8073,6 +8094,10 @@ pub class CGenerator:
             if method == "keys":
                 if is_idict: return "_tr_idict_keys(" + obj_s + ")"
                 return "_tr_dict_keys(" + obj_s + ")"
+            if method == "values" and self._dict_val_kind(obj) == "obj":
+                mut _vp0 = "_tr_dict_values"
+                if is_idict: _vp0 = "_tr_idict_values"
+                return "({ List_ptr* _vr = " + _vp0 + "(" + obj_s + "); if (_vr) for (size_t _vi = 0; _vi < _vr->len; _vi++) _tr_obj_retain(_vr->data[_vi]); _vr; })"
             if method == "values":
                 mut _vals_strval = call_ty.name == "List" and call_ty.args.len > 0 and _is_str_type(call_ty.args.get(0).read().name)
                 mut _vals_en = ""
@@ -8092,8 +8117,33 @@ pub class CGenerator:
                 return "_tr_dict_items(" + obj_s + ")"
             # update(other) - merge all entries from other map into self
             if method == "update" and args.len > 0:
-                if is_idict: return "_tr_idict_update(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                mut _uk = self._dict_val_kind(obj)
+                mut _up = "_tr_dict"
+                if is_idict: _up = "_tr_idict"
+                if _uk == "str": return _up + "_update_str(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+                if _uk == "obj": return _up + "_update_obj(" + obj_s + ", " + self.gen_expr(args.get(0)) + ", " + self._dict_val_drop(obj) + ")"
+                if is_idict: return "_tr_idict_update_plain(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
                 return "_tr_dict_update(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
+            # copy()/clone(): a new dict that owns its OWN reference to every value
+            if (method == "copy" or method == "clone") and args.len == 0:
+                mut _ck2 = self._dict_val_kind(obj)
+                mut _cp = "_tr_dict"
+                mut _cty = "TrMap"
+                mut _cnew = "_tr_dict_new(0LL)"
+                if is_idict:
+                    _cp = "_tr_idict"
+                    _cty = "TrIDict"
+                    _cnew = "_tr_idict_new(0LL)"
+                mut _cupd = _cp + "_update_plain(_cc, _cs)"
+                if not is_idict: _cupd = "_tr_dict_update(_cc, _cs)"
+                if _ck2 == "str": _cupd = _cp + "_update_str(_cc, _cs)"
+                if _ck2 == "obj": _cupd = _cp + "_update_obj(_cc, _cs, " + self._dict_val_drop(obj) + ")"
+                return "({ " + _cty + "* _cs = " + obj_s + "; " + _cty + "* _cc = " + _cnew + "; " + _cupd + "; _cc; })"
+            # values() of a Dict[K, HeapClass]: each element of the new list holds its own reference
+            if method == "values" and self._dict_val_kind(obj) == "obj":
+                mut _vp = "_tr_dict_values"
+                if is_idict: _vp = "_tr_idict_values"
+                return "({ List_ptr* _vr = " + _vp + "(" + obj_s + "); if (_vr) for (size_t _vi = 0; _vi < _vr->len; _vi++) _tr_obj_retain(_vr->data[_vi]); _vr; })"
             # clear() - remove all entries
             if method == "clear":
                 mut _ck = self._dict_val_kind(obj)
@@ -8817,6 +8867,11 @@ pub class CGenerator:
         # borrowed str element (e.g. `[s for s in strs]`) still uses the
         # retaining _append so the result keeps its own reference.
         mut _elem_s = self.gen_expr(element)
+        # A heap-class element is co-owned by the result list: retain an alias (`[x for x in a]`),
+        # move a fresh construction in (same rule as list.append).
+        if sfx == "ptr" and self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(element).name)):
+            _elem_s = self.obj_retain_wrap(element, _elem_s, false)
+            if self._obj_store_needs_retain(element): _elem_s = "_tr_obj_retain(" + _elem_s + ")"
         mut _app_sfx = "_append"
         if sfx == "TrStr" and self._is_fresh_str_expr(element): _app_sfx = "_append_owned"
         s = s + "List_" + sfx + _app_sfx + "(" + tmp + ", " + _elem_s + "); "
@@ -9769,6 +9824,7 @@ pub class CGenerator:
                     if _lsfx == "ptr" and ty.args.len > 0:
                         mut _elt = ty.args.get(0).read().name
                         if self.is_heap_class_tn(_elt): _lsfx = "ptr@" + _elt
+                        if _elt == "Weak": _lsfx = "weak@"
                     self.coll_local_sfx.insert(n, _lsfx)
                 elif (not _init_is_borrow) and (ty.name == "Dict" or ty.name == "Map" or ty.name == "Set") and (c_ty == "TrIDict*" or c_ty == "_TrISet*"):
                     self.coll_local_idict.insert(n, true)
@@ -10915,6 +10971,9 @@ pub class CGenerator:
                     # `shared` (Shared[T]/Rc) local: release its strong reference. The
                     # payload is reclaimed at strong==0 and the block survives any Weak.
                     self.w(pad + "_tr_shared_drop(" + _safe_c_varname(adn) + ");\n")
+                elif adc == "Shared":
+                    # plain local owning a Shared[T] handle (`Shared[T].init(..)` / `.clone()`)
+                    self.w(pad + "_tr_shared_drop(" + _safe_c_varname(adn) + ");\n")
                 elif adc == "Weak":
                     # Weak[T] handle: drop the weak ref (frees the block if it was the
                     # last one and the payload is already gone).
@@ -10944,7 +11003,9 @@ pub class CGenerator:
                 elif (adc == "List" or adc == "Vec") and not self.class_local_mono.contains(adn):
                     if self.coll_local_sfx.contains(adn):
                         mut _ad_sfx = self.coll_local_sfx.get(adn)
-                        if _ad_sfx.len() > 4 and _ad_sfx.slice(0, 4) == "ptr@":
+                        if _ad_sfx == "weak@":
+                            self.w(pad + "List_ptr_free_weak(" + _safe_c_varname(adn) + ");\n")
+                        elif _ad_sfx.len() > 4 and _ad_sfx.slice(0, 4) == "ptr@":
                             # Heap-class-element list: release each owned element.
                             self.w(pad + "List_ptr_free_obj(" + _safe_c_varname(adn) + ", " + self.obj_drop_fn(_ad_sfx.slice(4, _ad_sfx.len())) + ");\n")
                         else:
