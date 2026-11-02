@@ -25,7 +25,9 @@ __attribute__((hot)) TrStr pj_line(TrStr blob, long long idx) {
 #line 29 "src/pjobs.tr"
     List_TrStr* lines = _tr_str_splitv((blob), (_tr_str_lit_len("\n", 1LL)));
 #line 30 "src/pjobs.tr"
-    return List_TrStr_get(lines, idx);
+    TrStr _trret163 = List_TrStr_get(lines, idx);
+    List_TrStr_free(lines);
+    return _trret163;
 }
 
 __attribute__((hot)) void pj_worker(_TrSharedBox* job) {

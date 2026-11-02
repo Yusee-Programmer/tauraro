@@ -5,15 +5,15 @@ __attribute__((malloc,returns_nonnull,hot)) NativeGenerator* NativeGenerator_ini
 #line 32 "src/codegen/native/mod.tr"
     NativeGenerator* g = ((NativeGenerator*)_tr_obj_alloc(sizeof(NativeGenerator)));
 #line 33 "src/codegen/native/mod.tr"
-    TrStr _sfo_t8887 = g->target;
+    TrStr _sfo_t8928 = g->target;
     g->target = _tr_str_lit_len("x86_64-linux-elf", 16LL);
-    _tr_str_release(_sfo_t8887);
+    _tr_str_release(_sfo_t8928);
 #line 34 "src/codegen/native/mod.tr"
     g->ready = true;
 #line 35 "src/codegen/native/mod.tr"
-    TrStr _sfo_t8888 = g->fail_note;
+    TrStr _sfo_t8929 = g->fail_note;
     g->fail_note = _tr_str_lit_len("", 0LL);
-    _tr_str_release(_sfo_t8888);
+    _tr_str_release(_sfo_t8929);
 #line 36 "src/codegen/native/mod.tr"
     return g;
 }
@@ -24,9 +24,9 @@ __attribute__((hot)) bool NativeGenerator_emit_object(NativeGenerator* self, Hir
 #line 42 "src/codegen/native/mod.tr"
     if ((!m->ok)) {
 #line 43 "src/codegen/native/mod.tr"
-        TrStr _sfo_t8889 = self->fail_note;
+        TrStr _sfo_t8930 = self->fail_note;
         self->fail_note = _tr_str_retain(m->fail_note);
-        _tr_str_release(_sfo_t8889);
+        _tr_str_release(_sfo_t8930);
 #line 44 "src/codegen/native/mod.tr"
         _tr_obj_release(m, _trdrop_LModule);
         return false;
@@ -34,9 +34,9 @@ __attribute__((hot)) bool NativeGenerator_emit_object(NativeGenerator* self, Hir
 #line 45 "src/codegen/native/mod.tr"
     if ((!emit_lir_object(m, out_path))) {
 #line 46 "src/codegen/native/mod.tr"
-        TrStr _sfo_t8890 = self->fail_note;
+        TrStr _sfo_t8931 = self->fail_note;
         self->fail_note = _tr_str_lit_len("object emission failed (encode/ELF write)", 41LL);
-        _tr_str_release(_sfo_t8890);
+        _tr_str_release(_sfo_t8931);
 #line 47 "src/codegen/native/mod.tr"
         _tr_obj_release(m, _trdrop_LModule);
         return false;

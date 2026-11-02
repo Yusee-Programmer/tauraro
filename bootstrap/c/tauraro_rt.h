@@ -9821,6 +9821,41 @@ static inline void _tr_idict_clear_str(TrIDict* d) {
     _tr_idict_clear(d);
 }
 
+/* update(other) for a Dict whose values are co-owned: every copied value gets its OWN reference
+   (retained obj / re-boxed retained str); a displaced value is released. Copying the raw
+   pointers (the old behaviour) left two owners sharing one reference -> double release. */
+static inline void _tr_dict_update_obj(TrMap* dst, TrMap* src, void(*drop)(void*)) {
+    if (!dst || !src || dst == src) return;
+    for (size_t i=0;i<src->cap;i++) for (_DictNode* n=src->buckets[i]; n; n=n->next) {
+        if (n->key) _tr_dict_set_obj(dst, n->key, _tr_obj_retain(n->value), drop);
+    }
+}
+static inline void _tr_dict_update_str(TrMap* dst, TrMap* src) {
+    if (!dst || !src || dst == src) return;
+    for (size_t i=0;i<src->cap;i++) for (_DictNode* n=src->buckets[i]; n; n=n->next) {
+        if (n->key && n->value) _tr_dict_set_str(dst, n->key, _tr_str_box(_tr_str_retain(*(TrStr*)n->value)));
+    }
+}
+static inline void _tr_idict_update_plain(TrIDict* dst, TrIDict* src) {
+    if (!dst || !src || dst == src) return;
+    for (size_t i=0;i<src->cap;i++) for (_TrIDictNode* n=src->buckets[i]; n; n=n->next) _tr_idict_set(dst, n->key, n->value);
+}
+static inline void _tr_idict_update_obj(TrIDict* dst, TrIDict* src, void(*drop)(void*)) {
+    if (!dst || !src || dst == src) return;
+    for (size_t i=0;i<src->cap;i++) for (_TrIDictNode* n=src->buckets[i]; n; n=n->next) _tr_idict_set_obj(dst, n->key, _tr_obj_retain(n->value), drop);
+}
+static inline void _tr_idict_update_str(TrIDict* dst, TrIDict* src) {
+    if (!dst || !src || dst == src) return;
+    for (size_t i=0;i<src->cap;i++) for (_TrIDictNode* n=src->buckets[i]; n; n=n->next) if (n->value) _tr_idict_set_str(dst, n->key, _tr_str_box(_tr_str_retain(*(TrStr*)n->value)));
+}
+
+/* List[Weak[T]]: every slot owns one weak handle. */
+static inline void List_ptr_free_weak(List_ptr* l) {
+    if (!l) return;
+    for (size_t i=0;i<l->len;i++) _tr_weak_drop((_TrWeakBox*)l->data[i]);
+    List_ptr_free(l);
+}
+
 /* Set[HeapClass] — hash set of heap instances keyed by POINTER IDENTITY. The set
    OWNS each element (add retains); _tr_pset_free_obj releases them on teardown. */
 typedef struct _TrPSetNode { void* elem; struct _TrPSetNode* next; } _TrPSetNode;

@@ -380,8 +380,8 @@ __attribute__((hot)) TrStr pf_path(HirExpr* e) {
     __auto_type _t929 = (*e);
     if (_t929.tag == HirExpr_EIdent) {
         __auto_type nm = _t929.data.EIdent.name;
-        TrStr _trret179 = _tr_str_retain(nm);
-        return _trret179;
+        TrStr _trret180 = _tr_str_retain(nm);
+        return _trret180;
     } else if (_t929.tag == HirExpr_EPropAccess) {
         __auto_type o = _t929.data.EPropAccess.obj;
 __auto_type p = _t929.data.EPropAccess.prop;
@@ -390,9 +390,9 @@ __auto_type p = _t929.data.EPropAccess.prop;
 #line 216 "src/ptrflow.tr"
         if ((!_tr_str_eqv((po), (_tr_str_lit_len("", 0LL))))) {
 #line 216 "src/ptrflow.tr"
-            TrStr _trret180 = ({ TrStr _tr_cl = (_tr_strx_concatv((po), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (p)); _tr_str_release(_tr_cl); _tr_cres; });
+            TrStr _trret181 = ({ TrStr _tr_cl = (_tr_strx_concatv((po), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (p)); _tr_str_release(_tr_cl); _tr_cres; });
             _tr_str_release(po);
-            return _trret180;
+            return _trret181;
         }
 #line 217 "src/ptrflow.tr"
         _tr_str_release(po);
@@ -413,13 +413,13 @@ __attribute__((hot)) TrStr pf_root(HirExpr* e) {
     __auto_type _t930 = (*e);
     if (_t930.tag == HirExpr_EIdent) {
         __auto_type nm = _t930.data.EIdent.name;
-        TrStr _trret181 = _tr_str_retain(nm);
-        return _trret181;
+        TrStr _trret182 = _tr_str_retain(nm);
+        return _trret182;
     } else if (_t930.tag == HirExpr_EPropAccess) {
         __auto_type o = _t930.data.EPropAccess.obj;
 __auto_type p = _t930.data.EPropAccess.prop;
-        TrStr _trret182 = pf_path(e);
-        return _trret182;
+        TrStr _trret183 = pf_path(e);
+        return _trret183;
     } else if (_t930.tag == HirExpr_ECast) {
         __auto_type x = _t930.data.ECast.expr;
         return pf_root(x);
@@ -429,8 +429,8 @@ __auto_type m = _t930.data.EMethodCall.method;
 #line 228 "src/ptrflow.tr"
         if ((((_tr_str_eqv((m), (_tr_str_lit_len("offset", 6LL))) || _tr_str_eqv((m), (_tr_str_lit_len("add", 3LL)))) || _tr_str_eqv((m), (_tr_str_lit_len("sub", 3LL)))) || _tr_str_eqv((m), (_tr_str_lit_len("cast", 4LL))))) {
 #line 228 "src/ptrflow.tr"
-            TrStr _trret183 = pf_root(o);
-            return _trret183;
+            TrStr _trret184 = pf_root(o);
+            return _trret184;
         }
 #line 229 "src/ptrflow.tr"
         return _tr_str_lit_len("", 0LL);
@@ -450,16 +450,16 @@ __attribute__((hot)) bool pf_is_dealloc(HirExpr* callee) {
     __auto_type _t931 = (*callee);
     if (_t931.tag == HirExpr_EIdent) {
         __auto_type nm = _t931.data.EIdent.name;
-        bool _trret184 = _tr_str_eqv((nm), (_tr_str_lit_len("dealloc", 7LL)));
-        return _trret184;
+        bool _trret185 = _tr_str_eqv((nm), (_tr_str_lit_len("dealloc", 7LL)));
+        return _trret185;
     } else if (_t931.tag == HirExpr_EIndex) {
         __auto_type o = _t931.data.EIndex.obj;
 #line 237 "src/ptrflow.tr"
         __auto_type _t932 = (*o);
         if (_t932.tag == HirExpr_EIdent) {
             __auto_type nm = _t932.data.EIdent.name;
-            bool _trret185 = _tr_str_eqv((nm), (_tr_str_lit_len("dealloc", 7LL)));
-            return _trret185;
+            bool _trret186 = _tr_str_eqv((nm), (_tr_str_lit_len("dealloc", 7LL)));
+            return _trret186;
         } else if (1) {
             __auto_type _ = _t932;
             return false;
@@ -480,8 +480,8 @@ __attribute__((hot)) TrStr pf_callee_name(HirExpr* callee) {
     __auto_type _t933 = (*callee);
     if (_t933.tag == HirExpr_EIdent) {
         __auto_type nm = _t933.data.EIdent.name;
-        TrStr _trret186 = _tr_str_retain(nm);
-        return _trret186;
+        TrStr _trret187 = _tr_str_retain(nm);
+        return _trret187;
     } else if (1) {
         __auto_type _ = _t933;
         return _tr_str_lit_len("", 0LL);
@@ -508,8 +508,8 @@ __auto_type x = _t934.data.EUnaryOp.expr;
 #line 256 "src/ptrflow.tr"
                 if (((!_tr_str_eqv((nm), (_tr_str_lit_len("self", 4LL)))) && (pf_has(cx->locals, nm) || pf_has(cx->params, nm)))) {
 #line 256 "src/ptrflow.tr"
-                    TrStr _trret187 = _tr_str_retain(nm);
-                    return _trret187;
+                    TrStr _trret188 = _tr_str_retain(nm);
+                    return _trret188;
                 }
             } else if (1) {
                 __auto_type _ = _t935;
@@ -525,12 +525,12 @@ __auto_type x = _t934.data.EUnaryOp.expr;
 #line 261 "src/ptrflow.tr"
             if (_tr_dict_contains(cx->origin, _tr_strz(nm))) {
 #line 261 "src/ptrflow.tr"
-                TrStr _trret188 = _tr_str_retain(_tr_str_unbox(_tr_dict_get(cx->origin, _tr_strz(nm))));
-                return _trret188;
+                TrStr _trret189 = _tr_str_retain(_tr_str_unbox(_tr_dict_get(cx->origin, _tr_strz(nm))));
+                return _trret189;
             }
 #line 262 "src/ptrflow.tr"
-            TrStr _trret189 = _tr_str_retain(nm);
-            return _trret189;
+            TrStr _trret190 = _tr_str_retain(nm);
+            return _trret190;
         }
 #line 263 "src/ptrflow.tr"
         return _tr_str_lit_len("", 0LL);
@@ -543,8 +543,8 @@ __auto_type m = _t934.data.EMethodCall.method;
 #line 266 "src/ptrflow.tr"
         if ((((_tr_str_eqv((m), (_tr_str_lit_len("offset", 6LL))) || _tr_str_eqv((m), (_tr_str_lit_len("add", 3LL)))) || _tr_str_eqv((m), (_tr_str_lit_len("sub", 3LL)))) || _tr_str_eqv((m), (_tr_str_lit_len("cast", 4LL))))) {
 #line 266 "src/ptrflow.tr"
-            TrStr _trret190 = pf_stack_src(o, st, cx);
-            return _trret190;
+            TrStr _trret191 = pf_stack_src(o, st, cx);
+            return _trret191;
         }
 #line 267 "src/ptrflow.tr"
         return _tr_str_lit_len("", 0LL);
@@ -574,8 +574,8 @@ __auto_type x = _t936.data.EUnaryOp.expr;
             __auto_type _t937 = (*x);
             if (_t937.tag == HirExpr_ELitInt) {
                 __auto_type v2 = _t937.data.ELitInt.val;
-                long long _trret191 = (0LL - v2);
-                return _trret191;
+                long long _trret192 = (0LL - v2);
+                return _trret192;
             } else if (1) {
                 __auto_type _ = _t937;
                 return (-4611686018427387904LL);
@@ -604,16 +604,16 @@ __attribute__((hot)) bool pf_named_call(HirExpr* callee, TrStr want) {
     __auto_type _t938 = (*callee);
     if (_t938.tag == HirExpr_EIdent) {
         __auto_type nm = _t938.data.EIdent.name;
-        bool _trret192 = _tr_str_eqv((nm), (want));
-        return _trret192;
+        bool _trret193 = _tr_str_eqv((nm), (want));
+        return _trret193;
     } else if (_t938.tag == HirExpr_EIndex) {
         __auto_type o = _t938.data.EIndex.obj;
 #line 291 "src/ptrflow.tr"
         __auto_type _t939 = (*o);
         if (_t939.tag == HirExpr_EIdent) {
             __auto_type nm = _t939.data.EIdent.name;
-            bool _trret193 = _tr_str_eqv((nm), (want));
-            return _trret193;
+            bool _trret194 = _tr_str_eqv((nm), (want));
+            return _trret194;
         } else if (1) {
             __auto_type _ = _t939;
             return false;
@@ -673,8 +673,8 @@ __attribute__((hot)) bool pf_is_null_lit(HirExpr* val) {
     } else if (_t942.tag == HirExpr_ELitInt) {
         __auto_type v = _t942.data.ELitInt.val;
 __auto_type ty = _t942.data.ELitInt.ty;
-        bool _trret194 = ((v == 0LL) && _tr_str_eqv((ty->name), (_tr_str_lit_len("Pointer", 7LL))));
-        return _trret194;
+        bool _trret195 = ((v == 0LL) && _tr_str_eqv((ty->name), (_tr_str_lit_len("Pointer", 7LL))));
+        return _trret195;
     } else if (_t942.tag == HirExpr_ECast) {
         __auto_type x = _t942.data.ECast.expr;
 __auto_type ty = _t942.data.ECast.target_ty;
@@ -687,8 +687,8 @@ __auto_type ty = _t942.data.ECast.target_ty;
         __auto_type _t943 = (*x);
         if (_t943.tag == HirExpr_ELitInt) {
             __auto_type v = _t943.data.ELitInt.val;
-            bool _trret195 = (v == 0LL);
-            return _trret195;
+            bool _trret196 = (v == 0LL);
+            return _trret196;
         } else if (1) {
             __auto_type _ = _t943;
             return false;
@@ -711,9 +711,9 @@ __attribute__((hot)) long long pf_size_of(PfState* st, TrStr path) {
 #line 327 "src/ptrflow.tr"
         if (({ TrStr _cmpa_t944 = (_tr_str_slicev((e), 0LL, eq)); TrStr _cmpb_t945 = (path); _Bool _cmpr_t946 = _tr_str_eqv(_cmpa_t944, _cmpb_t945); _tr_str_release(_cmpa_t944); _cmpr_t946; })) {
 #line 327 "src/ptrflow.tr"
-            long long _trret196 = _tr_str_to_int(_tr_strz(_tr_str_slicev((e), (eq + 1LL), _tr_str_lenv((e)))));
+            long long _trret197 = _tr_str_to_int(_tr_strz(_tr_str_slicev((e), (eq + 1LL), _tr_str_lenv((e)))));
             _tr_str_release(e);
-            return _trret196;
+            return _trret197;
         }
 #line 328 "src/ptrflow.tr"
         i = (i + 1LL);
@@ -910,9 +910,9 @@ __attribute__((hot)) TrStr pf_is_freed(PfState* st, TrStr path) {
 #line 415 "src/ptrflow.tr"
         if (_tr_str_eqv((f), (path))) {
 #line 415 "src/ptrflow.tr"
-            TrStr _trret197 = _tr_str_retain(f);
+            TrStr _trret198 = _tr_str_retain(f);
             _tr_str_release(f);
-            return _trret197;
+            return _trret198;
         }
 #line 416 "src/ptrflow.tr"
         i = (i + 1LL);
@@ -985,9 +985,9 @@ __auto_type r = _t964.data.EBinOp.right;
             return _tr_str_lit_len("", 0LL);
         }
 #line 439 "src/ptrflow.tr"
-        TrStr _trret198 = ({ TrStr _tr_cl = (_tr_strx_concatv((op), (_tr_str_lit_len(":", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (pth)); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret199 = ({ TrStr _tr_cl = (_tr_strx_concatv((op), (_tr_str_lit_len(":", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (pth)); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(pth);
-        return _trret198;
+        return _trret199;
     } else if (1) {
         __auto_type _ = _t964;
         return _tr_str_lit_len("", 0LL);

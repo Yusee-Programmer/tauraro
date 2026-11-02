@@ -209,9 +209,9 @@ __attribute__((hot)) long long MirBuilder_new_block(MirBuilder* self) {
 #line 275 "src/mir.tr"
     List_ptr_append(self->blocks, _tr_obj_retain(blk));
 #line 276 "src/mir.tr"
-    long long _trret168 = blk->id;
+    long long _trret169 = blk->id;
     _tr_obj_release(blk, _trdrop_MirBlock);
-    return _trret168;
+    return _trret169;
 }
 
 __attribute__((hot)) void MirBuilder_push_stmt(MirBuilder* self, MirStmt s) {
@@ -438,8 +438,8 @@ __attribute__((hot)) TrStr _pl_root(HirExpr* e) {
         __auto_type _t689 = (*cur);
         if (_t689.tag == HirExpr_EIdent) {
             __auto_type n = _t689.data.EIdent.name;
-            TrStr _trret163 = _tr_str_retain(n);
-            return _trret163;
+            TrStr _trret164 = _tr_str_retain(n);
+            return _trret164;
         } else if (_t689.tag == HirExpr_EPropAccess) {
             __auto_type o = _t689.data.EPropAccess.obj;
             cur = o;
@@ -505,10 +505,10 @@ __auto_type prop = _t690.data.EPropAccess.prop;
         i = (i - 1LL);
     }
 #line 60 "src/mir.tr"
-    TrStr _trret164 = _tr_str_retain(out);
+    TrStr _trret165 = _tr_str_retain(out);
     List_TrStr_free(segs);
     _tr_str_release(out);
-    return _trret164;
+    return _trret165;
 }
 
 __attribute__((hot)) bool _pl_overlap(TrStr a, TrStr b) {
@@ -567,8 +567,8 @@ __auto_type method = _t693.data.EMethodCall.method;
                 return true;
             }
 #line 87 "src/mir.tr"
-            bool _trret165 = ({ TrStr _dkt_t695 = (({ TrStr _tr_cl = (_tr_strx_concatv((hir_expr_type(obj)->name), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (method)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (_tr_dict_contains(mm, _tr_strz(_dkt_t695))); _tr_str_release(_dkt_t695); _wr; });
-            return _trret165;
+            bool _trret166 = ({ TrStr _dkt_t695 = (({ TrStr _tr_cl = (_tr_strx_concatv((hir_expr_type(obj)->name), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (method)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (_tr_dict_contains(mm, _tr_strz(_dkt_t695))); _tr_str_release(_dkt_t695); _wr; });
+            return _trret166;
         } else if (_t694.tag == HirExpr_EPropAccess) {
 #line 89 "src/mir.tr"
             if (({ TrStr _cmpa_t696 = (_pl_root(obj)); TrStr _cmpb_t697 = (source); _Bool _cmpr_t698 = !_tr_str_eqv(_cmpa_t696, _cmpb_t697); _tr_str_release(_cmpa_t696); _cmpr_t698; })) {
@@ -585,14 +585,14 @@ __auto_type method = _t693.data.EMethodCall.method;
 #line 92 "src/mir.tr"
             if (((((_tr_str_eqv((tn), (_tr_str_lit_len("List", 4LL))) || _tr_str_eqv((tn), (_tr_str_lit_len("Vec", 3LL)))) || _tr_str_eqv((tn), (_tr_str_lit_len("Dict", 4LL)))) || _tr_str_eqv((tn), (_tr_str_lit_len("Map", 3LL)))) || _tr_str_eqv((tn), (_tr_str_lit_len("Set", 3LL))))) {
 #line 93 "src/mir.tr"
-                bool _trret166 = (((((((((_tr_str_eqv((method), (_tr_str_lit_len("push", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("append", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("insert", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("remove", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("pop", 3LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("clear", 5LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("extend", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("add", 3LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("put", 3LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("set", 3LL))));
+                bool _trret167 = (((((((((_tr_str_eqv((method), (_tr_str_lit_len("push", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("append", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("insert", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("remove", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("pop", 3LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("clear", 5LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("extend", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("add", 3LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("put", 3LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("set", 3LL))));
                 _tr_str_release(tn);
-                return _trret166;
+                return _trret167;
             }
 #line 94 "src/mir.tr"
-            bool _trret167 = ({ TrStr _dkt_t700 = (({ TrStr _tr_cl = (_tr_strx_concatv((tn), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (method)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (_tr_dict_contains(mm, _tr_strz(_dkt_t700))); _tr_str_release(_dkt_t700); _wr; });
+            bool _trret168 = ({ TrStr _dkt_t700 = (({ TrStr _tr_cl = (_tr_strx_concatv((tn), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (method)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (_tr_dict_contains(mm, _tr_strz(_dkt_t700))); _tr_str_release(_dkt_t700); _wr; });
             _tr_str_release(tn);
-            return _trret167;
+            return _trret168;
         } else if (1) {
             __auto_type _ = _t694;
             return false;
@@ -1797,8 +1797,8 @@ __attribute__((hot)) TrStr free_target(HirExpr* arg) {
     __auto_type _t756 = (*arg);
     if (_t756.tag == HirExpr_EIdent) {
         __auto_type n = _t756.data.EIdent.name;
-        TrStr _trret170 = _tr_str_retain(n);
-        return _trret170;
+        TrStr _trret171 = _tr_str_retain(n);
+        return _trret171;
     } else if (_t756.tag == HirExpr_ECast) {
         __auto_type x = _t756.data.ECast.expr;
         return free_target(x);
@@ -2524,8 +2524,8 @@ __attribute__((hot)) long long _decl_index(MirBlock* blk, TrStr name) {
 #line 1352 "src/mir.tr"
             if (_tr_str_eqv((dn), (name))) {
 #line 1352 "src/mir.tr"
-                long long _trret171 = i;
-                return _trret171;
+                long long _trret172 = i;
+                return _trret172;
             }
         } else if (1) {
             __auto_type _ = _t789;
@@ -2964,8 +2964,8 @@ __attribute__((hot)) TrStr _b3_root_ident(HirExpr* e) {
         __auto_type _t820 = (*cur);
         if (_t820.tag == HirExpr_EIdent) {
             __auto_type n = _t820.data.EIdent.name;
-            TrStr _trret172 = _tr_str_retain(n);
-            return _trret172;
+            TrStr _trret173 = _tr_str_retain(n);
+            return _trret173;
         } else if (_t820.tag == HirExpr_EPropAccess) {
             __auto_type o = _t820.data.EPropAccess.obj;
             cur = o;
@@ -3030,14 +3030,14 @@ __auto_type method = _t822.data.EMethodCall.method;
 #line 1557 "src/mir.tr"
         if (((((_tr_str_eqv((tn), (_tr_str_lit_len("List", 4LL))) || _tr_str_eqv((tn), (_tr_str_lit_len("Vec", 3LL)))) || _tr_str_eqv((tn), (_tr_str_lit_len("Dict", 4LL)))) || _tr_str_eqv((tn), (_tr_str_lit_len("Map", 3LL)))) || _tr_str_eqv((tn), (_tr_str_lit_len("Set", 3LL))))) {
 #line 1558 "src/mir.tr"
-            bool _trret173 = (((((((((_tr_str_eqv((method), (_tr_str_lit_len("push", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("append", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("insert", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("remove", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("pop", 3LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("clear", 5LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("extend", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("add", 3LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("put", 3LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("set", 3LL))));
+            bool _trret174 = (((((((((_tr_str_eqv((method), (_tr_str_lit_len("push", 4LL))) || _tr_str_eqv((method), (_tr_str_lit_len("append", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("insert", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("remove", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("pop", 3LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("clear", 5LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("extend", 6LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("add", 3LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("put", 3LL)))) || _tr_str_eqv((method), (_tr_str_lit_len("set", 3LL))));
             _tr_str_release(tn);
-            return _trret173;
+            return _trret174;
         }
 #line 1559 "src/mir.tr"
-        bool _trret174 = ({ TrStr _dkt_t826 = (({ TrStr _tr_cl = (_tr_strx_concatv((tn), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (method)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (_tr_dict_contains(mm, _tr_strz(_dkt_t826))); _tr_str_release(_dkt_t826); _wr; });
+        bool _trret175 = ({ TrStr _dkt_t826 = (({ TrStr _tr_cl = (_tr_strx_concatv((tn), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (method)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (_tr_dict_contains(mm, _tr_strz(_dkt_t826))); _tr_str_release(_dkt_t826); _wr; });
         _tr_str_release(tn);
-        return _trret174;
+        return _trret175;
     } else if (1) {
         __auto_type _ = _t822;
         return false;
@@ -3567,9 +3567,9 @@ __attribute__((hot)) TrStr set_str(List_TrStr* v) {
         i = (i + 1LL);
     }
 #line 1770 "src/mir.tr"
-    TrStr _trret175 = _tr_strx_concatv((s), (_tr_str_lit_len("}", 1LL)));
+    TrStr _trret176 = _tr_strx_concatv((s), (_tr_str_lit_len("}", 1LL)));
     _tr_str_release(s);
-    return _trret175;
+    return _trret176;
 }
 
 __attribute__((hot)) TrStr term_str(MirTerm* t) {
@@ -3599,12 +3599,12 @@ __attribute__((hot)) TrStr stmt_str(MirStmt* s) {
     __auto_type _t864 = (*s);
     if (_t864.tag == MirStmt_MDeclare) {
         __auto_type p = _t864.data.MDeclare.place;
-        TrStr _trret176 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("let ", 4LL)), (p))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = <expr>", 9LL))); _tr_str_release(_tr_cl); _tr_cres; });
-        return _trret176;
+        TrStr _trret177 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("let ", 4LL)), (p))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = <expr>", 9LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        return _trret177;
     } else if (_t864.tag == MirStmt_MAssign) {
         __auto_type p = _t864.data.MAssign.place;
-        TrStr _trret177 = _tr_strx_concatv((p), (_tr_str_lit_len(" = <expr>", 9LL)));
-        return _trret177;
+        TrStr _trret178 = _tr_strx_concatv((p), (_tr_str_lit_len(" = <expr>", 9LL)));
+        return _trret178;
     } else if (_t864.tag == MirStmt_MEval) {
         __auto_type _ = _t864.data.MEval.value;
         return _tr_str_lit_len("eval <expr>", 11LL);
@@ -3697,8 +3697,8 @@ __attribute__((hot)) TrStr dump_mir(MirProgram* mp) {
         List_ptr_free_obj(drops, _trdrop_LiveSet);
     }
 #line 1822 "src/mir.tr"
-    TrStr _trret178 = _tr_str_retain(out);
+    TrStr _trret179 = _tr_str_retain(out);
     _tr_str_release(out);
-    return _trret178;
+    return _trret179;
 }
 

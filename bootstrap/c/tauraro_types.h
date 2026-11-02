@@ -2816,6 +2816,7 @@ typedef struct Symbol {
     long long decl_block_id;
     bool str_escaped;
     bool defer_used;
+    bool shared_handle;
     bool coll_escaped;
     AstType* firm_ty;
     TrStr firm_cls;
