@@ -5415,8 +5415,9 @@ static inline unsigned long long _tr_f2u(double x) {
 /* --debug (AddressSanitizer) only: raw-pointer offset / index are checked against the heap block the
  * base pointer points into (alloc[T](n) is a malloc block, so ASan knows its exact extent). Catches the
  * out-of-bounds access that lands inside ANOTHER valid block (which ASan's redzones alone would miss).
- * In release builds _TR_PTR_OFF / _TR_PTR_IDX are plain pointer arithmetic: raw Pointer[T] is unchecked. */
-#if defined(_TR_NO_CRASH_HANDLER) && !defined(TAURARO_BARE) && !defined(_WIN32)
+ * In release builds _TR_PTR_OFF / _TR_PTR_IDX are plain pointer arithmetic: raw Pointer[T] is unchecked.
+ * Not on macOS: Apple's ASan asserts in __asan_locate_address outside a report (ASan redzones still apply). */
+#if defined(_TR_NO_CRASH_HANDLER) && !defined(TAURARO_BARE) && !defined(_WIN32) && !defined(__APPLE__)
 extern const char* __asan_locate_address(void* addr, char* name, size_t name_size, void** region_address, size_t* region_size);
 static inline void* _tr_dbg_ptr(void* p, long long k, size_t esz, int deref) {
     char nm[16]; void* rb = 0; size_t rs = 0;

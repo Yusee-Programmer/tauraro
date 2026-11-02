@@ -21,6 +21,7 @@ for f in tests/runtime_san/*.tr; do
   opt="-O2"; grep -q '^# EXPECT-NOOPT' "$f" && opt="-O0"
   for mode in plain san; do
     if [ $mode = plain ] && grep -q "^# SAN-ONLY" "$f"; then continue; fi
+    if [ "$(uname -s)" = Darwin ] && grep -q "^# SKIP-DARWIN" "$f"; then continue; fi
     flags="$opt"; [ $mode = san ] && flags="$opt --debug"
     if ! "$TAURAROC" "$f" -o "$TMP/$n.$mode" $flags >"$TMP/build.log" 2>&1; then
       echo "FAIL  $n [$mode] (build): $(grep -m1 error "$TMP/build.log")"; fail=$((fail+1)); continue
