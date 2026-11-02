@@ -1,0 +1,32 @@
+# tests/regression/shared_init_hoisted_temps.tr
+# `shared x = ...` whose initializer contains a hoisted temporary (a concat, an f-string,
+# a fresh call argument) used to emit the temp's use without its declaration
+# ("use of undeclared identifier '_at_tN'" from the C compiler).
+from std.test import TestRunner
+
+class Job:
+    pub name: str
+
+extend Job:
+    pub def init(n: str) -> Job:
+        mut j = Job()
+        j.name = n
+        return j
+
+def make(s: str) -> Job:
+    return Job.init(s)
+
+def main():
+    mut t = TestRunner.init("shared_init_hoisted_temps")
+    base = "x" + "y"
+    shared a = Job.init(base + "-end")
+    shared b = make(base + "!")
+    shared c = make(f"{base}-fs")
+    shared d = Job.init(base + "1" + "2")
+    t.assert_eq_str(a.name, "xy-end", "shared = Type.init(concat)")
+    t.assert_eq_str(b.name, "xy!", "shared = f(concat)")
+    t.assert_eq_str(c.name, "xy-fs", "shared = f(f-string)")
+    t.assert_eq_str(d.name, "xy12", "shared = Type.init(chained concat)")
+    mut m = make(base + "-mut")
+    t.assert_eq_str(m.name, "xy-mut", "mut local with a hoisted temp")
+    t.summary()

@@ -9878,7 +9878,7 @@ pub class CGenerator:
                             case _: pass
                         # `shared x = f()` where f returns a Shared[T] handle (+1 strong ref): bind it directly.
                         if (not is_clone) and hir_expr_type(v).name == "Shared":
-                            self.w(" = " + self.gen_expr(v) + ";\n")
+                            self.w(" = " + self.flush_wraps(self.gen_expr(v), false) + ";\n")
                             is_clone = true
                         if not is_clone:
                             # Pass the payload's drop fn so _tr_shared_drop reclaims a
@@ -9890,7 +9890,9 @@ pub class CGenerator:
                             # a var or field) is still owned by its source (which auto-drops or
                             # is a live receiver), so the box must RETAIN it to co-own —
                             # otherwise both free it (double-free).
-                            mut _sh_val = self.gen_expr(v)
+                            # flush_wraps: a hoisted temp (concat / f-string / fresh-arg wrap) inside the
+                            # initializer is declared inline, since the declarator is already written.
+                            mut _sh_val = self.flush_wraps(self.gen_expr(v), false)
                             mut _sh_ref = false
                             match v.read():
                                 case HirExpr.EIdent(_, _, _): _sh_ref = true
