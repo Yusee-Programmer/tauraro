@@ -501,6 +501,74 @@ static inline void _tr_install_ice_handlers(void) {
 static inline void _tr_install_ice_handlers(void) {}
 #endif
 
+/* Crash diagnostics for USER programs: a stack overflow (runaway / too-deep recursion) or a wild
+ * memory fault ends with a clear Tauraro message instead of a bare "Segmentation fault". The handler
+ * runs on a per-thread alternate stack (a overflowed stack has no room to run anything), prints with
+ * async-signal-safe write(), then re-raises the signal with the default action so the exit status is
+ * unchanged. Skipped under AddressSanitizer (which reports stack-overflow itself) and in the freestanding
+ * tiers (no OS signals). */
+#if defined(__SANITIZE_ADDRESS__)
+#  define _TR_NO_CRASH_HANDLER 1
+#elif defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define _TR_NO_CRASH_HANDLER 1
+#  endif
+#endif
+#if !defined(_TR_NO_CRASH_HANDLER) && !defined(TAURARO_BARE) && !defined(__wasi__) && !defined(TAURARO_KERNEL) && !defined(TAURARO_NO_OS) && !defined(_WIN32) && !defined(_TR_CRASH_COMPILER)
+#include <sys/resource.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <pthread.h>
+static char* _tr_main_stack_lo = 0;                 /* lowest address of the main thread's stack */
+#if defined(__GNUC__) || defined(__clang__)
+static __thread char* _tr_tls_stack_lo = 0;         /* lowest address of this thread's stack (0 = unknown) */
+#else
+static char* _tr_tls_stack_lo = 0;
+#endif
+static void _tr_crash_say(const char* m) { size_t n = 0; while (m[n]) n++; ssize_t r = write(2, m, n); (void)r; }
+static void _tr_crash_handler(int sig, siginfo_t* si, void* uc) {
+    (void)uc;
+    char* a = si ? (char*)si->si_addr : 0;
+    int is_stack = 0;
+    char* lo = _tr_tls_stack_lo ? _tr_tls_stack_lo : _tr_main_stack_lo;
+    if (lo && a && a >= lo - 1048576 && a <= lo + 131072) is_stack = 1;
+    fflush(stdout);
+    if (is_stack) _tr_crash_say("tauraro: fatal: stack overflow (runaway or too-deep recursion, or a very large local).\n  FIX: bound the recursion depth, make it iterative, or move large buffers to the heap (List[T]).\n");
+    else if (a && (size_t)a < 4096) _tr_crash_say("tauraro: fatal: null pointer dereference.\n");
+    else if (sig == SIGSEGV || sig == SIGBUS) _tr_crash_say("tauraro: fatal: invalid memory access (segmentation fault) - a raw Pointer was used out of bounds, after dealloc, or from an invalid address.\n  Rebuild with --debug to locate it with AddressSanitizer.\n");
+    else if (sig == SIGFPE) _tr_crash_say("tauraro: fatal: arithmetic fault (SIGFPE).\n");
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+/* Give the calling thread an alternate signal stack and record its stack bounds. */
+static void _tr_thread_crash_init(void) {
+    void* st = malloc(65536);
+    if (st) { stack_t ss; ss.ss_sp = st; ss.ss_size = 65536; ss.ss_flags = 0; sigaltstack(&ss, 0); }
+#if defined(__linux__) && defined(_GNU_SOURCE)
+    { pthread_attr_t at; if (pthread_getattr_np(pthread_self(), &at) == 0) { void* base = 0; size_t sz = 0; if (pthread_attr_getstack(&at, &base, &sz) == 0) _tr_tls_stack_lo = (char*)base; pthread_attr_destroy(&at); } }
+#elif defined(__APPLE__)
+    { pthread_t t = pthread_self(); char* top = (char*)pthread_get_stackaddr_np(t); size_t sz = pthread_get_stacksize_np(t); _tr_tls_stack_lo = top - sz; }
+#endif
+}
+static void _tr_install_crash_handlers(void) {
+    char probe; struct rlimit rl; size_t sz = 8u << 20;
+    if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY) sz = (size_t)rl.rlim_cur;
+    _tr_main_stack_lo = &probe - sz;
+    _tr_thread_crash_init();
+    _tr_tls_stack_lo = 0;                           /* main thread: use the rlimit-derived bound */
+    struct sigaction sa; sa.sa_sigaction = _tr_crash_handler; sigemptyset(&sa.sa_mask); sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigaction(SIGSEGV, &sa, 0);
+#ifdef SIGBUS
+    sigaction(SIGBUS, &sa, 0);
+#endif
+}
+#else
+static void _tr_thread_crash_init(void) {}
+#ifndef _WIN32
+static void _tr_install_crash_handlers(void) {}
+#endif
+#endif
+
 /* Opt-in live-allocation counter for leak bisection. Compile with
  * -DTAURARO_MEMCOUNT to enable; _tr_report_mem() then also prints the net
  * number of outstanding (alloc'd minus freed) heap blocks, so a steady
@@ -1345,6 +1413,7 @@ static void* _tr_posix_thread_trampoline(void* raw) {
     void*(*fn)(void*) = s->fn; void* arg = s->arg;
     _TrSpawnResult* result = s->result;
     free(s);
+    _tr_thread_crash_init();
     _tr_thread_has_panic_buf = 1;
     _tr_thread_panic_message = NULL;
     if (setjmp(_tr_thread_panic_jmpbuf) == 0) {
@@ -2154,6 +2223,7 @@ typedef struct {
 } _TrThreadPool;
 static void* _tr_pool_worker(void* arg) {
     _TrThreadPool* pool = (_TrThreadPool*)arg;
+    _tr_thread_crash_init();
     for (;;) {
         int ok = 0;
         long long item_val = _tr_chan_recv_ok(pool->queue, &ok);
@@ -4938,6 +5008,7 @@ static void* _tr_pool_worker_main(void* arg) {
     _TrPoolWorker* self = (_TrPoolWorker*)arg;
     _TrAsyncPool* pool = self->pool;
     _tr_tl_pool_worker = self;
+    _tr_thread_crash_init();
     for (;;) {
         _TrAsyncTask* t = _tr_pool_find_work(pool, self);
         if (t) { _tr_asynctask_run_and_complete(t); continue; }
@@ -5315,6 +5386,32 @@ static inline unsigned long long _tr_f2u(double x) {
     if (x >= 18446744073709551616.0) return ~0ULL;
     return (unsigned long long)x;
 }
+
+/* --debug (AddressSanitizer) only: raw-pointer offset / index are checked against the heap block the
+ * base pointer points into (alloc[T](n) is a malloc block, so ASan knows its exact extent). Catches the
+ * out-of-bounds access that lands inside ANOTHER valid block (which ASan's redzones alone would miss).
+ * In release builds _TR_PTR_OFF / _TR_PTR_IDX are plain pointer arithmetic: raw Pointer[T] is unchecked. */
+#if defined(_TR_NO_CRASH_HANDLER) && !defined(TAURARO_BARE) && !defined(_WIN32)
+extern const char* __asan_locate_address(void* addr, char* name, size_t name_size, void** region_address, size_t* region_size);
+static inline void* _tr_dbg_ptr(void* p, long long k, size_t esz, int deref) {
+    char nm[16]; void* rb = 0; size_t rs = 0;
+    const char* cat = p ? __asan_locate_address(p, nm, sizeof nm, &rb, &rs) : 0;
+    if (cat && cat[0] == 'h' && cat[1] == 'e' && cat[2] == 'a' && cat[3] == 'p' && cat[4] == 0 && (char*)p >= (char*)rb && (char*)p < (char*)rb + rs) {
+        long long off = (long long)((char*)p - (char*)rb) + k * (long long)esz;
+        long long lim = deref ? (long long)rs - (long long)esz : (long long)rs;
+        if (off < 0 || off > lim) {
+            _TR_DIAG("raw pointer %s %lld element(s) from an alloc block of %zu bytes is out of bounds (byte offset %lld)\n", deref ? "access" : "offset", k, rs, off);
+            _TR_TRAP();
+        }
+    }
+    return (char*)p + k * (long long)esz;
+}
+#define _TR_PTR_OFF(p, k) ((__typeof__(p))_tr_dbg_ptr((void*)(p), (long long)(k), sizeof(*(p)), 0))
+#define _TR_PTR_IDX(p, i) (*(__typeof__(p))_tr_dbg_ptr((void*)(p), (long long)(i), sizeof(*(p)), 1))
+#else
+#define _TR_PTR_OFF(p, k) ((p) + (k))
+#define _TR_PTR_IDX(p, i) ((p)[i])
+#endif
 
 #ifndef _TR_GLOBAL
 #ifdef _TR_MAIN
@@ -7695,7 +7792,21 @@ static inline unsigned char _tr_mmio_read8  (unsigned long long a)              
 
 
 #ifdef _WIN32
+#if !defined(_TR_NO_CRASH_HANDLER) && !defined(TAURARO_BARE) && !defined(_TR_CRASH_COMPILER)
+static LONG WINAPI _tr_win_crash_filter(PEXCEPTION_POINTERS ep) {
+    DWORD code = ep->ExceptionRecord->ExceptionCode;
+    const char* m = 0;
+    if (code == EXCEPTION_STACK_OVERFLOW) m = "tauraro: fatal: stack overflow (runaway or too-deep recursion, or a very large local).\n";
+    else if (code == EXCEPTION_ACCESS_VIOLATION) m = "tauraro: fatal: invalid memory access (access violation) - a raw Pointer was used out of bounds, after dealloc, or from an invalid address.\n";
+    if (m) { DWORD w; const char* e = m; DWORD n = 0; while (e[n]) n++; WriteFile(GetStdHandle(STD_ERROR_HANDLE), m, n, &w, 0); }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+static void _tr_install_crash_handlers(void) { AddVectoredExceptionHandler(1, _tr_win_crash_filter); }
+#else
+static void _tr_install_crash_handlers(void) {}
+#endif
 static inline void _tr_init_console(void) {
+    _tr_install_crash_handlers();
     SetConsoleOutputCP(65001);
     SetConsoleCP(65001);
 }
@@ -7712,6 +7823,7 @@ static inline void _tr_init_console(void) {
 static void _tr_flush_stdout_at_exit(void) { fflush(stdout); }
 #endif
 static inline void _tr_init_console(void) {
+    _tr_install_crash_handlers();
 #if !defined(TAURARO_BARE) && !defined(__wasi__) && defined(SIGPIPE)
     signal(SIGPIPE, SIG_IGN);
 #endif

@@ -1,0 +1,18 @@
+# EXPECT-EXIT: 0
+# EXPECT-STDOUT: 9223372036854775807
+# EXPECT-STDOUT: 0
+# EXPECT-STDOUT: -1
+# EXPECT-STDOUT: 255
+# EXPECT-STDOUT: 0
+# float -> int conversions saturate (NaN -> 0): no C undefined behaviour (UBSan clean).
+def main():
+    mut big = 1e30
+    mut nan = 0.0
+    nan = nan / nan
+    mut negf = -1.5
+    mut f300 = 300.5
+    print(int(big))
+    print(int(nan))
+    print(int(negf))
+    print((f300 as u8) as int)
+    print((negf as u8) as int)

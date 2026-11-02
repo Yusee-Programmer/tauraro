@@ -24,6 +24,7 @@ pub class PfState:
     pub pa:    Vec[str]     # alias pairs (pa[i] <-> pb[i]); both orders stored
     pub pb:    Vec[str]
     pub stk:   Vec[str]     # names that may hold the address of a stack local
+    pub inval: Vec[str]     # pointers into a List buffer that a mutating call has since reallocated
     pub own:   Vec[str]     # locals that (maybe) own a live alloc[] block made in this function
     pub nul:   Vec[str]     # paths that are DEFINITELY null here (intersection at joins)
     pub sz:    Vec[str]     # "p=N": p is DEFINITELY a literal alloc[T](N) block (intersection)
@@ -36,6 +37,7 @@ extend PfState:
         s.pa    = Vec[str].init(2)
         s.pb    = Vec[str].init(2)
         s.stk   = Vec[str].init(2)
+        s.inval = Vec[str].init(1)
         s.own   = Vec[str].init(2)
         s.nul   = Vec[str].init(2)
         s.sz    = Vec[str].init(2)
@@ -57,6 +59,7 @@ extend PfState:
         while i < self.stk.len:
             s.stk.push(self.stk.get(i))
             i = i + 1
+        s.inval = pf_vcopy(self.inval)
         s.own = pf_vcopy(self.own)
         s.nul = pf_vcopy(self.nul)
         s.sz = pf_vcopy(self.sz)
@@ -99,6 +102,7 @@ def pf_assign_from(into: PfState, o: PfState):
     into.pa = pf_vcopy(o.pa)
     into.pb = pf_vcopy(o.pb)
     into.stk = pf_vcopy(o.stk)
+    into.inval = pf_vcopy(o.inval)
     into.own = pf_vcopy(o.own)
     into.nul = pf_vcopy(o.nul)
     into.sz = pf_vcopy(o.sz)
@@ -135,6 +139,10 @@ def pf_merge(into: PfState, o: PfState):
     while i < o.own.len:
         pf_add(into.own, o.own.get(i))
         i = i + 1
+    i = 0
+    while i < o.inval.len:
+        pf_add(into.inval, o.inval.get(i))
+        i = i + 1
     into.nul = pf_inter(into.nul, o.nul)
     into.sz = pf_inter(into.sz, o.sz)
 
@@ -158,6 +166,7 @@ pub class PfCtx:
     pub noesc:      bool                # visiting a `.read()` / `.write()` receiver: not an escape of its base
     pub in_defer:   bool
     pub unsafe_depth: int
+    pub origin:     Map[str, str]       # name holding a stack address -> the local it points at
     pub externs:    Map[str, bool]      # extern functions with a raw Pointer parameter
 
 extend PfCtx:
@@ -183,6 +192,7 @@ extend PfCtx:
         c.noesc = false
         c.in_defer = false
         c.unsafe_depth = 0
+        c.origin = Map[str, str].init(4)
         c.externs = Map[str, bool].init(2)
         return c
 
@@ -247,7 +257,9 @@ def pf_stack_src(e: Pointer[HirExpr], st: PfState, cx: PfCtx) -> str:
                     case _: pass
             return ""
         case HirExpr.EIdent(nm, _, _):
-            if pf_has(st.stk, nm): return nm
+            if pf_has(st.stk, nm):
+                if cx.origin.contains(nm): return cx.origin.get(nm)
+                return nm
             return ""
         case HirExpr.ECast(x, _): return pf_stack_src(x, st, cx)
         case HirExpr.EMethodCall(o, m, _, _):
@@ -342,6 +354,7 @@ def pf_kill(st: PfState, path: str):
         i = i + 1
     st.stk = ns
     st.own = pf_drop_under(st.own, path)
+    st.inval = pf_drop_under(st.inval, path)
     st.nul = pf_drop_under(st.nul, path)
     mut nz = Vec[str].init(1)
     i = 0
@@ -487,7 +500,14 @@ def pf_expr(cx: PfCtx, e: Pointer[HirExpr], st: PfState):
                 pf_use_msg(cx, nm)
                 pf_kill(st, nm)
             if not cx.noesc and pf_has(st.own, nm): st.own = pf_drop_under(st.own, nm)
+            if pf_has(st.inval, nm):
+                cx.err("[M-6] '" + nm + "' points into the buffer of a List that was grown, shrunk or cleared after the pointer was taken; the buffer may have moved or been freed, so the pointer dangles.\n      FIX: take the pointer (`l as Pointer[T]`) again after the last mutation of the list, or index the list instead of holding a raw pointer.")
+                st.inval = pf_drop_under(st.inval, nm)
         case HirExpr.EPropAccess(o, p, _):
+            if not pf_null(o) and hir_expr_type(o).name == "Pointer":
+                mut wh = "inside an 'unsafe:' block "
+                if cx.unsafe_depth == 0: wh = ""
+                cx.err("[P-2] '." + p + "' is a field access through a raw Pointer, which has no fields.\n      FIX: read the pointee " + wh + "first, e.g. `unsafe:` then `p.read()." + p + "` (and `p.write(v)` to store a whole value), or keep the data in a class / List[T].")
             mut pp = pf_path(e)
             if pp != "" and pf_has(st.freed, pp):
                 pf_use_msg(cx, pp)
@@ -521,7 +541,7 @@ def pf_expr(cx: PfCtx, e: Pointer[HirExpr], st: PfState):
             mut cn = pf_callee_name(callee)
             if cn != "" and cx.unsafe_depth == 0 and cx.externs.contains(cn):
                 cx.err("[P-5] extern function '" + cn + "' takes a raw Pointer; C cannot check it, so the call must be inside an 'unsafe:' block.\n      FIX: wrap the call in 'unsafe:' (ideally inside a small safe wrapper function that validates its arguments).")
-            if cn == "":
+            if cn == "" or pf_has(st.freed, cn):
                 pf_expr(cx, callee, st)
             pf_exprs(cx, args, st)
             mut ki = 0
@@ -549,6 +569,13 @@ def pf_expr(cx: PfCtx, e: Pointer[HirExpr], st: PfState):
             pf_exprs(cx, args, st)
             mut mkp = pf_path(o)
             if mkp != "": pf_kill_fields(st, mkp)
+            if mkp != "" and (m == "push" or m == "append" or m == "insert" or m == "extend" or m == "clear" or m == "pop" or m == "remove" or m == "resize" or m == "reserve" or m == "truncate" or m == "push_back" or m == "pop_back"):
+                mut ot = hir_expr_type(o).name
+                if ot == "List" or ot == "Vec":
+                    mut li = 0
+                    while li < st.pa.len:
+                        if st.pa.get(li) == mkp and st.pb.get(li) != mkp: pf_add(st.inval, st.pb.get(li))
+                        li = li + 1
             if not cx.is_main:
                 # a container insert / `.write(...)` of a stack address into storage that outlives the call
                 if m == "push" or m == "append" or m == "insert" or m == "add" or m == "set" or m == "write" or m == "send" or m == "put":
@@ -697,8 +724,18 @@ def pf_declare(cx: PfCtx, st: PfState, name: str, val: Pointer[HirExpr]):
     if not pf_has(cx.locals, name): cx.locals.push(name)
     mut r = pf_root(val)
     if r != "" and r != name: pf_link(st, name, r)
+    if not pf_null(val):
+        match val.read():
+            case HirExpr.EClosure(_, _, _, _, ccaps):
+                mut cci = 0
+                while cci < ccaps.len:
+                    pf_link(st, name, ccaps.get(cci).name)
+                    cci = cci + 1
+            case _: pass
     mut ss = pf_stack_src(val, st, cx)
-    if ss != "": pf_add(st.stk, name)
+    if ss != "":
+        pf_add(st.stk, name)
+        cx.origin.insert(name, ss)
     pf_bind(cx, st, name, val, true)
 
 def pf_assign(cx: PfCtx, st: PfState, tgt: Pointer[HirExpr], val: Pointer[HirExpr]):
@@ -726,7 +763,9 @@ def pf_assign(cx: PfCtx, st: PfState, tgt: Pointer[HirExpr], val: Pointer[HirExp
     pf_kill(st, tp)
     mut r = pf_root(val)
     if r != "" and r != tp and not pf_under(r, tp): pf_link(st, tp, r)
-    if ss != "" and dot < 0: pf_add(st.stk, tp)
+    if ss != "" and dot < 0:
+        pf_add(st.stk, tp)
+        cx.origin.insert(tp, ss)
     pf_bind(cx, st, tp, val, dot < 0 and pf_has(cx.locals, tp))
 
 def pf_exit_loop_ctx(cx: PfCtx, brk_out: PfState, cnt_out: PfState):

@@ -1,0 +1,14 @@
+# EXPECT-EXIT: nonzero
+# EXPECT-STDOUT: start
+# EXPECT-STDERR: stack overflow
+# EXPECT-NOOPT: 1
+# SAN-SKIP-STDOUT: 1
+# Runaway recursion ends with a clear Tauraro message (not a bare segfault), also in a thread.
+def f(n: int) -> int:
+    if n < 0:
+        return 0
+    return 1 + f(n + 1)
+
+def main():
+    print("start")
+    print(f(0))

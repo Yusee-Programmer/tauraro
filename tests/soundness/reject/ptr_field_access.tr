@@ -1,0 +1,9 @@
+# EXPECT: [P-2]
+# A raw Pointer has no fields: p.v is rejected with a Tauraro diagnostic (not a late C error).
+class N:
+    pub v: int
+
+def main():
+    mut x = N()
+    mut p: Pointer[N] = &x
+    print(p.v)

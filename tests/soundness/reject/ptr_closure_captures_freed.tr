@@ -1,0 +1,10 @@
+# EXPECT: [M-6]
+# A closure that captured a pointer dangles once the pointer is dealloc'd.
+def main():
+    unsafe:
+        mut p: Pointer[int] = alloc[int](2)
+        p.write(3)
+        mut f = def() -> int:
+            return p.read()
+        dealloc(p)
+        print(f())

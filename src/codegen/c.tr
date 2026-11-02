@@ -4945,7 +4945,7 @@ pub class CGenerator:
         # stays an lvalue (`*({ ...; &os->data[i]; })`), so assignment targets work too -- hoisting
         # to a statement-level temporary would not, as assignment targets are not flushed.
         mut once = self._op_class(o) == 2 or self._op_class(idx) == 2
-        if ty_n == "Pointer": return os + "[" + is_idx + "]"
+        if ty_n == "Pointer": return "_TR_PTR_IDX(" + os + ", " + is_idx + ")"
         if ty_n == "Array":
             # Fixed-size array: bounds-checked `.data[i]` (lvalue + rvalue). N is the
             # compile-time size carried on the type.
@@ -6684,7 +6684,7 @@ pub class CGenerator:
                 if not self.classes.contains(t_n):
                     _ptr_intercept = true
         if _ptr_intercept:
-            if method == "offset": return "(" + obj_s + " + " + self.gen_expr(args.get(0)) + ")"
+            if method == "offset": return "_TR_PTR_OFF(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
             if method == "read": return "(*" + obj_s + ")"
             if method == "write": return "(*" + obj_s + " = " + self.gen_expr(args.get(0)) + ")"
             if method == "as_ptr": return obj_s

@@ -616,3 +616,31 @@ unsafe:
 ---
 
 Next: [Modules →](15_modules.md)
+
+---
+
+## What `unsafe:` Does and Does Not Check
+
+Inside `unsafe:` you take over the guarantees the compiler gives everywhere else. Precisely:
+
+**Checked at compile time (even inside `unsafe:`)**
+- `[M-6]` use / double `dealloc`, followed through aliases, branches, loops, field paths and calls to
+  functions that `dealloc` a parameter.
+- `[L-1]` returning, or storing into a parameter / field / global / container, the address of a local.
+- `[P-3]` a pointer that is certainly null being dereferenced; a constant `offset`/index outside a literal
+  `alloc[T](n)` block; `dealloc` of a stack address or null; a negative literal `alloc` count.
+- `[P-4]` (warning) an `alloc` block that leaks on some path.
+- `[P-2]` `*p`, `p[i]`, `p + n`, `.read()`, `.offset()` and `p.field` outside `unsafe:`.
+
+**Checked at run time**
+- Release builds: nothing. `Pointer[T]` index/`offset`/`read`/`write` are plain C pointer operations.
+  An out-of-range or freed access is undefined behaviour; a crash prints
+  `tauraro: fatal: invalid memory access ...` (or `stack overflow` for runaway recursion).
+- `--debug` builds (AddressSanitizer + UBSan): every `p[i]` and `p.offset(k)` is checked against the heap
+  block `p` points into (`raw pointer ... out of bounds`), and ASan additionally traps use-after-free,
+  double free and heap-buffer-overflow on every read/write. Leaks are reported at exit.
+
+**Never checked (your responsibility)**
+- Offsets computed at run time when the pointer is not into a heap `alloc` block (stack, global, `List`
+  data, memory from C), pointer type punning via `as`, aliasing between a `Pointer` and a live `List`
+  buffer that is later resized, data races on raw memory, and the lifetime of memory owned by C code.

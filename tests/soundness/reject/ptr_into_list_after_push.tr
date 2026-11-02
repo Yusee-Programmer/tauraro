@@ -1,0 +1,11 @@
+# EXPECT: [M-6]
+# A raw pointer into a List buffer dangles after the list is grown (push may reallocate).
+def main():
+    mut l: List[int] = [1,2,3]
+    unsafe:
+        mut p = l as Pointer[int]
+        mut i = 0
+        while i < 100:
+            l.push(i)
+            i += 1
+        print(p.read())

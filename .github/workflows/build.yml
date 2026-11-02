@@ -295,6 +295,13 @@ jobs:
         shell: pwsh
         run: ./scripts/run_soundness.ps1
 
+      # Run-time defined-behaviour corpus (tests/runtime_san): shift masking, float->int
+      # saturation, str index trap, stack-overflow message - built plain and with ASan/UBSan.
+      - name: Runtime sanitizer corpus (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash scripts/run_runtime_san.sh
+
       # -------------------------------------------------------
       # Example harness: build EVERY example under examples/ (a build failure means
       # an example drifted onto a removed/renamed API), run the deterministic ones,

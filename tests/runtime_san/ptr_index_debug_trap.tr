@@ -1,0 +1,19 @@
+# EXPECT-EXIT: nonzero
+# EXPECT-STDOUT: 2
+# EXPECT-STDERR: out of bounds
+# SAN-ONLY: 1
+# --debug checks raw Pointer index/offset against the alloc block (release builds do not).
+def main():
+    mut n = 4
+    unsafe:
+        mut a: Pointer[int] = alloc[int](n)
+        mut b: Pointer[int] = alloc[int](n)
+        mut k = 10
+        mut i = 0
+        while i < n:
+            a[i] = i
+            i += 1
+        print(a[2])
+        a[k] = 7
+        dealloc(a)
+        dealloc(b)

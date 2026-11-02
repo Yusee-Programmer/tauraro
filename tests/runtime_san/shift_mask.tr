@@ -1,0 +1,19 @@
+# EXPECT-EXIT: 0
+# EXPECT-STDOUT: 1
+# EXPECT-STDOUT: 2
+# EXPECT-STDOUT: -9223372036854775808
+# EXPECT-STDOUT: 8
+# EXPECT-STDOUT: 2
+# Shift counts are masked to the operand width: no C undefined behaviour (UBSan clean).
+def main():
+    mut one = 1
+    mut c64 = 64
+    mut c65 = 65
+    mut neg = -1
+    print(one << c64)
+    print(one << c65)
+    print(one << neg)
+    print(8 >> c64)
+    mut u: u32 = 1
+    mut c33: u32 = 33
+    print(u << c33)

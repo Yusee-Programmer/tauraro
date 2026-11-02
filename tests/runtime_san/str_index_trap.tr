@@ -1,0 +1,10 @@
+# EXPECT-EXIT: nonzero
+# EXPECT-STDOUT: 98
+# EXPECT-STDERR: out of bounds
+# str indexing is bounds-checked: in range works, out of range traps (never reads outside the buffer).
+def main():
+    mut s = "abc"
+    mut i = 1
+    print(s[i] as int)
+    i = -1
+    print(s[i] as int)
