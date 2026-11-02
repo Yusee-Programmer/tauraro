@@ -1,0 +1,55 @@
+# std.collections.span -- a bounds-checked view over raw memory.
+#
+# `Span[T]` pairs a `Pointer[T]` with the number of elements behind it, so every `get`/`set`
+# is checked against that length (an out-of-range index aborts with the usual bounds-check
+# diagnostic, in release builds too). Use it instead of `Pointer[T].offset(i)` whenever the
+# length is known: a `Span` over an `alloc[T](n)` block is `Span.init(p, n)`.
+#
+# A Span does not own the memory; the caller still frees the block it was made from, and the
+# Span must not be used afterwards.
+#
+# Usage:
+#   from std.collections.span import Span
+#   unsafe:
+#       p = alloc[int](8)
+#   mut s = Span[int].init(p, 8)
+#   s.set(3, 42)
+#   x = s.get(3)
+#   mut t = s.sub(2, 4)         # elements 2..4 of the same memory
+from std.io.console import Console
+from std.sys.process import Process
+
+def _span_oob(i: int, n: int):
+    Console.eprint("Span index " + i.to_str() + " out of range for length " + n.to_str())
+    Process.exit(134)
+
+pub class Span[T]:
+    pub ptr: Pointer[T]
+    pub n: int
+
+extend Span[T]:
+    pub def init(p: Pointer[T], count: int) -> Span[T]:
+        mut s = Span[T]()
+        s.ptr = p
+        s.n = count
+        return s
+
+    pub def len(self) -> int:
+        return self.n
+
+    pub def get(self, i: int) -> T:
+        if i < 0 or i >= self.n: _span_oob(i, self.n)
+        unsafe:
+            return self.ptr.offset(i).read()
+
+    pub def set(self, i: int, v: T):
+        if i < 0 or i >= self.n: _span_oob(i, self.n)
+        unsafe:
+            self.ptr.offset(i).write(v)
+
+    # View of elements [lo, hi) of the same memory.
+    pub def sub(self, lo: int, hi: int) -> Span[T]:
+        if lo < 0 or hi < lo or hi > self.n:
+            _span_oob(hi, self.n)
+        unsafe:
+            return Span[T].init(self.ptr.offset(lo), hi - lo)

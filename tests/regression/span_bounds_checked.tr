@@ -1,0 +1,23 @@
+# std.collections.span: Span[T] gives bounds-checked access to alloc[T](n) memory.
+from std.test import TestRunner
+from std.collections.span import Span
+
+def main():
+    mut t = TestRunner.init("span_bounds_checked")
+    unsafe:
+        p = alloc[int](8)
+    mut s = Span[int].init(p, 8)
+    mut i = 0
+    while i < 8:
+        s.set(i, i * i)
+        i = i + 1
+    t.assert_eq_int(s.get(3), 9, "get after set")
+    t.assert_eq_int(s.len(), 8, "len")
+    v = s.sub(2, 5)
+    t.assert_eq_int(v.len(), 3, "sub len")
+    t.assert_eq_int(v.get(0), 4, "sub shares memory")
+    v.set(1, 100)
+    t.assert_eq_int(s.get(3), 100, "write through sub is visible")
+    unsafe:
+        dealloc(p)
+    t.summary()

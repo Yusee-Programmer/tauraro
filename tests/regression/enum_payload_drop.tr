@@ -1,0 +1,71 @@
+# Enum variants with owned str/class payloads: locals own and drop them; reads, early returns,
+# continue and reassignment stay sound (run under ASan by scripts/asan_check.sh).
+from std.test import TestRunner
+
+class Tag:
+    pub name: str
+extend Tag:
+    pub def init(n: str) -> Tag:
+        mut t = Tag()
+        t.name = n
+        return t
+
+enum E:
+    A(Tag)
+    B(str)
+    C
+
+class Holder:
+    pub e: E
+
+def mke(i: int) -> E:
+    return E.A(Tag.init("e" + i.to_str()))
+
+def show(e: E) -> str:
+    match e:
+        case E.A(t): return t.name
+        case E.B(s): return s
+        case E.C: return "c"
+
+def pick(i: int) -> E:
+    if i % 2 == 0:
+        return E.B("even" + i.to_str())
+    return E.C
+
+def stash(h: Holder, i: int):
+    d = E.B("x" + i.to_str())
+    h.e = d
+
+def early(i: int) -> int:
+    a = mke(i)
+    if i > 3:
+        return 1
+    return show(a).len()
+
+def main():
+    mut t = TestRunner.init("enum_payload_drop")
+    mut i = 0
+    mut total = 0
+    mut keep = E.C
+    h = Holder()
+    h.e = E.C
+    while i < 50:
+        a = mke(i)
+        total = total + show(a).len()
+        h2 = Holder()
+        stash(h2, i)
+        total = total + show(h2.e).len()
+        p = pick(i)
+        total = total + show(p).len()
+        total = total + early(i)
+        if i == 10:
+            keep = E.B("kept")
+        i = i + 1
+        if i == 40:
+            continue
+    t.assert_eq_int(total, 504, "enum payload locals survive reads and drop cleanly")
+    t.assert_eq_str(show(keep), "kept", "kept enum value")
+    src = [3, 1, 2]
+    xs = sorted(src)
+    t.assert_eq_int(xs.get(0), 1, "sorted returns a sorted copy")
+    t.summary()

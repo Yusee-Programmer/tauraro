@@ -109,6 +109,13 @@ unsafe:
     buf.offset(i).read()    # why is i in bounds? nobody knows
 ```
 
+### Bounds-checked access: `Span[T]`
+
+`Pointer[T].offset(i)` with a non-literal index is not range-checked in release builds,
+because a bare pointer does not know how long its block is. When you know the length,
+wrap the block in `std.collections.span.Span[T]` (`Span[int].init(p, n)`): `get`, `set`
+and `sub(lo, hi)` are checked against `n` in every build and abort with a clear message.
+
 ### Best Practices
 
 1. Keep `unsafe:` blocks as small as possible — just the raw operation, nothing else.

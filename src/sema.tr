@@ -3211,6 +3211,18 @@ extend Sema:
             if sym.active_borrows > 0: return false
             if not sym.is_init or sym.is_maybe_init: return false
             return true
+        # A user enum value whose variants carry an owned `str` / refcounted-class payload
+        # (the ctor retained each payload): the local owns that +1 and releases it at scope
+        # exit through the enum's generated drop glue, unless the value was passed on,
+        # returned, aliased or moved (then the new holder owns it). Codegen additionally
+        # requires the initialiser to be a FRESH value (variant ctor / owned-returning fn).
+        if self.enums.contains(tn) and self._enum_owns_payload(tn):
+            if sym.coll_escaped: return false
+            if self.alias_assigned.contains(sym.name): return false
+            if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
+            if sym.active_borrows > 0: return false
+            if not sym.is_init or sym.is_maybe_init: return false
+            return true
         if not self.classes.contains(tn): return false
         # "Box" omitted: builtin Box[T] is not in self.classes (guarded above), so a
         # tn=="Box" here is a user `class Box` — a droppable owned local, not the builtin.
@@ -3941,7 +3953,7 @@ extend Sema:
                 mut _len_builtin = false
                 match callee.read():
                     case HirExpr.EIdent(_lbn, _, _):
-                        if _lbn == "len" and not self.fn_defs.contains("len") and not self.is_local_var("len"): _len_builtin = true
+                        if (_lbn == "len" or _lbn == "print" or _lbn == "println") and not self.fn_defs.contains(_lbn) and not self.is_local_var(_lbn): _len_builtin = true
                     case _: pass
                 mut i = 0
                 while i < args.len:
@@ -4181,6 +4193,7 @@ extend Sema:
     # heap classes. User-`free()` classes, collections, locks ... keep their old behaviour.
     pub def _early_exit_drop_ok(self, tn: str) -> bool:
         if tn == "str": return true
+        if self.enums.contains(tn): return true   # owning-enum locals (is_droppable_sym gated); codegen drops only fresh ones
         # Collections / Shared handles that reach here already passed is_droppable_sym (no escape,
         # no alias, definitely initialised), so releasing one the exit expression merely READ is
         # safe when the expression value was computed first (primitive return) or on break/continue.
@@ -4758,7 +4771,9 @@ extend Sema:
                     mut all_owned = true
                     mut ri = 0
                     while ri < rets.len:
-                        if not self._ret_yields_owned(rets.get(ri)):
+                        if fns.get(xi).ret_ty as usize != 0 as usize and self.enums.contains(fns.get(xi).ret_ty.name):
+                            if not self._ret_yields_fresh_enum(rets.get(ri)): all_owned = false
+                        elif not self._ret_yields_owned(rets.get(ri)):
                             all_owned = false
                         ri = ri + 1
                     if not all_owned:
@@ -5196,9 +5211,75 @@ extend Sema:
             case HirExpr.ETryExpr(e, _): return self._param_consumed_in_expr(pname, e)
             case _: return false
 
+    # True if a (non-generic) user enum has a variant payload field that is an owned `str` or a
+    # refcounted heap class: its ctor retains the field, so a holder must release it (drop glue).
+    pub def _enum_owns_payload(self, en: str) -> bool:
+        if not self.enums.contains(en): return false
+        mut ed = self.enums.get(en)
+        if ed.generics.len > 0: return false
+        mut vi = 0
+        while vi < ed.variants.len:
+            mut v = ed.variants.get(vi)
+            mut fi = 0
+            while fi < v.fields.len:
+                mut fp = v.fields.get(fi)
+                mut fn_ = fp.name
+                if fp.ty as usize != 0 as usize: fn_ = fp.ty.read().name
+                if fn_ == "str": return true
+                if self.classes.contains(fn_) and not self.class_method_exists(fn_, "free") and self._is_rc_class(fn_) and self.classes.get(fn_).generics.len == 0: return true
+                fi = fi + 1
+            vi = vi + 1
+        return false
+
+    # An enum-valued return expression that is a FRESH owned value (variant ctor call, a
+    # payload-less variant, or a call to a function already proven to return one).
+    pub def _ret_yields_fresh_enum(self, e: Pointer[HirExpr]) -> bool:
+        if e as usize == 0 as usize: return false
+        match e.read():
+            case HirExpr.EMethodCall(recv, m, _, _):
+                match recv.read():
+                    case HirExpr.EIdent(rn, _, _):
+                        if self.enums.contains(rn):
+                            mut ed = self.enums.get(rn)
+                            mut vi = 0
+                            while vi < ed.variants.len:
+                                if ed.variants.get(vi).name == m: return true
+                                vi = vi + 1
+                    case _: pass
+                return false
+            case HirExpr.EPropAccess(recv2, m2, _):
+                match recv2.read():
+                    case HirExpr.EIdent(rn2, _, _):
+                        if self.enums.contains(rn2):
+                            mut ed2 = self.enums.get(rn2)
+                            mut vj = 0
+                            while vj < ed2.variants.len:
+                                if ed2.variants.get(vj).name == m2 and ed2.variants.get(vj).fields.len == 0: return true
+                                vj = vj + 1
+                    case _: pass
+                return false
+            case HirExpr.ECall(callee, _, _):
+                if callee as usize == 0 as usize: return false
+                match callee.read():
+                    case HirExpr.EIdent(cn, _, _): return self._owned_of(cn)
+                    case HirExpr.EPropAccess(po, pv, _):
+                        mut pen = hir_expr_type(po).name
+                        if self.enums.contains(pen):
+                            mut ped = self.enums.get(pen)
+                            mut pvi = 0
+                            while pvi < ped.variants.len:
+                                if ped.variants.get(pvi).name == pv: return true
+                                pvi = pvi + 1
+                        return false
+                    case _: return false
+            case HirExpr.EIfElse(_, a, b2, _):
+                return self._ret_yields_fresh_enum(a) and self._ret_yields_fresh_enum(b2)
+            case _: return false
+
     pub def _fn_ret_is_heap_class(self, f: HirFunction) -> bool:
         if f.ret_ty as usize == 0 as usize: return false
         mut rn = f.ret_ty.name
+        if self.enums.contains(rn) and f.class_name == "": return self._enum_owns_payload(rn)
         if not self.classes.contains(rn): return false
         if rn == "Vec" or rn == "Map" or rn == "List" or rn == "Dict" or rn == "Set" or ((rn == "Box") and not self.classes.contains("Box")) or rn == "Mutex" or rn == "RwLock" or rn == "Atomic" or rn == "Shared" or rn == "Option" or rn == "Result" or rn == "Chan" or rn == "StringBuilder" or rn == "StringObj": return false
         # value types are copied by value, not refcounted
@@ -6770,10 +6851,30 @@ extend Sema:
                 self.mark_escaped_str_args(_sw_c)
                 self.mark_escaped_coll_args(_sw_c)
             case HirStmt.SFor(_, _sf_iter, _):
-                self.mark_escaped_coll_args(_sf_iter)
+                if not self._for_iter_builtin_only(_sf_iter): self.mark_escaped_coll_args(_sf_iter)
             case HirStmt.SForUnpack(_, _sfu_iter, _):
-                self.mark_escaped_coll_args(_sfu_iter)
+                if not self._for_iter_builtin_only(_sfu_iter): self.mark_escaped_coll_args(_sfu_iter)
             case _: pass
+
+    # `for .. in enumerate(xs)` / `zip(a, b)` / `iter(xs)`: the builtin only walks its arguments for
+    # the duration of the loop (no alias outlives it), so its collection arguments do not escape.
+    # Argument sub-expressions are still scanned for their own escapes.
+    pub def _for_iter_builtin_only(self, it: Pointer[HirExpr]) -> bool:
+        if it as usize == 0 as usize: return false
+        match it.read():
+            case HirExpr.ECall(callee, args, _):
+                if callee as usize == 0 as usize: return false
+                match callee.read():
+                    case HirExpr.EIdent(bn, _, _):
+                        if (bn == "enumerate" or bn == "zip" or bn == "iter") and not self.fn_defs.contains(bn) and not self.is_local_var(bn):
+                            mut ai = 0
+                            while ai < args.len:
+                                self.mark_escaped_coll_args(args.get(ai))
+                                ai = ai + 1
+                            return true
+                    case _: pass
+            case _: pass
+        return false
 
     pub def lower_block(self, b: Block) -> HirBlock:
         mut hb = HirBlock.init()

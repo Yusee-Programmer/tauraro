@@ -1,0 +1,96 @@
+# Leak gate: enum variants carrying an owned `str` / refcounted class payload must release
+# it when the owning local goes out of scope (E_drop glue), on every exit path; plus the
+# builtin copy ops (list()/sorted()/reversed(), enumerate/zip loops) and `print` of
+# f-strings / collections, which used to leak their temporaries.
+extern "C":
+    def _tr_mem_live() -> int
+
+class Tag:
+    pub name: str
+extend Tag:
+    pub def init(n: str) -> Tag:
+        mut t = Tag()
+        t.name = n
+        return t
+
+enum E:
+    A(Tag)
+    B(str)
+    C
+
+def mke(i: int) -> E:
+    return E.A(Tag.init("e" + i.to_str()))
+
+def mks(i: int) -> E:
+    return E.B("s" + i.to_str())
+
+def pick(i: int) -> E:
+    if i % 2 == 0:
+        return E.B("even" + i.to_str())
+    return E.C
+
+def show(e: E) -> int:
+    match e:
+        case E.A(t): return 1
+        case E.B(s): return 2
+        case E.C: return 0
+
+def early(i: int) -> int:
+    a = mke(i)
+    if i > 3:
+        return 1
+    return show(a)
+
+def loopy() -> int:
+    mut n = 0
+    mut i = 0
+    while i < 6:
+        e = mks(i)
+        i = i + 1
+        if i == 2:
+            continue
+        if i == 5:
+            break
+        n = n + show(e)
+    return n
+
+def copies() -> int:
+    l = [3, 1, 2]
+    s = sorted(l)
+    r = reversed(l)
+    z = list(l)
+    names = ["b", "a"]
+    mut t = 0
+    for i, x in enumerate(l):
+        t = t + i + x
+    for a, b in zip(l, names):
+        t = t + a
+    return t + s.len() + r.len() + z.len()
+
+def workload():
+    a = mke(1)
+    b = mks(2)
+    c = E.B("lit" + "x")
+    d = pick(4)
+    f = pick(5)
+    show(a) + show(b) + show(c) + show(d) + show(f)
+    early(1)
+    early(9)
+    loopy()
+    copies()
+    xs = [1, 2]
+    fs = f"{xs}"
+    fn = f"n={show(a)}"
+
+def main():
+    workload()
+    mut before = _tr_mem_live()
+    mut r = 0
+    while r < 100:
+        workload()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    if leaked <= 0:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str())

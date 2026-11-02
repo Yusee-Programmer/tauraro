@@ -9990,11 +9990,30 @@ static char* _tr_sb_append(char* buf, size_t* len, size_t* cap, const char* s) {
         while (*len + sl + 1 > *cap) *cap *= 2;
         char* nb = (char*)_tr_checked_alloc(*cap);
         memcpy(nb, buf, *len + 1);
+        _tr_free(buf);
         buf = nb;
     }
     memcpy(buf + *len, s, sl);
     *len += sl;
     buf[*len] = '\0';
+    return buf;
+}
+static char* _tr_fmt_i64(const void* p); static char* _tr_fmt_i32(const void* p); static char* _tr_fmt_i16(const void* p);
+static char* _tr_fmt_i8(const void* p); static char* _tr_fmt_u8(const void* p); static char* _tr_fmt_u16(const void* p);
+static char* _tr_fmt_u32(const void* p); static char* _tr_fmt_u64(const void* p); static char* _tr_fmt_f64(const void* p);
+static char* _tr_fmt_bool(const void* p); static char* _tr_fmt_char(const void* p); static char* _tr_fmt_str(const void* p);
+static char* _tr_fmt_str_box(const void* p); static char* _tr_fmt_str_raw(const void* p);
+/* True for the runtime's own element formatters, which always return a fresh heap string the
+   caller must free (user-class / nested formatters may return literals or borrowed text). */
+static int _tr_fmt_owns_result(_TrElemFmt f) {
+    return f == _tr_fmt_i64 || f == _tr_fmt_i32 || f == _tr_fmt_i16 || f == _tr_fmt_i8 || f == _tr_fmt_u8 ||
+           f == _tr_fmt_u16 || f == _tr_fmt_u32 || f == _tr_fmt_u64 || f == _tr_fmt_f64 || f == _tr_fmt_bool ||
+           f == _tr_fmt_char || f == _tr_fmt_str || f == _tr_fmt_str_box || f == _tr_fmt_str_raw;
+}
+static char* _tr_sb_append_fmt(char* buf, size_t* len, size_t* cap, _TrElemFmt f, const void* ep) {
+    char* t = f(ep);
+    buf = _tr_sb_append(buf, len, cap, t);
+    if (_tr_fmt_owns_result(f)) _tr_free(t);
     return buf;
 }
 static char* _tr_collection_to_str(const void* data, size_t len, size_t elem_size, _TrElemFmt fmt, const char* open, const char* close, const char* sep) {
@@ -10004,7 +10023,7 @@ static char* _tr_collection_to_str(const void* data, size_t len, size_t elem_siz
     for (size_t i = 0; i < len; i++) {
         if (i > 0) buf = _tr_sb_append(buf, &blen, &cap, sep);
         const char* ep = (const char*)data + i * elem_size;
-        buf = _tr_sb_append(buf, &blen, &cap, fmt(ep));
+        buf = _tr_sb_append_fmt(buf, &blen, &cap, fmt, ep);
     }
     buf = _tr_sb_append(buf, &blen, &cap, close);
     return buf;
@@ -10018,9 +10037,9 @@ static char* _tr_dict_to_str(const void* kdata, const void* vdata, size_t len, s
         if (i > 0) buf = _tr_sb_append(buf, &blen, &cap, ", ");
         const char* kp = (const char*)kdata + i * sizeof(TrStr);
         const char* vp = (const char*)vdata + i * vsize;
-        buf = _tr_sb_append(buf, &blen, &cap, kfmt(kp));
+        buf = _tr_sb_append_fmt(buf, &blen, &cap, kfmt, kp);
         buf = _tr_sb_append(buf, &blen, &cap, ": ");
-        buf = _tr_sb_append(buf, &blen, &cap, vfmt(vp));
+        buf = _tr_sb_append_fmt(buf, &blen, &cap, vfmt, vp);
     }
     buf = _tr_sb_append(buf, &blen, &cap, "}");
     return buf;
@@ -10035,9 +10054,9 @@ static char* _tr_dict_to_str_ks(const void* kdata, const void* vdata, size_t len
         if (i > 0) buf = _tr_sb_append(buf, &blen, &cap, ", ");
         const char* kp = (const char*)kdata + i * ksize;
         const char* vp = (const char*)vdata + i * vsize;
-        buf = _tr_sb_append(buf, &blen, &cap, kfmt(kp));
+        buf = _tr_sb_append_fmt(buf, &blen, &cap, kfmt, kp);
         buf = _tr_sb_append(buf, &blen, &cap, ": ");
-        buf = _tr_sb_append(buf, &blen, &cap, vfmt(vp));
+        buf = _tr_sb_append_fmt(buf, &blen, &cap, vfmt, vp);
     }
     buf = _tr_sb_append(buf, &blen, &cap, "}");
     return buf;

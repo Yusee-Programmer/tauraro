@@ -296,6 +296,8 @@ pub class CGenerator:
     pub method_owners:  Map[str, bool]  # "ClassOrEnumName#method" -> true (extend methods, incl. enums)
     pub decl_vars:      Map[str, bool]
     pub str_local_names: Map[str, bool]  # TrStr-typed locals declared via SLet in current function (retain/release tracked)
+    pub enum_owning: Map[str, bool]       # user enums whose payload fields are owned (str / heap class): have an E_drop glue
+    pub enum_local_names: Map[str, bool]  # enum-typed locals in the current function that OWN a fresh enum value (dropped at scope exit)
     pub class_local_names: Map[str, bool]  # heap-class-typed locals in current function that OWN a refcount (released at scope exit; reset in seed_params)
     pub class_local_mono: Map[str, str]    # heap-class local name -> its monomorphized C prefix (e.g. "Buffer_f64") so SAutoDrop's free()/drop call uses the mono name, not the bare generic ("Buffer")
     pub fn_owned: Map[str, bool]  # return-ownership inference (from sema HirFunction.returns_owned): fn key ("name" or "Class.method") -> returns an OWNED heap-class ref; drives _obj_expr_owns_ref
@@ -385,6 +387,8 @@ pub class CGenerator:
         g.decl_vars     = Map[str, bool].init(64)
         g.str_local_names = Map[str, bool].init(16)
         g.class_local_names = Map[str, bool].init(16)
+        g.enum_owning = Map[str, bool].init(16)
+        g.enum_local_names = Map[str, bool].init(16)
         g.class_local_mono = Map[str, str].init(16)
         g.fn_owned = Map[str, bool].init(64)
         g.raw_aliased = Map[str, bool].init(32)
@@ -528,6 +532,7 @@ pub class CGenerator:
         # single common entry for every function/method emit — avoids resetting at
         # each of the ~13 emit sites).
         self.class_local_names = Map[str, bool].init(16)
+        self.enum_local_names = Map[str, bool].init(16)
         self.class_local_mono = Map[str, str].init(16)
         # A `-> ref` function returns a BORROW: it does NOT retain on return, and its
         # callers must NOT free the result (see _is_fresh_str_expr / _expr_is_borrow_call).
@@ -2938,6 +2943,28 @@ pub class CGenerator:
                 self.ws("return _r; }\n")
             i = i + 1
         self.ws("\n")
+        # Drop glue: release the payload fields the ctors retained (str / refcounted class).
+        if e.generics.len == 0:
+            mut dg = ""
+            i = 0
+            while i < e.variants.len:
+                mut dv = e.variants.get(i)
+                mut dj = 0
+                mut dvs = ""
+                while dj < dv.fields.len:
+                    mut df = dv.fields.get(dj)
+                    mut dfn = "_e->data." + dv.name + "." + _safe_c_varname(df.name)
+                    if _is_str_type(self.resolve_generic_prim(df.ty.name)):
+                        dvs = dvs + "_tr_str_release(" + dfn + "); "
+                    elif self.is_heap_class_tn(df.ty.name):
+                        dvs = dvs + "_tr_obj_release(" + dfn + ", " + self.obj_drop_fn(df.ty.name) + "); "
+                    dj = dj + 1
+                if dvs != "":
+                    dg = dg + "case " + e.name + "_" + dv.name + ": " + dvs + "break; "
+                i = i + 1
+            if dg != "":
+                self.enum_owning.insert(e.name, true)
+                self.ws("static inline void " + e.name + "_drop(" + e.name + "* _e) { switch (_e->tag) { " + dg + "default: break; } }\n\n")
         # Pre-generate List_EnumName so Vec[EnumType] works in prototypes
         # that appear after this struct definition. Without this, the prototype
         # uses List_EnumName before it is defined.
@@ -3886,6 +3913,19 @@ pub class CGenerator:
     # (double-free / use-after-free — 0xC0000374 on Windows). Fresh collections
     # (literals, Type.init(), keys()/values()/clone(), free-fn results) are NOT
     # borrows and remain owned by the local.
+    # A `do:` block (the lowering of list()/sorted()/reversed()) yielding a FRESH List/Vec whose
+    # element is a scalar or str (not a class / Weak: those need element-drop encodings).
+    pub def _is_fresh_list_do(self, v: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(v as usize): return false
+        match v.read():
+            case HirExpr.EDo(_, dty):
+                if (dty.name != "List" and dty.name != "Vec") or dty.args.len == 0: return false
+                mut en = self.resolve_generic_prim(dty.args.get(0).read().name)
+                if not (_is_int_type(en) or _is_float_type(en) or en == "bool" or en == "char" or _is_str_type(en)): return false
+                mut ct = self.type_to_c(dty)
+                return ct.starts_with("List_") and ct.ends_with("*") and ct != "List_ptr*"
+            case _: return false
+
     pub def _coll_init_is_borrow(self, v: Pointer[HirExpr]) -> bool:
         if _is_invalid_ptr(v as usize): return false
         match v.read():
@@ -4240,6 +4280,36 @@ pub class CGenerator:
         if self.fn_owned.contains(key):
             if not self.fn_owned.get(key): nv = false
         self.fn_owned.insert(key, nv)
+
+    # A variant-constructor call or a call to a function proven to return a FRESH enum value.
+    pub def _enum_expr_fresh(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return false
+        match e.read():
+            case HirExpr.EMethodCall(recv, m, _, _):
+                match recv.read():
+                    case HirExpr.EIdent(rn, _, _):
+                        if self.enums.contains(rn):
+                            mut ed = self.enums.get(rn)
+                            mut vi = 0
+                            while vi < ed.variants.len:
+                                if ed.variants.get(vi).name == m: return true
+                                vi = vi + 1
+                    case _: pass
+                return false
+            case HirExpr.ECall(callee, _, _):
+                match callee.read():
+                    case HirExpr.EIdent(cn, _, _): return self._fn_owned_lookup(cn)
+                    case HirExpr.EPropAccess(po, pv, _):
+                        mut pen = hir_expr_type(po).name
+                        if self.enums.contains(pen):
+                            mut ped = self.enums.get(pen)
+                            mut pvi = 0
+                            while pvi < ped.variants.len:
+                                if ped.variants.get(pvi).name == pv: return true
+                                pvi = pvi + 1
+                        return false
+                    case _: return false
+            case _: return false
 
     pub def _obj_expr_owns_ref(self, e: Pointer[HirExpr]) -> bool:
         if _is_invalid_ptr(e as usize): return false
@@ -4680,6 +4750,7 @@ pub class CGenerator:
         if self.decl_vars.contains(n): self.decl_vars.remove(n)
         if self.str_local_names.contains(n): self.str_local_names.remove(n)
         if self.class_local_names.contains(n): self.class_local_names.remove(n)
+        if self.enum_local_names.contains(n): self.enum_local_names.remove(n)
         if self.coll_local_idict.contains(n): self.coll_local_idict.remove(n)
         if self.coll_local_strval.contains(n): self.coll_local_strval.remove(n)
         if self.class_local_mono.contains(n): self.class_local_mono.remove(n)
@@ -6039,10 +6110,13 @@ pub class CGenerator:
         if ty_n == "char": return "printf(\"%c\", " + s + ")"
         if ty_n == "Pointer": return "printf(\"0x%llx\", (unsigned long long)(uintptr_t)(" + s + "))"
         if ty_n == "List" or ty_n == "Vec" or ty_n == "Set" or ty_n == "Dict" or ty_n == "Map":
-            return "printf(\"%s\", " + self.gen_collection_to_str(s, hir_expr_type(arg)) + ")"
+            return "({ char* _pcs = " + self.gen_collection_to_str(s, hir_expr_type(arg)) + "; printf(\"%s\", _pcs); _tr_free(_pcs); })"
         if ty_n == "Tuple" or ty_n == "tuple":
             return "printf(\"%s\", " + self.gen_tuple_to_str(s, hir_expr_type(arg)) + ")"
-        if _is_str_type(ty_n): return "printf(\"%s\", _tr_strz(" + s + "))"
+        if _is_str_type(ty_n):
+            # A FRESH owned string (f-string, concat, call result) is released after printing.
+            if self._is_fresh_str_expr(arg): return "({ TrStr _ps = " + s + "; printf(\"%s\", _tr_strz(_ps)); _tr_str_release(_ps); })"
+            return "printf(\"%s\", _tr_strz(" + s + "))"
         mut mono0 = self.mono_cls_name_for(hir_expr_type(arg))
         if self.has_method(mono0, "__str__"):
             return "printf(\"%s\", _tr_strz(" + self.cls_method_c_call(mono0, "__str__", s, "") + "))"
@@ -8212,6 +8286,8 @@ pub class CGenerator:
         if parts.len == 0: return "_tr_str_lit(\"\")"
         mut fmt = ""
         mut fargs = ""
+        mut fpre = ""
+        mut fpost = ""
         mut i = 0
         mut fs_exprs = Vec[Pointer[HirExpr]].init(parts.len)
         while i < parts.len:
@@ -8357,7 +8433,12 @@ pub class CGenerator:
                     fargs = fargs + ", _TR_AUTO_STR(" + s + ")"
                 elif ty_n == "List" or ty_n == "Vec" or ty_n == "Set" or ty_n == "Dict" or ty_n == "Map":
                     fmt = fmt + "%s"
-                    fargs = fargs + ", " + self.gen_collection_to_str(s, hir_expr_type(part.expr))
+                    # Render ONCE into an owned buffer (freed after the string is built) instead of
+                    # twice inline (snprintf size pass + fill pass), which leaked both renderings.
+                    mut _fcn = "_fc" + self.next_temp()
+                    fpre = fpre + "char* " + _fcn + " = " + self.gen_collection_to_str(s, hir_expr_type(part.expr)) + "; "
+                    fpost = fpost + "_tr_free(" + _fcn + "); "
+                    fargs = fargs + ", " + _fcn
                 elif _is_str_type(ty_n):
                     fmt = fmt + "%s"
                     fargs = fargs + ", " + self.strz(s)
@@ -8373,6 +8454,8 @@ pub class CGenerator:
                     else:
                         fargs = fargs + ", (char*)(" + s + ")"
             i = i + 1
+        if fpre != "":
+            return "({ " + fpre + "int _fz = snprintf(NULL,0,\"" + fmt + "\"" + fargs + "); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,\"" + fmt + "\"" + fargs + "); TrStr _frs = _tr_str_wrap_len(_fr, (size_t)_fz); " + fpost + "_frs; })"
         return "({ int _fz = snprintf(NULL,0,\"" + fmt + "\"" + fargs + "); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,\"" + fmt + "\"" + fargs + "); _tr_str_wrap_len(_fr, (size_t)_fz); })"
 
     pub def gen_tuple(self, items: Vec[Pointer[HirExpr]]) -> str:
@@ -9770,7 +9853,8 @@ pub class CGenerator:
                             # result (self, a field) so the caller owns a counted ref;
                             # a returned local transfers (no retain — excluded from drops).
                             self.w(pad + "return " + self.iface_wrap_return(e, self.obj_retain_wrap(e, self.str_retain_wrap(e, ret_s2, true), true)) + ";\n")
-            case HirStmt.SLet(n, _, sl_is_mut, is_const, is_shared, ty, v):
+            case HirStmt.SLet(n, _, sl_is_mut, is_const, is_shared, ty0, v):
+                mut ty = ty0
                 # A (re)declaration starts with a clean slate in the per-name tables: stale entries of an
                 # earlier or enclosing variable with the same name must not describe THIS one.
                 self.clear_name(n)
@@ -9778,6 +9862,8 @@ pub class CGenerator:
                 # branch), so an SAutoDrop free/drop names the concrete instance. The
                 # helper self-guards (only records when it finds concrete class args).
                 self.capture_local_mono(n, ty, v)
+                # Enum local owning a fresh payload-carrying value: dropped at scope exit (E_drop glue).
+                if v as usize != 0 as usize and self._enum_expr_fresh(v): self.enum_local_names.insert(n, true)
                 # Result local: remember its Ok / Err payload types for the
                 # scope-exit drop (see SAutoDrop "Result").
                 mut _rl_ty = ty
@@ -9806,7 +9892,16 @@ pub class CGenerator:
                         case _: pass
                     if _init_sfx != "ptr":
                         c_ty = "List_" + self.list_sfx(_init_sfx) + "*"
-                if c_ty == "void" and v as usize != 0 as usize: c_ty = "__auto_type"
+                if c_ty == "void" and v as usize != 0 as usize:
+                    # Un-annotated local whose initialiser is a typed List/Vec (e.g. the `do:` block
+                    # that `list(xs)` / `sorted(xs)` / `reversed(xs)` lower to): recover the element
+                    # type so the local is tracked and freed like an annotated one.
+                    mut _vt0 = hir_expr_type(v)
+                    if (_vt0.name == "List" or _vt0.name == "Vec") and _vt0.args.len > 0:
+                        ty = _vt0
+                        c_ty = self.type_to_c(_vt0)
+                    else:
+                        c_ty = "__auto_type"
                 # A local bound to a borrow (container.get(), field alias, ident
                 # alias) does NOT own its collection — skip auto-drop registration
                 # so the container's own drop is the sole owner (no double-free).
@@ -10214,6 +10309,7 @@ pub class CGenerator:
                         if not self.decl_vars.contains(n) and not self.global_vars.contains(n):
                             mut _sa_rhs = self.gen_expr(v)
                             _sa_rhs = self.flush_wraps(_sa_rhs, false)
+                            if self.enum_owning.contains(hir_expr_type(t).name) and self._enum_expr_fresh(v): self.enum_local_names.insert(n, true)
                             if hir_expr_type(t).name == "str":
                                 if self.cur_proven_borrows.contains(n):
                                     # proven borrow: pure alias, no retain/release
@@ -10267,6 +10363,12 @@ pub class CGenerator:
                                     if _sa_owns:
                                         self.class_local_names.insert(n, true)
                                     self.capture_local_mono(n, hir_expr_type(v), v)
+                            elif self._is_fresh_list_do(v):
+                                # `z = list(xs)` / `sorted(xs)` / `reversed(xs)` (a `do:` block yielding a
+                                # fresh List of a scalar/str element): own it and free it at scope exit.
+                                mut _sa_lct = self.type_to_c(hir_expr_type(v))
+                                self.w(pad + _sa_lct + " " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
+                                self.coll_local_sfx.insert(n, _sa_lct.slice(5, _sa_lct.len() - 1))
                             else:
                                 self.w(pad + "__auto_type " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
                                 # A bare `s = set()` is int-keyed in C: record it so the auto-drop
@@ -10993,6 +11095,9 @@ pub class CGenerator:
                     # still-held guard) and releases an owned fresh payload. Only fires
                     # for non-moved/non-shared locals (is_droppable_sym gates it).
                     self.w(pad + "_tr_mutexbox_drop(" + _safe_c_varname(adn) + ");\n")
+                elif self.enum_owning.contains(adc):
+                    if self.enum_local_names.contains(adn):
+                        self.w(pad + adc + "_drop(&" + _safe_c_varname(adn) + ");\n")
                 elif self.value_types.contains(adc):
                     # Value type (@value_type): lives on the stack, holds no owned
                     # heap, no refcount — nothing to drop.

@@ -76,6 +76,20 @@ def conditional(flag: bool) -> void:
     # free(obj) injected here too — exactly once per path
 ```
 
+#### Enum payloads and copies
+
+A user `enum` whose variants carry a `str` or a refcounted class owns those payloads: the
+constructor retains each one, and a local that holds a freshly built value (a variant
+constructor call, or a call to a function that only returns fresh values) releases them at
+scope exit, on `return`/`break`/`continue` paths too. A local that is passed on, returned,
+re-bound or stored is owned by its new holder instead. `list(xs)`, `sorted(xs)` and
+`reversed(xs)` return real copies that are freed like any other list local, and
+`print`/f-strings release their temporary strings.
+
+Known remaining gaps: tuples holding a class or `str` are not yet dropped, enum values
+reached through a collection or field are released only by their container, and
+`List[Weak[T]]` / `List[Shared[T]]` are still rejected by `[T-11]`.
+
 ### Common Mistakes
 
 ```python
