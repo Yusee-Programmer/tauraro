@@ -180,6 +180,7 @@ pub class HirFunction:
     pub is_static: bool
     pub is_variadic: bool
     pub is_decorator: bool
+    pub is_lib: bool                 # from the trusted std/core library (never checked by the --strict move checker)
     pub borrow_borrowers: Vec[str]   # outlives engine: ref-borrow edge borrowers ...
     pub borrow_sources:   Vec[str]   # ... and their immediate sources (parallel arrays),
                                      # collected by sema (cross-fn), consumed by the MIR.

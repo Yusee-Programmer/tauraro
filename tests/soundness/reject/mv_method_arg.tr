@@ -1,0 +1,12 @@
+# EXPECT: [M-1]
+# A by-value method parameter consumes the argument.
+class Sink:
+    pub n: int
+extend Sink:
+    pub def put(self, xs: List[int]):
+        self.n = self.n + len(xs)
+def main():
+    mut k = Sink()
+    mut xs = [1, 2]
+    k.put(xs)
+    print(len(xs))

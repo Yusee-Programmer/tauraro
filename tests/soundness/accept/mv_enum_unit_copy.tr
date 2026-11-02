@@ -1,0 +1,13 @@
+# EXPECT: pass
+# A payload-less enum is Copy.
+enum Color:
+    Red
+    Green
+def show(c: Color):
+    match c:
+        case Color.Red: print("r")
+        case _: print("other")
+def main():
+    mut c = Color.Red
+    show(c)
+    show(c)

@@ -1,0 +1,7 @@
+# EXPECT: [M-1]
+# Appending a str to a list moves it.
+def main():
+    mut names: List[str] = []
+    mut s = "bob"
+    names.append(s)
+    print(s)

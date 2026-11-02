@@ -68,7 +68,7 @@ extend Vec2:
 # Non-capturing top-level functions generate plain C functions,
 # which means they can be passed to C APIs that accept function pointers.
 
-def sort_ints_asc(items: List[int]) -> void:
+def sort_ints_asc(items: mut ref List[int]) -> void:
     mut n = len(items)
     mut i = 0
     while i < n:
@@ -82,7 +82,7 @@ def sort_ints_asc(items: List[int]) -> void:
             j += 1
         i += 1
 
-def sort_ints_desc(items: List[int]) -> void:
+def sort_ints_desc(items: mut ref List[int]) -> void:
     mut n = len(items)
     mut i = 0
     while i < n:

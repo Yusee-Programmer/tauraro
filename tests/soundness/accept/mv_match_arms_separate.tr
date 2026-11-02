@@ -1,0 +1,14 @@
+# EXPECT: pass
+# Each match arm consumes on its own path.
+def take(s: str):
+    print(s)
+def main():
+    mut s = "a"
+    mut k = 1
+    match k:
+        case 1:
+            take(s)
+        case 2:
+            take(s)
+        case _:
+            print("none")

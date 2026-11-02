@@ -1,0 +1,7 @@
+# EXPECT: [M-1]
+# b = a (plain assignment) transfers a Dict.
+def main():
+    mut a = {"k": 1}
+    mut b = {"z": 2}
+    b = a
+    print(len(a))

@@ -1,0 +1,8 @@
+# EXPECT: [M-1]
+# A Set passed by value is consumed.
+def take(s: Set[int]):
+    print(len(s))
+def main():
+    mut s = {1, 2, 3}
+    take(s)
+    print(len(s))

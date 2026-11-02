@@ -1,0 +1,7 @@
+# EXPECT: [M-1]
+# Sending a value on a channel moves it.
+def main():
+    mut ch: Chan[str] = Chan.init(4)
+    mut s = "msg"
+    ch.send(s)
+    print(s)

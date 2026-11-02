@@ -1,0 +1,9 @@
+# EXPECT: pass
+# `mut ref` parameters borrow exclusively and do not consume.
+def grow(xs: mut ref List[int]):
+    xs.append(len(xs))
+def main():
+    mut xs = [1]
+    grow(xs)
+    grow(xs)
+    print(len(xs))

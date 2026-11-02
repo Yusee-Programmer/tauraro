@@ -1,0 +1,9 @@
+# EXPECT: [M-1]
+# Two list slots cannot both take the same instance.
+class N:
+    pub v: int
+    pub s: List[int]
+def main():
+    mut n = N()
+    mut a = [n]
+    mut b = [n]

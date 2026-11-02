@@ -103,7 +103,7 @@ async def process(id: int) -> int:
 # ── 12. Tuple return types ────────────────────────────────────────────────────
 # Functions can return multiple values as a tuple using -> (T1, T2, ...).
 # Callers unpack with: mut a, b = fn(...)
-def min_max(items: List[int]) -> (int, int):
+def min_max(items: ref List[int]) -> (int, int):
     mut lo = items[0]
     mut hi = items[0]
     for x in items:

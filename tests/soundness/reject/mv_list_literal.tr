@@ -1,0 +1,7 @@
+# EXPECT: [M-1]
+# Building a list literal moves its non-Copy elements.
+def main():
+    mut a = "x"
+    mut b = "y"
+    mut both = [a, b]
+    print(a)

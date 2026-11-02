@@ -1,0 +1,16 @@
+# EXPECT: pass
+# A field or element used as an argument is a place read, not a move of the owner.
+class Bag:
+    pub items: List[str]
+    pub name: str
+def show(s: str):
+    print(s)
+def main():
+    mut b = Bag()
+    b.name = "bag"
+    b.items = ["x", "y"]
+    show(b.name)
+    show(b.name)
+    show(b.items[0])
+    show(b.items[0])
+    print(len(b.items))

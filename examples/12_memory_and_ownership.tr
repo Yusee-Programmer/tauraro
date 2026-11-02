@@ -41,11 +41,11 @@ def make_or_default(use_real: bool) -> Point:
 
 # ── Functions that borrow (don't take ownership) ──────────────────────────────
 # Class parameters are passed by pointer (borrow). The caller still owns them.
-def describe_point(p: Point) -> void:
+def describe_point(p: ref Point) -> void:
     p.describe()          # reads p but does not consume it
     # no free injected here — caller owns p
 
-def sum_list(items: List[int]) -> int:
+def sum_list(items: ref List[int]) -> int:
     mut total = 0
     for x in items:
         total += x

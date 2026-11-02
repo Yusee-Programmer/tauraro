@@ -1,0 +1,21 @@
+# EXPECT: pass
+# Chan/Mutex/Atomic handles and Sendable classes are shared by design, never consumed.
+def prod(ch: Chan[int]):
+    ch.send(1)
+    ch.send(2)
+    ch.close()
+def cons(ch: Chan[int], out: Mutex[int]):
+    mut sum = 0
+    for v in ch:
+        sum = sum + v
+    out.set(sum)
+async def main():
+    mut ch: Chan[int] = Chan.init(4)
+    mut out: Mutex[int] = Mutex.init(0)
+    task_group:
+        spawn prod(ch)
+        spawn cons(ch, out)
+    mut s = out.get()
+    out.unlock()
+    assert_eq(s, 3)
+    print("ok")

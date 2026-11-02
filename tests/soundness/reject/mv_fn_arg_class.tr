@@ -1,0 +1,12 @@
+# EXPECT: [M-1]
+# A class instance passed by value to a function is consumed.
+class N:
+    pub v: int
+    pub s: List[int]
+def take(n: N):
+    print(n.v)
+def main():
+    mut n = N()
+    n.v = 1
+    take(n)
+    print(n.v)

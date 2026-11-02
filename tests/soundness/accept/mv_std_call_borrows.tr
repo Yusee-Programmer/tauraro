@@ -1,0 +1,10 @@
+# EXPECT: pass
+# Concrete-typed std parameters borrow (std is not annotated with ref).
+from std.string.str import Str
+def main():
+    mut parts = ["a", "b"]
+    mut sep = ", "
+    mut j = Str.join(parts, sep)
+    mut j2 = Str.join(parts, sep)
+    print(j + j2)
+    print(len(parts))

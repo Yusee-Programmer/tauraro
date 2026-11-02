@@ -1,0 +1,8 @@
+# EXPECT: [M-1]
+# An Option of a move type is itself a move type.
+def take(o: Option[str]):
+    pass
+def main():
+    mut o: Option[str] = Some("a")
+    take(o)
+    print(o.is_some())

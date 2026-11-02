@@ -1,0 +1,8 @@
+# EXPECT: pass
+# A condition that only reads.
+def main():
+    mut xs = [1, 2, 3]
+    mut i = 0
+    while i < len(xs):
+        i = i + 1
+    print(len(xs))

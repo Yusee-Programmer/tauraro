@@ -1,0 +1,11 @@
+# EXPECT: pass
+# `ref List` parameters borrow.
+def total(xs: ref List[int]) -> int:
+    mut t = 0
+    for v in xs:
+        t = t + v
+    return t
+def main():
+    mut xs = [1, 2, 3]
+    print(total(xs) + total(xs))
+    print(len(xs))

@@ -1,0 +1,10 @@
+# EXPECT: pass
+# Inside `unsafe:` the checker stands down.
+def take(s: str):
+    print(s)
+def main():
+    mut s = "a"
+    unsafe:
+        take(s)
+        take(s)
+    print("ok")

@@ -1,0 +1,8 @@
+# EXPECT: [M-1]
+# A str passed by value to a function is consumed; using it afterwards is a use after move.
+def take(s: str):
+    print(s)
+def main():
+    mut a = "hello"
+    take(a)
+    print(a)

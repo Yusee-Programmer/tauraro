@@ -1,0 +1,10 @@
+# EXPECT: [M-1]
+# Storing a value into a field moves it.
+class N:
+    pub v: int
+    pub s: List[int]
+def main():
+    mut n = N()
+    mut xs = [1, 2]
+    n.s = xs
+    print(len(xs))

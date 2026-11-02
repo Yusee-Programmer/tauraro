@@ -1,0 +1,6 @@
+# EXPECT: [M-1]
+# Building a tuple moves its non-Copy parts.
+def main():
+    mut s = "abc"
+    mut t = (s, 1)
+    print(s)

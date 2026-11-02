@@ -1,0 +1,12 @@
+# EXPECT: pass
+# Moving then continuing is fine when the variable is reassigned.
+def take(s: str):
+    print(s)
+def main():
+    mut s = "a"
+    for i in range(3):
+        if i == 1:
+            take(s)
+            s = "b"
+            continue
+        print(s)

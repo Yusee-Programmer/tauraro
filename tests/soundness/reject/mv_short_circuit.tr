@@ -1,0 +1,10 @@
+# EXPECT: [M-5]
+# The right operand of `and` runs on some paths only.
+def eat(xs: List[int]) -> bool:
+    return len(xs) > 0
+def main():
+    mut xs = [1]
+    mut c = len(xs) > 5
+    if c and eat(xs):
+        print("y")
+    print(len(xs))

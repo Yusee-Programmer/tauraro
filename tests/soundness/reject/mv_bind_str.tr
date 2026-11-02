@@ -1,0 +1,6 @@
+# EXPECT: [M-1]
+# b = a transfers a str.
+def main():
+    mut a = "x"
+    mut b = a
+    print(a)

@@ -1,0 +1,9 @@
+# EXPECT: pass
+# Short-circuit operators with non-consuming operands.
+def main():
+    mut xs = [1]
+    mut s = "a"
+    if len(xs) > 0 and len(s) > 0:
+        print("both")
+    print(len(xs))
+    print(s)

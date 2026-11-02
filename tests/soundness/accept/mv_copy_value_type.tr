@@ -1,0 +1,17 @@
+# EXPECT: pass
+# A @value_type struct is Copy.
+@value_type
+class Pt:
+    pub x: int
+    pub y: int
+def f(p: Pt):
+    print(p.x)
+def main():
+    mut p = Pt()
+    p.x = 1
+    p.y = 2
+    f(p)
+    f(p)
+    mut ps: List[Pt] = []
+    ps.append(p)
+    print(p.y)

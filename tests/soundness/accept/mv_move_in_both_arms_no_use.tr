@@ -1,0 +1,11 @@
+# EXPECT: pass
+# Every branch moves and nothing uses the value afterwards.
+def take(s: str):
+    print(s)
+def main():
+    mut s = "a"
+    if len(s) > 0:
+        take(s)
+    else:
+        take(s)
+    print("done")

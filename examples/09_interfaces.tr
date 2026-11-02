@@ -71,7 +71,7 @@ extend Bird:
         return 2
 
 # ── 3. Polymorphic functions — accept any Animal ──────────────────────────────
-def introduce(a: Animal) -> void:
+def introduce(a: ref Animal) -> void:
     print(f"  Name: {a.name()},  Legs: {a.legs()}")
     a.speak()
 
@@ -153,7 +153,7 @@ extend Employee:
     pub def serialize(self) -> str:
         return f"{self.name},{self.salary},{self.dept}"
 
-def print_one(item: Printable) -> void:
+def print_one(item: ref Printable) -> void:
     item.print_info()
 
 def serialize_one(item: Serializable) -> str:

@@ -1,0 +1,9 @@
+# EXPECT: pass
+# A `ref` parameter borrows: the caller keeps using the value.
+def show(s: ref str):
+    print(s)
+def main():
+    mut a = "hello"
+    show(a)
+    show(a)
+    print(a)

@@ -1,0 +1,8 @@
+# EXPECT: [M-1]
+# Moving an outer variable on every iteration of a for loop.
+def take(s: str):
+    print(s)
+def main():
+    mut s = "x"
+    for i in range(3):
+        take(s)

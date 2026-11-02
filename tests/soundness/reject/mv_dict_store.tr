@@ -1,0 +1,7 @@
+# EXPECT: [M-1]
+# Storing a value into a dict element moves it.
+def main():
+    mut d: Dict[str, List[int]] = {}
+    mut xs = [1]
+    d["k"] = xs
+    print(len(xs))

@@ -82,7 +82,14 @@ model behind the M-series and L-1.
 **Message:** `'data' was moved and cannot be used again.`
 
 **Cause:** A variable was moved into another binding (`b = a`), then used
-again afterward. (Calls do not move: only binding transfers do.)
+again afterward. In default mode calls do not move: only binding transfers do.
+Under `--strict` a *consuming call* moves as well: passing a non-`Copy` local by
+value to a function / method / constructor, `append`/`insert`/`send`, a field or
+element store, `Some(x)`/`Ok(x)`/tuple/list/dict construction,
+`Shared[T].init(x)`, `Thread.spawn(f, x)` / `spawn f(x)`, or a capture by a
+spawned / returned / stored closure consumes the variable (see
+[Consuming calls under `--strict`](13_memory_and_ownership.md#consuming-calls-under---strict)).
+The message names where it was consumed: `moved at line 6, into argument 1 of 'take'`.
 
 ```python
 # WRONG:
@@ -96,7 +103,17 @@ owner = data
 ```
 
 **FIX:** Use the variable that now owns the value, or call `.clone()` to copy
-before moving.
+before moving; for a callee that only reads the value declare the parameter
+`ref T` (or `mut ref T` if it edits it) so the call borrows; assign the variable
+a new value to re-initialise it.
+
+```python
+def take(s: str): print(s)           # --strict: by-value parameter consumes
+mut a = "hi"
+take(a)
+print(a)             # M-1 (--strict): 'a' was moved (moved at line 3, into argument 1 of 'take')
+take(str(a))         # RIGHT: consume a copy (`str(s)` for str, `.clone()` for List/Dict/class)
+```
 
 ---
 
@@ -155,9 +172,11 @@ items.append(4)    # M-4: 'items' is mutated while 'view' borrows into it
 
 **Message:** `'data' may have been moved on some code paths, making this use unsafe.`
 
-**Cause:** On at least one branch of an `if`/`match`/loop, `data` was moved,
-but on others it wasn't — so using `data` after the branches merge is unsafe
-in general.
+**Cause:** On at least one branch of an `if`/`match`/`try`/loop (or the right
+operand of `and`/`or`), `data` was moved - by a binding transfer or, under
+`--strict`, a consuming call - but on others it wasn't, so using `data` after the
+branches merge is unsafe in general. (A branch that ends in `return`, `raise`,
+`break` or `continue` does not contribute to the merge.)
 
 ```python
 data = load_bytes()

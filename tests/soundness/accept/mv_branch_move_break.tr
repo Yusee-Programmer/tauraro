@@ -1,0 +1,12 @@
+# EXPECT: pass
+# A branch that moves and breaks out of the loop is fine.
+def take(s: str):
+    print(s)
+def main():
+    mut s = "a"
+    mut i = 0
+    while i < 5:
+        if i == 2:
+            take(s)
+            break
+        i = i + 1

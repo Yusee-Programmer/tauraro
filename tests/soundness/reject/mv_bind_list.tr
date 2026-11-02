@@ -1,0 +1,6 @@
+# EXPECT: [M-1]
+# b = a transfers a List.
+def main():
+    mut a = [1]
+    mut b = a
+    print(len(a))

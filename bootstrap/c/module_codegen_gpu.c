@@ -7,9 +7,9 @@ __attribute__((malloc,returns_nonnull,hot)) GpuGenerator* GpuGenerator_init() {
 #line 33 "src/codegen/gpu/mod.tr"
     g->ok = true;
 #line 34 "src/codegen/gpu/mod.tr"
-    TrStr _sfo_t9086 = g->fail_note;
+    TrStr _sfo_t9192 = g->fail_note;
     g->fail_note = _tr_str_lit_len("", 0LL);
-    _tr_str_release(_sfo_t9086);
+    _tr_str_release(_sfo_t9192);
 #line 35 "src/codegen/gpu/mod.tr"
     g->n_kernels = 0LL;
 #line 36 "src/codegen/gpu/mod.tr"
@@ -22,9 +22,9 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
 #line 42 "src/codegen/gpu/mod.tr"
     if (_tr_str_eqv((tgt), (_tr_str_lit_len("", 0LL)))) {
 #line 42 "src/codegen/gpu/mod.tr"
-        TrStr _strtmp_t9087 = _tr_str_lit_len("spirv", 5LL);
+        TrStr _strtmp_t9193 = _tr_str_lit_len("spirv", 5LL);
         _tr_str_release(tgt);
-        tgt = _strtmp_t9087;
+        tgt = _strtmp_t9193;
     }
 #line 43 "src/codegen/gpu/mod.tr"
     StringBuilder* sb = StringBuilder_init(2048LL);
@@ -103,7 +103,7 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
 #line 83 "src/codegen/gpu/mod.tr"
         e0->dev_fns = dev_fns;
 #line 84 "src/codegen/gpu/mod.tr"
-        ({ TrStr _sbt_t9088 = (GpuEmitter_emit_device_fn(e0, ((HirFunction*)List_ptr_get(dev_fns, de)))); StringBuilder_append(sb, _sbt_t9088); _tr_str_release(_sbt_t9088); });
+        ({ TrStr _sbt_t9194 = (GpuEmitter_emit_device_fn(e0, ((HirFunction*)List_ptr_get(dev_fns, de)))); StringBuilder_append(sb, _sbt_t9194); _tr_str_release(_sbt_t9194); });
 #line 85 "src/codegen/gpu/mod.tr"
         if ((!e0->ok)) {
 #line 86 "src/codegen/gpu/mod.tr"
@@ -111,9 +111,9 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
 #line 87 "src/codegen/gpu/mod.tr"
             if (_tr_str_eqv((self->fail_note), (_tr_str_lit_len("", 0LL)))) {
 #line 87 "src/codegen/gpu/mod.tr"
-                TrStr _sfo_t9090 = self->fail_note;
-                self->fail_note = ({ __auto_type _ord_t9089 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("device fn '", 11LL)), (((HirFunction*)List_ptr_get(dev_fns, de))->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (_ord_t9089); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (e0->fail_note)); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
-                _tr_str_release(_sfo_t9090);
+                TrStr _sfo_t9196 = self->fail_note;
+                self->fail_note = ({ __auto_type _ord_t9195 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("device fn '", 11LL)), (((HirFunction*)List_ptr_get(dev_fns, de))->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (_ord_t9195); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (e0->fail_note)); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+                _tr_str_release(_sfo_t9196);
             }
         }
 #line 88 "src/codegen/gpu/mod.tr"
@@ -135,7 +135,7 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
 #line 96 "src/codegen/gpu/mod.tr"
             e->dev_fns = dev_fns;
 #line 97 "src/codegen/gpu/mod.tr"
-            ({ TrStr _sbt_t9091 = (GpuEmitter_emit_kernel(e, f)); StringBuilder_append(sb, _sbt_t9091); _tr_str_release(_sbt_t9091); });
+            ({ TrStr _sbt_t9197 = (GpuEmitter_emit_kernel(e, f)); StringBuilder_append(sb, _sbt_t9197); _tr_str_release(_sbt_t9197); });
 #line 98 "src/codegen/gpu/mod.tr"
             if ((!e->ok)) {
 #line 99 "src/codegen/gpu/mod.tr"
@@ -143,9 +143,9 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
 #line 100 "src/codegen/gpu/mod.tr"
                 if (_tr_str_eqv((self->fail_note), (_tr_str_lit_len("", 0LL)))) {
 #line 100 "src/codegen/gpu/mod.tr"
-                    TrStr _sfo_t9092 = self->fail_note;
+                    TrStr _sfo_t9198 = self->fail_note;
                     self->fail_note = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("kernel '", 8LL)), (f->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (e->fail_note)); _tr_str_release(_tr_cl); _tr_cres; });
-                    _tr_str_release(_sfo_t9092);
+                    _tr_str_release(_sfo_t9198);
                 }
             }
         }
@@ -159,9 +159,9 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
 #line 105 "src/codegen/gpu/mod.tr"
         if (_tr_str_eqv((self->fail_note), (_tr_str_lit_len("", 0LL)))) {
 #line 105 "src/codegen/gpu/mod.tr"
-            TrStr _sfo_t9093 = self->fail_note;
+            TrStr _sfo_t9199 = self->fail_note;
             self->fail_note = _tr_str_lit_len("no @kernel functions found", 26LL);
-            _tr_str_release(_sfo_t9093);
+            _tr_str_release(_sfo_t9199);
         }
     }
 #line 108 "src/codegen/gpu/mod.tr"
@@ -184,7 +184,7 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
                     StringBuilder_append(sb, _tr_str_lit_len(", ", 2LL));
                 }
 #line 116 "src/codegen/gpu/mod.tr"
-                ({ TrStr _sbt_t9094 = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ki)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("!", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); StringBuilder_append(sb, _sbt_t9094); _tr_str_release(_sbt_t9094); });
+                ({ TrStr _sbt_t9200 = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ki)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("!", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); StringBuilder_append(sb, _sbt_t9200); _tr_str_release(_sbt_t9200); });
 #line 117 "src/codegen/gpu/mod.tr"
                 ki = (ki + 1LL);
             }
@@ -204,7 +204,7 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
 #line 124 "src/codegen/gpu/mod.tr"
             if (fn_is_kernel(f3)) {
 #line 125 "src/codegen/gpu/mod.tr"
-                ({ __auto_type _ord_t9095 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ki2)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("!", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = !{ptr @", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t9096 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t9095); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (f3->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", !\"kernel\", i32 1}\n", 20LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t9096); _tr_str_release(_sbt_t9096); });
+                ({ __auto_type _ord_t9201 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ki2)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("!", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = !{ptr @", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t9202 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t9201); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (f3->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", !\"kernel\", i32 1}\n", 20LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t9202); _tr_str_release(_sbt_t9202); });
 #line 126 "src/codegen/gpu/mod.tr"
                 ki2 = (ki2 + 1LL);
             }
@@ -213,9 +213,9 @@ __attribute__((hot)) TrStr GpuGenerator_emit(GpuGenerator* self, HirProgram* pro
         }
     }
 #line 129 "src/codegen/gpu/mod.tr"
-    TrStr _trret2034 = StringObj_as_str(StringBuilder_to_string(sb));
+    TrStr _trret2044 = StringObj_as_str(StringBuilder_to_string(sb));
     _tr_str_release(tgt);
     StringBuilder__tr_fn_free(sb);
-    return _trret2034;
+    return _trret2044;
 }
 

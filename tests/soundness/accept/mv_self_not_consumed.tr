@@ -1,0 +1,13 @@
+# EXPECT: pass
+# Passing fields of self and calling self methods never consumes self.
+class Reg:
+    pub names: List[str]
+extend Reg:
+    pub def size(self) -> int:
+        return len(self.names)
+    pub def twice(self) -> int:
+        return self.size() + self.size() + len(self.names)
+def main():
+    mut r = Reg()
+    r.names = ["a"]
+    print(r.twice())

@@ -1,0 +1,8 @@
+# EXPECT: [M-1]
+# A Dict passed by value is consumed.
+def take(d: Dict[str, int]):
+    print(len(d))
+def main():
+    mut d = {"a": 1}
+    take(d)
+    print(len(d))

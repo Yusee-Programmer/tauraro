@@ -1,0 +1,14 @@
+# EXPECT: pass
+# Destructuring re-initialises the targets.
+def pair() -> (str, str):
+    return ("x", "y")
+def take(s: str):
+    print(s)
+def main():
+    mut a = "p"
+    mut b = "q"
+    take(a)
+    take(b)
+    (a, b) = pair()
+    take(a)
+    take(b)

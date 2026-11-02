@@ -1,0 +1,13 @@
+# EXPECT: [M-5]
+# Moved before a conditional break, used after the loop.
+def take(s: str):
+    print(s)
+def main():
+    mut s = "a"
+    mut i = 0
+    while i < 3:
+        if i == 1:
+            take(s)
+            break
+        i = i + 1
+    print(s)

@@ -1,0 +1,13 @@
+# EXPECT: pass
+# A branch that moves and leaves the function does not affect the fall-through path.
+def take(s: str):
+    print(s)
+def f(c: bool) -> int:
+    mut s = "a"
+    if c:
+        take(s)
+        return 1
+    print(s)
+    return 2
+def main():
+    print(f(true) + f(false))

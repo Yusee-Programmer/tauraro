@@ -1,0 +1,19 @@
+# EXPECT: pass
+# len, print, str, ==, indexing, f-strings, to_str, + and for-in only read.
+def main():
+    mut xs = [1, 2, 3]
+    mut s = "abc"
+    print(len(xs))
+    print(xs)
+    print(s)
+    print(str(len(s)))
+    print(s == "abc")
+    print(xs[0])
+    print(f"{s} {xs}")
+    mut t = s + "d"
+    mut u = s.to_str()
+    for v in xs:
+        print(v)
+    print(len(xs) + len(s) + len(t) + len(u))
+    print(s)
+    print(xs)

@@ -1,0 +1,10 @@
+# EXPECT: [M-1]
+# Returning a value that was already moved.
+def take(s: str):
+    print(s)
+def f() -> str:
+    mut s = "a"
+    take(s)
+    return s
+def main():
+    print(f())

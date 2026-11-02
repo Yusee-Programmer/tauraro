@@ -1,0 +1,16 @@
+# EXPECT: pass
+# Constructing with Copy fields never consumes.
+class P:
+    pub x: int
+    pub y: int
+extend P:
+    pub def init(x: int, y: int) -> P:
+        mut p = P()
+        p.x = x
+        p.y = y
+        return p
+def main():
+    mut x = 3
+    mut p = P.init(x, x)
+    mut q = P.init(x, x)
+    print(p.x + q.y + x)

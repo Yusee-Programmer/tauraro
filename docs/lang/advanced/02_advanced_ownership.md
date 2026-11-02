@@ -59,10 +59,15 @@ print(len(items))           # OK
 
 ### How the compiler decides: move vs. borrow
 
-Only a *binding transfer* (`b = a`, `mut b = a`) moves. A callee that keeps its
+In default mode only a *binding transfer* (`b = a`, `mut b = a`) moves. A callee that keeps its
 parameter (stores it in a field/collection, or hands it to another thread) takes
 its own reference, so no annotation is needed at the call site. Use `Shared[T]`
 when several owners must outlive one another across threads.
+
+Under `--strict` a by-value argument of a move type is **consumed** as well (Rust-style):
+declare read-only parameters `ref T` and editing parameters `mut ref T`, and `clone()` when
+you need the value both before and after a consuming call. The exact rules, the Copy table and
+the default/strict comparison are in [Memory & Ownership](../13_memory_and_ownership.md#consuming-calls-under---strict).
 
 ---
 
@@ -185,7 +190,7 @@ def send_to_both(data: List[int]) -> void:
 
 ## Common Mistakes
 
-**Assuming a call consumes its argument.** Passing a value to a function, method, `append`, a field store or `Shared.init(...)` never invalidates the caller's variable: the receiver takes its own reference-counted reference. Only a binding transfer (`b = a`) moves.
+**Assuming a call consumes (or never consumes) its argument.** In default mode, passing a value to a function, method, `append`, a field store or `Shared.init(...)` never invalidates the caller's variable: the receiver takes its own reference-counted reference, and only a binding transfer (`b = a`) moves. Under `--strict` the same calls *do* consume a by-value argument of a move type - write `ref T` parameters (or `.clone()` at the call site) when you need the variable afterwards.
 
 ```python
 class Cache:
@@ -202,6 +207,14 @@ extend Cache:
 mut items = [1, 2, 3]
 mut other = items
 print(len(items))    # M-1: items was moved into other
+```
+
+```python
+# --strict only: a consuming call
+def take(xs: List[int]): print(len(xs))
+mut items = [1, 2, 3]
+take(items)
+print(len(items))    # M-1 (--strict): moved into argument 1 of 'take'
 ```
 
 **Reaching for clone() before understanding the ownership flow.** `clone()` allocates memory. Many apparent "need to clone" situations are actually "need to reorder the calls so the borrow doesn't conflict."

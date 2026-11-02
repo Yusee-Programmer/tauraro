@@ -1,0 +1,8 @@
+# EXPECT: [M-1]
+# A generic by-value parameter consumes the argument.
+def ident[T](x: T) -> T:
+    return x
+def main():
+    mut s = "a"
+    mut t = ident(s)
+    print(s)

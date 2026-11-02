@@ -1,0 +1,9 @@
+# EXPECT: pass
+# A tuple of Copy values is Copy.
+def f(t: (int, int)):
+    print(t[0])
+def main():
+    mut t = (1, 2)
+    f(t)
+    f(t)
+    print(t[1])

@@ -1,0 +1,8 @@
+# EXPECT: pass
+# The same variable to two `ref` parameters is two shared borrows.
+def two(a: ref List[int], b: ref List[int]):
+    print(len(a) + len(b))
+def main():
+    mut a = [1]
+    two(a, a)
+    two(a, a)

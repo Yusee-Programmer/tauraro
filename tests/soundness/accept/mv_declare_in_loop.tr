@@ -1,0 +1,8 @@
+# EXPECT: pass
+# A variable declared inside the loop body is new on each iteration.
+def take(xs: List[int]):
+    print(len(xs))
+def main():
+    for i in range(3):
+        mut xs = [i]
+        take(xs)

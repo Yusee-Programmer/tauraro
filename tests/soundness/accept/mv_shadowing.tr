@@ -1,0 +1,11 @@
+# EXPECT: pass
+# A block-local variable that shadows an outer one has its own state.
+def take(s: str):
+    print(s)
+def main():
+    mut s = "outer"
+    if len(s) > 0:
+        mut s = "inner"
+        take(s)
+    print(s)
+    take(s)

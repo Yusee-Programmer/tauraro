@@ -1,0 +1,11 @@
+# EXPECT: pass
+# Re-assigning a moved variable re-initialises it.
+def take(s: str):
+    print(s)
+def main():
+    mut s = "a"
+    take(s)
+    s = "b"
+    take(s)
+    s = "c"
+    print(s)

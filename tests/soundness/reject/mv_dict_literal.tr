@@ -1,0 +1,6 @@
+# EXPECT: [M-1]
+# A dict literal moves its values.
+def main():
+    mut v = [1, 2]
+    mut d = {"k": v}
+    print(len(v))

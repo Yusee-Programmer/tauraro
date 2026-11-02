@@ -1,0 +1,11 @@
+# EXPECT: [M-1]
+# A by-value parameter of a static method consumes the argument.
+class Util:
+    pub n: int
+extend Util:
+    pub def total(xs: List[int]) -> int:
+        return len(xs)
+def main():
+    mut xs = [1, 2]
+    mut t = Util.total(xs)
+    print(t + len(xs))

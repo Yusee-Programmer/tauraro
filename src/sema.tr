@@ -9,6 +9,7 @@ from ast import Program, Decl, Expr, Stmt, AstType, Block, MatchArm, Pattern, Fu
 from hir import HirProgram, HirFunction, HirClass, HirEnum, HirInterface, HirStmt, HirExpr, HirBlock, HirParam, HirField, HirVariant, HirFStringPart, HirComprehension, HirCatchClause, HirMatchArm, box_hirexpr, box_hirstmt, hir_expr_type, HirChanSelectArm
 from mir import mir_if_drop_plan, DropSite, mir_proven_borrows, mir_borrow_conflicts, mir_shared_ref_param_violations, mir_shared_ref_param_field_writes
 from ptrflow import ptrflow_check
+from movecheck import movecheck_check
 
 
 pub enum SymbolKind:
@@ -4647,6 +4648,7 @@ extend Sema:
         self.apply_borrow_drops(hp)
         self.check_free_fn_method_c_name_collisions(hp)
         self.run_ptrflow(hp)
+        if self.strict_mode: self.run_movecheck(hp)
         return hp
 
     # [Bug: free-fn/class-method C-namespace collision] A free (module-level,
@@ -5827,6 +5829,62 @@ extend Sema:
                 if bc.base_classes.len > 0: cur = bc.base_classes.get(0)
                 else: cur = ""
 
+    # --strict consuming-call move checker (movecheck.tr): [M-1]/[M-5] for a value passed by value /
+    # stored / spawned / captured by an escaping closure and then used again.
+    pub def run_movecheck(self, hp: HirProgram):
+        mut mvt = Map[str, bool].init(16)
+        mut oldt = Map[str, bool].init(16)
+        mut cks = self.classes.keys()
+        mut ci = 0
+        while ci < cks.len:
+            mut cn = cks.get(ci)
+            mut cd = self.classes.get(cn)
+            mut is_mv = cd.is_class
+            mut di = 0
+            while di < cd.decorators.len:
+                if cd.decorators.get(di).name == "copy" or cd.decorators.get(di).name == "value_type": is_mv = false
+                di = di + 1
+            # a class declared `implements Sendable` (incl. WaitGroup/Semaphore/Barrier/...) is a share-by-design
+            # handle: handing it to several threads shares it, it is never consumed
+            mut ii = 0
+            while ii < cd.iface_names.len:
+                if cd.iface_names.get(ii) == "Sendable": is_mv = false
+                ii = ii + 1
+            mvt.insert(cn, is_mv)
+            oldt.insert(cn, false)
+            ci = ci + 1
+        mut eks = self.enums.keys()
+        mut ei = 0
+        while ei < eks.len:
+            mut en = eks.get(ei)
+            mut ed = self.enums.get(en)
+            mut has_payload = false
+            mut vi = 0
+            while vi < ed.variants.len:
+                if ed.variants.get(vi).fields.len > 0: has_payload = true
+                vi = vi + 1
+            mvt.insert(en, has_payload)
+            oldt.insert(en, true)
+            ei = ei + 1
+        mut res = movecheck_check(self.pf_fns, hp, mvt, oldt)
+        mut sv_file = self.current_file
+        mut sv_line = self.current_line
+        mut ri = 0
+        while ri < res.len:
+            mut r = res.get(ri)
+            mut at = r.index_of("@")
+            mut bar = r.index_of("|")
+            mut fi = r.slice(0, at).to_int()
+            mut ln = r.slice(at + 1, bar).to_int()
+            if fi < self.pf_files.len:
+                self.current_file = self.pf_files.get(fi)
+                if ln <= 0: ln = self.pf_lines.get(fi)
+            self.current_line = ln
+            self.error(r.slice(bar + 1, r.len()))
+            ri = ri + 1
+        self.current_file = sv_file
+        self.current_line = sv_line
+
     # Flow-sensitive raw-pointer analysis (ptrflow.tr): [M-6] use/double free through aliases, branches,
     # loops and calls; [L-1] escape of a stack address. Runs only when a non-trusted function deallocs
     # or takes an address.
@@ -6358,6 +6416,7 @@ extend Sema:
         hf.is_static = self.current_class_name != "" and not _has_self
         hf.is_variadic = f.is_variadic
         hf.is_decorator = false
+        hf.is_lib = f.is_lib
 
         # Rule F-3: Definite return check for non-void, non-extern functions.
         # Skip interface method signatures (empty body), constructors, and the

@@ -44,7 +44,7 @@ extend Vec3:
         mut v = Vec3()
         v.x = x; v.y = y; v.z = z
         return v
-    pub def dot(self, other: Vec3) -> float:
+    pub def dot(self, other: ref Vec3) -> float:
         return self.x * other.x + self.y * other.y + self.z * other.z
 
 # Non-Copy class — has a List field; move tracking applies
@@ -57,7 +57,7 @@ extend NameList:
         nl.names = List[str].init(4)
         return nl
 
-def process(c: Counter) -> int:
+def process(c: ref Counter) -> int:
     return c.value * 2
 
 # ── 1. Borrow — pass to function, caller retains ownership ───────────────────
@@ -244,7 +244,7 @@ def double_it(x: mut ref int) -> int:
     return x * 2
 
 # Collections use a plain borrow — the caller keeps ownership, no ref wrapper.
-def scale_all(items: List[int], factor: int) -> int:
+def scale_all(items: ref List[int], factor: int) -> int:
     mut total = 0
     mut i = 0
     while i < items.len:
@@ -266,13 +266,13 @@ def first_or_default(items: List[int], default_val: int) -> int:
 # pointer would borrow from. The clean solution is to return a VALUE (a copy):
 # no pointer, no lifetime, no 'from' annotation needed.
 
-def larger_of(a: List[int], b: List[int]) -> int:
+def larger_of(a: ref List[int], b: ref List[int]) -> int:
     mut va = a.get(0) if a.len > 0 else 0
     mut vb = b.get(0) if b.len > 0 else 0
     if va >= vb: return va
     return vb
 
-def pick_value(a: List[int], b: List[int], use_a: bool) -> int:
+def pick_value(a: ref List[int], b: ref List[int], use_a: bool) -> int:
     if use_a: return a.get(0)   # copy of the value — no pointer lifetime
     return b.get(0)
 

@@ -1,0 +1,7 @@
+# EXPECT: [M-1]
+# The same variable passed twice in one call: the second use follows the move.
+def two(a: List[int], b: List[int]):
+    print(len(a) + len(b))
+def main():
+    mut xs = [1, 2]
+    two(xs, xs)

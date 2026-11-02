@@ -1,0 +1,12 @@
+# EXPECT: pass
+# Consume as the very last use.
+class N:
+    pub v: int
+    pub s: List[int]
+def take(n: N):
+    print(n.v)
+def main():
+    mut n = N()
+    n.v = 2
+    print(n.v)
+    take(n)

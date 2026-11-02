@@ -1,0 +1,7 @@
+# EXPECT: [M-1]
+# A closure stored in a collection takes its captured locals.
+def main():
+    mut xs = [1, 2]
+    mut fs: List[def() -> int] = []
+    fs.append(lambda: len(xs))
+    print(len(xs))

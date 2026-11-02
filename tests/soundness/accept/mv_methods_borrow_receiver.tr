@@ -1,0 +1,19 @@
+# EXPECT: pass
+# Method calls borrow their receiver, even repeated.
+class Counter:
+    pub n: int
+    pub log: List[str]
+extend Counter:
+    pub def bump(self):
+        self.n = self.n + 1
+    pub def get(self) -> int:
+        return self.n
+def main():
+    mut c = Counter()
+    c.bump()
+    c.bump()
+    print(c.get())
+    mut xs = [3, 1, 2]
+    xs.append(4)
+    xs.sort()
+    print(len(xs))

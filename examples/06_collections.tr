@@ -3,7 +3,7 @@
 # zip, list comprehension, Dict create/get/set/has, typed Dict, tuples,
 # for k,v in dict.items() iteration, ownership rules.
 
-def sum_list(items: List[int]) -> int:
+def sum_list(items: ref List[int]) -> int:
     mut total = 0
     for x in items:
         total += x
@@ -428,7 +428,7 @@ def main():
     print("=== done ===")
 
 # Helper for the defer demo — appends run when this function returns (LIFO).
-def collect_with_defers(log: List[str]) -> void:
+def collect_with_defers(log: mut ref List[str]) -> void:
     log.append("start")
     defer log.append("deferred 1")
     defer log.append("deferred 2")

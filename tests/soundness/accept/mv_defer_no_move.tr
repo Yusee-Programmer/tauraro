@@ -1,0 +1,9 @@
+# EXPECT: pass
+# A deferred read is fine as long as the value is not moved.
+def show(xs: ref List[int]):
+    print(len(xs))
+def main():
+    mut xs = [1]
+    defer print(len(xs))
+    show(xs)
+    show(xs)

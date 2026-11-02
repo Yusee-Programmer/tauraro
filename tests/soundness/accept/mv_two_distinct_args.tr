@@ -1,0 +1,8 @@
+# EXPECT: pass
+# Different variables to one call are independent.
+def two(a: List[int], b: List[int]):
+    print(len(a) + len(b))
+def main():
+    mut a = [1]
+    mut b = [2]
+    two(a, b)

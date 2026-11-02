@@ -1,0 +1,6 @@
+# EXPECT: [M-1]
+# Wrapping in Ok(x) moves x.
+def main():
+    mut xs = [1, 2]
+    mut r: Result[List[int], str] = Ok(xs)
+    print(len(xs))

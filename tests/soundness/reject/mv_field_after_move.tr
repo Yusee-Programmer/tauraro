@@ -1,0 +1,11 @@
+# EXPECT: [M-1]
+# Reading a field of a moved class instance.
+class N:
+    pub v: int
+    pub s: List[int]
+def take(n: N):
+    print(n.v)
+def main():
+    mut n = N()
+    take(n)
+    print(n.v)

@@ -1,0 +1,10 @@
+# EXPECT: [M-5]
+# Moved on one branch only: the later use is possibly-moved.
+def take(s: str):
+    print(s)
+def main():
+    mut s = "a"
+    mut c = len(s) > 5
+    if c:
+        take(s)
+    print(s)

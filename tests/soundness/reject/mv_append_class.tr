@@ -1,0 +1,10 @@
+# EXPECT: [M-1]
+# Appending a class instance to a list moves it.
+class N:
+    pub v: int
+    pub s: List[int]
+def main():
+    mut ns: List[N] = []
+    mut n = N()
+    ns.append(n)
+    print(n.v)

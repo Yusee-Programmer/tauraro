@@ -1,0 +1,14 @@
+# EXPECT: [M-5]
+# Moved in one arm of an if/elif chain.
+def take(s: str):
+    print(s)
+def main():
+    mut s = "a"
+    mut k = len(s)
+    if k == 1:
+        print("one")
+    elif k == 2:
+        take(s)
+    else:
+        print("many")
+    print(s)

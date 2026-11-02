@@ -1,0 +1,7 @@
+# EXPECT: [M-1]
+# Appending a List to another collection moves it.
+def main():
+    mut xs = [1, 2]
+    mut ys = List[List[int]].init(1)
+    ys.append(xs)
+    print(len(xs))

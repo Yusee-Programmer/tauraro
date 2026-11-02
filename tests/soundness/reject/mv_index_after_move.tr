@@ -1,0 +1,8 @@
+# EXPECT: [M-1]
+# Indexing a moved value.
+def take(xs: List[int]):
+    print(len(xs))
+def main():
+    mut xs = [1]
+    take(xs)
+    print(xs[0])

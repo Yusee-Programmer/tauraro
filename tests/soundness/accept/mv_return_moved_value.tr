@@ -1,0 +1,9 @@
+# EXPECT: pass
+# Returning a value moves it out; nothing follows.
+def mk() -> List[int]:
+    mut xs = [1, 2]
+    xs.append(3)
+    return xs
+def main():
+    mut ys = mk()
+    print(len(ys))

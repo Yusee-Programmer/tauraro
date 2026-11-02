@@ -1,0 +1,8 @@
+# EXPECT: [M-1]
+# A deferred statement reads x; moving x away first leaves it dangling.
+def take(xs: List[int]):
+    print(len(xs))
+def main():
+    mut xs = [1]
+    defer print(len(xs))
+    take(xs)

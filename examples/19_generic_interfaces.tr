@@ -78,13 +78,13 @@ def drain_all(c: Container[int]) -> void:
         mut v = c.pop()
         print(f"  popped: {v}")
 
-def fill(c: Container[int], from_val: int, count: int) -> void:
+def fill(c: mut ref Container[int], from_val: int, count: int) -> void:
     mut i = 0
     while i < count:
         c.push(from_val + i)
         i = i + 1
 
-def print_top(c: Container[int]) -> void:
+def print_top(c: ref Container[int]) -> void:
     if not c.is_empty():
         print(f"  top={c.peek()}, size={c.size()}")
 

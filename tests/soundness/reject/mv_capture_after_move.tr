@@ -1,0 +1,9 @@
+# EXPECT: [M-1]
+# Capturing a moved value in a closure.
+def take(xs: List[int]):
+    print(len(xs))
+def main():
+    mut xs = [1]
+    take(xs)
+    f = lambda: len(xs)
+    print(f())

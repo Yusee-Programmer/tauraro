@@ -109,7 +109,10 @@ print(len(data))        # ERROR [M-1]: 'data' was moved and cannot be used again
 **Compiler message:** `'data' was moved and cannot be used again.`
 **FIX:** *Use the variable that now owns it, or call `.clone()` to copy before moving.*
 
-**What counts as a move.** A move is a *binding transfer* of a non-`Copy` value: `b = a`, `mut b = a`, or `a = b` where the right-hand side is a plain variable. Calls do **not** move: passing a value to a function or method, `append`ing it to a collection, storing it in a field, or handing it to `Thread.spawn` *borrows* it for the call; whoever stores it takes its own (reference-counted) reference, so the caller's variable stays valid. (Cross-thread transfers are policed separately by `[T-1]`/`[T-7]`.) A move inside a loop body is checked as well: moving an outer variable on every iteration is `[M-1]` unless the body reassigns it first or ends with `break`/`return`. A `defer` statement reads its variables at function exit, so moving such a variable away is `[M-1]` too.
+**What counts as a move.** There are two modes.
+
+* **Default mode.** A move is a *binding transfer* of a non-`Copy` class/enum value: `b = a`, `mut b = a`, or `a = b` where the right-hand side is a plain variable. Calls do **not** move: passing a value to a function or method, `append`ing it to a collection, storing it in a field, or handing it to `Thread.spawn` *borrows* it for the call; whoever stores it takes its own (reference-counted) reference, so the caller's variable stays valid. (Cross-thread transfers are policed separately by `[T-1]`/`[T-7]`.) A move inside a loop body is checked as well: moving an outer variable on every iteration is `[M-1]` unless the body reassigns it first or ends with `break`/`return`. A `defer` statement reads its variables at function exit, so moving such a variable away is `[M-1]` too.
+* **`--strict` (Rust-style consuming calls).** Passing a non-`Copy` local **by value consumes it**. The full rules are in [Consuming calls under `--strict`](#consuming-calls-under---strict) below. Default-mode behaviour and generated code are unchanged by `--strict`'s move rules: they are a pure compile-time check.
 
 The compiler traces the control-flow graph: every path after a move is checked to ensure the moved-from variable is not accessed.
 
@@ -125,10 +128,71 @@ mut copy = clone(data)
 owner = data             # move the original
 print(len(copy))         # use the copy
 
-# Option 3: Pass it to a function — calls borrow, they do not move
-send(data)
+# Option 3: Pass a borrow - a `ref` parameter does not consume (and in default mode
+# every call borrows)
+send(data)               # def send(d: ref List[int])
 print(len(data))         # data still valid
 ```
+
+### Consuming calls under `--strict`
+
+`--strict` turns on Rust's ownership discipline for *calls*: a value that is handed over **by value** is *consumed*, and any later use of the variable on a path that reaches it is `[M-1]` (moved on every path) or `[M-5]` (moved on some paths). The pass is flow-sensitive (`if`/`elif`/`else`, `match` arms, `try`/`catch`, loops with `break`/`continue`/`return`, `and`/`or` right operands, `defer`) and runs on the lowered program: code generation is unchanged, because ARC retains every alias anyway. Trusted `std`/`core` functions and `unsafe:` blocks are not checked.
+
+**What consumes a local `x`** (only a plain local variable or parameter is consumed; `o.f`, `xs[i]`, `self.f` and other places are *read*, never moved out of):
+
+| Position | Example |
+|---|---|
+| By-value argument of a user function, method, static method or constructor | `f(x)`, `obj.put(x)`, `Util.total(x)`, `Box.init(x)` |
+| Argument of a generic std parameter (`T`/`K`/`V`) that stores it | `xs.append(x)`, `xs.insert(i, x)`, `d.set(k, x)`, `ch.send(x)`, `Vec.push(x)` |
+| Store into a field / element | `obj.f = x`, `d[k] = x`, `xs[i] = x`, `self.f = x` |
+| Wrapper / variant / literal construction | `Some(x)`, `Ok(x)`, `Err(x)`, `Msg.Text(x)`, `(x, 1)`, `[x, y]`, `{"k": x}`, `Cls(x)` |
+| Shared / spawn | `Shared[T].init(x)`, `Thread.spawn(f, x)`, `pool.spawn(f, x)`, `spawn f(x)` |
+| Binding transfer of a non-class value | `mut b = x`, `b = x` (for `str`, `List`, `Dict`, ... ; classes/enums are checked by the default-mode rule) |
+| Capture by a closure that is spawned, returned, or stored | `Thread.spawn(lambda: use(x))`, `fs.append(lambda: x.len())` |
+
+**What never consumes:** `ref`/`mut ref` parameters (they borrow, under the existing `[B-*]` rules); method *receivers* (`x.m()`; `self` always borrows - there is no consuming-`self` syntax); `for v in xs` (iteration borrows `xs`); `len(x)`, `print(x)`, `str(x)`, `x.to_str()`, `x == y`, `x + y`, indexing, slicing, f-strings; reading `o.f` / `xs[i]`; passing literals; `extern "C"` calls; a closure that is only called locally or passed to a non-spawning function (its captures stay usable).
+
+**Copy table** - a `Copy` value is duplicated, never consumed:
+
+| Copy | Move (consumed) |
+|---|---|
+| `int`, `float`, `bool`, `char`, all `i8`..`u64`/`f32`/`f64`/`usize` | `str` |
+| `Pointer[T]`, `RawPtr`, `StrView` | `List`, `Vec`, `Dict`, `Map`, `Set`, `Deque`, `StringBuilder` |
+| function values (`def(...) -> R`, lambdas) | classes (`is_class`) and enums with payload variants |
+| `ref T` / `mut ref T` borrows | `Option[T]` / `Result[T, E]` / tuples / fixed arrays **when some component is a move type** |
+| `@value_type` / `@copy` structs, payload-less enums | `Shared[T]`, `Weak[T]` handles (copy with `.clone()`) |
+| `Option`/`Result`/tuple/fixed array of Copy | |
+| share-by-design handles: `Chan`, `Mutex`, `RwLock`, `Atomic`, and any class declared `implements Sendable` (`WaitGroup`, `Semaphore`, `Barrier`, `Once`, ...) | |
+
+Sync handles and `Sendable` classes are *shared*, not owned: handing the same `Chan`/`Mutex`/`WaitGroup` to several threads is the point of the type, so it is not a move. Plain data and `Shared[T]` handles are owned: give each consumer its own `.clone()` (`spawn bump(s.clone())`).
+
+**Which parameters consume.** A parameter consumes when it is declared by value (no `ref`/`mut ref`) and the argument has a move type. For *library* (`std`/`core`) functions the std is not annotated with `ref`, so a parameter of a concrete type (`Str.join(parts: List[str], sep: str)`) is a read-only borrow; only parameters whose declared type is a generic parameter (`push(self, val: T)`) consume. User functions follow the declaration exactly: if the callee only reads the value, declare it `ref T`; if it mutates the caller's value declare it `mut ref T`; if it takes ownership leave it by value and `clone()` at the call site when you still need the original.
+
+**Re-initialisation.** `x = value`, `mut x = ...` (also inside a nested block, which shadows the outer variable only for that block), a `for` loop variable, a `match`/`catch` binding and tuple destructuring `(a, b) = f()` give the name a fresh value; uses after that are valid.
+
+```python
+def take(s: str): print(s)           # by value: consumes
+def show(s: ref str): print(s)       # borrows
+
+mut a = "hi"
+show(a); show(a)                     # OK: borrowed twice
+take(a)                              # a is consumed here
+print(a)                             # ERROR [M-1]: 'a' was moved (moved at line 6, into argument 1 of 'take')
+a = "again"                          # re-initialised
+print(a)                             # OK
+take(str(a)); print(a)               # OK: a copy was consumed (`str(s)` copies a str; List/Dict/class use `.clone()`)
+```
+
+**Default vs. `--strict`**
+
+| | default | `--strict` |
+|---|---|---|
+| `b = a` (class/enum) | `[M-1]`/`[M-5]` | same |
+| `b = a` (`str`, `List`, `Dict`, ...) | allowed | `[M-1]`/`[M-5]` |
+| `f(a)`, `m.put(a)`, `xs.append(a)`, `Some(a)`, `(a, b)`, `obj.f = a`, `d[k] = a`, `Shared.init(a)`, `Thread.spawn(f, a)`, `chan.send(a)` | borrow, `a` stays valid | consumes `a` |
+| closure captured by a spawned / returned / stored closure | borrow | consumes the captured locals |
+| generated code | - | identical (check only) |
+
 
 ### Common Mistakes
 
@@ -143,7 +207,7 @@ write(buf)            # ERROR [M-1]
 
 - Use the value fully before passing it to a consuming function.
 - Use `clone(x)` when you need the value both before and after a move.
-- Prefer passing values to functions (a call borrows) or `ref` bindings in hot loops where cloning would be expensive.
+- Prefer `ref`/`mut ref` parameters for callees that only read or edit the caller's value (default-mode calls borrow, `--strict` calls consume by value) and `ref` bindings in hot loops where cloning would be expensive.
 
 ---
 
@@ -266,6 +330,8 @@ if flag:
 print(len(data))      # ERROR [M-5]: 'data' may have been moved on some code
                        # paths, making this use unsafe
 ```
+
+Under `--strict` a *consuming call* (`if flag: take(data)`) is a move too, so the same rule applies to branches, `match` arms, `try`/`catch` handlers (a move anywhere in the `try` body makes the value possibly-moved in the handler), the right operand of `and`/`or`, and loop bodies.
 
 **Compiler message:** `'data' may have been moved on some code paths, making this use unsafe.`
 **FIX:** *Ensure 'data' is not moved before this point on any branch, or restructure so the use is inside the branch where it's still valid.*

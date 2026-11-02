@@ -141,7 +141,7 @@ extend TrafficLight:
             case TrafficLight.Green:  return "Go"
             case _:                   return "Unknown"
 
-def find_first(items: List[int], target: int) -> Option[int]:
+def find_first(items: ref List[int], target: int) -> Option[int]:
     mut i = 0
     while i < len(items):
         mut cur: int = items[i + 0]

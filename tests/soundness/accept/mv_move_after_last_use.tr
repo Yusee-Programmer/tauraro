@@ -1,0 +1,9 @@
+# EXPECT: pass
+# Using a value fully and only then moving it.
+def take(xs: List[int]):
+    print(len(xs))
+def main():
+    mut xs = [1, 2]
+    print(len(xs))
+    print(xs[0])
+    take(xs)

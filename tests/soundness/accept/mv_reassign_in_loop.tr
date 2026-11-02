@@ -1,0 +1,10 @@
+# EXPECT: pass
+# Giving the variable a new value each iteration is fine.
+def take(xs: List[int]):
+    print(len(xs))
+def main():
+    mut xs = [1]
+    for i in range(3):
+        take(xs)
+        xs = [i, i]
+    print(len(xs))

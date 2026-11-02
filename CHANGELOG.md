@@ -11,6 +11,17 @@ there is no deprecation period.
 
 ## [Unreleased]
 
+### Added
+
+- `--strict` consuming calls (Rust-style moves): passing a non-`Copy` local by value to a function / method /
+  constructor, `append`/`insert`/`send`, a field or element store, `Some(x)`/`Ok(x)`/tuple/list/dict construction,
+  `Shared[T].init(x)`, `Thread.spawn(f, x)` / `spawn f(x)`, or capturing it in a spawned / returned / stored closure
+  now consumes it: a later use is `[M-1]` (moved on every path) or `[M-5]` (possibly moved), flow-sensitively
+  (branches, `match`, `try`/`catch`, loops, `defer`). `ref`/`mut ref` parameters borrow; `Copy` types, share-by-design
+  handles (`Chan`, `Mutex`, `Atomic`, `Sendable` classes) and std parameters of concrete type never consume. Check-only
+  pass (`src/movecheck.tr`): default mode and generated code are unchanged. New CI step runs
+  `scripts/run_strict_subset.sh` over `tests/strict_subset.list`. See `docs/lang/13_memory_and_ownership.md`.
+
 ### Fixed
 
 - `**` now behaves like Python: `-2 ** 2` is `-4` (the unary minus used to bind first), a float

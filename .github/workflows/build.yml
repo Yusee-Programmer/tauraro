@@ -295,6 +295,14 @@ jobs:
         shell: pwsh
         run: ./scripts/run_soundness.ps1
 
+      # --strict on real programs: the curated list in tests/strict_subset.list (examples/,
+      # tests/concurrency/, a slice of tests/lang/) must pass `--strict --check`, including the
+      # consuming-call move rules ([M-1]/[M-5]); keeps the strict checkers free of false positives.
+      - name: Strict subset (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/run_strict_subset.sh
+
       # Run-time defined-behaviour corpus (tests/runtime_san): shift masking, float->int
       # saturation, str index trap, stack-overflow message - built plain and with ASan/UBSan.
       - name: Runtime sanitizer corpus (Linux/macOS)

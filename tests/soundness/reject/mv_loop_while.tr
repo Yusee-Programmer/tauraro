@@ -1,0 +1,10 @@
+# EXPECT: [M-1]
+# Moving an outer variable on every iteration of a while loop.
+def take(xs: List[int]):
+    print(len(xs))
+def main():
+    mut xs = [1]
+    mut i = 0
+    while i < 3:
+        take(xs)
+        i = i + 1

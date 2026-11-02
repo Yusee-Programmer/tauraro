@@ -25,15 +25,15 @@ __attribute__((malloc,returns_nonnull,hot)) EncodedFunc* EncodedFunc_init(TrStr 
 #line 34 "src/codegen/native/isa_x64.tr"
     EncodedFunc* e = ((EncodedFunc*)_tr_obj_alloc(sizeof(EncodedFunc)));
 #line 35 "src/codegen/native/isa_x64.tr"
-    TrStr _sfo_t8903 = e->name;
+    TrStr _sfo_t9009 = e->name;
     e->name = _tr_str_retain(name);
-    _tr_str_release(_sfo_t8903);
+    _tr_str_release(_sfo_t9009);
 #line 36 "src/codegen/native/isa_x64.tr"
     e->is_main = false;
 #line 37 "src/codegen/native/isa_x64.tr"
-    ByteBuf* _cltmp_t8904 = ByteBuf_init();
+    ByteBuf* _cltmp_t9010 = ByteBuf_init();
     _tr_obj_release(e->code, _trdrop_ByteBuf);
-    e->code = _cltmp_t8904;
+    e->code = _cltmp_t9010;
 #line 38 "src/codegen/native/isa_x64.tr"
     e->relocs = (void*)List_ptr_new();
 #line 39 "src/codegen/native/isa_x64.tr"
@@ -412,7 +412,7 @@ __attribute__((hot)) void _emit_return(ByteBuf* c, long long rv) {
 
 __attribute__((hot)) EncodedFunc* encode_func(LFunc* lf) {
 #line 220 "src/codegen/native/isa_x64.tr"
-    EncodedFunc* e = ({ TrStr _apt_t8905 = _tr_str_retain(lf->name); __auto_type _wr = (EncodedFunc_init(_apt_t8905)); _tr_str_release(_apt_t8905); _wr; });
+    EncodedFunc* e = ({ TrStr _apt_t9011 = _tr_str_retain(lf->name); __auto_type _wr = (EncodedFunc_init(_apt_t9011)); _tr_str_release(_apt_t9011); _wr; });
 #line 221 "src/codegen/native/isa_x64.tr"
     e->is_main = lf->is_main;
 #line 222 "src/codegen/native/isa_x64.tr"
@@ -443,7 +443,7 @@ __attribute__((hot)) EncodedFunc* encode_func(LFunc* lf) {
 #line 239 "src/codegen/native/isa_x64.tr"
     while ((ppi < lf->params->len)) {
 #line 240 "src/codegen/native/isa_x64.tr"
-        ({ TrStr _at_t8906 = (List_TrStr_get(lf->params, ppi)); _st_argreg(c, ppi, _var_disp(lf, _at_t8906)); _tr_str_release(_at_t8906); });
+        ({ TrStr _at_t9012 = (List_TrStr_get(lf->params, ppi)); _st_argreg(c, ppi, _var_disp(lf, _at_t9012)); _tr_str_release(_at_t9012); });
 #line 241 "src/codegen/native/isa_x64.tr"
         ppi = (ppi + 1LL);
     }
@@ -464,17 +464,17 @@ __attribute__((hot)) EncodedFunc* encode_func(LFunc* lf) {
 #line 252 "src/codegen/native/isa_x64.tr"
         while ((ii < blk->insts->len)) {
 #line 253 "src/codegen/native/isa_x64.tr"
-            __auto_type _t8907 = (*((LInst*)List_ptr_get(blk->insts, ii)));
-            if (_t8907.tag == LInst_IConst) {
-                __auto_type dst = _t8907.data.IConst.dst;
-__auto_type v = _t8907.data.IConst.v;
+            __auto_type _t9013 = (*((LInst*)List_ptr_get(blk->insts, ii)));
+            if (_t9013.tag == LInst_IConst) {
+                __auto_type dst = _t9013.data.IConst.dst;
+__auto_type v = _t9013.data.IConst.v;
 #line 255 "src/codegen/native/isa_x64.tr"
                 _mov_rax_imm64(c, v);
 #line 256 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t8907.tag == LInst_IStr) {
-                __auto_type dst = _t8907.data.IStr.dst;
-__auto_type sidx = _t8907.data.IStr.str_idx;
+            } else if (_t9013.tag == LInst_IStr) {
+                __auto_type dst = _t9013.data.IStr.dst;
+__auto_type sidx = _t9013.data.IStr.str_idx;
 #line 258 "src/codegen/native/isa_x64.tr"
                 ByteBuf_u8(c, 72LL);
 #line 259 "src/codegen/native/isa_x64.tr"
@@ -486,9 +486,9 @@ __auto_type sidx = _t8907.data.IStr.str_idx;
 #line 262 "src/codegen/native/isa_x64.tr"
                 sr->offset = c->len;
 #line 263 "src/codegen/native/isa_x64.tr"
-                TrStr _sfo_t8908 = sr->symbol;
+                TrStr _sfo_t9014 = sr->symbol;
                 sr->symbol = _tr_str_lit_len("", 0LL);
-                _tr_str_release(_sfo_t8908);
+                _tr_str_release(_sfo_t9014);
 #line 264 "src/codegen/native/isa_x64.tr"
                 sr->kind = 1LL;
 #line 265 "src/codegen/native/isa_x64.tr"
@@ -500,23 +500,23 @@ __auto_type sidx = _t8907.data.IStr.str_idx;
 #line 268 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
                 _tr_obj_release(sr, _trdrop_Reloc);
-            } else if (_t8907.tag == LInst_ILoadVar) {
-                __auto_type dst = _t8907.data.ILoadVar.dst;
-__auto_type name = _t8907.data.ILoadVar.name;
+            } else if (_t9013.tag == LInst_ILoadVar) {
+                __auto_type dst = _t9013.data.ILoadVar.dst;
+__auto_type name = _t9013.data.ILoadVar.name;
 #line 270 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _var_disp(lf, name));
 #line 271 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t8907.tag == LInst_IStoreVar) {
-                __auto_type name = _t8907.data.IStoreVar.name;
-__auto_type src = _t8907.data.IStoreVar.src;
+            } else if (_t9013.tag == LInst_IStoreVar) {
+                __auto_type name = _t9013.data.IStoreVar.name;
+__auto_type src = _t9013.data.IStoreVar.src;
 #line 273 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(src));
 #line 274 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _var_disp(lf, name));
-            } else if (_t8907.tag == LInst_ILoadGlobal) {
-                __auto_type dst = _t8907.data.ILoadGlobal.dst;
-__auto_type gidx = _t8907.data.ILoadGlobal.gidx;
+            } else if (_t9013.tag == LInst_ILoadGlobal) {
+                __auto_type dst = _t9013.data.ILoadGlobal.dst;
+__auto_type gidx = _t9013.data.ILoadGlobal.gidx;
 #line 276 "src/codegen/native/isa_x64.tr"
                 ByteBuf_u8(c, 72LL);
 #line 277 "src/codegen/native/isa_x64.tr"
@@ -528,9 +528,9 @@ __auto_type gidx = _t8907.data.ILoadGlobal.gidx;
 #line 280 "src/codegen/native/isa_x64.tr"
                 glr->offset = c->len;
 #line 281 "src/codegen/native/isa_x64.tr"
-                TrStr _sfo_t8909 = glr->symbol;
+                TrStr _sfo_t9015 = glr->symbol;
                 glr->symbol = _tr_str_lit_len("", 0LL);
-                _tr_str_release(_sfo_t8909);
+                _tr_str_release(_sfo_t9015);
 #line 282 "src/codegen/native/isa_x64.tr"
                 glr->kind = 3LL;
 #line 283 "src/codegen/native/isa_x64.tr"
@@ -542,9 +542,9 @@ __auto_type gidx = _t8907.data.ILoadGlobal.gidx;
 #line 286 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
                 _tr_obj_release(glr, _trdrop_Reloc);
-            } else if (_t8907.tag == LInst_IStoreGlobal) {
-                __auto_type gidx = _t8907.data.IStoreGlobal.gidx;
-__auto_type src = _t8907.data.IStoreGlobal.src;
+            } else if (_t9013.tag == LInst_IStoreGlobal) {
+                __auto_type gidx = _t9013.data.IStoreGlobal.gidx;
+__auto_type src = _t9013.data.IStoreGlobal.src;
 #line 288 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(src));
 #line 289 "src/codegen/native/isa_x64.tr"
@@ -558,9 +558,9 @@ __auto_type src = _t8907.data.IStoreGlobal.src;
 #line 293 "src/codegen/native/isa_x64.tr"
                 gsr->offset = c->len;
 #line 294 "src/codegen/native/isa_x64.tr"
-                TrStr _sfo_t8910 = gsr->symbol;
+                TrStr _sfo_t9016 = gsr->symbol;
                 gsr->symbol = _tr_str_lit_len("", 0LL);
-                _tr_str_release(_sfo_t8910);
+                _tr_str_release(_sfo_t9016);
 #line 295 "src/codegen/native/isa_x64.tr"
                 gsr->kind = 3LL;
 #line 296 "src/codegen/native/isa_x64.tr"
@@ -570,11 +570,11 @@ __auto_type src = _t8907.data.IStoreGlobal.src;
 #line 298 "src/codegen/native/isa_x64.tr"
                 ByteBuf_u32(c, 0LL);
                 _tr_obj_release(gsr, _trdrop_Reloc);
-            } else if (_t8907.tag == LInst_IBinOp) {
-                __auto_type dst = _t8907.data.IBinOp.dst;
-__auto_type op = _t8907.data.IBinOp.op;
-__auto_type a = _t8907.data.IBinOp.a;
-__auto_type b = _t8907.data.IBinOp.b;
+            } else if (_t9013.tag == LInst_IBinOp) {
+                __auto_type dst = _t9013.data.IBinOp.dst;
+__auto_type op = _t9013.data.IBinOp.op;
+__auto_type a = _t9013.data.IBinOp.a;
+__auto_type b = _t9013.data.IBinOp.b;
 #line 300 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(a));
 #line 301 "src/codegen/native/isa_x64.tr"
@@ -607,10 +607,10 @@ __auto_type b = _t8907.data.IBinOp.b;
                 }
 #line 315 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t8907.tag == LInst_ICall) {
-                __auto_type dst = _t8907.data.ICall.dst;
-__auto_type callee = _t8907.data.ICall.callee;
-__auto_type args = _t8907.data.ICall.args;
+            } else if (_t9013.tag == LInst_ICall) {
+                __auto_type dst = _t9013.data.ICall.dst;
+__auto_type callee = _t9013.data.ICall.callee;
+__auto_type args = _t9013.data.ICall.args;
 #line 317 "src/codegen/native/isa_x64.tr"
                 long long ai = 0LL;
 #line 318 "src/codegen/native/isa_x64.tr"
@@ -627,9 +627,9 @@ __auto_type args = _t8907.data.ICall.args;
 #line 323 "src/codegen/native/isa_x64.tr"
                 r->offset = c->len;
 #line 324 "src/codegen/native/isa_x64.tr"
-                TrStr _sfo_t8911 = r->symbol;
+                TrStr _sfo_t9017 = r->symbol;
                 r->symbol = _tr_str_retain(callee);
-                _tr_str_release(_sfo_t8911);
+                _tr_str_release(_sfo_t9017);
 #line 325 "src/codegen/native/isa_x64.tr"
                 r->kind = 0LL;
 #line 326 "src/codegen/native/isa_x64.tr"
@@ -644,11 +644,11 @@ __auto_type args = _t8907.data.ICall.args;
                     _st_rax(c, _vreg_disp(dst));
                 }
                 _tr_obj_release(r, _trdrop_Reloc);
-            } else if (_t8907.tag == LInst_IFBinOp) {
-                __auto_type dst = _t8907.data.IFBinOp.dst;
-__auto_type op = _t8907.data.IFBinOp.op;
-__auto_type a = _t8907.data.IFBinOp.a;
-__auto_type b = _t8907.data.IFBinOp.b;
+            } else if (_t9013.tag == LInst_IFBinOp) {
+                __auto_type dst = _t9013.data.IFBinOp.dst;
+__auto_type op = _t9013.data.IFBinOp.op;
+__auto_type a = _t9013.data.IFBinOp.a;
+__auto_type b = _t9013.data.IFBinOp.b;
 #line 332 "src/codegen/native/isa_x64.tr"
                 _ld_xmm0(c, _vreg_disp(a));
 #line 333 "src/codegen/native/isa_x64.tr"
@@ -685,9 +685,9 @@ __auto_type b = _t8907.data.IFBinOp.b;
 #line 349 "src/codegen/native/isa_x64.tr"
                     _st_xmm0(c, _vreg_disp(dst));
                 }
-            } else if (_t8907.tag == LInst_IIToF) {
-                __auto_type dst = _t8907.data.IIToF.dst;
-__auto_type src = _t8907.data.IIToF.src;
+            } else if (_t9013.tag == LInst_IIToF) {
+                __auto_type dst = _t9013.data.IIToF.dst;
+__auto_type src = _t9013.data.IIToF.src;
 #line 351 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(src));
 #line 352 "src/codegen/native/isa_x64.tr"
@@ -702,9 +702,9 @@ __auto_type src = _t8907.data.IIToF.src;
                 ByteBuf_u8(c, 192LL);
 #line 357 "src/codegen/native/isa_x64.tr"
                 _st_xmm0(c, _vreg_disp(dst));
-            } else if (_t8907.tag == LInst_IFToI) {
-                __auto_type dst = _t8907.data.IFToI.dst;
-__auto_type src = _t8907.data.IFToI.src;
+            } else if (_t9013.tag == LInst_IFToI) {
+                __auto_type dst = _t9013.data.IFToI.dst;
+__auto_type src = _t9013.data.IFToI.src;
 #line 359 "src/codegen/native/isa_x64.tr"
                 _ld_xmm0(c, _vreg_disp(src));
 #line 360 "src/codegen/native/isa_x64.tr"
@@ -719,10 +719,10 @@ __auto_type src = _t8907.data.IFToI.src;
                 ByteBuf_u8(c, 192LL);
 #line 365 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t8907.tag == LInst_IFCall1) {
-                __auto_type dst = _t8907.data.IFCall1.dst;
-__auto_type callee = _t8907.data.IFCall1.callee;
-__auto_type arg = _t8907.data.IFCall1.arg;
+            } else if (_t9013.tag == LInst_IFCall1) {
+                __auto_type dst = _t9013.data.IFCall1.dst;
+__auto_type callee = _t9013.data.IFCall1.callee;
+__auto_type arg = _t9013.data.IFCall1.arg;
 #line 367 "src/codegen/native/isa_x64.tr"
                 _ld_xmm0(c, _vreg_disp(arg));
 #line 368 "src/codegen/native/isa_x64.tr"
@@ -732,9 +732,9 @@ __auto_type arg = _t8907.data.IFCall1.arg;
 #line 370 "src/codegen/native/isa_x64.tr"
                 fr->offset = c->len;
 #line 371 "src/codegen/native/isa_x64.tr"
-                TrStr _sfo_t8912 = fr->symbol;
+                TrStr _sfo_t9018 = fr->symbol;
                 fr->symbol = _tr_str_retain(callee);
-                _tr_str_release(_sfo_t8912);
+                _tr_str_release(_sfo_t9018);
 #line 372 "src/codegen/native/isa_x64.tr"
                 fr->kind = 0LL;
 #line 373 "src/codegen/native/isa_x64.tr"
@@ -749,10 +749,10 @@ __auto_type arg = _t8907.data.IFCall1.arg;
                     _st_rax(c, _vreg_disp(dst));
                 }
                 _tr_obj_release(fr, _trdrop_Reloc);
-            } else if (_t8907.tag == LInst_IFCallF) {
-                __auto_type dst = _t8907.data.IFCallF.dst;
-__auto_type callee = _t8907.data.IFCallF.callee;
-__auto_type arg = _t8907.data.IFCallF.arg;
+            } else if (_t9013.tag == LInst_IFCallF) {
+                __auto_type dst = _t9013.data.IFCallF.dst;
+__auto_type callee = _t9013.data.IFCallF.callee;
+__auto_type arg = _t9013.data.IFCallF.arg;
 #line 379 "src/codegen/native/isa_x64.tr"
                 _ld_xmm0(c, _vreg_disp(arg));
 #line 380 "src/codegen/native/isa_x64.tr"
@@ -762,9 +762,9 @@ __auto_type arg = _t8907.data.IFCallF.arg;
 #line 382 "src/codegen/native/isa_x64.tr"
                 ffr->offset = c->len;
 #line 383 "src/codegen/native/isa_x64.tr"
-                TrStr _sfo_t8913 = ffr->symbol;
+                TrStr _sfo_t9019 = ffr->symbol;
                 ffr->symbol = _tr_str_retain(callee);
-                _tr_str_release(_sfo_t8913);
+                _tr_str_release(_sfo_t9019);
 #line 384 "src/codegen/native/isa_x64.tr"
                 ffr->kind = 0LL;
 #line 385 "src/codegen/native/isa_x64.tr"
@@ -776,11 +776,11 @@ __auto_type arg = _t8907.data.IFCallF.arg;
 #line 388 "src/codegen/native/isa_x64.tr"
                 _st_xmm0(c, _vreg_disp(dst));
                 _tr_obj_release(ffr, _trdrop_Reloc);
-            } else if (_t8907.tag == LInst_IFCall2F) {
-                __auto_type dst = _t8907.data.IFCall2F.dst;
-__auto_type callee = _t8907.data.IFCall2F.callee;
-__auto_type a = _t8907.data.IFCall2F.a;
-__auto_type b = _t8907.data.IFCall2F.b;
+            } else if (_t9013.tag == LInst_IFCall2F) {
+                __auto_type dst = _t9013.data.IFCall2F.dst;
+__auto_type callee = _t9013.data.IFCall2F.callee;
+__auto_type a = _t9013.data.IFCall2F.a;
+__auto_type b = _t9013.data.IFCall2F.b;
 #line 390 "src/codegen/native/isa_x64.tr"
                 _ld_xmm0(c, _vreg_disp(a));
 #line 391 "src/codegen/native/isa_x64.tr"
@@ -792,9 +792,9 @@ __auto_type b = _t8907.data.IFCall2F.b;
 #line 394 "src/codegen/native/isa_x64.tr"
                 f2r->offset = c->len;
 #line 395 "src/codegen/native/isa_x64.tr"
-                TrStr _sfo_t8914 = f2r->symbol;
+                TrStr _sfo_t9020 = f2r->symbol;
                 f2r->symbol = _tr_str_retain(callee);
-                _tr_str_release(_sfo_t8914);
+                _tr_str_release(_sfo_t9020);
 #line 396 "src/codegen/native/isa_x64.tr"
                 f2r->kind = 0LL;
 #line 397 "src/codegen/native/isa_x64.tr"
@@ -806,23 +806,23 @@ __auto_type b = _t8907.data.IFCall2F.b;
 #line 400 "src/codegen/native/isa_x64.tr"
                 _st_xmm0(c, _vreg_disp(dst));
                 _tr_obj_release(f2r, _trdrop_Reloc);
-            } else if (_t8907.tag == LInst_IBitsF) {
-                __auto_type dst = _t8907.data.IBitsF.dst;
-__auto_type src = _t8907.data.IBitsF.src;
+            } else if (_t9013.tag == LInst_IBitsF) {
+                __auto_type dst = _t9013.data.IBitsF.dst;
+__auto_type src = _t9013.data.IBitsF.src;
 #line 404 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(src));
 #line 405 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t8907.tag == LInst_IFBits) {
-                __auto_type dst = _t8907.data.IFBits.dst;
-__auto_type src = _t8907.data.IFBits.src;
+            } else if (_t9013.tag == LInst_IFBits) {
+                __auto_type dst = _t9013.data.IFBits.dst;
+__auto_type src = _t9013.data.IFBits.src;
 #line 407 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(src));
 #line 408 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t8907.tag == LInst_IAddrVar) {
-                __auto_type dst = _t8907.data.IAddrVar.dst;
-__auto_type name = _t8907.data.IAddrVar.name;
+            } else if (_t9013.tag == LInst_IAddrVar) {
+                __auto_type dst = _t9013.data.IAddrVar.dst;
+__auto_type name = _t9013.data.IAddrVar.name;
 #line 410 "src/codegen/native/isa_x64.tr"
                 ByteBuf_u8(c, 72LL);
 #line 411 "src/codegen/native/isa_x64.tr"
@@ -833,12 +833,12 @@ __auto_type name = _t8907.data.IAddrVar.name;
                 ByteBuf_u32(c, _var_disp(lf, name));
 #line 414 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t8907.tag == LInst_IAddrGlobal) {
+            } else if (_t9013.tag == LInst_IAddrGlobal) {
 #line 419 "src/codegen/native/isa_x64.tr"
                 _emit_return(c, 0LL);
-            } else if (_t8907.tag == LInst_IFuncAddr) {
-                __auto_type dst = _t8907.data.IFuncAddr.dst;
-__auto_type fname = _t8907.data.IFuncAddr.fname;
+            } else if (_t9013.tag == LInst_IFuncAddr) {
+                __auto_type dst = _t9013.data.IFuncAddr.dst;
+__auto_type fname = _t9013.data.IFuncAddr.fname;
 #line 421 "src/codegen/native/isa_x64.tr"
                 ByteBuf_u8(c, 72LL);
 #line 422 "src/codegen/native/isa_x64.tr"
@@ -850,9 +850,9 @@ __auto_type fname = _t8907.data.IFuncAddr.fname;
 #line 425 "src/codegen/native/isa_x64.tr"
                 fnaddr_r->offset = c->len;
 #line 426 "src/codegen/native/isa_x64.tr"
-                TrStr _sfo_t8915 = fnaddr_r->symbol;
+                TrStr _sfo_t9021 = fnaddr_r->symbol;
                 fnaddr_r->symbol = _tr_str_retain(fname);
-                _tr_str_release(_sfo_t8915);
+                _tr_str_release(_sfo_t9021);
 #line 427 "src/codegen/native/isa_x64.tr"
                 fnaddr_r->kind = 4LL;
 #line 428 "src/codegen/native/isa_x64.tr"
@@ -864,10 +864,10 @@ __auto_type fname = _t8907.data.IFuncAddr.fname;
 #line 431 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
                 _tr_obj_release(fnaddr_r, _trdrop_Reloc);
-            } else if (_t8907.tag == LInst_ICallInd) {
-                __auto_type dst = _t8907.data.ICallInd.dst;
-__auto_type fnreg = _t8907.data.ICallInd.fnreg;
-__auto_type iargs = _t8907.data.ICallInd.args;
+            } else if (_t9013.tag == LInst_ICallInd) {
+                __auto_type dst = _t9013.data.ICallInd.dst;
+__auto_type fnreg = _t9013.data.ICallInd.fnreg;
+__auto_type iargs = _t9013.data.ICallInd.args;
 #line 433 "src/codegen/native/isa_x64.tr"
                 long long ci = 0LL;
 #line 434 "src/codegen/native/isa_x64.tr"
@@ -888,15 +888,15 @@ __auto_type iargs = _t8907.data.ICallInd.args;
 #line 441 "src/codegen/native/isa_x64.tr"
                     _st_rax(c, _vreg_disp(dst));
                 }
-            } else if (_t8907.tag == LInst_IAsm) {
-                __auto_type acode = _t8907.data.IAsm.code;
-__auto_type acons = _t8907.data.IAsm.cons;
+            } else if (_t9013.tag == LInst_IAsm) {
+                __auto_type acode = _t9013.data.IAsm.code;
+__auto_type acons = _t9013.data.IAsm.cons;
 #line 443 "src/codegen/native/isa_x64.tr"
                 /* pass */
-            } else if (_t8907.tag == LInst_ILoad) {
-                __auto_type dst = _t8907.data.ILoad.dst;
-__auto_type base = _t8907.data.ILoad.base;
-__auto_type off = _t8907.data.ILoad.off;
+            } else if (_t9013.tag == LInst_ILoad) {
+                __auto_type dst = _t9013.data.ILoad.dst;
+__auto_type base = _t9013.data.ILoad.base;
+__auto_type off = _t9013.data.ILoad.off;
 #line 446 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(base));
 #line 447 "src/codegen/native/isa_x64.tr"
@@ -909,10 +909,10 @@ __auto_type off = _t8907.data.ILoad.off;
                 ByteBuf_u32(c, off);
 #line 451 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t8907.tag == LInst_IStore) {
-                __auto_type base = _t8907.data.IStore.base;
-__auto_type off = _t8907.data.IStore.off;
-__auto_type src = _t8907.data.IStore.src;
+            } else if (_t9013.tag == LInst_IStore) {
+                __auto_type base = _t9013.data.IStore.base;
+__auto_type off = _t9013.data.IStore.off;
+__auto_type src = _t9013.data.IStore.src;
 #line 453 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(base));
 #line 454 "src/codegen/native/isa_x64.tr"
@@ -925,10 +925,10 @@ __auto_type src = _t8907.data.IStore.src;
                 ByteBuf_u8(c, 136LL);
 #line 458 "src/codegen/native/isa_x64.tr"
                 ByteBuf_u32(c, off);
-            } else if (_t8907.tag == LInst_ILoadB) {
-                __auto_type dst = _t8907.data.ILoadB.dst;
-__auto_type base = _t8907.data.ILoadB.base;
-__auto_type off = _t8907.data.ILoadB.off;
+            } else if (_t9013.tag == LInst_ILoadB) {
+                __auto_type dst = _t9013.data.ILoadB.dst;
+__auto_type base = _t9013.data.ILoadB.base;
+__auto_type off = _t9013.data.ILoadB.off;
 #line 460 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(base));
 #line 461 "src/codegen/native/isa_x64.tr"
@@ -941,10 +941,10 @@ __auto_type off = _t8907.data.ILoadB.off;
                 ByteBuf_u32(c, off);
 #line 465 "src/codegen/native/isa_x64.tr"
                 _st_rax(c, _vreg_disp(dst));
-            } else if (_t8907.tag == LInst_IStoreB) {
-                __auto_type base = _t8907.data.IStoreB.base;
-__auto_type off = _t8907.data.IStoreB.off;
-__auto_type src = _t8907.data.IStoreB.src;
+            } else if (_t9013.tag == LInst_IStoreB) {
+                __auto_type base = _t9013.data.IStoreB.base;
+__auto_type off = _t9013.data.IStoreB.off;
+__auto_type src = _t9013.data.IStoreB.src;
 #line 467 "src/codegen/native/isa_x64.tr"
                 _ld_rax(c, _vreg_disp(base));
 #line 468 "src/codegen/native/isa_x64.tr"
@@ -960,24 +960,24 @@ __auto_type src = _t8907.data.IStoreB.src;
             ii = (ii + 1LL);
         }
 #line 474 "src/codegen/native/isa_x64.tr"
-        __auto_type _t8916 = blk->term;
-        if (_t8916.tag == LTerm_TRetInt) {
-            __auto_type rv = _t8916.data.TRetInt.v;
+        __auto_type _t9022 = blk->term;
+        if (_t9022.tag == LTerm_TRetInt) {
+            __auto_type rv = _t9022.data.TRetInt.v;
 #line 476 "src/codegen/native/isa_x64.tr"
             _emit_return(c, rv);
-        } else if (_t8916.tag == LTerm_TRetVal) {
-            __auto_type rvreg = _t8916.data.TRetVal.v;
+        } else if (_t9022.tag == LTerm_TRetVal) {
+            __auto_type rvreg = _t9022.data.TRetVal.v;
 #line 478 "src/codegen/native/isa_x64.tr"
             _ld_rax(c, _vreg_disp(rvreg));
 #line 479 "src/codegen/native/isa_x64.tr"
             ByteBuf_u8(c, 201LL);
 #line 480 "src/codegen/native/isa_x64.tr"
             ByteBuf_u8(c, 195LL);
-        } else if (_t8916.tag == LTerm_TRetVoid) {
+        } else if (_t9022.tag == LTerm_TRetVoid) {
 #line 482 "src/codegen/native/isa_x64.tr"
             _emit_return(c, 0LL);
-        } else if (_t8916.tag == LTerm_TBr) {
-            __auto_type target = _t8916.data.TBr.target;
+        } else if (_t9022.tag == LTerm_TBr) {
+            __auto_type target = _t9022.data.TBr.target;
 #line 484 "src/codegen/native/isa_x64.tr"
             ByteBuf_u8(c, 233LL);
 #line 485 "src/codegen/native/isa_x64.tr"
@@ -991,10 +991,10 @@ __auto_type src = _t8907.data.IStoreB.src;
 #line 489 "src/codegen/native/isa_x64.tr"
             ByteBuf_u32(c, 0LL);
             _tr_obj_release(jp, _trdrop_Jump);
-        } else if (_t8916.tag == LTerm_TCondBr) {
-            __auto_type cond = _t8916.data.TCondBr.cond;
-__auto_type tb = _t8916.data.TCondBr.then_b;
-__auto_type eb = _t8916.data.TCondBr.else_b;
+        } else if (_t9022.tag == LTerm_TCondBr) {
+            __auto_type cond = _t9022.data.TCondBr.cond;
+__auto_type tb = _t9022.data.TCondBr.then_b;
+__auto_type eb = _t9022.data.TCondBr.else_b;
 #line 491 "src/codegen/native/isa_x64.tr"
             _ld_rax(c, _vreg_disp(cond));
 #line 492 "src/codegen/native/isa_x64.tr"
@@ -1032,7 +1032,7 @@ __auto_type eb = _t8916.data.TCondBr.else_b;
             _tr_obj_release(jp2, _trdrop_Jump);
             _tr_obj_release(jp3, _trdrop_Jump);
         } else if (1) {
-            __auto_type _ = _t8916;
+            __auto_type _ = _t9022;
 #line 509 "src/codegen/native/isa_x64.tr"
             _emit_return(c, 0LL);
         }
@@ -1046,7 +1046,7 @@ __auto_type eb = _t8916.data.TCondBr.else_b;
 #line 515 "src/codegen/native/isa_x64.tr"
         Jump* j = ((Jump*)List_ptr_get(jumps, ji));
 #line 516 "src/codegen/native/isa_x64.tr"
-        long long rel = ({ __auto_type _ord_t8917 = (List_i64_get(block_start, j->target)); __auto_type _wr = ((_ord_t8917 - (j->patch_off + 4LL))); _wr; });
+        long long rel = ({ __auto_type _ord_t9023 = (List_i64_get(block_start, j->target)); __auto_type _wr = ((_ord_t9023 - (j->patch_off + 4LL))); _wr; });
 #line 517 "src/codegen/native/isa_x64.tr"
         ByteBuf_patch_u32(c, j->patch_off, rel);
 #line 518 "src/codegen/native/isa_x64.tr"

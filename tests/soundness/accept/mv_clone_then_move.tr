@@ -1,0 +1,12 @@
+# EXPECT: pass
+# Cloning before the consuming call keeps the original.
+def take(xs: List[int]):
+    print(len(xs))
+def main():
+    mut xs = [1, 2]
+    take(xs.clone())
+    take(xs.clone())
+    print(len(xs))
+    mut ys: List[List[int]] = []
+    ys.append(xs.clone())
+    print(len(xs))

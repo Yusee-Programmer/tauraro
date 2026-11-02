@@ -1,0 +1,9 @@
+# EXPECT: pass
+# A closure passed to a non-spawning function keeps its captures usable.
+def apply(f: def() -> int) -> int:
+    return f()
+def main():
+    mut xs = [1, 2]
+    print(apply(lambda: len(xs)))
+    print(apply(lambda: len(xs)))
+    print(len(xs))

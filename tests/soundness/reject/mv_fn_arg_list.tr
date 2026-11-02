@@ -1,0 +1,8 @@
+# EXPECT: [M-1]
+# A List passed by value to a function is consumed.
+def take(xs: List[int]):
+    print(len(xs))
+def main():
+    mut xs = [1, 2, 3]
+    take(xs)
+    print(len(xs))

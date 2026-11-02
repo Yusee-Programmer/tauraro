@@ -77,7 +77,7 @@ def safe_div(a: int, b: int) throws str -> int:
     return a / b
 
 # Helper for RULE 20 (defer) — deferred appends run when this function returns.
-def rule20_defer_helper(log: List[str]) -> void:
+def rule20_defer_helper(log: mut ref List[str]) -> void:
     log.append("start")
     defer log.append("cleanup 1")     # registered first  → runs last  (LIFO)
     defer log.append("cleanup 2")     # registered second → runs first (LIFO)

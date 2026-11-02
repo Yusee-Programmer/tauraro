@@ -1,0 +1,9 @@
+# EXPECT: pass
+# The loop variable is a fresh binding every iteration.
+def take(s: str):
+    print(s)
+def main():
+    mut names = ["a", "b"]
+    for n in names:
+        take(n)
+    print(len(names))

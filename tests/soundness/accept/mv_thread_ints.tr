@@ -1,0 +1,11 @@
+# EXPECT: pass
+# Copy arguments to Thread.spawn stay usable.
+def sq(n: int):
+    assert_ne(n * n, 0 - 1)
+def main():
+    mut n = 4
+    mut t1 = Thread.spawn(sq, n)
+    mut t2 = Thread.spawn(sq, n)
+    t1.join()
+    t2.join()
+    print(n)

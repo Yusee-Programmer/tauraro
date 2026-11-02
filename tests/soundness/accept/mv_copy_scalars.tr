@@ -1,0 +1,13 @@
+# EXPECT: pass
+# int/float/bool/char are Copy: never consumed.
+def f(n: int, x: float, b: bool, c: char):
+    print(n)
+def main():
+    mut n = 3
+    mut x = 1.5
+    mut b = true
+    mut c = 'a'
+    f(n, x, b, c)
+    f(n, x, b, c)
+    mut ys = [n, n]
+    print(n + len(ys))

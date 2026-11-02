@@ -1,0 +1,7 @@
+# EXPECT: [M-1]
+# Storing a value into a list element moves it.
+def main():
+    mut rows: List[List[int]] = [[0], [0]]
+    mut xs = [9]
+    rows[1] = xs
+    print(len(xs))

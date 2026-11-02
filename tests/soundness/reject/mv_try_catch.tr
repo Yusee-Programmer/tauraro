@@ -1,0 +1,11 @@
+# EXPECT: [M-5]
+# Moved in the try body; the catch handler may see it moved or not.
+def take(s: str):
+    print(s)
+def main():
+    mut s = "a"
+    try:
+        take(s)
+        raise("x")
+    except e:
+        print(s)

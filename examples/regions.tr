@@ -9,7 +9,7 @@
 from std.string.str import Str
 
 # 1) Single-source borrow — `from s` is AUTO-INFERRED (one non-primitive param).
-def first_word(s: str) -> ref str:
+def first_word(s: ref str) -> ref str:
     mut sp = Str.index_of(s, " ")
     if sp < 0:
         return s

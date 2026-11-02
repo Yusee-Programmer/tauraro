@@ -60,6 +60,9 @@ typedef struct MirBuilder MirBuilder;
 typedef struct LiveSet LiveSet;
 typedef struct PfState PfState;
 typedef struct PfCtx PfCtx;
+typedef struct MvSig MvSig;
+typedef struct MvState MvState;
+typedef struct MvCtx MvCtx;
 typedef struct Symbol Symbol;
 typedef struct Scope Scope;
 typedef struct Sema Sema;
@@ -163,6 +166,9 @@ static void _trdrop_MirBuilder(void* vp);
 static void _trdrop_LiveSet(void* vp);
 static void _trdrop_PfState(void* vp);
 static void _trdrop_PfCtx(void* vp);
+static void _trdrop_MvSig(void* vp);
+static void _trdrop_MvState(void* vp);
+static void _trdrop_MvCtx(void* vp);
 static void _trdrop_Symbol(void* vp);
 static void _trdrop_Scope(void* vp);
 static void _trdrop_Sema(void* vp);
@@ -2476,6 +2482,7 @@ typedef struct HirFunction {
     bool is_static;
     bool is_variadic;
     bool is_decorator;
+    bool is_lib;
     List_TrStr* borrow_borrowers;
     List_TrStr* borrow_sources;
     List_TrStr* proven_borrows;
@@ -2789,6 +2796,87 @@ static void _trdrop_PfCtx(void* vp) {
     List_i64_free(self->cnt_base);
     Dict_free(self->alloc_line);
     Dict_free_strval(self->origin);
+}
+#endif
+
+#ifndef MvSig_STRUCT_DEFINED
+#define MvSig_STRUCT_DEFINED
+typedef struct MvSig {
+    size_t __rc;
+    HirFunction* f;
+    bool lib;
+    List_TrStr* gens;
+} MvSig;
+static void _trdrop_MvSig(void* vp) {
+    MvSig* self = (MvSig*)vp; (void)self;
+    _tr_obj_release(self->f, _trdrop_HirFunction);
+}
+#endif
+
+#ifndef MvState_STRUCT_DEFINED
+#define MvState_STRUCT_DEFINED
+typedef struct MvState {
+    size_t __rc;
+    List_TrStr* any;
+    List_TrStr* all;
+    List_TrStr* lp;
+    bool dead;
+} MvState;
+static void _trdrop_MvState(void* vp) {
+    MvState* self = (MvState*)vp; (void)self;
+}
+#endif
+
+#ifndef MvCtx_STRUCT_DEFINED
+#define MvCtx_STRUCT_DEFINED
+typedef struct MvCtx {
+    size_t __rc;
+    List_TrStr* errs;
+    long long line;
+    TrStr fn_name;
+    TrMap* mv;
+    TrMap* old;
+    TrMap* sigs;
+    TrMap* amb;
+    List_TrStr* declared;
+    TrMap* mline;
+    TrMap* clcaps;
+    List_TrStr* defers;
+    List_ptr* brk;
+    List_i64* brk_base;
+    List_ptr* cnt;
+    List_i64* cnt_base;
+    long long unsafe_depth;
+    bool in_defer;
+    List_TrStr* sh_name;
+    List_i64* sh_bits;
+    List_i64* sh_base;
+    List_TrStr* try_acc;
+    long long try_depth;
+    TrStr site;
+    TrStr callee;
+    TrMap* msite;
+} MvCtx;
+static void _trdrop_MvCtx(void* vp) {
+    MvCtx* self = (MvCtx*)vp; (void)self;
+    List_TrStr_free(self->errs);
+    _tr_str_release(self->fn_name);
+    Dict_free_objval(self->sigs, _trdrop_MvSig);
+    Dict_free(self->amb);
+    List_TrStr_free(self->declared);
+    Dict_free(self->mline);
+    Dict_free(self->clcaps);
+    List_TrStr_free(self->defers);
+    List_ptr_free_obj(self->brk, _trdrop_MvState);
+    List_i64_free(self->brk_base);
+    List_ptr_free_obj(self->cnt, _trdrop_MvState);
+    List_i64_free(self->cnt_base);
+    List_TrStr_free(self->sh_name);
+    List_i64_free(self->sh_bits);
+    List_i64_free(self->sh_base);
+    _tr_str_release(self->site);
+    _tr_str_release(self->callee);
+    Dict_free_strval(self->msite);
 }
 #endif
 
@@ -4324,6 +4412,54 @@ __attribute__((hot)) void pf_loop(PfCtx* cx, PfState* st, HirExpr* cond, TrStr l
 __attribute__((hot)) void pf_stmt(PfCtx* cx, HirStmt* sp, PfState* st);
 __attribute__((hot)) List_i64* pf_run_fn(HirFunction* hf, TrMap* summaries, TrMap* externs, bool report, List_TrStr* errs);
 __attribute__((hot)) List_TrStr* ptrflow_check(List_ptr* fns, TrMap* externs);
+__attribute__((malloc,returns_nonnull,hot)) MvState* MvState_init();
+__attribute__((hot)) MvState* MvState_copy(MvState* self);
+__attribute__((hot)) bool mv_has(List_TrStr* v, TrStr s);
+__attribute__((hot)) void mv_add(List_TrStr* v, TrStr s);
+__attribute__((hot)) List_TrStr* mv_without(List_TrStr* v, TrStr s);
+__attribute__((hot)) List_TrStr* mv_inter(List_TrStr* a, List_TrStr* b);
+__attribute__((hot)) void mv_assign_from(MvState* into, MvState* o);
+__attribute__((hot)) void mv_merge(MvState* into, MvState* o);
+__attribute__((malloc,returns_nonnull,hot)) MvCtx* MvCtx_init();
+__attribute__((hot)) void MvCtx_err(MvCtx* self, TrStr msg);
+__attribute__((hot)) bool mv_null(HirExpr* e);
+__attribute__((hot)) bool mv_scalar(TrStr n);
+__attribute__((hot)) bool mv_is_move(MvCtx* cx, AstType* t);
+__attribute__((hot)) bool mv_tracked(MvCtx* cx, TrStr nm);
+__attribute__((hot)) void mv_use(MvCtx* cx, TrStr nm, MvState* st);
+__attribute__((hot)) void mv_mark(MvCtx* cx, TrStr nm, MvState* st);
+__attribute__((hot)) void mv_reinit(MvCtx* cx, TrStr nm, MvState* st);
+__attribute__((hot)) void mv_declare(MvCtx* cx, TrStr nm, MvState* st);
+__attribute__((hot)) void mv_idents(HirExpr* e, List_TrStr* out);
+__attribute__((hot)) TrStr mv_strip(TrStr n);
+__attribute__((hot)) List_i64* mv_all_mask(long long n, long long v);
+__attribute__((hot)) List_i64* mv_sig_mask(MvCtx* cx, TrStr key, long long n, bool skip_self);
+__attribute__((hot)) bool mv_coll_type(TrStr t);
+__attribute__((hot)) bool mv_store_method(TrStr m);
+__attribute__((hot)) bool mv_ctor_type(TrStr t);
+__attribute__((hot)) TrStr mv_callee_name(HirExpr* c);
+__attribute__((hot)) TrStr mv_static_base(MvCtx* cx, HirExpr* o);
+__attribute__((hot)) List_i64* mv_mask_static(MvCtx* cx, TrStr tn, TrStr v, long long n);
+__attribute__((hot)) List_i64* mv_mask_method(MvCtx* cx, TrStr rt, TrStr m, long long n);
+__attribute__((hot)) void mv_block(MvCtx* cx, HirBlock* b, MvState* st);
+__attribute__((hot)) void mv_exprs(MvCtx* cx, List_ptr* v, MvState* st);
+__attribute__((hot)) void mv_branchy_block(MvCtx* cx, HirBlock* b, MvState* st);
+__attribute__((hot)) void mv_consume_caps(MvCtx* cx, List_TrStr* caps, MvState* st);
+__attribute__((hot)) List_TrStr* mv_closure_caps(MvCtx* cx, List_ptr* caps);
+__attribute__((hot)) void mv_consume(MvCtx* cx, HirExpr* e, MvState* st, long long mode);
+__attribute__((hot)) void mv_args(MvCtx* cx, List_ptr* args, List_i64* mask, MvState* st, TrStr cname);
+__attribute__((hot)) void mv_items(MvCtx* cx, List_ptr* items, MvState* st);
+__attribute__((hot)) void mv_expr(MvCtx* cx, HirExpr* e, MvState* st);
+__attribute__((hot)) void mv_pat_names(Pattern p, List_TrStr* out);
+__attribute__((hot)) void mv_pat(MvCtx* cx, Pattern p, MvState* st);
+__attribute__((hot)) void mv_exit_loop_ctx(MvCtx* cx, MvState* brk_out, MvState* cnt_out);
+__attribute__((hot)) void mv_loop(MvCtx* cx, MvState* st, HirExpr* cond, List_TrStr* lvs, HirBlock* body, bool always);
+__attribute__((hot)) void mv_bind_rhs(MvCtx* cx, HirExpr* val, MvState* st);
+__attribute__((hot)) void mv_note_closure(MvCtx* cx, TrStr nm, HirExpr* val);
+__attribute__((hot)) void mv_stmt(MvCtx* cx, HirStmt* sp, MvState* st);
+__attribute__((hot)) List_TrStr* mv_run_fn(MvCtx* cx, HirFunction* hf);
+__attribute__((hot)) void mv_add_sig(MvCtx* cx, HirFunction* f, TrStr key, List_TrStr* cgens);
+__attribute__((hot)) List_TrStr* movecheck_check(List_ptr* fns, HirProgram* hp, TrMap* mvt, TrMap* oldt);
 __attribute__((hot)) bool _is_neg_int_lit(Expr* e);
 __attribute__((hot)) bool _is_builtin_type_word(TrStr n);
 __attribute__((hot)) bool _is_c_top_collision(TrStr n);
@@ -4547,6 +4683,7 @@ __attribute__((hot)) void Sema_check_duplicate_decls(Sema* self, Program* prog);
 __attribute__((hot)) void Sema__check_type_name_dup(Sema* self, TrMap* types, TrMap* fns, TrStr file, TrStr name, TrStr kind, long long line);
 __attribute__((hot)) void Sema_check_base_classes(Sema* self, Program* prog);
 __attribute__((hot)) void Sema__check_overrides(Sema* self, ClassDef* c);
+__attribute__((hot)) void Sema_run_movecheck(Sema* self, HirProgram* hp);
 __attribute__((hot)) void Sema_run_ptrflow(Sema* self, HirProgram* hp);
 __attribute__((hot)) void Sema_check_not_type_value(Sema* self, Expr* e);
 __attribute__((hot)) void Sema_check_not_fn_operand(Sema* self, Expr* e, TrStr op);
@@ -6693,6 +6830,60 @@ __attribute__((hot)) ptrflow_PfCtx*** core_alloc_resize_ptrflow_PfCtx_ptr(ptrflo
 __attribute__((hot)) void core_alloc_dealloc_ptrflow_PfCtx_ptr(ptrflow_PfCtx*** ptr);
 __attribute__((hot)) core_map_MapNode_str_ptrflow_PfCtx** core_alloc_alloc_core_map_MapNode_str_ptrflow_PfCtx(long long count);
 __attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_ptrflow_PfCtx(core_map_MapNode_str_ptrflow_PfCtx** ptr);
+
+typedef MvSig movecheck_MvSig;
+struct core_vec_Vec_movecheck_MvSig { movecheck_MvSig** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_movecheck_MvSig core_vec_Vec_movecheck_MvSig;
+struct core_vec_Vec_movecheck_MvSig_ptr { movecheck_MvSig*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_movecheck_MvSig_ptr core_vec_Vec_movecheck_MvSig_ptr;
+struct core_map_MapNode_str_movecheck_MvSig { char* key; movecheck_MvSig* value; struct core_map_MapNode_str_movecheck_MvSig* next; };
+typedef struct core_map_MapNode_str_movecheck_MvSig core_map_MapNode_str_movecheck_MvSig;
+struct core_map_Map_str_movecheck_MvSig { core_map_MapNode_str_movecheck_MvSig** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_movecheck_MvSig core_map_Map_str_movecheck_MvSig;
+__attribute__((hot)) movecheck_MvSig** core_alloc_alloc_movecheck_MvSig(long long count);
+__attribute__((hot)) movecheck_MvSig** core_alloc_resize_movecheck_MvSig(movecheck_MvSig** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_movecheck_MvSig(movecheck_MvSig** ptr);
+__attribute__((hot)) movecheck_MvSig*** core_alloc_alloc_movecheck_MvSig_ptr(long long count);
+__attribute__((hot)) movecheck_MvSig*** core_alloc_resize_movecheck_MvSig_ptr(movecheck_MvSig*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_movecheck_MvSig_ptr(movecheck_MvSig*** ptr);
+__attribute__((hot)) core_map_MapNode_str_movecheck_MvSig** core_alloc_alloc_core_map_MapNode_str_movecheck_MvSig(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_movecheck_MvSig(core_map_MapNode_str_movecheck_MvSig** ptr);
+
+typedef MvState movecheck_MvState;
+struct core_vec_Vec_movecheck_MvState { movecheck_MvState** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_movecheck_MvState core_vec_Vec_movecheck_MvState;
+struct core_vec_Vec_movecheck_MvState_ptr { movecheck_MvState*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_movecheck_MvState_ptr core_vec_Vec_movecheck_MvState_ptr;
+struct core_map_MapNode_str_movecheck_MvState { char* key; movecheck_MvState* value; struct core_map_MapNode_str_movecheck_MvState* next; };
+typedef struct core_map_MapNode_str_movecheck_MvState core_map_MapNode_str_movecheck_MvState;
+struct core_map_Map_str_movecheck_MvState { core_map_MapNode_str_movecheck_MvState** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_movecheck_MvState core_map_Map_str_movecheck_MvState;
+__attribute__((hot)) movecheck_MvState** core_alloc_alloc_movecheck_MvState(long long count);
+__attribute__((hot)) movecheck_MvState** core_alloc_resize_movecheck_MvState(movecheck_MvState** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_movecheck_MvState(movecheck_MvState** ptr);
+__attribute__((hot)) movecheck_MvState*** core_alloc_alloc_movecheck_MvState_ptr(long long count);
+__attribute__((hot)) movecheck_MvState*** core_alloc_resize_movecheck_MvState_ptr(movecheck_MvState*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_movecheck_MvState_ptr(movecheck_MvState*** ptr);
+__attribute__((hot)) core_map_MapNode_str_movecheck_MvState** core_alloc_alloc_core_map_MapNode_str_movecheck_MvState(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_movecheck_MvState(core_map_MapNode_str_movecheck_MvState** ptr);
+
+typedef MvCtx movecheck_MvCtx;
+struct core_vec_Vec_movecheck_MvCtx { movecheck_MvCtx** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_movecheck_MvCtx core_vec_Vec_movecheck_MvCtx;
+struct core_vec_Vec_movecheck_MvCtx_ptr { movecheck_MvCtx*** data; long long len; long long capacity; };
+typedef struct core_vec_Vec_movecheck_MvCtx_ptr core_vec_Vec_movecheck_MvCtx_ptr;
+struct core_map_MapNode_str_movecheck_MvCtx { char* key; movecheck_MvCtx* value; struct core_map_MapNode_str_movecheck_MvCtx* next; };
+typedef struct core_map_MapNode_str_movecheck_MvCtx core_map_MapNode_str_movecheck_MvCtx;
+struct core_map_Map_str_movecheck_MvCtx { core_map_MapNode_str_movecheck_MvCtx** buckets; long long capacity; long long len; };
+typedef struct core_map_Map_str_movecheck_MvCtx core_map_Map_str_movecheck_MvCtx;
+__attribute__((hot)) movecheck_MvCtx** core_alloc_alloc_movecheck_MvCtx(long long count);
+__attribute__((hot)) movecheck_MvCtx** core_alloc_resize_movecheck_MvCtx(movecheck_MvCtx** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_movecheck_MvCtx(movecheck_MvCtx** ptr);
+__attribute__((hot)) movecheck_MvCtx*** core_alloc_alloc_movecheck_MvCtx_ptr(long long count);
+__attribute__((hot)) movecheck_MvCtx*** core_alloc_resize_movecheck_MvCtx_ptr(movecheck_MvCtx*** ptr, long long new_count);
+__attribute__((hot)) void core_alloc_dealloc_movecheck_MvCtx_ptr(movecheck_MvCtx*** ptr);
+__attribute__((hot)) core_map_MapNode_str_movecheck_MvCtx** core_alloc_alloc_core_map_MapNode_str_movecheck_MvCtx(long long count);
+__attribute__((hot)) void core_alloc_dealloc_core_map_MapNode_str_movecheck_MvCtx(core_map_MapNode_str_movecheck_MvCtx** ptr);
 
 typedef SymbolKind sema_SymbolKind;
 struct core_vec_Vec_sema_SymbolKind { sema_SymbolKind* data; long long len; long long capacity; };

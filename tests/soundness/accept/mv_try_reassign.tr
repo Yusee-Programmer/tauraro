@@ -1,0 +1,13 @@
+# EXPECT: pass
+# Re-assigning in the handler path makes the later use valid.
+def take(s: str):
+    print(s)
+def main():
+    mut s = "a"
+    try:
+        take(s)
+        s = "b"
+        raise("x")
+    except e:
+        s = "c"
+    print(s)

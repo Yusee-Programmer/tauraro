@@ -1,0 +1,13 @@
+# EXPECT: [M-5]
+# Moved in one match arm only.
+def take(s: str):
+    print(s)
+def main():
+    mut s = "a"
+    mut k = 2
+    match k:
+        case 1:
+            take(s)
+        case _:
+            print("other")
+    print(s)

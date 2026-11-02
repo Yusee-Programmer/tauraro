@@ -1,0 +1,12 @@
+# EXPECT: [M-1]
+# Moved on both branches of an if, then used.
+def take(s: str):
+    print(s)
+def main():
+    mut s = "a"
+    mut c = len(s) > 0
+    if c:
+        take(s)
+    else:
+        take(s)
+    print(s)

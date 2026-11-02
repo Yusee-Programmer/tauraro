@@ -1,0 +1,9 @@
+# EXPECT: pass
+# Literals are not places: repeated literal arguments are fine.
+def show(s: str):
+    print(s)
+def main():
+    show("a")
+    show("a")
+    mut xs = [[1], [2]]
+    print(len(xs))

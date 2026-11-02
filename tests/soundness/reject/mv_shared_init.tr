@@ -1,0 +1,6 @@
+# EXPECT: [M-1]
+# Shared[T].init(x) moves x into the shared cell.
+def main():
+    mut xs = [1, 2]
+    mut sh = Shared[List[int]].init(xs)
+    print(len(xs))

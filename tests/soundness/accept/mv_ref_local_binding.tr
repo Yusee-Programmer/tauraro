@@ -1,0 +1,10 @@
+# EXPECT: pass
+# A `ref` local is a borrow and is never consumed.
+def take(xs: ref List[int]):
+    print(len(xs))
+def main():
+    mut xs = [1, 2]
+    v: ref List[int] = xs
+    take(v)
+    take(v)
+    print(len(xs))

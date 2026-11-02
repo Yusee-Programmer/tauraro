@@ -1,0 +1,15 @@
+# EXPECT: pass
+# Shared handles are moved, so each consumer gets its own .clone().
+class Cell implements Sendable:
+    pub n: Atomic[int]
+def bump(c: Shared[Cell]):
+    c.n.add(1)
+async def main():
+    mut cell = Cell()
+    cell.n = Atomic.new(0)
+    shared s = cell
+    task_group:
+        spawn bump(s.clone())
+        spawn bump(s.clone())
+    assert_eq(s.n.load(), 2)
+    print("ok")

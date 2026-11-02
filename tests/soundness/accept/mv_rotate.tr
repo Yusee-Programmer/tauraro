@@ -1,0 +1,11 @@
+# EXPECT: pass
+# The classic rotation: read the result of a call that consumed the old value.
+def bump(xs: List[int]) -> List[int]:
+    mut ys = xs.clone()
+    ys.append(1)
+    return ys
+def main():
+    mut xs = [0]
+    for i in range(3):
+        xs = bump(xs)
+    print(len(xs))

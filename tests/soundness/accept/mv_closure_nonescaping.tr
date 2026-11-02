@@ -1,0 +1,8 @@
+# EXPECT: pass
+# A closure that is only called locally does not consume its captures.
+def main():
+    mut xs = [1, 2]
+    f = lambda: len(xs)
+    print(f())
+    print(f())
+    print(len(xs))

@@ -1,0 +1,13 @@
+# EXPECT: [M-1]
+# A by-value parameter of a user constructor consumes the argument.
+class Box2:
+    pub items: List[int]
+extend Box2:
+    pub def init(items: List[int]) -> Box2:
+        mut b = Box2()
+        b.items = items
+        return b
+def main():
+    mut xs = [1]
+    mut b = Box2.init(xs)
+    print(len(xs))

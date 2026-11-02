@@ -1,0 +1,9 @@
+# EXPECT: [M-1]
+# Iterating a moved list.
+def take(xs: List[int]):
+    print(len(xs))
+def main():
+    mut xs = [1]
+    take(xs)
+    for v in xs:
+        print(v)

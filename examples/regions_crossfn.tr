@@ -8,16 +8,16 @@ extern "C":
     def _tr_report_mem(tag: Pointer[char]) -> void
 
 # Callee returns a BORROW of a parameter (no retain on return).
-def head(a: str, b: str) -> ref str from a:
+def head(a: ref str, b: ref str) -> ref str from a:
     return a
 
-def longest(x: str, y: str) -> ref str from x, y:
+def longest(x: ref str, y: ref str) -> ref str from x, y:
     if Str.len(x) >= Str.len(y):
         return x
     return y
 
 # Owned-return function that returns a borrow-call result: must OWN it (retain).
-def head_owned(a: str, b: str) -> str:
+def head_owned(a: ref str, b: ref str) -> str:
     return head(a, b)
 
 # Not-proven borrow: `a` is not used after `r`, so `r` falls back to ARC (retain+release).

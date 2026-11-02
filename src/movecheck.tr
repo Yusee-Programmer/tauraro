@@ -1,0 +1,969 @@
+# @trusted: compiler systems module — audited raw-pointer core (like Rust std internals)
+# src/movecheck.tr — Rust-style CONSUMING-CALL move checker (--strict only).
+#
+# Under `--strict`, passing a non-Copy local BY VALUE consumes it: after `f(x)`, `xs.append(x)`,
+# `obj.f = x`, `d[k] = x`, `Some(x)`, `Shared.init(x)`, `Thread.spawn(f, x)`, `chan.send(x)`, a tuple /
+# list / struct construction, `b = x` (for non-class types; classes/enums are checked in sema), or a
+# capture by a closure that is spawned / returned / stored, any later use of `x` is
+#   [M-1]  on every path that reaches the use, or
+#   [M-5]  on some (not all) path (join of branches / match arms / try-catch).
+# Re-assigning (`x = ...`) or re-declaring `x` re-initialises it. The pass is a PURE CHECK over the
+# lowered HIR: codegen is unchanged (ARC retains every alias), so default mode is byte-identical.
+# Trusted std/core functions (HirFunction.is_lib) and `unsafe:` bodies are never checked.
+#
+# What is Copy (never consumed): int/float/bool/char/other scalars, Pointer/RawPtr, StrView, function
+# values, `ref`/`mut ref` borrows, @value_type / all-Copy structs, payload-less enums, fixed arrays and
+# tuples of Copy, Option/Result of Copy. Move types: str, List/Vec/Dict/Map/Set/..., classes, enums with
+# payloads, Option/Result of a move type, Shared/Weak/Chan/Mutex/... handles.
+
+from hir import HirProgram, HirFunction, HirBlock, HirStmt, HirExpr, HirParam, HirMatchArm, hir_expr_type
+from ast import AstType, Pattern
+from core.vec import Vec
+from core.map import Map
+
+pub class MvSig:
+    pub f: HirFunction
+    pub lib: bool
+    pub gens: Vec[str]
+
+pub class MvState:
+    pub any:  Vec[str]    # moved on SOME path reaching here
+    pub all:  Vec[str]    # moved on EVERY path reaching here
+    pub lp:   Vec[str]    # moved by an earlier loop iteration (back edge)
+    pub dead: bool
+
+extend MvState:
+    pub def init() -> MvState:
+        mut s = MvState()
+        s.any = Vec[str].init(2)
+        s.all = Vec[str].init(2)
+        s.lp = Vec[str].init(1)
+        s.dead = false
+        return s
+
+    pub def copy(self) -> MvState:
+        mut s = MvState.init()
+        mut i = 0
+        while i < self.any.len:
+            s.any.push(self.any.get(i))
+            i = i + 1
+        i = 0
+        while i < self.all.len:
+            s.all.push(self.all.get(i))
+            i = i + 1
+        i = 0
+        while i < self.lp.len:
+            s.lp.push(self.lp.get(i))
+            i = i + 1
+        s.dead = self.dead
+        return s
+
+def mv_has(v: Vec[str], s: str) -> bool:
+    mut i = 0
+    while i < v.len:
+        if v.get(i) == s: return true
+        i = i + 1
+    return false
+
+def mv_add(v: Vec[str], s: str):
+    if not mv_has(v, s): v.push(s)
+
+def mv_without(v: Vec[str], s: str) -> Vec[str]:
+    mut out = Vec[str].init(v.len + 1)
+    mut i = 0
+    while i < v.len:
+        if v.get(i) != s: out.push(v.get(i))
+        i = i + 1
+    return out
+
+def mv_inter(a: Vec[str], b: Vec[str]) -> Vec[str]:
+    mut out = Vec[str].init(2)
+    mut i = 0
+    while i < a.len:
+        if mv_has(b, a.get(i)): out.push(a.get(i))
+        i = i + 1
+    return out
+
+def mv_assign_from(into: MvState, o: MvState):
+    into.any = o.copy().any
+    into.all = o.copy().all
+    into.lp = o.copy().lp
+    into.dead = o.dead
+
+def mv_merge(into: MvState, o: MvState):
+    if o.dead: return
+    if into.dead:
+        mv_assign_from(into, o)
+        return
+    mut i = 0
+    while i < o.any.len:
+        mv_add(into.any, o.any.get(i))
+        i = i + 1
+    i = 0
+    while i < o.lp.len:
+        mv_add(into.lp, o.lp.get(i))
+        i = i + 1
+    into.all = mv_inter(into.all, o.all)
+
+pub class MvCtx:
+    pub errs:      Vec[str]
+    pub line:      int
+    pub fn_name:   str
+    pub mv:        Map[str, bool]       # class / enum name -> is a MOVE type
+    pub old:       Map[str, bool]       # class / enum names: sema already tracks `b = a` for them
+    pub sigs:      Map[str, MvSig]
+    pub amb:       Map[str, bool]
+    pub declared:  Vec[str]             # locals / params of this function
+    pub mline:     Map[str, int]        # name -> line of its latest consuming use
+    pub clcaps:    Map[str, Vec[str]]   # closure-valued local -> captured move-typed names
+    pub defers:    Vec[str]
+    pub brk:       Vec[MvState]
+    pub brk_base:  Vec[int]
+    pub cnt:       Vec[MvState]
+    pub cnt_base:  Vec[int]
+    pub unsafe_depth: int
+    pub in_defer:  bool
+    pub sh_name:   Vec[str]             # shadowed outer variables saved at a nested redeclaration
+    pub sh_bits:   Vec[int]
+    pub sh_base:   Vec[int]             # per open block: start index into sh_name
+    pub try_acc:   Vec[str]             # names consumed inside the innermost open try bodies
+    pub try_depth: int
+    pub site:      str                  # description of the consuming position being visited
+    pub callee:    str
+    pub msite:     Map[str, str]        # name -> where it was last consumed
+
+extend MvCtx:
+    pub def init() -> MvCtx:
+        mut c = MvCtx()
+        c.errs = Vec[str].init(2)
+        c.line = 0
+        c.fn_name = ""
+        c.mv = Map[str, bool].init(8)
+        c.old = Map[str, bool].init(8)
+        c.sigs = Map[str, MvSig].init(8)
+        c.amb = Map[str, bool].init(2)
+        c.declared = Vec[str].init(8)
+        c.mline = Map[str, int].init(4)
+        c.clcaps = Map[str, Vec[str]].init(2)
+        c.defers = Vec[str].init(2)
+        c.brk = Vec[MvState].init(2)
+        c.brk_base = Vec[int].init(2)
+        c.cnt = Vec[MvState].init(2)
+        c.cnt_base = Vec[int].init(2)
+        c.unsafe_depth = 0
+        c.in_defer = false
+        c.sh_name = Vec[str].init(2)
+        c.sh_bits = Vec[int].init(2)
+        c.sh_base = Vec[int].init(2)
+        c.try_acc = Vec[str].init(2)
+        c.try_depth = 0
+        c.site = ""
+        c.callee = ""
+        c.msite = Map[str, str].init(4)
+        return c
+
+    pub def err(self, msg: str):
+        mut e = str(self.line) + "|" + msg
+        if not mv_has(self.errs, e): self.errs.push(e)
+
+def mv_null(e: Pointer[HirExpr]) -> bool:
+    return e as usize == 0 as usize
+
+# --- types ---------------------------------------------------------------------------
+
+def mv_scalar(n: str) -> bool:
+    return n == "int" or n == "float" or n == "bool" or n == "char" or n == "void" or n == "None" or n == "" or n == "i8" or n == "i16" or n == "i32" or n == "i64" or n == "u8" or n == "u16" or n == "u32" or n == "u64" or n == "usize" or n == "isize" or n == "f32" or n == "f64" or n == "Pointer" or n == "RawPtr" or n == "StrView" or n == "def" or n == "lambda" or n == "Any" or n == "any" or n == "object" or n == "Atomic" or n == "ref" or n == "mut_ref"
+
+def mv_is_move(cx: MvCtx, t: AstType) -> bool:
+    if t.is_borrow: return false
+    mut n = t.name
+    if mv_scalar(n): return false
+    if t.array_size > 0:
+        if t.args.len > 0: return mv_is_move(cx, t.args.get(0).read())
+        return false
+    if n == "Tuple" or n == "tuple" or n == "Option" or n == "Result":
+        mut i = 0
+        while i < t.args.len:
+            if mv_is_move(cx, t.args.get(i).read()): return true
+            i = i + 1
+        return false
+    if n == "str" or n == "List" or n == "Vec" or n == "Dict" or n == "Map" or n == "Set" or n == "Shared" or n == "Weak" or n == "Deque" or n == "StringBuilder": return true
+    if cx.mv.contains(n): return cx.mv.get(n)
+    return false
+
+def mv_tracked(cx: MvCtx, nm: str) -> bool:
+    return nm != "self" and mv_has(cx.declared, nm)
+
+# --- state transitions -----------------------------------------------------------------
+
+def mv_use(cx: MvCtx, nm: str, st: MvState):
+    if st.dead: return
+    if not mv_has(st.any, nm): return
+    mut at = ""
+    if cx.mline.contains(nm):
+        at = " (moved at line " + str(cx.mline.get(nm))
+        if cx.msite.contains(nm): at = at + ", into " + cx.msite.get(nm)
+        at = at + ")"
+    if mv_has(st.all, nm):
+        cx.err("[M-1] '" + nm + "' was moved" + at + " and cannot be used again (--strict: passing a value by value consumes it).\n      FIX: pass a copy to the call that consumes it (`" + nm + ".clone()`; for a `str` use `str(" + nm + ")`), pass a `ref` borrow, or stop using '" + nm + "' after the move; assign it a new value to re-initialise it.")
+    elif mv_has(st.lp, nm):
+        cx.err("[M-1] '" + nm + "' is moved inside a loop" + at + " and used again by the next iteration: it was already moved in the previous one.\n      FIX: move a `clone()` of it, give '" + nm + "' a new value before the end of the loop body, or `break` right after the move.")
+    else:
+        cx.err("[M-5] '" + nm + "' may have been moved" + at + " on some code paths, making this use unsafe (--strict).\n      FIX: do not move '" + nm + "' on any branch before this point (move a `clone()`), or restructure so the use is inside the branch where it is still valid.")
+
+def mv_mark(cx: MvCtx, nm: str, st: MvState):
+    if st.dead or cx.unsafe_depth > 0 or cx.in_defer: return
+    if mv_has(cx.defers, nm):
+        cx.err("[M-1] '" + nm + "' is read by a `defer` statement of this function and is moved here; the deferred statement would run after its new owner released it.\n      FIX: move a `clone()` instead, or do not move '" + nm + "' after deferring a use of it.")
+    mv_add(st.any, nm)
+    mv_add(st.all, nm)
+    cx.mline.insert(nm, cx.line)
+    cx.msite.insert(nm, cx.site)
+    if cx.try_depth > 0: mv_add(cx.try_acc, nm)
+
+def mv_reinit(cx: MvCtx, nm: str, st: MvState):
+    st.any = mv_without(st.any, nm)
+    st.all = mv_without(st.all, nm)
+    st.lp = mv_without(st.lp, nm)
+    if cx.clcaps.contains(nm): cx.clcaps.remove(nm)
+
+def mv_declare(cx: MvCtx, nm: str, st: MvState):
+    mv_add(cx.declared, nm)
+    mv_reinit(cx, nm, st)
+
+# --- identifier collection (for `defer`) ------------------------------------------------
+
+def mv_idents(e: Pointer[HirExpr], out: Vec[str]):
+    if mv_null(e): return
+    match e.read():
+        case HirExpr.EIdent(nm, _, _): mv_add(out, nm)
+        case HirExpr.EBinOp(_, l, r, _):
+            mv_idents(l, out)
+            mv_idents(r, out)
+        case HirExpr.EUnaryOp(_, x, _): mv_idents(x, out)
+        case HirExpr.ECall(c, args, _):
+            mv_idents(c, out)
+            mut i = 0
+            while i < args.len:
+                mv_idents(args.get(i), out)
+                i = i + 1
+        case HirExpr.EMethodCall(o, _, args, _):
+            mv_idents(o, out)
+            mut j = 0
+            while j < args.len:
+                mv_idents(args.get(j), out)
+                j = j + 1
+        case HirExpr.EPropAccess(o, _, _): mv_idents(o, out)
+        case HirExpr.EIndex(o, i2, _):
+            mv_idents(o, out)
+            mv_idents(i2, out)
+        case HirExpr.ECast(x, _): mv_idents(x, out)
+        case HirExpr.EFString(parts, _):
+            mut k = 0
+            while k < parts.len:
+                if parts.get(k).is_expr: mv_idents(parts.get(k).expr, out)
+                k = k + 1
+        case _: pass
+
+# --- callee resolution -------------------------------------------------------------------
+
+def mv_strip(n: str) -> str:
+    return n
+
+# mask entries: 0 = borrow, 1 = consume, 2 = consume (and a closure argument escapes with its captures)
+def mv_all_mask(n: int, v: int) -> Vec[int]:
+    mut m = Vec[int].init(n + 1)
+    mut i = 0
+    while i < n:
+        m.push(v)
+        i = i + 1
+    return m
+
+def mv_sig_mask(cx: MvCtx, key: str, n: int, skip_self: bool) -> Vec[int]:
+    if cx.amb.contains(key) or not cx.sigs.contains(key): return mv_all_mask(n, 0)
+    mut sg = cx.sigs.get(key)
+    mut f = sg.f
+    if f.is_extern: return mv_all_mask(n, 0)
+    mut off = 0
+    if skip_self and f.params.len > 0 and f.params.get(0).name == "self":
+        off = 1
+    mut i = 0
+    mut out = Vec[int].init(n + 1)
+    while i < n:
+        mut pi = i + off
+        mut v = 0
+        if pi < f.params.len:
+            mut pt = f.params.get(pi).ty
+            if f.params.get(pi).name != "self" and not pt.is_borrow:
+                mut generic = mv_has(sg.gens, pt.name)
+                if generic:
+                    v = 2
+                elif not sg.lib:
+                    v = 1
+        out.push(v)
+        i = i + 1
+    return out
+
+def mv_coll_type(t: str) -> bool:
+    return t == "List" or t == "Vec" or t == "Deque" or t == "Set" or t == "Dict" or t == "Map" or t == "Heap" or t == "Queue" or t == "Stack" or t == "PriorityQueue"
+
+def mv_store_method(m: str) -> bool:
+    return m == "append" or m == "push" or m == "push_back" or m == "push_front" or m == "add" or m == "insert" or m == "put" or m == "set" or m == "enqueue" or m == "appendleft"
+
+def mv_ctor_type(t: str) -> bool:
+    return t == "Shared" or t == "Box"
+
+def mv_callee_name(c: Pointer[HirExpr]) -> str:
+    if mv_null(c): return "?"
+    match c.read():
+        case HirExpr.EIdent(n, _, _): return n
+        case HirExpr.EPropAccess(o, p, _):
+            if mv_null(o): return p
+            match o.read():
+                case HirExpr.EIdent(on, _, _): return on + "." + p
+                case HirExpr.EIndex(b, _, _):
+                    match b.read():
+                        case HirExpr.EIdent(bn, _, _): return bn + "." + p
+                        case _: return p
+                case _: return p
+        case _: return "?"
+    return "?"
+
+def mv_static_base(cx: MvCtx, o: Pointer[HirExpr]) -> str:
+    if mv_null(o): return ""
+    match o.read():
+        case HirExpr.EIdent(nm, _, _):
+            if mv_has(cx.declared, nm): return ""
+            return nm
+        case HirExpr.EIndex(b, _, _):
+            return mv_static_base(cx, b)
+        case HirExpr.EMethodCall(b2, mm, _, _):
+            if mm == "get_index": return mv_static_base(cx, b2)
+            return ""
+        case _: return ""
+    return ""
+
+def mv_mask_static(cx: MvCtx, tn: str, v: str, n: int) -> Vec[int]:
+    if cx.sigs.contains(tn + "." + v): return mv_sig_mask(cx, tn + "." + v, n, false)
+    if cx.old.contains(tn) and cx.old.get(tn):
+        return mv_all_mask(n, 2)                  # enum variant constructor
+    if (tn == "Thread" or tn == "ThreadPool") and (v == "spawn" or v == "new" or v == "submit" or v == "execute"): return mv_all_mask(n, 2)
+    if mv_ctor_type(tn) and (v == "init" or v == "new"): return mv_all_mask(n, 2)
+    if tn == "Option" or tn == "Result": return mv_all_mask(n, 2)
+    return mv_all_mask(n, 0)
+
+def mv_mask_method(cx: MvCtx, rt: str, m: str, n: int) -> Vec[int]:
+    if cx.sigs.contains(rt + "." + m): return mv_sig_mask(cx, rt + "." + m, n, true)
+    if mv_coll_type(rt) and mv_store_method(m): return mv_all_mask(n, 2)
+    if (rt == "Chan" or rt == "Channel") and (m == "send" or m == "try_send" or m == "send_timeout"):
+        mut mm = mv_all_mask(n, 0)
+        if n > 0: mm.set(0, 2)
+        return mm
+    if (rt == "ThreadPool" or rt == "Thread") and (m == "submit" or m == "spawn" or m == "execute"): return mv_all_mask(n, 2)
+    return mv_all_mask(n, 0)
+
+# --- expressions -------------------------------------------------------------------------
+
+def mv_block(cx: MvCtx, b: HirBlock, st: MvState):
+    cx.sh_base.push(cx.sh_name.len)
+    mut i = 0
+    while i < b.stmts.len:
+        mv_stmt(cx, b.stmts.get(i), st)
+        i = i + 1
+    # leaving the block: shadowed outer variables get their own state back
+    mut base = cx.sh_base.get(cx.sh_base.len - 1)
+    cx.sh_base.pop()
+    while cx.sh_name.len > base:
+        mut k = cx.sh_name.len - 1
+        mut nm = cx.sh_name.get(k)
+        mut bits = cx.sh_bits.get(k)
+        cx.sh_name.pop()
+        cx.sh_bits.pop()
+        st.any = mv_without(st.any, nm)
+        st.all = mv_without(st.all, nm)
+        st.lp = mv_without(st.lp, nm)
+        if bits % 2 == 1: st.any.push(nm)
+        if (bits / 2) % 2 == 1: st.all.push(nm)
+        if (bits / 4) % 2 == 1: st.lp.push(nm)
+
+def mv_exprs(cx: MvCtx, v: Vec[Pointer[HirExpr]], st: MvState):
+    mut i = 0
+    while i < v.len:
+        mv_expr(cx, v.get(i), st)
+        i = i + 1
+
+def mv_branchy_block(cx: MvCtx, b: HirBlock, st: MvState):
+    mut c = st.copy()
+    mv_block(cx, b, c)
+    mv_merge(st, c)
+
+# consume the captured move-typed variables of a closure that escapes
+def mv_consume_caps(cx: MvCtx, caps: Vec[str], st: MvState):
+    mut i = 0
+    while i < caps.len:
+        mv_use(cx, caps.get(i), st)
+        mv_mark(cx, caps.get(i), st)
+        i = i + 1
+
+def mv_closure_caps(cx: MvCtx, caps: Vec[HirParam]) -> Vec[str]:
+    mut out = Vec[str].init(2)
+    mut i = 0
+    while i < caps.len:
+        mut nm = caps.get(i).name
+        if mv_tracked(cx, nm) and mv_is_move(cx, caps.get(i).ty): out.push(nm)
+        i = i + 1
+    return out
+
+# An expression in a CONSUMING position: a plain local of a move type is consumed.
+# mode 1 = consume, 2 = consume + an escaping closure consumes its captures.
+def mv_consume(cx: MvCtx, e: Pointer[HirExpr], st: MvState, mode: int):
+    if mv_null(e): return
+    match e.read():
+        case HirExpr.EIdent(nm, ty, _):
+            mv_use(cx, nm, st)
+            if mv_tracked(cx, nm):
+                if mv_is_move(cx, ty): mv_mark(cx, nm, st)
+                elif mode == 2 and cx.clcaps.contains(nm): mv_consume_caps(cx, cx.clcaps.get(nm), st)
+        case HirExpr.EClosure(_, _, _, _, caps):
+            mv_expr(cx, e, st)
+            if mode == 2: mv_consume_caps(cx, mv_closure_caps(cx, caps), st)
+        case HirExpr.ETuple(items, _):
+            mut i = 0
+            while i < items.len:
+                mv_consume(cx, items.get(i), st, 2)
+                i = i + 1
+        case _: mv_expr(cx, e, st)
+
+def mv_args(cx: MvCtx, args: Vec[Pointer[HirExpr]], mask: Vec[int], st: MvState, cname: str):
+    mut i = 0
+    while i < args.len:
+        mut k = 0
+        if i < mask.len: k = mask.get(i)
+        if k == 0: mv_expr(cx, args.get(i), st)
+        else:
+            cx.site = "argument " + str(i + 1) + " of '" + cname + "'"
+            mv_consume(cx, args.get(i), st, k)
+        i = i + 1
+
+def mv_items(cx: MvCtx, items: Vec[Pointer[HirExpr]], st: MvState):
+    cx.site = "a list/tuple/dict/set literal"
+    mut i = 0
+    while i < items.len:
+        mv_consume(cx, items.get(i), st, 2)
+        i = i + 1
+
+def mv_expr(cx: MvCtx, e: Pointer[HirExpr], st: MvState):
+    if mv_null(e): return
+    if st.dead: return
+    match e.read():
+        case HirExpr.EIdent(nm, _, _): mv_use(cx, nm, st)
+        case HirExpr.EPropAccess(o, _, _): mv_expr(cx, o, st)
+        case HirExpr.EBinOp(bop, l, r, _):
+            mv_expr(cx, l, st)
+            if bop == "and" or bop == "or" or bop == "&&" or bop == "||":
+                # the right operand runs only on some paths
+                mut rs = st.copy()
+                mv_expr(cx, r, rs)
+                mv_merge(st, rs)
+            else:
+                mv_expr(cx, r, st)
+        case HirExpr.EUnaryOp(_, x, _): mv_expr(cx, x, st)
+        case HirExpr.ECall(callee, args, _):
+            mut mask = mv_all_mask(args.len, 0)
+            mut cname = mv_callee_name(callee)
+            if not mv_null(callee):
+                match callee.read():
+                    case HirExpr.EIdent(fnm, _, _):
+                        if fnm == "Some" or fnm == "Ok" or fnm == "Err" or fnm == "spawn":
+                            mask = mv_all_mask(args.len, 2)
+                        elif mv_has(cx.declared, fnm):
+                            mv_use(cx, fnm, st)
+                        elif cx.sigs.contains(fnm):
+                            mask = mv_sig_mask(cx, fnm, args.len, false)
+                        elif cx.mv.contains(fnm) and cx.old.contains(fnm):
+                            if cx.sigs.contains(fnm + ".init"): mask = mv_sig_mask(cx, fnm + ".init", args.len, false)
+                            else: mask = mv_all_mask(args.len, 2)
+                    case HirExpr.EPropAccess(co, cv, _):
+                        mut sb = mv_static_base(cx, co)
+                        if sb != "": mask = mv_mask_static(cx, sb, cv, args.len)
+                        else:
+                            mv_expr(cx, callee, st)
+                            mask = mv_mask_method(cx, hir_expr_type(co).name, cv, args.len)
+                    case _: mv_expr(cx, callee, st)
+            mv_args(cx, args, mask, st, cname)
+        case HirExpr.EMethodCall(o, m, args, _):
+            mut cname2 = m
+            mut sb2 = mv_static_base(cx, o)
+            mut mask2 = mv_all_mask(args.len, 0)
+            if sb2 != "" and (cx.mv.contains(sb2) or mv_ctor_type(sb2) or sb2 == "Thread" or sb2 == "ThreadPool" or sb2 == "Option" or sb2 == "Result"):
+                mask2 = mv_mask_static(cx, sb2, m, args.len)
+            else:
+                mv_expr(cx, o, st)
+                mut rt = hir_expr_type(o).name
+                mask2 = mv_mask_method(cx, rt, m, args.len)
+            mv_args(cx, args, mask2, st, cname2)
+        case HirExpr.EIndex(o, i, _):
+            mv_expr(cx, o, st)
+            mv_expr(cx, i, st)
+        case HirExpr.ECast(x, _): mv_expr(cx, x, st)
+        case HirExpr.EFString(parts, _):
+            mut pi = 0
+            while pi < parts.len:
+                mut part = parts.get(pi)
+                if part.is_expr:
+                    mv_expr(cx, part.expr, st)
+                    mv_exprs(cx, part.spec_args, st)
+                pi = pi + 1
+        case HirExpr.ETryExpr(x, _): mv_expr(cx, x, st)
+        case HirExpr.EClosure(_, _, _, _, caps):
+            mut ci = 0
+            while ci < caps.len:
+                mv_use(cx, caps.get(ci).name, st)
+                ci = ci + 1
+        case HirExpr.ESuperMethodCall(_, _, args, _): mv_exprs(cx, args, st)
+        case HirExpr.EList(items, _): mv_items(cx, items, st)
+        case HirExpr.ESet(items, _): mv_items(cx, items, st)
+        case HirExpr.ETuple(items, _): mv_items(cx, items, st)
+        case HirExpr.EDict(keys, vals, _):
+            mv_items(cx, keys, st)
+            mv_items(cx, vals, st)
+        case HirExpr.EListComp(el, gens, _):
+            mut gi = 0
+            while gi < gens.len:
+                mv_expr(cx, gens.get(gi).read().iter, st)
+                gi = gi + 1
+        case HirExpr.EGeneratorExpr(el2, gens2, _):
+            mut gj = 0
+            while gj < gens2.len:
+                mv_expr(cx, gens2.get(gj).read().iter, st)
+                gj = gj + 1
+        case HirExpr.ESlice(a, b, c, _):
+            mv_expr(cx, a, st)
+            mv_expr(cx, b, st)
+            mv_expr(cx, c, st)
+        case HirExpr.EAwait(x, _): mv_expr(cx, x, st)
+        case HirExpr.EAwaitTimeout(x, t, _):
+            mv_expr(cx, x, st)
+            mv_expr(cx, t, st)
+        case HirExpr.EYield(x, _): mv_expr(cx, x, st)
+        case HirExpr.ERange(a2, b2, _, _):
+            mv_expr(cx, a2, st)
+            mv_expr(cx, b2, st)
+        case HirExpr.EIfElse(c2, t2, f2, _):
+            mv_expr(cx, c2, st)
+            mut s1 = st.copy()
+            mut s2 = st.copy()
+            mv_expr(cx, t2, s1)
+            mv_expr(cx, f2, s2)
+            s1.dead = false
+            s2.dead = false
+            mv_assign_from(st, s1)
+            mv_merge(st, s2)
+        case HirExpr.EDo(body, _): mv_branchy_block(cx, body, st)
+        case HirExpr.ELoop(body2, _): mv_branchy_block(cx, body2, st)
+        case HirExpr.EWhileExpr(c3, body3, eb, _):
+            mv_expr(cx, c3, st)
+            mv_branchy_block(cx, body3, st)
+            mv_branchy_block(cx, eb, st)
+        case HirExpr.EMatchExpr(subj, arms, _):
+            mv_expr(cx, subj, st)
+            mut first = true
+            mut acc = MvState.init()
+            acc.dead = true
+            mut ai = 0
+            while ai < arms.len:
+                mut a = arms.get(ai)
+                mut c4 = st.copy()
+                mv_pat(cx, a.pat, c4)
+                mv_expr(cx, a.guard, c4)
+                mv_block(cx, a.body, c4)
+                mv_merge(acc, c4)
+                ai = ai + 1
+            if arms.len > 0: mv_assign_from(st, acc)
+        case HirExpr.ETry(tb, catches, fb, _):
+            mv_branchy_block(cx, tb, st)
+            mut ti = 0
+            while ti < catches.len:
+                mv_declare(cx, catches.get(ti).read().err_name, st)
+                mv_branchy_block(cx, catches.get(ti).read().body, st)
+                ti = ti + 1
+            mv_branchy_block(cx, fb, st)
+        case _: pass
+
+def mv_pat_names(p: Pattern, out: Vec[str]):
+    match p:
+        case Pattern.PBind(n): out.push(n)
+        case Pattern.PVariantBind(_, _, f): out.push(f)
+        case Pattern.PVariantBindMany(_, _, fs):
+            mut i = 0
+            while i < fs.len:
+                out.push(fs.get(i))
+                i = i + 1
+        case Pattern.PTuple(a, b):
+            out.push(a)
+            out.push(b)
+        case Pattern.POr(ps):
+            mut j = 0
+            while j < ps.len:
+                mv_pat_names(ps.get(j), out)
+                j = j + 1
+        case _: pass
+
+def mv_pat(cx: MvCtx, p: Pattern, st: MvState):
+    mut names = Vec[str].init(2)
+    mv_pat_names(p, names)
+    mut i = 0
+    while i < names.len:
+        mv_declare(cx, names.get(i), st)
+        i = i + 1
+
+# --- statements --------------------------------------------------------------------------
+
+def mv_exit_loop_ctx(cx: MvCtx, brk_out: MvState, cnt_out: MvState):
+    mut bb = cx.brk_base.get(cx.brk_base.len - 1)
+    cx.brk_base.pop()
+    while cx.brk.len > bb:
+        mv_merge(brk_out, cx.brk.get(cx.brk.len - 1))
+        cx.brk.pop()
+    mut cb = cx.cnt_base.get(cx.cnt_base.len - 1)
+    cx.cnt_base.pop()
+    while cx.cnt.len > cb:
+        mv_merge(cnt_out, cx.cnt.get(cx.cnt.len - 1))
+        cx.cnt.pop()
+
+def mv_loop(cx: MvCtx, st: MvState, cond: Pointer[HirExpr], lvs: Vec[str], body: HirBlock, always: bool):
+    mut entry = st.copy()
+    mut head = entry.copy()
+    mut pass_i = 0
+    mut exit_st = MvState.init()
+    exit_st.dead = true
+    while pass_i < 2:
+        mut s = head.copy()
+        mv_expr(cx, cond, s)
+        mut after_cond = s.copy()
+        mut li = 0
+        while li < lvs.len:
+            mv_declare(cx, lvs.get(li), s)
+            li = li + 1
+        cx.brk_base.push(cx.brk.len)
+        cx.cnt_base.push(cx.cnt.len)
+        mv_block(cx, body, s)
+        mut bo = MvState.init()
+        bo.dead = true
+        mut co = MvState.init()
+        co.dead = true
+        mv_exit_loop_ctx(cx, bo, co)
+        mut back = s.copy()
+        mv_merge(back, co)
+        if pass_i == 0:
+            head = entry.copy()
+            if not back.dead:
+                mut bi = 0
+                while bi < back.any.len:
+                    mut bn = back.any.get(bi)
+                    if not mv_has(entry.any, bn): mv_add(head.lp, bn)
+                    bi = bi + 1
+            mv_merge(head, back)
+        else:
+            if not always: mv_merge(exit_st, after_cond)
+            mv_merge(exit_st, bo)
+        pass_i = pass_i + 1
+    mv_assign_from(st, exit_st)
+
+# `b = a` / `mut b = a` of a non-class value is a binding transfer (consumes `a`); classes/enums are
+# tracked by sema's own [M-1] machinery.
+def mv_bind_rhs(cx: MvCtx, val: Pointer[HirExpr], st: MvState):
+    if mv_null(val): return
+    cx.site = "a binding transfer (`b = a`)"
+    match val.read():
+        case HirExpr.EIdent(nm, ty, _):
+            mv_use(cx, nm, st)
+            if mv_tracked(cx, nm) and mv_is_move(cx, ty) and not cx.old.contains(ty.name): mv_mark(cx, nm, st)
+        case _: mv_expr(cx, val, st)
+
+def mv_note_closure(cx: MvCtx, nm: str, val: Pointer[HirExpr]):
+    if mv_null(val): return
+    match val.read():
+        case HirExpr.EClosure(_, _, _, _, caps):
+            cx.clcaps.insert(nm, mv_closure_caps(cx, caps))
+        case _: pass
+
+def mv_stmt(cx: MvCtx, sp: Pointer[HirStmt], st: MvState):
+    if st.dead: return
+    match sp.read():
+        case HirStmt.SLineMarker(n): cx.line = n
+        case HirStmt.SExpr(e): mv_expr(cx, e, st)
+        case HirStmt.SLet(nm, _, _, _, _, ty, val):
+            if ty.is_borrow: mv_expr(cx, val, st)
+            else: mv_bind_rhs(cx, val, st)
+            if mv_has(cx.declared, nm) and cx.sh_base.len > 1:
+                mut bits = 0
+                if mv_has(st.any, nm): bits = bits + 1
+                if mv_has(st.all, nm): bits = bits + 2
+                if mv_has(st.lp, nm): bits = bits + 4
+                cx.sh_name.push(nm)
+                cx.sh_bits.push(bits)
+            mv_declare(cx, nm, st)
+            mv_note_closure(cx, nm, val)
+        case HirStmt.SMultiLet(names, _, val):
+            mv_expr(cx, val, st)
+            mut ni = 0
+            while ni < names.len:
+                mv_declare(cx, names.get(ni), st)
+                ni = ni + 1
+        case HirStmt.SAssign(tgt, val):
+            if mv_null(tgt):
+                mv_expr(cx, val, st)
+            else:
+                match tgt.read():
+                    case HirExpr.EIdent(tn, _, _):
+                        mv_bind_rhs(cx, val, st)
+                        if mv_tracked(cx, tn):
+                            mv_reinit(cx, tn, st)
+                            mv_note_closure(cx, tn, val)
+                    case HirExpr.ETuple(titems, _):
+                        # `(a, b) = f()`: destructuring re-initialises each plain-name target
+                        mv_expr(cx, val, st)
+                        mut tti = 0
+                        while tti < titems.len:
+                            if not mv_null(titems.get(tti)):
+                                match titems.get(tti).read():
+                                    case HirExpr.EIdent(tin, _, _): mv_reinit(cx, tin, st)
+                                    case _: mv_expr(cx, titems.get(tti), st)
+                            tti = tti + 1
+                    case _:
+                        # store into a field / element / dereference: the stored local is consumed
+                        mv_expr(cx, tgt, st)
+                        cx.site = "a field/element store"
+                        mv_consume(cx, val, st, 2)
+        case HirStmt.SReturn(v):
+            if mv_null(v): pass
+            else:
+                match v.read():
+                    case HirExpr.EClosure(_, _, _, _, caps):
+                        mv_expr(cx, v, st)
+                        mv_consume_caps(cx, mv_closure_caps(cx, caps), st)
+                    case _:
+                        cx.site = "a return"
+                        mv_consume(cx, v, st, 2)
+            st.dead = true
+        case HirStmt.SRaise(v):
+            mv_expr(cx, v, st)
+            st.dead = true
+        case HirStmt.SDefer(ds):
+            mut ids = Vec[str].init(2)
+            match ds.read():
+                case HirStmt.SExpr(de): mv_idents(de, ids)
+                case HirStmt.SAssign(dt, dv):
+                    mv_idents(dt, ids)
+                    mv_idents(dv, ids)
+                case _: pass
+            mut di = 0
+            while di < ids.len:
+                if mv_tracked(cx, ids.get(di)): mv_add(cx.defers, ids.get(di))
+                di = di + 1
+        case HirStmt.SBreak(v):
+            mv_expr(cx, v, st)
+            if cx.brk_base.len > 0: cx.brk.push(st.copy())
+            st.dead = true
+        case HirStmt.SContinue:
+            if cx.cnt_base.len > 0: cx.cnt.push(st.copy())
+            st.dead = true
+        case HirStmt.SUnsafe(body):
+            cx.unsafe_depth = cx.unsafe_depth + 1
+            mv_block(cx, body, st)
+            cx.unsafe_depth = cx.unsafe_depth - 1
+        case HirStmt.SIf(cond, tb, eb):
+            mv_expr(cx, cond, st)
+            mut s1 = st.copy()
+            mut s2 = st.copy()
+            mv_block(cx, tb, s1)
+            mv_block(cx, eb, s2)
+            mv_assign_from(st, s1)
+            mv_merge(st, s2)
+        case HirStmt.SWhile(cond, body):
+            mut always = false
+            if not mv_null(cond):
+                match cond.read():
+                    case HirExpr.ELitBool(bv, _): always = bv
+                    case _: pass
+            mv_loop(cx, st, cond, Vec[str].init(0), body, always)
+        case HirStmt.SFor(var, it, body):
+            mv_expr(cx, it, st)
+            mut lv = Vec[str].init(1)
+            lv.push(var)
+            mv_add(cx.declared, var)
+            mv_loop(cx, st, Pointer[HirExpr](0), lv, body, false)
+        case HirStmt.SForUnpack(vars, it, body):
+            mv_expr(cx, it, st)
+            mut vi = 0
+            while vi < vars.len:
+                mv_add(cx.declared, vars.get(vi))
+                vi = vi + 1
+            mv_loop(cx, st, Pointer[HirExpr](0), vars, body, false)
+        case HirStmt.SMatch(subj, arms):
+            mv_expr(cx, subj, st)
+            mut acc = MvState.init()
+            acc.dead = true
+            mut ai = 0
+            while ai < arms.len:
+                mut a = arms.get(ai)
+                mut c = st.copy()
+                mv_pat(cx, a.pat, c)
+                mv_expr(cx, a.guard, c)
+                mv_block(cx, a.body, c)
+                mv_merge(acc, c)
+                ai = ai + 1
+            if arms.len > 0: mv_assign_from(st, acc)
+        case HirStmt.STry(tb, catches, fb):
+            mut entry = st.copy()
+            mut s1 = st.copy()
+            mut outer_acc = cx.try_acc
+            cx.try_acc = Vec[str].init(2)
+            cx.try_depth = cx.try_depth + 1
+            mv_block(cx, tb, s1)
+            cx.try_depth = cx.try_depth - 1
+            mut moved_in_try = cx.try_acc
+            cx.try_acc = outer_acc
+            mut tai = 0
+            while tai < moved_in_try.len:
+                if cx.try_depth > 0: mv_add(cx.try_acc, moved_in_try.get(tai))
+                tai = tai + 1
+            mut acc = s1.copy()
+            mut hs = entry.copy()
+            mv_merge(hs, s1)
+            hs.dead = false
+            # a failure can happen after any move inside the body: the handler sees those names as possibly moved
+            tai = 0
+            while tai < moved_in_try.len:
+                mv_add(hs.any, moved_in_try.get(tai))
+                tai = tai + 1
+            mut ci = 0
+            while ci < catches.len:
+                mut cs = hs.copy()
+                mv_declare(cx, catches.get(ci).read().err_name, cs)
+                mv_block(cx, catches.get(ci).read().body, cs)
+                mv_merge(acc, cs)
+                ci = ci + 1
+            mv_block(cx, fb, acc)
+            mv_assign_from(st, acc)
+        case HirStmt.SAssert(c, m):
+            mv_expr(cx, c, st)
+            mv_expr(cx, m, st)
+        case HirStmt.SWith(items, aliases, body):
+            mv_exprs(cx, items, st)
+            mut wi = 0
+            while wi < aliases.len:
+                mv_declare(cx, aliases.get(wi), st)
+                wi = wi + 1
+            mv_block(cx, body, st)
+        case HirStmt.SSpawn(e):
+            if mv_null(e): pass
+            else:
+                match e.read():
+                    case HirExpr.ECall(sc, sargs, _):
+                        mv_expr(cx, sc, st)
+                        mv_args(cx, sargs, mv_all_mask(sargs.len, 2), st, "spawn")
+                    case HirExpr.EClosure(_, _, _, _, caps):
+                        mv_expr(cx, e, st)
+                        mv_consume_caps(cx, mv_closure_caps(cx, caps), st)
+                    case _: mv_expr(cx, e, st)
+        case HirStmt.STaskGroup(body): mv_block(cx, body, st)
+        case HirStmt.SGpuBlock(body): mv_block(cx, body, st)
+        case _: pass
+
+def mv_run_fn(cx: MvCtx, hf: HirFunction) -> Vec[str]:
+    cx.errs = Vec[str].init(2)
+    cx.fn_name = hf.name
+    cx.declared = Vec[str].init(8)
+    cx.mline = Map[str, int].init(4)
+    cx.clcaps = Map[str, Vec[str]].init(2)
+    cx.defers = Vec[str].init(2)
+    cx.brk = Vec[MvState].init(2)
+    cx.brk_base = Vec[int].init(2)
+    cx.cnt = Vec[MvState].init(2)
+    cx.cnt_base = Vec[int].init(2)
+    cx.unsafe_depth = 0
+    cx.in_defer = false
+    cx.line = 0
+    cx.sh_name = Vec[str].init(2)
+    cx.sh_bits = Vec[int].init(2)
+    cx.sh_base = Vec[int].init(2)
+    cx.try_acc = Vec[str].init(2)
+    cx.try_depth = 0
+    mut pi = 0
+    while pi < hf.params.len:
+        mv_add(cx.declared, hf.params.get(pi).name)
+        pi = pi + 1
+    mut st = MvState.init()
+    mv_block(cx, hf.body, st)
+    return cx.errs
+
+def mv_add_sig(cx: MvCtx, f: HirFunction, key: str, cgens: Vec[str]):
+    if cx.sigs.contains(key):
+        # the same method appears in both hp.functions and hp.classes; only a DIFFERENT signature is ambiguous
+        mut ex = cx.sigs.get(key).f
+        mut same = ex.params.len == f.params.len
+        mut pj = 0
+        while same and pj < f.params.len:
+            if ex.params.get(pj).ty.name != f.params.get(pj).ty.name or ex.params.get(pj).ty.is_borrow != f.params.get(pj).ty.is_borrow: same = false
+            pj = pj + 1
+        if not same: cx.amb.insert(key, true)
+        return
+    mut sg = MvSig()
+    sg.f = f
+    sg.lib = f.is_lib
+    mut gs = Vec[str].init(2)
+    mut i = 0
+    while i < f.generics.len:
+        gs.push(f.generics.get(i))
+        i = i + 1
+    i = 0
+    while i < cgens.len:
+        gs.push(cgens.get(i))
+        i = i + 1
+    sg.gens = gs
+    cx.sigs.insert(key, sg)
+
+# Whole-program entry. `fns` = the (non-trusted) lowered functions to check; `hp` supplies every
+# signature (incl. std). `mvt`/`oldt`: class/enum name -> move type / sema-tracked. Returns
+# "<idx>@<line>|<message>" entries like ptrflow_check.
+pub def movecheck_check(fns: Vec[HirFunction], hp: HirProgram, mvt: Map[str, bool], oldt: Map[str, bool]) -> Vec[str]:
+    mut cx = MvCtx.init()
+    cx.mv = mvt
+    cx.old = oldt
+    mut nogens = Vec[str].init(0)
+    mut i = 0
+    while i < hp.functions.len:
+        mut f = hp.functions.get(i)
+        if f.class_name == "": mv_add_sig(cx, f, f.name, nogens)
+        else: mv_add_sig(cx, f, f.class_name + "." + f.name, nogens)
+        i = i + 1
+    i = 0
+    while i < hp.classes.len:
+        mut c = hp.classes.get(i)
+        mut j = 0
+        while j < c.methods.len:
+            mv_add_sig(cx, c.methods.get(j), c.name + "." + c.methods.get(j).name, c.generics)
+            j = j + 1
+        i = i + 1
+    i = 0
+    while i < hp.enums.len:
+        mut en = hp.enums.get(i)
+        mut j2 = 0
+        while j2 < en.methods.len:
+            mv_add_sig(cx, en.methods.get(j2), en.name + "." + en.methods.get(j2).name, en.generics)
+            j2 = j2 + 1
+        i = i + 1
+    mut out = Vec[str].init(2)
+    mut fi = 0
+    while fi < fns.len:
+        mut hf = fns.get(fi)
+        if not hf.is_lib:
+            mut errs = mv_run_fn(cx, hf)
+            mut ei = 0
+            while ei < errs.len:
+                out.push(str(fi) + "@" + errs.get(ei))
+                ei = ei + 1
+        fi = fi + 1
+    return out

@@ -1,0 +1,9 @@
+# EXPECT: pass
+# Option of a Copy type is Copy.
+def f(o: Option[int]):
+    pass
+def main():
+    mut o: Option[int] = Some(3)
+    f(o)
+    f(o)
+    print(o.is_some())
