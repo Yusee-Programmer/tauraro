@@ -11,6 +11,10 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 TAURAROC="${TAURAROC:-./tauraroc}"; [ -x "$TAURAROC" ] || TAURAROC="./tauraroc.exe"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+# stock macOS has no `timeout`: use coreutils' gtimeout if present, else run unguarded
+if command -v timeout >/dev/null 2>&1; then TMO="timeout 30"
+elif command -v gtimeout >/dev/null 2>&1; then TMO="gtimeout 30"
+else TMO=""; fi
 fail=0; pass=0
 for f in tests/runtime_san/*.tr; do
   n=$(basename "$f" .tr)
@@ -21,7 +25,7 @@ for f in tests/runtime_san/*.tr; do
     if ! "$TAURAROC" "$f" -o "$TMP/$n.$mode" $flags >"$TMP/build.log" 2>&1; then
       echo "FAIL  $n [$mode] (build): $(grep -m1 error "$TMP/build.log")"; fail=$((fail+1)); continue
     fi
-    timeout 30 "$TMP/$n.$mode" >"$TMP/out" 2>"$TMP/err"; rc=$?
+    $TMO "$TMP/$n.$mode" >"$TMP/out" 2>"$TMP/err"; rc=$?
     ok=1; why=""
     want=$(sed -n 's/^# EXPECT-EXIT: //p' "$f" | head -1)
     if [ "$want" = 0 ] && [ $rc -ne 0 ]; then ok=0; why="exit $rc (wanted 0): $(head -c 200 "$TMP/err")"; fi
