@@ -79,7 +79,7 @@ __attribute__((hot)) PfState* PfState_copy(PfState* self) {
 #line 50 "src/ptrflow.tr"
     while ((i < self->freed->len)) {
 #line 51 "src/ptrflow.tr"
-        ({ TrStr _ord_t824 = (List_TrStr_get(self->freed, i)); List_TrStr_append(s->freed, _ord_t824); _tr_str_release(_ord_t824); });
+        ({ TrStr _ord_t873 = (List_TrStr_get(self->freed, i)); List_TrStr_append(s->freed, _ord_t873); _tr_str_release(_ord_t873); });
 #line 52 "src/ptrflow.tr"
         i = (i + 1LL);
     }
@@ -88,9 +88,9 @@ __attribute__((hot)) PfState* PfState_copy(PfState* self) {
 #line 54 "src/ptrflow.tr"
     while ((i < self->pa->len)) {
 #line 55 "src/ptrflow.tr"
-        ({ TrStr _ord_t825 = (List_TrStr_get(self->pa, i)); List_TrStr_append(s->pa, _ord_t825); _tr_str_release(_ord_t825); });
+        ({ TrStr _ord_t874 = (List_TrStr_get(self->pa, i)); List_TrStr_append(s->pa, _ord_t874); _tr_str_release(_ord_t874); });
 #line 56 "src/ptrflow.tr"
-        ({ TrStr _ord_t826 = (List_TrStr_get(self->pb, i)); List_TrStr_append(s->pb, _ord_t826); _tr_str_release(_ord_t826); });
+        ({ TrStr _ord_t875 = (List_TrStr_get(self->pb, i)); List_TrStr_append(s->pb, _ord_t875); _tr_str_release(_ord_t875); });
 #line 57 "src/ptrflow.tr"
         i = (i + 1LL);
     }
@@ -99,7 +99,7 @@ __attribute__((hot)) PfState* PfState_copy(PfState* self) {
 #line 59 "src/ptrflow.tr"
     while ((i < self->stk->len)) {
 #line 60 "src/ptrflow.tr"
-        ({ TrStr _ord_t827 = (List_TrStr_get(self->stk, i)); List_TrStr_append(s->stk, _ord_t827); _tr_str_release(_ord_t827); });
+        ({ TrStr _ord_t876 = (List_TrStr_get(self->stk, i)); List_TrStr_append(s->stk, _ord_t876); _tr_str_release(_ord_t876); });
 #line 61 "src/ptrflow.tr"
         i = (i + 1LL);
     }
@@ -125,7 +125,9 @@ __attribute__((malloc,returns_nonnull,hot)) PfCtx* PfCtx_init(TrMap* summaries) 
 #line 176 "src/ptrflow.tr"
     c->line = 0LL;
 #line 177 "src/ptrflow.tr"
+    TrStr _sfo_t877 = c->fn_name;
     c->fn_name = _tr_str_lit_len("", 0LL);
+    _tr_str_release(_sfo_t877);
 #line 178 "src/ptrflow.tr"
     c->ret_from = false;
 #line 179 "src/ptrflow.tr"
@@ -137,9 +139,9 @@ __attribute__((malloc,returns_nonnull,hot)) PfCtx* PfCtx_init(TrMap* summaries) 
 #line 182 "src/ptrflow.tr"
     c->summaries = summaries;
 #line 183 "src/ptrflow.tr"
-    PfState* _cltmp_t828 = PfState_init();
+    PfState* _cltmp_t878 = PfState_init();
     _tr_obj_release(c->ret_acc, _trdrop_PfState);
-    c->ret_acc = _cltmp_t828;
+    c->ret_acc = _cltmp_t878;
 #line 184 "src/ptrflow.tr"
     c->ret_acc->dead = true;
 #line 185 "src/ptrflow.tr"
@@ -192,7 +194,7 @@ __attribute__((hot)) bool pf_has(List_TrStr* v, TrStr s) {
 #line 71 "src/ptrflow.tr"
     while ((i < v->len)) {
 #line 72 "src/ptrflow.tr"
-        if (({ TrStr _cmpa_t829 = (List_TrStr_get(v, i)); TrStr _cmpb_t830 = (s); _Bool _cmpr_t831 = _tr_str_eqv(_cmpa_t829, _cmpb_t830); _tr_str_release(_cmpa_t829); _cmpr_t831; })) {
+        if (({ TrStr _cmpa_t879 = (List_TrStr_get(v, i)); TrStr _cmpb_t880 = (s); _Bool _cmpr_t881 = _tr_str_eqv(_cmpa_t879, _cmpb_t880); _tr_str_release(_cmpa_t879); _cmpr_t881; })) {
 #line 72 "src/ptrflow.tr"
             return true;
         }
@@ -229,7 +231,7 @@ __attribute__((hot)) List_TrStr* pf_vcopy(List_TrStr* v) {
 #line 87 "src/ptrflow.tr"
     while ((i < v->len)) {
 #line 88 "src/ptrflow.tr"
-        ({ TrStr _at_t832 = (List_TrStr_get(v, i)); List_TrStr_append(o, _at_t832); _tr_str_release(_at_t832); });
+        ({ TrStr _at_t882 = (List_TrStr_get(v, i)); List_TrStr_append(o, _at_t882); _tr_str_release(_at_t882); });
 #line 89 "src/ptrflow.tr"
         i = (i + 1LL);
     }
@@ -245,9 +247,9 @@ __attribute__((hot)) List_TrStr* pf_inter(List_TrStr* a, List_TrStr* b) {
 #line 95 "src/ptrflow.tr"
     while ((i < a->len)) {
 #line 96 "src/ptrflow.tr"
-        if (({ TrStr _at_t833 = (List_TrStr_get(a, i)); __auto_type _wr = (pf_has(b, _at_t833)); _tr_str_release(_at_t833); _wr; })) {
+        if (({ TrStr _at_t883 = (List_TrStr_get(a, i)); __auto_type _wr = (pf_has(b, _at_t883)); _tr_str_release(_at_t883); _wr; })) {
 #line 96 "src/ptrflow.tr"
-            ({ TrStr _at_t834 = (List_TrStr_get(a, i)); List_TrStr_append(o, _at_t834); _tr_str_release(_at_t834); });
+            ({ TrStr _at_t884 = (List_TrStr_get(a, i)); List_TrStr_append(o, _at_t884); _tr_str_release(_at_t884); });
         }
 #line 97 "src/ptrflow.tr"
         i = (i + 1LL);
@@ -283,7 +285,7 @@ __attribute__((hot)) bool pf_has_pair(PfState* st, TrStr a, TrStr b) {
 #line 113 "src/ptrflow.tr"
     while ((i < st->pa->len)) {
 #line 114 "src/ptrflow.tr"
-        if ((({ TrStr _cmpa_t835 = (List_TrStr_get(st->pa, i)); TrStr _cmpb_t836 = (a); _Bool _cmpr_t837 = _tr_str_eqv(_cmpa_t835, _cmpb_t836); _tr_str_release(_cmpa_t835); _cmpr_t837; }) && ({ TrStr _cmpa_t838 = (List_TrStr_get(st->pb, i)); TrStr _cmpb_t839 = (b); _Bool _cmpr_t840 = _tr_str_eqv(_cmpa_t838, _cmpb_t839); _tr_str_release(_cmpa_t838); _cmpr_t840; }))) {
+        if ((({ TrStr _cmpa_t885 = (List_TrStr_get(st->pa, i)); TrStr _cmpb_t886 = (a); _Bool _cmpr_t887 = _tr_str_eqv(_cmpa_t885, _cmpb_t886); _tr_str_release(_cmpa_t885); _cmpr_t887; }) && ({ TrStr _cmpa_t888 = (List_TrStr_get(st->pb, i)); TrStr _cmpb_t889 = (b); _Bool _cmpr_t890 = _tr_str_eqv(_cmpa_t888, _cmpb_t889); _tr_str_release(_cmpa_t888); _cmpr_t890; }))) {
 #line 114 "src/ptrflow.tr"
             return true;
         }
@@ -312,7 +314,7 @@ __attribute__((hot)) void pf_merge(PfState* into, PfState* o) {
 #line 125 "src/ptrflow.tr"
     while ((i < o->freed->len)) {
 #line 126 "src/ptrflow.tr"
-        ({ __auto_type _ord_t842 = (into->freed); TrStr _at_t841 = (List_TrStr_get(o->freed, i)); pf_add(_ord_t842, _at_t841); _tr_str_release(_at_t841); });
+        ({ __auto_type _ord_t892 = (into->freed); TrStr _at_t891 = (List_TrStr_get(o->freed, i)); pf_add(_ord_t892, _at_t891); _tr_str_release(_at_t891); });
 #line 127 "src/ptrflow.tr"
         i = (i + 1LL);
     }
@@ -321,11 +323,11 @@ __attribute__((hot)) void pf_merge(PfState* into, PfState* o) {
 #line 129 "src/ptrflow.tr"
     while ((i < o->pa->len)) {
 #line 130 "src/ptrflow.tr"
-        if (({ TrStr _at_t843 = (List_TrStr_get(o->pa, i)); TrStr _at_t844 = (List_TrStr_get(o->pb, i)); __auto_type _wr = ((!pf_has_pair(into, _at_t843, _at_t844))); _tr_str_release(_at_t843); _tr_str_release(_at_t844); _wr; })) {
+        if (({ TrStr _at_t893 = (List_TrStr_get(o->pa, i)); TrStr _at_t894 = (List_TrStr_get(o->pb, i)); __auto_type _wr = ((!pf_has_pair(into, _at_t893, _at_t894))); _tr_str_release(_at_t893); _tr_str_release(_at_t894); _wr; })) {
 #line 131 "src/ptrflow.tr"
-            ({ TrStr _ord_t845 = (List_TrStr_get(o->pa, i)); List_TrStr_append(into->pa, _ord_t845); _tr_str_release(_ord_t845); });
+            ({ TrStr _ord_t895 = (List_TrStr_get(o->pa, i)); List_TrStr_append(into->pa, _ord_t895); _tr_str_release(_ord_t895); });
 #line 132 "src/ptrflow.tr"
-            ({ TrStr _ord_t846 = (List_TrStr_get(o->pb, i)); List_TrStr_append(into->pb, _ord_t846); _tr_str_release(_ord_t846); });
+            ({ TrStr _ord_t896 = (List_TrStr_get(o->pb, i)); List_TrStr_append(into->pb, _ord_t896); _tr_str_release(_ord_t896); });
         }
 #line 133 "src/ptrflow.tr"
         i = (i + 1LL);
@@ -335,7 +337,7 @@ __attribute__((hot)) void pf_merge(PfState* into, PfState* o) {
 #line 135 "src/ptrflow.tr"
     while ((i < o->stk->len)) {
 #line 136 "src/ptrflow.tr"
-        ({ __auto_type _ord_t848 = (into->stk); TrStr _at_t847 = (List_TrStr_get(o->stk, i)); pf_add(_ord_t848, _at_t847); _tr_str_release(_at_t847); });
+        ({ __auto_type _ord_t898 = (into->stk); TrStr _at_t897 = (List_TrStr_get(o->stk, i)); pf_add(_ord_t898, _at_t897); _tr_str_release(_at_t897); });
 #line 137 "src/ptrflow.tr"
         i = (i + 1LL);
     }
@@ -344,7 +346,7 @@ __attribute__((hot)) void pf_merge(PfState* into, PfState* o) {
 #line 139 "src/ptrflow.tr"
     while ((i < o->own->len)) {
 #line 140 "src/ptrflow.tr"
-        ({ __auto_type _ord_t850 = (into->own); TrStr _at_t849 = (List_TrStr_get(o->own, i)); pf_add(_ord_t850, _at_t849); _tr_str_release(_at_t849); });
+        ({ __auto_type _ord_t900 = (into->own); TrStr _at_t899 = (List_TrStr_get(o->own, i)); pf_add(_ord_t900, _at_t899); _tr_str_release(_at_t899); });
 #line 141 "src/ptrflow.tr"
         i = (i + 1LL);
     }
@@ -353,7 +355,7 @@ __attribute__((hot)) void pf_merge(PfState* into, PfState* o) {
 #line 143 "src/ptrflow.tr"
     while ((i < o->inval->len)) {
 #line 144 "src/ptrflow.tr"
-        ({ __auto_type _ord_t852 = (into->inval); TrStr _at_t851 = (List_TrStr_get(o->inval, i)); pf_add(_ord_t852, _at_t851); _tr_str_release(_at_t851); });
+        ({ __auto_type _ord_t902 = (into->inval); TrStr _at_t901 = (List_TrStr_get(o->inval, i)); pf_add(_ord_t902, _at_t901); _tr_str_release(_at_t901); });
 #line 145 "src/ptrflow.tr"
         i = (i + 1LL);
     }
@@ -375,14 +377,14 @@ __attribute__((hot)) TrStr pf_path(HirExpr* e) {
         return _tr_str_lit_len("", 0LL);
     }
 #line 212 "src/ptrflow.tr"
-    __auto_type _t853 = (*e);
-    if (_t853.tag == HirExpr_EIdent) {
-        __auto_type nm = _t853.data.EIdent.name;
+    __auto_type _t903 = (*e);
+    if (_t903.tag == HirExpr_EIdent) {
+        __auto_type nm = _t903.data.EIdent.name;
         TrStr _trret179 = _tr_str_retain(nm);
         return _trret179;
-    } else if (_t853.tag == HirExpr_EPropAccess) {
-        __auto_type o = _t853.data.EPropAccess.obj;
-__auto_type p = _t853.data.EPropAccess.prop;
+    } else if (_t903.tag == HirExpr_EPropAccess) {
+        __auto_type o = _t903.data.EPropAccess.obj;
+__auto_type p = _t903.data.EPropAccess.prop;
 #line 215 "src/ptrflow.tr"
         TrStr po = pf_path(o);
 #line 216 "src/ptrflow.tr"
@@ -396,7 +398,7 @@ __auto_type p = _t853.data.EPropAccess.prop;
         _tr_str_release(po);
         return _tr_str_lit_len("", 0LL);
     } else if (1) {
-        __auto_type _ = _t853;
+        __auto_type _ = _t903;
         return _tr_str_lit_len("", 0LL);
     }
 }
@@ -408,22 +410,22 @@ __attribute__((hot)) TrStr pf_root(HirExpr* e) {
         return _tr_str_lit_len("", 0LL);
     }
 #line 223 "src/ptrflow.tr"
-    __auto_type _t854 = (*e);
-    if (_t854.tag == HirExpr_EIdent) {
-        __auto_type nm = _t854.data.EIdent.name;
+    __auto_type _t904 = (*e);
+    if (_t904.tag == HirExpr_EIdent) {
+        __auto_type nm = _t904.data.EIdent.name;
         TrStr _trret181 = _tr_str_retain(nm);
         return _trret181;
-    } else if (_t854.tag == HirExpr_EPropAccess) {
-        __auto_type o = _t854.data.EPropAccess.obj;
-__auto_type p = _t854.data.EPropAccess.prop;
+    } else if (_t904.tag == HirExpr_EPropAccess) {
+        __auto_type o = _t904.data.EPropAccess.obj;
+__auto_type p = _t904.data.EPropAccess.prop;
         TrStr _trret182 = pf_path(e);
         return _trret182;
-    } else if (_t854.tag == HirExpr_ECast) {
-        __auto_type x = _t854.data.ECast.expr;
+    } else if (_t904.tag == HirExpr_ECast) {
+        __auto_type x = _t904.data.ECast.expr;
         return pf_root(x);
-    } else if (_t854.tag == HirExpr_EMethodCall) {
-        __auto_type o = _t854.data.EMethodCall.obj;
-__auto_type m = _t854.data.EMethodCall.method;
+    } else if (_t904.tag == HirExpr_EMethodCall) {
+        __auto_type o = _t904.data.EMethodCall.obj;
+__auto_type m = _t904.data.EMethodCall.method;
 #line 228 "src/ptrflow.tr"
         if ((((_tr_str_eqv((m), (_tr_str_lit_len("offset", 6LL))) || _tr_str_eqv((m), (_tr_str_lit_len("add", 3LL)))) || _tr_str_eqv((m), (_tr_str_lit_len("sub", 3LL)))) || _tr_str_eqv((m), (_tr_str_lit_len("cast", 4LL))))) {
 #line 228 "src/ptrflow.tr"
@@ -433,7 +435,7 @@ __auto_type m = _t854.data.EMethodCall.method;
 #line 229 "src/ptrflow.tr"
         return _tr_str_lit_len("", 0LL);
     } else if (1) {
-        __auto_type _ = _t854;
+        __auto_type _ = _t904;
         return _tr_str_lit_len("", 0LL);
     }
 }
@@ -445,25 +447,25 @@ __attribute__((hot)) bool pf_is_dealloc(HirExpr* callee) {
         return false;
     }
 #line 234 "src/ptrflow.tr"
-    __auto_type _t855 = (*callee);
-    if (_t855.tag == HirExpr_EIdent) {
-        __auto_type nm = _t855.data.EIdent.name;
+    __auto_type _t905 = (*callee);
+    if (_t905.tag == HirExpr_EIdent) {
+        __auto_type nm = _t905.data.EIdent.name;
         bool _trret184 = _tr_str_eqv((nm), (_tr_str_lit_len("dealloc", 7LL)));
         return _trret184;
-    } else if (_t855.tag == HirExpr_EIndex) {
-        __auto_type o = _t855.data.EIndex.obj;
+    } else if (_t905.tag == HirExpr_EIndex) {
+        __auto_type o = _t905.data.EIndex.obj;
 #line 237 "src/ptrflow.tr"
-        __auto_type _t856 = (*o);
-        if (_t856.tag == HirExpr_EIdent) {
-            __auto_type nm = _t856.data.EIdent.name;
+        __auto_type _t906 = (*o);
+        if (_t906.tag == HirExpr_EIdent) {
+            __auto_type nm = _t906.data.EIdent.name;
             bool _trret185 = _tr_str_eqv((nm), (_tr_str_lit_len("dealloc", 7LL)));
             return _trret185;
         } else if (1) {
-            __auto_type _ = _t856;
+            __auto_type _ = _t906;
             return false;
         }
     } else if (1) {
-        __auto_type _ = _t855;
+        __auto_type _ = _t905;
         return false;
     }
 }
@@ -475,13 +477,13 @@ __attribute__((hot)) TrStr pf_callee_name(HirExpr* callee) {
         return _tr_str_lit_len("", 0LL);
     }
 #line 244 "src/ptrflow.tr"
-    __auto_type _t857 = (*callee);
-    if (_t857.tag == HirExpr_EIdent) {
-        __auto_type nm = _t857.data.EIdent.name;
+    __auto_type _t907 = (*callee);
+    if (_t907.tag == HirExpr_EIdent) {
+        __auto_type nm = _t907.data.EIdent.name;
         TrStr _trret186 = _tr_str_retain(nm);
         return _trret186;
     } else if (1) {
-        __auto_type _ = _t857;
+        __auto_type _ = _t907;
         return _tr_str_lit_len("", 0LL);
     }
 }
@@ -493,16 +495,16 @@ __attribute__((hot)) TrStr pf_stack_src(HirExpr* e, PfState* st, PfCtx* cx) {
         return _tr_str_lit_len("", 0LL);
     }
 #line 251 "src/ptrflow.tr"
-    __auto_type _t858 = (*e);
-    if (_t858.tag == HirExpr_EUnaryOp) {
-        __auto_type op = _t858.data.EUnaryOp.op;
-__auto_type x = _t858.data.EUnaryOp.expr;
+    __auto_type _t908 = (*e);
+    if (_t908.tag == HirExpr_EUnaryOp) {
+        __auto_type op = _t908.data.EUnaryOp.op;
+__auto_type x = _t908.data.EUnaryOp.expr;
 #line 253 "src/ptrflow.tr"
         if ((_tr_str_eqv((op), (_tr_str_lit_len("&", 1LL))) && (!pf_null(x)))) {
 #line 254 "src/ptrflow.tr"
-            __auto_type _t859 = (*x);
-            if (_t859.tag == HirExpr_EIdent) {
-                __auto_type nm = _t859.data.EIdent.name;
+            __auto_type _t909 = (*x);
+            if (_t909.tag == HirExpr_EIdent) {
+                __auto_type nm = _t909.data.EIdent.name;
 #line 256 "src/ptrflow.tr"
                 if (((!_tr_str_eqv((nm), (_tr_str_lit_len("self", 4LL)))) && (pf_has(cx->locals, nm) || pf_has(cx->params, nm)))) {
 #line 256 "src/ptrflow.tr"
@@ -510,14 +512,14 @@ __auto_type x = _t858.data.EUnaryOp.expr;
                     return _trret187;
                 }
             } else if (1) {
-                __auto_type _ = _t859;
+                __auto_type _ = _t909;
                 /* pass */
             }
         }
 #line 258 "src/ptrflow.tr"
         return _tr_str_lit_len("", 0LL);
-    } else if (_t858.tag == HirExpr_EIdent) {
-        __auto_type nm = _t858.data.EIdent.name;
+    } else if (_t908.tag == HirExpr_EIdent) {
+        __auto_type nm = _t908.data.EIdent.name;
 #line 260 "src/ptrflow.tr"
         if (pf_has(st->stk, nm)) {
 #line 261 "src/ptrflow.tr"
@@ -532,12 +534,12 @@ __auto_type x = _t858.data.EUnaryOp.expr;
         }
 #line 263 "src/ptrflow.tr"
         return _tr_str_lit_len("", 0LL);
-    } else if (_t858.tag == HirExpr_ECast) {
-        __auto_type x = _t858.data.ECast.expr;
+    } else if (_t908.tag == HirExpr_ECast) {
+        __auto_type x = _t908.data.ECast.expr;
         return pf_stack_src(x, st, cx);
-    } else if (_t858.tag == HirExpr_EMethodCall) {
-        __auto_type o = _t858.data.EMethodCall.obj;
-__auto_type m = _t858.data.EMethodCall.method;
+    } else if (_t908.tag == HirExpr_EMethodCall) {
+        __auto_type o = _t908.data.EMethodCall.obj;
+__auto_type m = _t908.data.EMethodCall.method;
 #line 266 "src/ptrflow.tr"
         if ((((_tr_str_eqv((m), (_tr_str_lit_len("offset", 6LL))) || _tr_str_eqv((m), (_tr_str_lit_len("add", 3LL)))) || _tr_str_eqv((m), (_tr_str_lit_len("sub", 3LL)))) || _tr_str_eqv((m), (_tr_str_lit_len("cast", 4LL))))) {
 #line 266 "src/ptrflow.tr"
@@ -547,7 +549,7 @@ __auto_type m = _t858.data.EMethodCall.method;
 #line 267 "src/ptrflow.tr"
         return _tr_str_lit_len("", 0LL);
     } else if (1) {
-        __auto_type _ = _t858;
+        __auto_type _ = _t908;
         return _tr_str_lit_len("", 0LL);
     }
 }
@@ -559,30 +561,30 @@ __attribute__((hot)) long long pf_lit(HirExpr* e) {
         return (-4611686018427387904LL);
     }
 #line 273 "src/ptrflow.tr"
-    __auto_type _t860 = (*e);
-    if (_t860.tag == HirExpr_ELitInt) {
-        __auto_type v = _t860.data.ELitInt.val;
+    __auto_type _t910 = (*e);
+    if (_t910.tag == HirExpr_ELitInt) {
+        __auto_type v = _t910.data.ELitInt.val;
         return v;
-    } else if (_t860.tag == HirExpr_EUnaryOp) {
-        __auto_type op = _t860.data.EUnaryOp.op;
-__auto_type x = _t860.data.EUnaryOp.expr;
+    } else if (_t910.tag == HirExpr_EUnaryOp) {
+        __auto_type op = _t910.data.EUnaryOp.op;
+__auto_type x = _t910.data.EUnaryOp.expr;
 #line 276 "src/ptrflow.tr"
         if ((_tr_str_eqv((op), (_tr_str_lit_len("-", 1LL))) && (!pf_null(x)))) {
 #line 277 "src/ptrflow.tr"
-            __auto_type _t861 = (*x);
-            if (_t861.tag == HirExpr_ELitInt) {
-                __auto_type v2 = _t861.data.ELitInt.val;
+            __auto_type _t911 = (*x);
+            if (_t911.tag == HirExpr_ELitInt) {
+                __auto_type v2 = _t911.data.ELitInt.val;
                 long long _trret191 = (0LL - v2);
                 return _trret191;
             } else if (1) {
-                __auto_type _ = _t861;
+                __auto_type _ = _t911;
                 return (-4611686018427387904LL);
             }
         }
 #line 280 "src/ptrflow.tr"
         return (-4611686018427387904LL);
     } else if (1) {
-        __auto_type _ = _t860;
+        __auto_type _ = _t910;
         return (-4611686018427387904LL);
     }
 }
@@ -599,25 +601,25 @@ __attribute__((hot)) bool pf_named_call(HirExpr* callee, TrStr want) {
         return false;
     }
 #line 288 "src/ptrflow.tr"
-    __auto_type _t862 = (*callee);
-    if (_t862.tag == HirExpr_EIdent) {
-        __auto_type nm = _t862.data.EIdent.name;
+    __auto_type _t912 = (*callee);
+    if (_t912.tag == HirExpr_EIdent) {
+        __auto_type nm = _t912.data.EIdent.name;
         bool _trret192 = _tr_str_eqv((nm), (want));
         return _trret192;
-    } else if (_t862.tag == HirExpr_EIndex) {
-        __auto_type o = _t862.data.EIndex.obj;
+    } else if (_t912.tag == HirExpr_EIndex) {
+        __auto_type o = _t912.data.EIndex.obj;
 #line 291 "src/ptrflow.tr"
-        __auto_type _t863 = (*o);
-        if (_t863.tag == HirExpr_EIdent) {
-            __auto_type nm = _t863.data.EIdent.name;
+        __auto_type _t913 = (*o);
+        if (_t913.tag == HirExpr_EIdent) {
+            __auto_type nm = _t913.data.EIdent.name;
             bool _trret193 = _tr_str_eqv((nm), (want));
             return _trret193;
         } else if (1) {
-            __auto_type _ = _t863;
+            __auto_type _ = _t913;
             return false;
         }
     } else if (1) {
-        __auto_type _ = _t862;
+        __auto_type _ = _t912;
         return false;
     }
 }
@@ -629,21 +631,21 @@ __attribute__((hot)) bool pf_is_alloc(HirExpr* val) {
         return false;
     }
 #line 298 "src/ptrflow.tr"
-    __auto_type _t864 = (*val);
-    if (_t864.tag == HirExpr_ECall) {
-        __auto_type callee = _t864.data.ECall.callee;
+    __auto_type _t914 = (*val);
+    if (_t914.tag == HirExpr_ECall) {
+        __auto_type callee = _t914.data.ECall.callee;
         return pf_named_call(callee, _tr_str_lit_len("alloc", 5LL));
     } else if (1) {
-        __auto_type _ = _t864;
+        __auto_type _ = _t914;
         return false;
     }
 }
 
 __attribute__((hot)) long long pf_alloc_n(HirExpr* val) {
 #line 303 "src/ptrflow.tr"
-    __auto_type _t865 = (*val);
-    if (_t865.tag == HirExpr_ECall) {
-        __auto_type args = _t865.data.ECall.args;
+    __auto_type _t915 = (*val);
+    if (_t915.tag == HirExpr_ECall) {
+        __auto_type args = _t915.data.ECall.args;
 #line 305 "src/ptrflow.tr"
         if ((args->len == 1LL)) {
 #line 305 "src/ptrflow.tr"
@@ -652,7 +654,7 @@ __attribute__((hot)) long long pf_alloc_n(HirExpr* val) {
 #line 306 "src/ptrflow.tr"
         return (-4611686018427387904LL);
     } else if (1) {
-        __auto_type _ = _t865;
+        __auto_type _ = _t915;
         return (-4611686018427387904LL);
     }
 }
@@ -664,35 +666,35 @@ __attribute__((hot)) bool pf_is_null_lit(HirExpr* val) {
         return false;
     }
 #line 312 "src/ptrflow.tr"
-    __auto_type _t866 = (*val);
-    if (_t866.tag == HirExpr_ELitNone) {
-        __auto_type _ = _t866.data.ELitNone.ty;
+    __auto_type _t916 = (*val);
+    if (_t916.tag == HirExpr_ELitNone) {
+        __auto_type _ = _t916.data.ELitNone.ty;
         return true;
-    } else if (_t866.tag == HirExpr_ELitInt) {
-        __auto_type v = _t866.data.ELitInt.val;
-__auto_type ty = _t866.data.ELitInt.ty;
+    } else if (_t916.tag == HirExpr_ELitInt) {
+        __auto_type v = _t916.data.ELitInt.val;
+__auto_type ty = _t916.data.ELitInt.ty;
         bool _trret194 = ((v == 0LL) && _tr_str_eqv((ty->name), (_tr_str_lit_len("Pointer", 7LL))));
         return _trret194;
-    } else if (_t866.tag == HirExpr_ECast) {
-        __auto_type x = _t866.data.ECast.expr;
-__auto_type ty = _t866.data.ECast.target_ty;
+    } else if (_t916.tag == HirExpr_ECast) {
+        __auto_type x = _t916.data.ECast.expr;
+__auto_type ty = _t916.data.ECast.target_ty;
 #line 316 "src/ptrflow.tr"
         if ((pf_null(x) || (!_tr_str_eqv((ty->name), (_tr_str_lit_len("Pointer", 7LL)))))) {
 #line 316 "src/ptrflow.tr"
             return false;
         }
 #line 317 "src/ptrflow.tr"
-        __auto_type _t867 = (*x);
-        if (_t867.tag == HirExpr_ELitInt) {
-            __auto_type v = _t867.data.ELitInt.val;
+        __auto_type _t917 = (*x);
+        if (_t917.tag == HirExpr_ELitInt) {
+            __auto_type v = _t917.data.ELitInt.val;
             bool _trret195 = (v == 0LL);
             return _trret195;
         } else if (1) {
-            __auto_type _ = _t867;
+            __auto_type _ = _t917;
             return false;
         }
     } else if (1) {
-        __auto_type _ = _t866;
+        __auto_type _ = _t916;
         return false;
     }
 }
@@ -707,7 +709,7 @@ __attribute__((hot)) long long pf_size_of(PfState* st, TrStr path) {
 #line 326 "src/ptrflow.tr"
         long long eq = _tr_str_index_ofv((e), (_tr_str_lit_len("=", 1LL)));
 #line 327 "src/ptrflow.tr"
-        if (({ TrStr _cmpa_t868 = (_tr_str_slicev((e), 0LL, eq)); TrStr _cmpb_t869 = (path); _Bool _cmpr_t870 = _tr_str_eqv(_cmpa_t868, _cmpb_t869); _tr_str_release(_cmpa_t868); _cmpr_t870; })) {
+        if (({ TrStr _cmpa_t918 = (_tr_str_slicev((e), 0LL, eq)); TrStr _cmpb_t919 = (path); _Bool _cmpr_t920 = _tr_str_eqv(_cmpa_t918, _cmpb_t919); _tr_str_release(_cmpa_t918); _cmpr_t920; })) {
 #line 327 "src/ptrflow.tr"
             long long _trret196 = _tr_str_to_int(_tr_strz(_tr_str_slicev((e), (eq + 1LL), _tr_str_lenv((e)))));
             _tr_str_release(e);
@@ -729,9 +731,9 @@ __attribute__((hot)) void pf_kill(PfState* st, TrStr path) {
 #line 336 "src/ptrflow.tr"
     while ((i < st->freed->len)) {
 #line 337 "src/ptrflow.tr"
-        if (({ TrStr _at_t871 = (List_TrStr_get(st->freed, i)); __auto_type _wr = ((!pf_under(_at_t871, path))); _tr_str_release(_at_t871); _wr; })) {
+        if (({ TrStr _at_t921 = (List_TrStr_get(st->freed, i)); __auto_type _wr = ((!pf_under(_at_t921, path))); _tr_str_release(_at_t921); _wr; })) {
 #line 337 "src/ptrflow.tr"
-            ({ TrStr _at_t872 = (List_TrStr_get(st->freed, i)); List_TrStr_append(nf, _at_t872); _tr_str_release(_at_t872); });
+            ({ TrStr _at_t922 = (List_TrStr_get(st->freed, i)); List_TrStr_append(nf, _at_t922); _tr_str_release(_at_t922); });
         }
 #line 338 "src/ptrflow.tr"
         i = (i + 1LL);
@@ -747,11 +749,11 @@ __attribute__((hot)) void pf_kill(PfState* st, TrStr path) {
 #line 343 "src/ptrflow.tr"
     while ((i < st->pa->len)) {
 #line 344 "src/ptrflow.tr"
-        if ((({ TrStr _at_t873 = (List_TrStr_get(st->pa, i)); __auto_type _wr = ((!pf_under(_at_t873, path))); _tr_str_release(_at_t873); _wr; }) && ({ TrStr _at_t874 = (List_TrStr_get(st->pb, i)); __auto_type _wr = ((!pf_under(_at_t874, path))); _tr_str_release(_at_t874); _wr; }))) {
+        if ((({ TrStr _at_t923 = (List_TrStr_get(st->pa, i)); __auto_type _wr = ((!pf_under(_at_t923, path))); _tr_str_release(_at_t923); _wr; }) && ({ TrStr _at_t924 = (List_TrStr_get(st->pb, i)); __auto_type _wr = ((!pf_under(_at_t924, path))); _tr_str_release(_at_t924); _wr; }))) {
 #line 345 "src/ptrflow.tr"
-            ({ TrStr _at_t875 = (List_TrStr_get(st->pa, i)); List_TrStr_append(na, _at_t875); _tr_str_release(_at_t875); });
+            ({ TrStr _at_t925 = (List_TrStr_get(st->pa, i)); List_TrStr_append(na, _at_t925); _tr_str_release(_at_t925); });
 #line 346 "src/ptrflow.tr"
-            ({ TrStr _at_t876 = (List_TrStr_get(st->pb, i)); List_TrStr_append(nb, _at_t876); _tr_str_release(_at_t876); });
+            ({ TrStr _at_t926 = (List_TrStr_get(st->pb, i)); List_TrStr_append(nb, _at_t926); _tr_str_release(_at_t926); });
         }
 #line 347 "src/ptrflow.tr"
         i = (i + 1LL);
@@ -767,9 +769,9 @@ __attribute__((hot)) void pf_kill(PfState* st, TrStr path) {
 #line 352 "src/ptrflow.tr"
     while ((i < st->stk->len)) {
 #line 353 "src/ptrflow.tr"
-        if (({ TrStr _at_t877 = (List_TrStr_get(st->stk, i)); __auto_type _wr = ((!pf_under(_at_t877, path))); _tr_str_release(_at_t877); _wr; })) {
+        if (({ TrStr _at_t927 = (List_TrStr_get(st->stk, i)); __auto_type _wr = ((!pf_under(_at_t927, path))); _tr_str_release(_at_t927); _wr; })) {
 #line 353 "src/ptrflow.tr"
-            ({ TrStr _at_t878 = (List_TrStr_get(st->stk, i)); List_TrStr_append(ns, _at_t878); _tr_str_release(_at_t878); });
+            ({ TrStr _at_t928 = (List_TrStr_get(st->stk, i)); List_TrStr_append(ns, _at_t928); _tr_str_release(_at_t928); });
         }
 #line 354 "src/ptrflow.tr"
         i = (i + 1LL);
@@ -793,7 +795,7 @@ __attribute__((hot)) void pf_kill(PfState* st, TrStr path) {
 #line 363 "src/ptrflow.tr"
         long long eq = _tr_str_index_ofv((e), (_tr_str_lit_len("=", 1LL)));
 #line 364 "src/ptrflow.tr"
-        if (({ TrStr _at_t879 = (_tr_str_slicev((e), 0LL, eq)); __auto_type _wr = ((!pf_under(_at_t879, path))); _tr_str_release(_at_t879); _wr; })) {
+        if (({ TrStr _at_t929 = (_tr_str_slicev((e), 0LL, eq)); __auto_type _wr = ((!pf_under(_at_t929, path))); _tr_str_release(_at_t929); _wr; })) {
 #line 364 "src/ptrflow.tr"
             List_TrStr_append(nz, e);
         }
@@ -813,9 +815,9 @@ __attribute__((hot)) List_TrStr* pf_drop_under(List_TrStr* v, TrStr path) {
 #line 371 "src/ptrflow.tr"
     while ((i < v->len)) {
 #line 372 "src/ptrflow.tr"
-        if (({ TrStr _at_t880 = (List_TrStr_get(v, i)); __auto_type _wr = ((!pf_under(_at_t880, path))); _tr_str_release(_at_t880); _wr; })) {
+        if (({ TrStr _at_t930 = (List_TrStr_get(v, i)); __auto_type _wr = ((!pf_under(_at_t930, path))); _tr_str_release(_at_t930); _wr; })) {
 #line 372 "src/ptrflow.tr"
-            ({ TrStr _at_t881 = (List_TrStr_get(v, i)); List_TrStr_append(o, _at_t881); _tr_str_release(_at_t881); });
+            ({ TrStr _at_t931 = (List_TrStr_get(v, i)); List_TrStr_append(o, _at_t931); _tr_str_release(_at_t931); });
         }
 #line 373 "src/ptrflow.tr"
         i = (i + 1LL);
@@ -886,9 +888,9 @@ __attribute__((hot)) void pf_free(PfState* st, TrStr path) {
 #line 404 "src/ptrflow.tr"
         while ((i < st->pa->len)) {
 #line 405 "src/ptrflow.tr"
-            if ((({ __auto_type _ord_t883 = (st->freed); TrStr _at_t882 = (List_TrStr_get(st->pa, i)); __auto_type _wr = (pf_has(_ord_t883, _at_t882)); _tr_str_release(_at_t882); _wr; }) && ({ __auto_type _ord_t885 = (st->freed); TrStr _at_t884 = (List_TrStr_get(st->pb, i)); __auto_type _wr = ((!pf_has(_ord_t885, _at_t884))); _tr_str_release(_at_t884); _wr; }))) {
+            if ((({ __auto_type _ord_t933 = (st->freed); TrStr _at_t932 = (List_TrStr_get(st->pa, i)); __auto_type _wr = (pf_has(_ord_t933, _at_t932)); _tr_str_release(_at_t932); _wr; }) && ({ __auto_type _ord_t935 = (st->freed); TrStr _at_t934 = (List_TrStr_get(st->pb, i)); __auto_type _wr = ((!pf_has(_ord_t935, _at_t934))); _tr_str_release(_at_t934); _wr; }))) {
 #line 406 "src/ptrflow.tr"
-                ({ TrStr _ord_t886 = (List_TrStr_get(st->pb, i)); List_TrStr_append(st->freed, _ord_t886); _tr_str_release(_ord_t886); });
+                ({ TrStr _ord_t936 = (List_TrStr_get(st->pb, i)); List_TrStr_append(st->freed, _ord_t936); _tr_str_release(_ord_t936); });
 #line 407 "src/ptrflow.tr"
                 changed = true;
             }
@@ -932,15 +934,15 @@ __attribute__((hot)) bool pf_zeroish(HirExpr* e) {
         return true;
     }
 #line 424 "src/ptrflow.tr"
-    __auto_type _t887 = (*e);
-    if (_t887.tag == HirExpr_ELitInt) {
-        __auto_type v = _t887.data.ELitInt.val;
+    __auto_type _t937 = (*e);
+    if (_t937.tag == HirExpr_ELitInt) {
+        __auto_type v = _t937.data.ELitInt.val;
         return (v == 0LL);
-    } else if (_t887.tag == HirExpr_ECast) {
-        __auto_type x = _t887.data.ECast.expr;
+    } else if (_t937.tag == HirExpr_ECast) {
+        __auto_type x = _t937.data.ECast.expr;
         return pf_zeroish(x);
     } else if (1) {
-        __auto_type _ = _t887;
+        __auto_type _ = _t937;
         return false;
     }
 }
@@ -952,11 +954,11 @@ __attribute__((hot)) TrStr pf_nulltest(HirExpr* cond) {
         return _tr_str_lit_len("", 0LL);
     }
 #line 432 "src/ptrflow.tr"
-    __auto_type _t888 = (*cond);
-    if (_t888.tag == HirExpr_EBinOp) {
-        __auto_type op = _t888.data.EBinOp.op;
-__auto_type l = _t888.data.EBinOp.left;
-__auto_type r = _t888.data.EBinOp.right;
+    __auto_type _t938 = (*cond);
+    if (_t938.tag == HirExpr_EBinOp) {
+        __auto_type op = _t938.data.EBinOp.op;
+__auto_type l = _t938.data.EBinOp.left;
+__auto_type r = _t938.data.EBinOp.right;
 #line 434 "src/ptrflow.tr"
         if (((!_tr_str_eqv((op), (_tr_str_lit_len("==", 2LL)))) && (!_tr_str_eqv((op), (_tr_str_lit_len("!=", 2LL)))))) {
 #line 434 "src/ptrflow.tr"
@@ -967,14 +969,14 @@ __auto_type r = _t888.data.EBinOp.right;
 #line 436 "src/ptrflow.tr"
         if (pf_zeroish(r)) {
 #line 436 "src/ptrflow.tr"
-            TrStr _strtmp_t889 = pf_root(l);
+            TrStr _strtmp_t939 = pf_root(l);
             _tr_str_release(pth);
-            pth = _strtmp_t889;
+            pth = _strtmp_t939;
         } else if (pf_zeroish(l)) {
 #line 437 "src/ptrflow.tr"
-            TrStr _strtmp_t890 = pf_root(r);
+            TrStr _strtmp_t940 = pf_root(r);
             _tr_str_release(pth);
-            pth = _strtmp_t890;
+            pth = _strtmp_t940;
         }
 #line 438 "src/ptrflow.tr"
         if (_tr_str_eqv((pth), (_tr_str_lit_len("", 0LL)))) {
@@ -987,7 +989,7 @@ __auto_type r = _t888.data.EBinOp.right;
         _tr_str_release(pth);
         return _trret198;
     } else if (1) {
-        __auto_type _ = _t888;
+        __auto_type _ = _t938;
         return _tr_str_lit_len("", 0LL);
     }
 }
@@ -1027,7 +1029,7 @@ __attribute__((hot)) void pf_block(PfCtx* cx, HirBlock* b, PfState* st) {
 
 __attribute__((hot)) void pf_use_msg(PfCtx* cx, TrStr name) {
 #line 457 "src/ptrflow.tr"
-    ({ TrStr _at_t891 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[M-6] '", 7LL)), (name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' was freed by 'dealloc()' and can no longer be used.\n      FIX: Remove all uses of '", 85LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' after 'dealloc()', or restructure so the pointer is freed only when no longer needed (or re-assign it a fresh value first). A pointer that is deallocated on only some paths, or in a previous loop iteration, counts as freed.", 225LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t891); _tr_str_release(_at_t891); });
+    ({ TrStr _at_t941 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[M-6] '", 7LL)), (name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' was freed by 'dealloc()' and can no longer be used.\n      FIX: Remove all uses of '", 85LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' after 'dealloc()', or restructure so the pointer is freed only when no longer needed (or re-assign it a fresh value first). A pointer that is deallocated on only some paths, or in a previous loop iteration, counts as freed.", 225LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t941); _tr_str_release(_at_t941); });
 }
 
 __attribute__((hot)) void pf_exprs(PfCtx* cx, List_ptr* v, PfState* st) {
@@ -1060,10 +1062,10 @@ __attribute__((hot)) void pf_ptr_checks(PfCtx* cx, PfState* st, HirExpr* o, TrSt
 #line 474 "src/ptrflow.tr"
         if (pf_has(st->nul, np)) {
 #line 475 "src/ptrflow.tr"
-            ({ TrStr _at_t892 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-3] '.", 8LL)), (m))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("()' on '", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (np)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', which is a null pointer here (null dereference).\n      FIX: allocate it (alloc[T](n)) or check it for null before dereferencing.", 131LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t892); _tr_str_release(_at_t892); });
+            ({ TrStr _at_t942 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-3] '.", 8LL)), (m))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("()' on '", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (np)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', which is a null pointer here (null dereference).\n      FIX: allocate it (alloc[T](n)) or check it for null before dereferencing.", 131LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t942); _tr_str_release(_at_t942); });
         } else if ((pf_size_of(st, np) == 0LL)) {
 #line 477 "src/ptrflow.tr"
-            ({ TrStr _at_t893 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-3] '.", 8LL)), (m))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("()' on '", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (np)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', which was allocated with 0 elements (out of bounds).\n      FIX: allocate at least one element, or do not dereference an empty block.", 135LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t893); _tr_str_release(_at_t893); });
+            ({ TrStr _at_t943 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-3] '.", 8LL)), (m))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("()' on '", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (np)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', which was allocated with 0 elements (out of bounds).\n      FIX: allocate at least one element, or do not dereference an empty block.", 135LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t943); _tr_str_release(_at_t943); });
         }
     }
 #line 478 "src/ptrflow.tr"
@@ -1075,17 +1077,17 @@ __attribute__((hot)) void pf_ptr_checks(PfCtx* cx, PfState* st, HirExpr* o, TrSt
 #line 481 "src/ptrflow.tr"
         if ((((sz >= 0LL) && pf_is_lit(((HirExpr*)List_ptr_get(args, 0LL)))) && ((k < 0LL) || (k > sz)))) {
 #line 482 "src/ptrflow.tr"
-            ({ __auto_type _ord_t894 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-3] '", 7LL)), (np))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".offset(", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(k)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")' moves outside the ", 21LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t895 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t894); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(sz)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("-element block '", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (np)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' was allocated with (undefined behaviour even before it is dereferenced).\n      FIX: keep the offset in 0 .. n (one-past-the-end) of the alloc[T](n) block.", 156LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t895); _tr_str_release(_at_t895); });
+            ({ __auto_type _ord_t944 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-3] '", 7LL)), (np))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".offset(", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(k)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")' moves outside the ", 21LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t945 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t944); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(sz)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("-element block '", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (np)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' was allocated with (undefined behaviour even before it is dereferenced).\n      FIX: keep the offset in 0 .. n (one-past-the-end) of the alloc[T](n) block.", 156LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t945); _tr_str_release(_at_t945); });
         }
     }
 #line 483 "src/ptrflow.tr"
     if (((_tr_str_eqv((m), (_tr_str_lit_len("read", 4LL))) || _tr_str_eqv((m), (_tr_str_lit_len("write", 5LL)))) && (!pf_null(o)))) {
 #line 484 "src/ptrflow.tr"
-        __auto_type _t896 = (*o);
-        if (_t896.tag == HirExpr_EMethodCall) {
-            __auto_type bo = _t896.data.EMethodCall.obj;
-__auto_type bm = _t896.data.EMethodCall.method;
-__auto_type bargs = _t896.data.EMethodCall.args;
+        __auto_type _t946 = (*o);
+        if (_t946.tag == HirExpr_EMethodCall) {
+            __auto_type bo = _t946.data.EMethodCall.obj;
+__auto_type bm = _t946.data.EMethodCall.method;
+__auto_type bargs = _t946.data.EMethodCall.args;
 #line 486 "src/ptrflow.tr"
             if ((_tr_str_eqv((bm), (_tr_str_lit_len("offset", 6LL))) && (bargs->len == 1LL))) {
 #line 487 "src/ptrflow.tr"
@@ -1102,11 +1104,11 @@ __auto_type bargs = _t896.data.EMethodCall.args;
 #line 491 "src/ptrflow.tr"
                 if ((((bsz >= 0LL) && pf_is_lit(((HirExpr*)List_ptr_get(bargs, 0LL)))) && ((bk < 0LL) || (bk >= bsz)))) {
 #line 492 "src/ptrflow.tr"
-                    ({ __auto_type _ord_t897 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-3] '", 7LL)), (bp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".offset(", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(bk)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(").", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("()' is outside the ", 19LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t898 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t897); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(bsz)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("-element block '", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (bp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' was allocated with (out-of-bounds access).\n      FIX: keep the offset in 0 .. n-1 of the alloc[T](n) block, or use a List[T] (bounds-checked).", 144LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t898); _tr_str_release(_at_t898); });
+                    ({ __auto_type _ord_t947 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-3] '", 7LL)), (bp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".offset(", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(bk)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(").", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("()' is outside the ", 19LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t948 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t947); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(bsz)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("-element block '", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (bp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' was allocated with (out-of-bounds access).\n      FIX: keep the offset in 0 .. n-1 of the alloc[T](n) block, or use a List[T] (bounds-checked).", 144LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t948); _tr_str_release(_at_t948); });
                 }
             }
         } else if (1) {
-            __auto_type _ = _t896;
+            __auto_type _ = _t946;
             /* pass */
         }
     }
@@ -1120,9 +1122,9 @@ __attribute__((hot)) void pf_expr(PfCtx* cx, HirExpr* e, PfState* st) {
         return;
     }
 #line 497 "src/ptrflow.tr"
-    __auto_type _t899 = (*e);
-    if (_t899.tag == HirExpr_EIdent) {
-        __auto_type nm = _t899.data.EIdent.name;
+    __auto_type _t949 = (*e);
+    if (_t949.tag == HirExpr_EIdent) {
+        __auto_type nm = _t949.data.EIdent.name;
 #line 499 "src/ptrflow.tr"
         if (pf_has(st->freed, nm)) {
 #line 500 "src/ptrflow.tr"
@@ -1138,13 +1140,13 @@ __attribute__((hot)) void pf_expr(PfCtx* cx, HirExpr* e, PfState* st) {
 #line 503 "src/ptrflow.tr"
         if (pf_has(st->inval, nm)) {
 #line 504 "src/ptrflow.tr"
-            ({ TrStr _at_t900 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[M-6] '", 7LL)), (nm))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' points into the buffer of a List that was grown, shrunk or cleared after the pointer was taken; the buffer may have moved or been freed, so the pointer dangles.\n      FIX: take the pointer (`l as Pointer[T]`) again after the last mutation of the list, or index the list instead of holding a raw pointer.", 305LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t900); _tr_str_release(_at_t900); });
+            ({ TrStr _at_t950 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[M-6] '", 7LL)), (nm))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' points into the buffer of a List that was grown, shrunk or cleared after the pointer was taken; the buffer may have moved or been freed, so the pointer dangles.\n      FIX: take the pointer (`l as Pointer[T]`) again after the last mutation of the list, or index the list instead of holding a raw pointer.", 305LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t950); _tr_str_release(_at_t950); });
 #line 505 "src/ptrflow.tr"
             st->inval = pf_drop_under(st->inval, nm);
         }
-    } else if (_t899.tag == HirExpr_EPropAccess) {
-        __auto_type o = _t899.data.EPropAccess.obj;
-__auto_type p = _t899.data.EPropAccess.prop;
+    } else if (_t949.tag == HirExpr_EPropAccess) {
+        __auto_type o = _t949.data.EPropAccess.obj;
+__auto_type p = _t949.data.EPropAccess.prop;
 #line 507 "src/ptrflow.tr"
         if (((!pf_null(o)) && _tr_str_eqv((hir_expr_type(o)->name), (_tr_str_lit_len("Pointer", 7LL))))) {
 #line 508 "src/ptrflow.tr"
@@ -1152,12 +1154,12 @@ __auto_type p = _t899.data.EPropAccess.prop;
 #line 509 "src/ptrflow.tr"
             if ((cx->unsafe_depth == 0LL)) {
 #line 509 "src/ptrflow.tr"
-                TrStr _strtmp_t901 = _tr_str_lit_len("", 0LL);
+                TrStr _strtmp_t951 = _tr_str_lit_len("", 0LL);
                 _tr_str_release(wh);
-                wh = _strtmp_t901;
+                wh = _strtmp_t951;
             }
 #line 510 "src/ptrflow.tr"
-            ({ TrStr _at_t902 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-2] '.", 8LL)), (p))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is a field access through a raw Pointer, which has no fields.\n      FIX: read the pointee ", 92LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (wh)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("first, e.g. `unsafe:` then `p.read().", 37LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (p)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("` (and `p.write(v)` to store a whole value), or keep the data in a class / List[T].", 83LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t902); _tr_str_release(_at_t902); });
+            ({ TrStr _at_t952 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-2] '.", 8LL)), (p))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is a field access through a raw Pointer, which has no fields.\n      FIX: read the pointee ", 92LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (wh)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("first, e.g. `unsafe:` then `p.read().", 37LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (p)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("` (and `p.write(v)` to store a whole value), or keep the data in a class / List[T].", 83LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t952); _tr_str_release(_at_t952); });
         }
 #line 511 "src/ptrflow.tr"
         TrStr pp = pf_path(e);
@@ -1171,22 +1173,22 @@ __auto_type p = _t899.data.EPropAccess.prop;
 #line 515 "src/ptrflow.tr"
         pf_expr(cx, o, st);
         _tr_str_release(pp);
-    } else if (_t899.tag == HirExpr_EBinOp) {
-        __auto_type bop = _t899.data.EBinOp.op;
-__auto_type l = _t899.data.EBinOp.left;
-__auto_type r = _t899.data.EBinOp.right;
+    } else if (_t949.tag == HirExpr_EBinOp) {
+        __auto_type bop = _t949.data.EBinOp.op;
+__auto_type l = _t949.data.EBinOp.left;
+__auto_type r = _t949.data.EBinOp.right;
 #line 517 "src/ptrflow.tr"
         if (((((cx->unsafe_depth == 0LL) && (_tr_str_eqv((bop), (_tr_str_lit_len("+", 1LL))) || _tr_str_eqv((bop), (_tr_str_lit_len("-", 1LL))))) && (!pf_null(l))) && _tr_str_eqv((hir_expr_type(l)->name), (_tr_str_lit_len("Pointer", 7LL))))) {
 #line 518 "src/ptrflow.tr"
-            ({ TrStr _at_t903 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-2] pointer arithmetic with '", 31LL)), (bop))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' can create an out-of-bounds pointer and must be inside an 'unsafe:' block.\n      FIX: wrap it in 'unsafe:', or use a safe slice / List[T] instead of pointer math.", 164LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t903); _tr_str_release(_at_t903); });
+            ({ TrStr _at_t953 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-2] pointer arithmetic with '", 31LL)), (bop))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' can create an out-of-bounds pointer and must be inside an 'unsafe:' block.\n      FIX: wrap it in 'unsafe:', or use a safe slice / List[T] instead of pointer math.", 164LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t953); _tr_str_release(_at_t953); });
         }
 #line 519 "src/ptrflow.tr"
         pf_expr(cx, l, st);
 #line 520 "src/ptrflow.tr"
         pf_expr(cx, r, st);
-    } else if (_t899.tag == HirExpr_EUnaryOp) {
-        __auto_type uop = _t899.data.EUnaryOp.op;
-__auto_type x = _t899.data.EUnaryOp.expr;
+    } else if (_t949.tag == HirExpr_EUnaryOp) {
+        __auto_type uop = _t949.data.EUnaryOp.op;
+__auto_type x = _t949.data.EUnaryOp.expr;
 #line 522 "src/ptrflow.tr"
         if (((((cx->unsafe_depth == 0LL) && (_tr_str_eqv((uop), (_tr_str_lit_len("*", 1LL))) || _tr_str_eqv((uop), (_tr_str_lit_len("deref", 5LL))))) && (!pf_null(x))) && _tr_str_eqv((hir_expr_type(x)->name), (_tr_str_lit_len("Pointer", 7LL))))) {
 #line 523 "src/ptrflow.tr"
@@ -1194,9 +1196,9 @@ __auto_type x = _t899.data.EUnaryOp.expr;
         }
 #line 524 "src/ptrflow.tr"
         pf_expr(cx, x, st);
-    } else if (_t899.tag == HirExpr_ECall) {
-        __auto_type callee = _t899.data.ECall.callee;
-__auto_type args = _t899.data.ECall.args;
+    } else if (_t949.tag == HirExpr_ECall) {
+        __auto_type callee = _t949.data.ECall.callee;
+__auto_type args = _t949.data.ECall.args;
 #line 526 "src/ptrflow.tr"
         if (pf_is_dealloc(callee)) {
 #line 527 "src/ptrflow.tr"
@@ -1206,7 +1208,7 @@ __auto_type args = _t899.data.ECall.args;
 #line 529 "src/ptrflow.tr"
                 if (((!_tr_str_eqv((dp), (_tr_str_lit_len("", 0LL)))) && pf_has(st->freed, dp))) {
 #line 530 "src/ptrflow.tr"
-                    ({ TrStr _at_t904 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[M-6] '", 7LL)), (dp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is deallocated twice (double free): it was already freed by 'dealloc()' on this or another path (an alias, a call, or the previous loop iteration).\n      FIX: dealloc each allocation exactly once; clear or re-assign the pointer after dealloc, and break out of the loop right after freeing.", 291LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t904); _tr_str_release(_at_t904); });
+                    ({ TrStr _at_t954 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[M-6] '", 7LL)), (dp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is deallocated twice (double free): it was already freed by 'dealloc()' on this or another path (an alias, a call, or the previous loop iteration).\n      FIX: dealloc each allocation exactly once; clear or re-assign the pointer after dealloc, and break out of the loop right after freeing.", 291LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t954); _tr_str_release(_at_t954); });
 #line 531 "src/ptrflow.tr"
                     pf_kill(st, dp);
                 }
@@ -1215,10 +1217,10 @@ __auto_type args = _t899.data.ECall.args;
 #line 533 "src/ptrflow.tr"
                 if ((!_tr_str_eqv((dss), (_tr_str_lit_len("", 0LL))))) {
 #line 534 "src/ptrflow.tr"
-                    ({ TrStr _at_t905 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-3] dealloc() of a pointer to the stack local '", 49LL)), (dss))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': only memory returned by alloc[T] may be deallocated.\n      FIX: remove the dealloc, or allocate the block with alloc[T] instead of taking the address of a local.", 164LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t905); _tr_str_release(_at_t905); });
+                    ({ TrStr _at_t955 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-3] dealloc() of a pointer to the stack local '", 49LL)), (dss))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': only memory returned by alloc[T] may be deallocated.\n      FIX: remove the dealloc, or allocate the block with alloc[T] instead of taking the address of a local.", 164LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t955); _tr_str_release(_at_t955); });
                 } else if (((!_tr_str_eqv((dp), (_tr_str_lit_len("", 0LL)))) && pf_has(st->nul, dp))) {
 #line 536 "src/ptrflow.tr"
-                    ({ TrStr _at_t906 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-3] dealloc() of '", 20LL)), (dp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', which is null here — there is nothing to free.\n      FIX: remove the dealloc (or guard it with a null check on a pointer that may be non-null).", 148LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t906); _tr_str_release(_at_t906); });
+                    ({ TrStr _at_t956 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-3] dealloc() of '", 20LL)), (dp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', which is null here — there is nothing to free.\n      FIX: remove the dealloc (or guard it with a null check on a pointer that may be non-null).", 148LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t956); _tr_str_release(_at_t956); });
                 }
 #line 537 "src/ptrflow.tr"
                 pf_expr(cx, ((HirExpr*)List_ptr_get(args, 0LL)), st);
@@ -1241,7 +1243,7 @@ __auto_type args = _t899.data.ECall.args;
 #line 542 "src/ptrflow.tr"
         if ((((!_tr_str_eqv((cn), (_tr_str_lit_len("", 0LL)))) && (cx->unsafe_depth == 0LL)) && _tr_dict_contains(cx->externs, _tr_strz(cn)))) {
 #line 543 "src/ptrflow.tr"
-            ({ TrStr _at_t907 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-5] extern function '", 23LL)), (cn))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' takes a raw Pointer; C cannot check it, so the call must be inside an 'unsafe:' block.\n      FIX: wrap the call in 'unsafe:' (ideally inside a small safe wrapper function that validates its arguments).", 203LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t907); _tr_str_release(_at_t907); });
+            ({ TrStr _at_t957 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-5] extern function '", 23LL)), (cn))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' takes a raw Pointer; C cannot check it, so the call must be inside an 'unsafe:' block.\n      FIX: wrap the call in 'unsafe:' (ideally inside a small safe wrapper function that validates its arguments).", 203LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t957); _tr_str_release(_at_t957); });
         }
 #line 544 "src/ptrflow.tr"
         if ((_tr_str_eqv((cn), (_tr_str_lit_len("", 0LL))) || pf_has(st->freed, cn))) {
@@ -1274,7 +1276,7 @@ __auto_type args = _t899.data.ECall.args;
 #line 555 "src/ptrflow.tr"
             while ((k < fr->len)) {
 #line 556 "src/ptrflow.tr"
-                if (({ __auto_type _ord_t908 = (List_i64_get(fr, k)); __auto_type _wr = ((_ord_t908 < args->len)); _wr; })) {
+                if (({ __auto_type _ord_t958 = (List_i64_get(fr, k)); __auto_type _wr = ((_ord_t958 < args->len)); _wr; })) {
 #line 557 "src/ptrflow.tr"
                     TrStr ap = pf_root(((HirExpr*)List_ptr_get(args, List_i64_get(fr, k))));
 #line 558 "src/ptrflow.tr"
@@ -1288,10 +1290,10 @@ __auto_type args = _t899.data.ECall.args;
             }
         }
         _tr_str_release(cn);
-    } else if (_t899.tag == HirExpr_EMethodCall) {
-        __auto_type o = _t899.data.EMethodCall.obj;
-__auto_type m = _t899.data.EMethodCall.method;
-__auto_type args = _t899.data.EMethodCall.args;
+    } else if (_t949.tag == HirExpr_EMethodCall) {
+        __auto_type o = _t949.data.EMethodCall.obj;
+__auto_type m = _t949.data.EMethodCall.method;
+__auto_type args = _t949.data.EMethodCall.args;
 #line 561 "src/ptrflow.tr"
         if (((_tr_str_eqv((m), (_tr_str_lit_len("read", 4LL))) || _tr_str_eqv((m), (_tr_str_lit_len("write", 5LL)))) || _tr_str_eqv((m), (_tr_str_lit_len("offset", 6LL))))) {
 #line 562 "src/ptrflow.tr"
@@ -1329,9 +1331,9 @@ __auto_type args = _t899.data.EMethodCall.args;
 #line 576 "src/ptrflow.tr"
                 while ((li < st->pa->len)) {
 #line 577 "src/ptrflow.tr"
-                    if ((({ TrStr _cmpa_t909 = (List_TrStr_get(st->pa, li)); TrStr _cmpb_t910 = (mkp); _Bool _cmpr_t911 = _tr_str_eqv(_cmpa_t909, _cmpb_t910); _tr_str_release(_cmpa_t909); _cmpr_t911; }) && ({ TrStr _cmpa_t912 = (List_TrStr_get(st->pb, li)); TrStr _cmpb_t913 = (mkp); _Bool _cmpr_t914 = !_tr_str_eqv(_cmpa_t912, _cmpb_t913); _tr_str_release(_cmpa_t912); _cmpr_t914; }))) {
+                    if ((({ TrStr _cmpa_t959 = (List_TrStr_get(st->pa, li)); TrStr _cmpb_t960 = (mkp); _Bool _cmpr_t961 = _tr_str_eqv(_cmpa_t959, _cmpb_t960); _tr_str_release(_cmpa_t959); _cmpr_t961; }) && ({ TrStr _cmpa_t962 = (List_TrStr_get(st->pb, li)); TrStr _cmpb_t963 = (mkp); _Bool _cmpr_t964 = !_tr_str_eqv(_cmpa_t962, _cmpb_t963); _tr_str_release(_cmpa_t962); _cmpr_t964; }))) {
 #line 577 "src/ptrflow.tr"
-                        ({ __auto_type _ord_t916 = (st->inval); TrStr _at_t915 = (List_TrStr_get(st->pb, li)); pf_add(_ord_t916, _at_t915); _tr_str_release(_at_t915); });
+                        ({ __auto_type _ord_t966 = (st->inval); TrStr _at_t965 = (List_TrStr_get(st->pb, li)); pf_add(_ord_t966, _at_t965); _tr_str_release(_at_t965); });
                     }
 #line 578 "src/ptrflow.tr"
                     li = (li + 1LL);
@@ -1359,16 +1361,16 @@ __auto_type args = _t899.data.EMethodCall.args;
 #line 589 "src/ptrflow.tr"
                         if ((dot >= 0LL)) {
 #line 589 "src/ptrflow.tr"
-                            TrStr _strtmp_t917 = _tr_str_slicev((r0), 0LL, dot);
+                            TrStr _strtmp_t967 = _tr_str_slicev((r0), 0LL, dot);
                             _tr_str_release(r0);
-                            r0 = _strtmp_t917;
+                            r0 = _strtmp_t967;
                         }
 #line 590 "src/ptrflow.tr"
                         if (((_tr_str_eqv((r0), (_tr_str_lit_len("", 0LL))) || (!pf_has(cx->locals, r0))) || _tr_str_eqv((r0), (_tr_str_lit_len("self", 4LL))))) {
 #line 591 "src/ptrflow.tr"
                             if (((!_tr_str_eqv((r0), (_tr_str_lit_len("", 0LL)))) || _tr_str_eqv((m), (_tr_str_lit_len("write", 5LL))))) {
 #line 592 "src/ptrflow.tr"
-                                ({ TrStr _at_t918 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[L-1] the address of local '", 28LL)), (ss))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is stored (via '.", 19LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("()') into memory that outlives this call of '", 45LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cx->fn_name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' — it dangles once the function returns.\n      FIX: store an owned value, or heap-allocate the data with alloc[T] (and dealloc it when its owner is done) instead of pointing at a stack local.", 194LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t918); _tr_str_release(_at_t918); });
+                                ({ TrStr _at_t968 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[L-1] the address of local '", 28LL)), (ss))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is stored (via '.", 19LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("()') into memory that outlives this call of '", 45LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cx->fn_name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' — it dangles once the function returns.\n      FIX: store an owned value, or heap-allocate the data with alloc[T] (and dealloc it when its owner is done) instead of pointing at a stack local.", 194LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t968); _tr_str_release(_at_t968); });
                             }
                         }
                     }
@@ -1379,9 +1381,9 @@ __auto_type args = _t899.data.EMethodCall.args;
             }
         }
         _tr_str_release(mkp);
-    } else if (_t899.tag == HirExpr_EIndex) {
-        __auto_type o = _t899.data.EIndex.obj;
-__auto_type i = _t899.data.EIndex._tr_v_index;
+    } else if (_t949.tag == HirExpr_EIndex) {
+        __auto_type o = _t949.data.EIndex.obj;
+__auto_type i = _t949.data.EIndex._tr_v_index;
 #line 595 "src/ptrflow.tr"
         if ((((cx->unsafe_depth == 0LL) && (!pf_null(o))) && _tr_str_eqv((hir_expr_type(o)->name), (_tr_str_lit_len("Pointer", 7LL))))) {
 #line 596 "src/ptrflow.tr"
@@ -1394,7 +1396,7 @@ __auto_type i = _t899.data.EIndex._tr_v_index;
 #line 599 "src/ptrflow.tr"
             if (pf_has(st->nul, ip)) {
 #line 600 "src/ptrflow.tr"
-                ({ TrStr _at_t919 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-3] indexing '", 16LL)), (ip))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', which is a null pointer here.\n      FIX: allocate it (alloc[T](n)) or check it for null before use.", 102LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t919); _tr_str_release(_at_t919); });
+                ({ TrStr _at_t969 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-3] indexing '", 16LL)), (ip))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', which is a null pointer here.\n      FIX: allocate it (alloc[T](n)) or check it for null before use.", 102LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t969); _tr_str_release(_at_t969); });
             } else {
 #line 602 "src/ptrflow.tr"
                 long long isz = pf_size_of(st, ip);
@@ -1403,7 +1405,7 @@ __auto_type i = _t899.data.EIndex._tr_v_index;
 #line 604 "src/ptrflow.tr"
                 if ((((isz >= 0LL) && pf_is_lit(i)) && ((ik < 0LL) || (ik >= isz)))) {
 #line 605 "src/ptrflow.tr"
-                    ({ __auto_type _ord_t920 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ik)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("[P-3] index ", 12LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" is outside the ", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t921 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t920); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(isz)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("-element block '", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ip)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' was allocated with.\n      FIX: keep indexes in 0 .. n-1 of the alloc[T](n) block, or use a List[T] (bounds-checked).", 118LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t921); _tr_str_release(_at_t921); });
+                    ({ __auto_type _ord_t970 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ik)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("[P-3] index ", 12LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" is outside the ", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t971 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t970); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(isz)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("-element block '", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ip)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' was allocated with.\n      FIX: keep indexes in 0 .. n-1 of the alloc[T](n) block, or use a List[T] (bounds-checked).", 118LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t971); _tr_str_release(_at_t971); });
                 }
             }
         }
@@ -1416,11 +1418,11 @@ __auto_type i = _t899.data.EIndex._tr_v_index;
 #line 609 "src/ptrflow.tr"
         pf_expr(cx, i, st);
         _tr_str_release(ip);
-    } else if (_t899.tag == HirExpr_ECast) {
-        __auto_type x = _t899.data.ECast.expr;
+    } else if (_t949.tag == HirExpr_ECast) {
+        __auto_type x = _t949.data.ECast.expr;
         pf_expr(cx, x, st);
-    } else if (_t899.tag == HirExpr_EFString) {
-        __auto_type parts = _t899.data.EFString.parts;
+    } else if (_t949.tag == HirExpr_EFString) {
+        __auto_type parts = _t949.data.EFString.parts;
 #line 612 "src/ptrflow.tr"
         long long pi = 0LL;
 #line 613 "src/ptrflow.tr"
@@ -1437,18 +1439,18 @@ __auto_type i = _t899.data.EIndex._tr_v_index;
 #line 618 "src/ptrflow.tr"
             pi = (pi + 1LL);
         }
-    } else if (_t899.tag == HirExpr_ETryExpr) {
-        __auto_type x = _t899.data.ETryExpr.expr;
+    } else if (_t949.tag == HirExpr_ETryExpr) {
+        __auto_type x = _t949.data.ETryExpr.expr;
         pf_expr(cx, x, st);
-    } else if (_t899.tag == HirExpr_EClosure) {
-        __auto_type body = _t899.data.EClosure.body;
-__auto_type caps = _t899.data.EClosure.captures;
+    } else if (_t949.tag == HirExpr_EClosure) {
+        __auto_type body = _t949.data.EClosure.body;
+__auto_type caps = _t949.data.EClosure.captures;
 #line 621 "src/ptrflow.tr"
         long long cpi = 0LL;
 #line 622 "src/ptrflow.tr"
         while ((cpi < caps->len)) {
 #line 623 "src/ptrflow.tr"
-            st->own = ({ __auto_type _ord_t923 = (st->own); TrStr _apt_t922 = _tr_str_retain(((HirParam*)List_ptr_get(caps, cpi))->name); __auto_type _wr = (pf_drop_under(_ord_t923, _apt_t922)); _tr_str_release(_apt_t922); _wr; });
+            st->own = ({ __auto_type _ord_t973 = (st->own); TrStr _apt_t972 = _tr_str_retain(((HirParam*)List_ptr_get(caps, cpi))->name); __auto_type _wr = (pf_drop_under(_ord_t973, _apt_t972)); _tr_str_release(_apt_t972); _wr; });
 #line 624 "src/ptrflow.tr"
             cpi = (cpi + 1LL);
         }
@@ -1457,28 +1459,28 @@ __auto_type caps = _t899.data.EClosure.captures;
 #line 626 "src/ptrflow.tr"
         pf_block(cx, body, c);
         _tr_obj_release(c, _trdrop_PfState);
-    } else if (_t899.tag == HirExpr_ESuperMethodCall) {
-        __auto_type args = _t899.data.ESuperMethodCall.args;
+    } else if (_t949.tag == HirExpr_ESuperMethodCall) {
+        __auto_type args = _t949.data.ESuperMethodCall.args;
         pf_exprs(cx, args, st);
-    } else if (_t899.tag == HirExpr_EList) {
-        __auto_type items = _t899.data.EList.items;
+    } else if (_t949.tag == HirExpr_EList) {
+        __auto_type items = _t949.data.EList.items;
         pf_exprs(cx, items, st);
-    } else if (_t899.tag == HirExpr_ESet) {
-        __auto_type items = _t899.data.ESet.items;
+    } else if (_t949.tag == HirExpr_ESet) {
+        __auto_type items = _t949.data.ESet.items;
         pf_exprs(cx, items, st);
-    } else if (_t899.tag == HirExpr_ETuple) {
-        __auto_type items = _t899.data.ETuple.items;
+    } else if (_t949.tag == HirExpr_ETuple) {
+        __auto_type items = _t949.data.ETuple.items;
         pf_exprs(cx, items, st);
-    } else if (_t899.tag == HirExpr_EDict) {
-        __auto_type keys = _t899.data.EDict.keys;
-__auto_type vals = _t899.data.EDict.vals;
+    } else if (_t949.tag == HirExpr_EDict) {
+        __auto_type keys = _t949.data.EDict.keys;
+__auto_type vals = _t949.data.EDict.vals;
 #line 632 "src/ptrflow.tr"
         pf_exprs(cx, keys, st);
 #line 633 "src/ptrflow.tr"
         pf_exprs(cx, vals, st);
-    } else if (_t899.tag == HirExpr_EListComp) {
-        __auto_type el = _t899.data.EListComp.element;
-__auto_type gens = _t899.data.EListComp.generators;
+    } else if (_t949.tag == HirExpr_EListComp) {
+        __auto_type el = _t949.data.EListComp.element;
+__auto_type gens = _t949.data.EListComp.generators;
 #line 635 "src/ptrflow.tr"
         long long gi = 0LL;
 #line 636 "src/ptrflow.tr"
@@ -1488,40 +1490,40 @@ __auto_type gens = _t899.data.EListComp.generators;
 #line 638 "src/ptrflow.tr"
             gi = (gi + 1LL);
         }
-    } else if (_t899.tag == HirExpr_ESlice) {
-        __auto_type a = _t899.data.ESlice.start;
-__auto_type b = _t899.data.ESlice.stop;
-__auto_type c = _t899.data.ESlice.step;
+    } else if (_t949.tag == HirExpr_ESlice) {
+        __auto_type a = _t949.data.ESlice.start;
+__auto_type b = _t949.data.ESlice.stop;
+__auto_type c = _t949.data.ESlice.step;
 #line 640 "src/ptrflow.tr"
         pf_expr(cx, a, st);
 #line 641 "src/ptrflow.tr"
         pf_expr(cx, b, st);
 #line 642 "src/ptrflow.tr"
         pf_expr(cx, c, st);
-    } else if (_t899.tag == HirExpr_EAwait) {
-        __auto_type x = _t899.data.EAwait.expr;
+    } else if (_t949.tag == HirExpr_EAwait) {
+        __auto_type x = _t949.data.EAwait.expr;
         pf_expr(cx, x, st);
-    } else if (_t899.tag == HirExpr_EAwaitTimeout) {
-        __auto_type x = _t899.data.EAwaitTimeout.expr;
-__auto_type t = _t899.data.EAwaitTimeout.timeout_ms;
+    } else if (_t949.tag == HirExpr_EAwaitTimeout) {
+        __auto_type x = _t949.data.EAwaitTimeout.expr;
+__auto_type t = _t949.data.EAwaitTimeout.timeout_ms;
 #line 645 "src/ptrflow.tr"
         pf_expr(cx, x, st);
 #line 646 "src/ptrflow.tr"
         pf_expr(cx, t, st);
-    } else if (_t899.tag == HirExpr_EYield) {
-        __auto_type x = _t899.data.EYield.expr;
+    } else if (_t949.tag == HirExpr_EYield) {
+        __auto_type x = _t949.data.EYield.expr;
         pf_expr(cx, x, st);
-    } else if (_t899.tag == HirExpr_ERange) {
-        __auto_type a = _t899.data.ERange.start;
-__auto_type b = _t899.data.ERange.end;
+    } else if (_t949.tag == HirExpr_ERange) {
+        __auto_type a = _t949.data.ERange.start;
+__auto_type b = _t949.data.ERange.end;
 #line 649 "src/ptrflow.tr"
         pf_expr(cx, a, st);
 #line 650 "src/ptrflow.tr"
         pf_expr(cx, b, st);
-    } else if (_t899.tag == HirExpr_EIfElse) {
-        __auto_type c = _t899.data.EIfElse.cond;
-__auto_type t = _t899.data.EIfElse.then_e;
-__auto_type f = _t899.data.EIfElse.else_e;
+    } else if (_t949.tag == HirExpr_EIfElse) {
+        __auto_type c = _t949.data.EIfElse.cond;
+__auto_type t = _t949.data.EIfElse.then_e;
+__auto_type f = _t949.data.EIfElse.else_e;
 #line 652 "src/ptrflow.tr"
         pf_expr(cx, c, st);
 #line 653 "src/ptrflow.tr"
@@ -1542,25 +1544,25 @@ __auto_type f = _t899.data.EIfElse.else_e;
         pf_merge(st, s2);
         _tr_obj_release(s1, _trdrop_PfState);
         _tr_obj_release(s2, _trdrop_PfState);
-    } else if (_t899.tag == HirExpr_EDo) {
-        __auto_type body = _t899.data.EDo.body;
+    } else if (_t949.tag == HirExpr_EDo) {
+        __auto_type body = _t949.data.EDo.body;
         pf_branchy_block(cx, body, st);
-    } else if (_t899.tag == HirExpr_ELoop) {
-        __auto_type body = _t899.data.ELoop.body;
+    } else if (_t949.tag == HirExpr_ELoop) {
+        __auto_type body = _t949.data.ELoop.body;
         pf_branchy_block(cx, body, st);
-    } else if (_t899.tag == HirExpr_EWhileExpr) {
-        __auto_type c = _t899.data.EWhileExpr.cond;
-__auto_type body = _t899.data.EWhileExpr.body;
-__auto_type eb = _t899.data.EWhileExpr.else_body;
+    } else if (_t949.tag == HirExpr_EWhileExpr) {
+        __auto_type c = _t949.data.EWhileExpr.cond;
+__auto_type body = _t949.data.EWhileExpr.body;
+__auto_type eb = _t949.data.EWhileExpr.else_body;
 #line 664 "src/ptrflow.tr"
         pf_expr(cx, c, st);
 #line 665 "src/ptrflow.tr"
         pf_branchy_block(cx, body, st);
 #line 666 "src/ptrflow.tr"
         pf_branchy_block(cx, eb, st);
-    } else if (_t899.tag == HirExpr_EMatchExpr) {
-        __auto_type subj = _t899.data.EMatchExpr.subj;
-__auto_type arms = _t899.data.EMatchExpr.arms;
+    } else if (_t949.tag == HirExpr_EMatchExpr) {
+        __auto_type subj = _t949.data.EMatchExpr.subj;
+__auto_type arms = _t949.data.EMatchExpr.arms;
 #line 668 "src/ptrflow.tr"
         pf_expr(cx, subj, st);
 #line 669 "src/ptrflow.tr"
@@ -1581,10 +1583,10 @@ __auto_type arms = _t899.data.EMatchExpr.arms;
             ai = (ai + 1LL);
             _tr_obj_release(c, _trdrop_PfState);
         }
-    } else if (_t899.tag == HirExpr_ETry) {
-        __auto_type tb = _t899.data.ETry.try_body;
-__auto_type catches = _t899.data.ETry.catches;
-__auto_type fb = _t899.data.ETry.finally_b;
+    } else if (_t949.tag == HirExpr_ETry) {
+        __auto_type tb = _t949.data.ETry.try_body;
+__auto_type catches = _t949.data.ETry.catches;
+__auto_type fb = _t949.data.ETry.finally_b;
 #line 678 "src/ptrflow.tr"
         pf_branchy_block(cx, tb, st);
 #line 679 "src/ptrflow.tr"
@@ -1599,7 +1601,7 @@ __auto_type fb = _t899.data.ETry.finally_b;
 #line 683 "src/ptrflow.tr"
         pf_branchy_block(cx, fb, st);
     } else if (1) {
-        __auto_type _ = _t899;
+        __auto_type _ = _t949;
         /* pass */
     }
 }
@@ -1622,12 +1624,12 @@ __attribute__((hot)) void pf_leak_warn(PfCtx* cx, TrStr name, TrStr why) {
 #line 693 "src/ptrflow.tr"
     if ((ln > 0LL)) {
 #line 693 "src/ptrflow.tr"
-        TrStr _strtmp_t924 = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ln)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len(" (allocated at line ", 20LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _strtmp_t974 = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ln)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len(" (allocated at line ", 20LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(at);
-        at = _strtmp_t924;
+        at = _strtmp_t974;
     }
 #line 694 "src/ptrflow.tr"
-    ({ TrStr _at_t925 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-4] the alloc[] block held by '", 33LL)), (name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("'", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (at)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" is ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (why)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": it leaks.\n      FIX: dealloc(", 31LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") on every path, return/store the pointer so a caller owns it, or wrap the pair in a class with init/drop.", 106LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t925); _tr_str_release(_at_t925); });
+    ({ TrStr _at_t975 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[P-4] the alloc[] block held by '", 33LL)), (name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("'", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (at)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" is ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (why)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": it leaks.\n      FIX: dealloc(", 31LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") on every path, return/store the pointer so a caller owns it, or wrap the pair in a class with init/drop.", 106LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t975); _tr_str_release(_at_t975); });
     _tr_str_release(at);
 }
 
@@ -1642,7 +1644,7 @@ __attribute__((hot)) void pf_leak_check(PfCtx* cx, PfState* st, TrStr why) {
 #line 699 "src/ptrflow.tr"
     while ((i < st->own->len)) {
 #line 700 "src/ptrflow.tr"
-        ({ TrStr _at_t926 = (List_TrStr_get(st->own, i)); pf_leak_warn(cx, _at_t926, why); _tr_str_release(_at_t926); });
+        ({ TrStr _at_t976 = (List_TrStr_get(st->own, i)); pf_leak_warn(cx, _at_t976, why); _tr_str_release(_at_t976); });
 #line 701 "src/ptrflow.tr"
         i = (i + 1LL);
     }
@@ -1665,10 +1667,10 @@ __attribute__((hot)) void pf_bind(PfCtx* cx, PfState* st, TrStr path, HirExpr* v
 #line 711 "src/ptrflow.tr"
             if ((n < 0LL)) {
 #line 712 "src/ptrflow.tr"
-                ({ TrStr _at_t927 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(n)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("[P-3] alloc with a negative element count (", 43LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(").\n      FIX: pass a non-negative element count.", 48LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t927); _tr_str_release(_at_t927); });
+                ({ TrStr _at_t977 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(n)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("[P-3] alloc with a negative element count (", 43LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(").\n      FIX: pass a non-negative element count.", 48LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t977); _tr_str_release(_at_t977); });
             } else {
 #line 714 "src/ptrflow.tr"
-                ({ TrStr _ord_t928 = (({ TrStr _tr_cl = (_tr_strx_concatv((path), (_tr_str_lit_len("=", 1LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(n)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); List_TrStr_append(st->sz, _ord_t928); _tr_str_release(_ord_t928); });
+                ({ TrStr _ord_t978 = (({ TrStr _tr_cl = (_tr_strx_concatv((path), (_tr_str_lit_len("=", 1LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(n)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); List_TrStr_append(st->sz, _ord_t978); _tr_str_release(_ord_t978); });
             }
         }
     } else if (pf_is_null_lit(val)) {
@@ -1709,20 +1711,20 @@ __attribute__((hot)) void pf_declare(PfCtx* cx, PfState* st, TrStr name, HirExpr
 #line 727 "src/ptrflow.tr"
     if ((!pf_null(val))) {
 #line 728 "src/ptrflow.tr"
-        __auto_type _t929 = (*val);
-        if (_t929.tag == HirExpr_EClosure) {
-            __auto_type ccaps = _t929.data.EClosure.captures;
+        __auto_type _t979 = (*val);
+        if (_t979.tag == HirExpr_EClosure) {
+            __auto_type ccaps = _t979.data.EClosure.captures;
 #line 730 "src/ptrflow.tr"
             long long cci = 0LL;
 #line 731 "src/ptrflow.tr"
             while ((cci < ccaps->len)) {
 #line 732 "src/ptrflow.tr"
-                ({ TrStr _apt_t930 = _tr_str_retain(((HirParam*)List_ptr_get(ccaps, cci))->name); pf_link(st, name, _apt_t930); _tr_str_release(_apt_t930); });
+                ({ TrStr _apt_t980 = _tr_str_retain(((HirParam*)List_ptr_get(ccaps, cci))->name); pf_link(st, name, _apt_t980); _tr_str_release(_apt_t980); });
 #line 733 "src/ptrflow.tr"
                 cci = (cci + 1LL);
             }
         } else if (1) {
-            __auto_type _ = _t929;
+            __auto_type _ = _t979;
             /* pass */
         }
     }
@@ -1733,7 +1735,7 @@ __attribute__((hot)) void pf_declare(PfCtx* cx, PfState* st, TrStr name, HirExpr
 #line 737 "src/ptrflow.tr"
         pf_add(st->stk, name);
 #line 738 "src/ptrflow.tr"
-        _tr_dict_set(cx->origin, _tr_strz(name), _tr_str_box(_tr_str_retain(ss)));
+        _tr_dict_set_str(cx->origin, _tr_strz(name), _tr_str_box(_tr_str_retain(ss)));
     }
 #line 739 "src/ptrflow.tr"
     pf_bind(cx, st, name, val, true);
@@ -1755,12 +1757,12 @@ __attribute__((hot)) void pf_assign(PfCtx* cx, PfState* st, HirExpr* tgt, HirExp
         return;
     }
 #line 747 "src/ptrflow.tr"
-    __auto_type _t931 = (*tgt);
-    if (_t931.tag == HirExpr_EPropAccess) {
-        __auto_type o = _t931.data.EPropAccess.obj;
+    __auto_type _t981 = (*tgt);
+    if (_t981.tag == HirExpr_EPropAccess) {
+        __auto_type o = _t981.data.EPropAccess.obj;
         pf_expr(cx, o, st);
     } else if (1) {
-        __auto_type _ = _t931;
+        __auto_type _ = _t981;
         /* pass */
     }
 #line 750 "src/ptrflow.tr"
@@ -1772,9 +1774,9 @@ __attribute__((hot)) void pf_assign(PfCtx* cx, PfState* st, HirExpr* tgt, HirExp
 #line 753 "src/ptrflow.tr"
     if ((dot >= 0LL)) {
 #line 753 "src/ptrflow.tr"
-        TrStr _strtmp_t932 = _tr_str_slicev((root0), 0LL, dot);
+        TrStr _strtmp_t982 = _tr_str_slicev((root0), 0LL, dot);
         _tr_str_release(root0);
-        root0 = _strtmp_t932;
+        root0 = _strtmp_t982;
     }
 #line 754 "src/ptrflow.tr"
     bool outlives = false;
@@ -1792,7 +1794,7 @@ __attribute__((hot)) void pf_assign(PfCtx* cx, PfState* st, HirExpr* tgt, HirExp
 #line 760 "src/ptrflow.tr"
     if ((((!_tr_str_eqv((ss), (_tr_str_lit_len("", 0LL)))) && outlives) && (!cx->is_main))) {
 #line 761 "src/ptrflow.tr"
-        ({ TrStr _at_t933 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[L-1] the address of local '", 28LL)), (ss))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is stored into '", 18LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', which outlives this call of '", 32LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cx->fn_name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' — it dangles once the function returns.\n      FIX: store an owned value, or heap-allocate the data with alloc[T] (and dealloc it when its owner is done) instead of pointing at a stack local.", 194LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t933); _tr_str_release(_at_t933); });
+        ({ TrStr _at_t983 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[L-1] the address of local '", 28LL)), (ss))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is stored into '", 18LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', which outlives this call of '", 32LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cx->fn_name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' — it dangles once the function returns.\n      FIX: store an owned value, or heap-allocate the data with alloc[T] (and dealloc it when its owner is done) instead of pointing at a stack local.", 194LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t983); _tr_str_release(_at_t983); });
     }
 #line 762 "src/ptrflow.tr"
     if (((dot < 0LL) && pf_has(st->own, tp))) {
@@ -1813,7 +1815,7 @@ __attribute__((hot)) void pf_assign(PfCtx* cx, PfState* st, HirExpr* tgt, HirExp
 #line 767 "src/ptrflow.tr"
         pf_add(st->stk, tp);
 #line 768 "src/ptrflow.tr"
-        _tr_dict_set(cx->origin, _tr_strz(tp), _tr_str_box(_tr_str_retain(ss)));
+        _tr_dict_set_str(cx->origin, _tr_strz(tp), _tr_str_box(_tr_str_retain(ss)));
     }
 #line 769 "src/ptrflow.tr"
     pf_bind(cx, st, tp, val, ((dot < 0LL) && pf_has(cx->locals, tp)));
@@ -1901,9 +1903,9 @@ __attribute__((hot)) void pf_loop(PfCtx* cx, PfState* st, HirExpr* cond, TrStr l
 #line 808 "src/ptrflow.tr"
         if ((pass_i == 0LL)) {
 #line 809 "src/ptrflow.tr"
-            PfState* _cltmp_t934 = PfState_copy(entry);
+            PfState* _cltmp_t984 = PfState_copy(entry);
             _tr_obj_release(head, _trdrop_PfState);
-            head = _cltmp_t934;
+            head = _cltmp_t984;
 #line 810 "src/ptrflow.tr"
             pf_merge(head, back);
         } else {
@@ -1938,23 +1940,23 @@ __attribute__((hot)) void pf_stmt(PfCtx* cx, HirStmt* sp, PfState* st) {
         return;
     }
 #line 819 "src/ptrflow.tr"
-    __auto_type _t935 = (*sp);
-    if (_t935.tag == HirStmt_SLineMarker) {
-        __auto_type n = _t935.data.SLineMarker.n;
+    __auto_type _t985 = (*sp);
+    if (_t985.tag == HirStmt_SLineMarker) {
+        __auto_type n = _t985.data.SLineMarker.n;
         cx->line = n;
-    } else if (_t935.tag == HirStmt_SExpr) {
-        __auto_type e = _t935.data.SExpr.expr;
+    } else if (_t985.tag == HirStmt_SExpr) {
+        __auto_type e = _t985.data.SExpr.expr;
         pf_expr(cx, e, st);
-    } else if (_t935.tag == HirStmt_SLet) {
-        __auto_type nm = _t935.data.SLet.name;
-__auto_type val = _t935.data.SLet.val;
+    } else if (_t985.tag == HirStmt_SLet) {
+        __auto_type nm = _t985.data.SLet.name;
+__auto_type val = _t985.data.SLet.val;
 #line 823 "src/ptrflow.tr"
         pf_expr(cx, val, st);
 #line 824 "src/ptrflow.tr"
         pf_declare(cx, st, nm, val);
-    } else if (_t935.tag == HirStmt_SMultiLet) {
-        __auto_type names = _t935.data.SMultiLet.names;
-__auto_type val = _t935.data.SMultiLet.val;
+    } else if (_t985.tag == HirStmt_SMultiLet) {
+        __auto_type names = _t985.data.SMultiLet.names;
+__auto_type val = _t985.data.SMultiLet.val;
 #line 826 "src/ptrflow.tr"
         pf_expr(cx, val, st);
 #line 827 "src/ptrflow.tr"
@@ -1962,21 +1964,21 @@ __auto_type val = _t935.data.SMultiLet.val;
 #line 828 "src/ptrflow.tr"
         while ((ni < names->len)) {
 #line 829 "src/ptrflow.tr"
-            ({ TrStr _at_t936 = (List_TrStr_get(names, ni)); pf_kill(st, _at_t936); _tr_str_release(_at_t936); });
+            ({ TrStr _at_t986 = (List_TrStr_get(names, ni)); pf_kill(st, _at_t986); _tr_str_release(_at_t986); });
 #line 830 "src/ptrflow.tr"
-            if (({ __auto_type _ord_t938 = (cx->locals); TrStr _at_t937 = (List_TrStr_get(names, ni)); __auto_type _wr = ((!pf_has(_ord_t938, _at_t937))); _tr_str_release(_at_t937); _wr; })) {
+            if (({ __auto_type _ord_t988 = (cx->locals); TrStr _at_t987 = (List_TrStr_get(names, ni)); __auto_type _wr = ((!pf_has(_ord_t988, _at_t987))); _tr_str_release(_at_t987); _wr; })) {
 #line 830 "src/ptrflow.tr"
-                ({ TrStr _ord_t939 = (List_TrStr_get(names, ni)); List_TrStr_append(cx->locals, _ord_t939); _tr_str_release(_ord_t939); });
+                ({ TrStr _ord_t989 = (List_TrStr_get(names, ni)); List_TrStr_append(cx->locals, _ord_t989); _tr_str_release(_ord_t989); });
             }
 #line 831 "src/ptrflow.tr"
             ni = (ni + 1LL);
         }
-    } else if (_t935.tag == HirStmt_SAssign) {
-        __auto_type tgt = _t935.data.SAssign.target;
-__auto_type val = _t935.data.SAssign.val;
+    } else if (_t985.tag == HirStmt_SAssign) {
+        __auto_type tgt = _t985.data.SAssign.target;
+__auto_type val = _t985.data.SAssign.val;
         pf_assign(cx, st, tgt, val);
-    } else if (_t935.tag == HirStmt_SReturn) {
-        __auto_type v = _t935.data.SReturn.val;
+    } else if (_t985.tag == HirStmt_SReturn) {
+        __auto_type v = _t985.data.SReturn.val;
 #line 834 "src/ptrflow.tr"
         pf_expr(cx, v, st);
 #line 835 "src/ptrflow.tr"
@@ -1986,7 +1988,7 @@ __auto_type val = _t935.data.SAssign.val;
 #line 837 "src/ptrflow.tr"
             if ((!_tr_str_eqv((ss), (_tr_str_lit_len("", 0LL))))) {
 #line 838 "src/ptrflow.tr"
-                ({ TrStr _at_t940 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[L-1] returning the address of local '", 38LL)), (ss))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': the local dies when '", 24LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cx->fn_name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' returns, so the pointer dangles.\n      FIX: return an owned value, heap-allocate with alloc[T] (the caller must dealloc it), or annotate the return type with 'from <param>' when the pointer borrows from a parameter.", 217LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t940); _tr_str_release(_at_t940); });
+                ({ TrStr _at_t990 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("[L-1] returning the address of local '", 38LL)), (ss))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': the local dies when '", 24LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cx->fn_name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' returns, so the pointer dangles.\n      FIX: return an owned value, heap-allocate with alloc[T] (the caller must dealloc it), or annotate the return type with 'from <param>' when the pointer borrows from a parameter.", 217LL))); _tr_str_release(_tr_cl); _tr_cres; })); PfCtx_err(cx, _at_t990); _tr_str_release(_at_t990); });
             }
         }
 #line 839 "src/ptrflow.tr"
@@ -1997,53 +1999,53 @@ __auto_type val = _t935.data.SAssign.val;
         cx->ret_seen = true;
 #line 842 "src/ptrflow.tr"
         st->dead = true;
-    } else if (_t935.tag == HirStmt_SRaise) {
-        __auto_type v = _t935.data.SRaise.val;
+    } else if (_t985.tag == HirStmt_SRaise) {
+        __auto_type v = _t985.data.SRaise.val;
 #line 844 "src/ptrflow.tr"
         pf_expr(cx, v, st);
 #line 845 "src/ptrflow.tr"
         pf_leak_check(cx, st, _tr_str_lit_len("not dealloc'd on this path before the raise", 43LL));
 #line 846 "src/ptrflow.tr"
         st->dead = true;
-    } else if (_t935.tag == HirStmt_SDefer) {
-        __auto_type ds = _t935.data.SDefer.stmt;
+    } else if (_t985.tag == HirStmt_SDefer) {
+        __auto_type ds = _t985.data.SDefer.stmt;
 #line 848 "src/ptrflow.tr"
         cx->in_defer = true;
 #line 849 "src/ptrflow.tr"
         pf_stmt(cx, ds, st);
 #line 850 "src/ptrflow.tr"
         cx->in_defer = false;
-    } else if (_t935.tag == HirStmt_SBreak) {
-        __auto_type v = _t935.data.SBreak.val;
+    } else if (_t985.tag == HirStmt_SBreak) {
+        __auto_type v = _t985.data.SBreak.val;
 #line 852 "src/ptrflow.tr"
         pf_expr(cx, v, st);
 #line 853 "src/ptrflow.tr"
         if ((cx->brk_base->len > 0LL)) {
 #line 853 "src/ptrflow.tr"
-            ({ PfState* _ord_t941 = (PfState_copy(st)); List_ptr_append(cx->brk, _tr_obj_retain(_ord_t941)); _tr_obj_release(_ord_t941, _trdrop_PfState); });
+            ({ PfState* _ord_t991 = (PfState_copy(st)); List_ptr_append(cx->brk, _tr_obj_retain(_ord_t991)); _tr_obj_release(_ord_t991, _trdrop_PfState); });
         }
 #line 854 "src/ptrflow.tr"
         st->dead = true;
-    } else if (_t935.tag == HirStmt_SContinue) {
+    } else if (_t985.tag == HirStmt_SContinue) {
 #line 856 "src/ptrflow.tr"
         if ((cx->cnt_base->len > 0LL)) {
 #line 856 "src/ptrflow.tr"
-            ({ PfState* _ord_t942 = (PfState_copy(st)); List_ptr_append(cx->cnt, _tr_obj_retain(_ord_t942)); _tr_obj_release(_ord_t942, _trdrop_PfState); });
+            ({ PfState* _ord_t992 = (PfState_copy(st)); List_ptr_append(cx->cnt, _tr_obj_retain(_ord_t992)); _tr_obj_release(_ord_t992, _trdrop_PfState); });
         }
 #line 857 "src/ptrflow.tr"
         st->dead = true;
-    } else if (_t935.tag == HirStmt_SUnsafe) {
-        __auto_type body = _t935.data.SUnsafe.body;
+    } else if (_t985.tag == HirStmt_SUnsafe) {
+        __auto_type body = _t985.data.SUnsafe.body;
 #line 859 "src/ptrflow.tr"
         cx->unsafe_depth = (cx->unsafe_depth + 1LL);
 #line 860 "src/ptrflow.tr"
         pf_block(cx, body, st);
 #line 861 "src/ptrflow.tr"
         cx->unsafe_depth = (cx->unsafe_depth - 1LL);
-    } else if (_t935.tag == HirStmt_SIf) {
-        __auto_type cond = _t935.data.SIf.cond;
-__auto_type tb = _t935.data.SIf.then_b;
-__auto_type eb = _t935.data.SIf.else_b;
+    } else if (_t985.tag == HirStmt_SIf) {
+        __auto_type cond = _t985.data.SIf.cond;
+__auto_type tb = _t985.data.SIf.then_b;
+__auto_type eb = _t985.data.SIf.else_b;
 #line 863 "src/ptrflow.tr"
         pf_expr(cx, cond, st);
 #line 864 "src/ptrflow.tr"
@@ -2067,29 +2069,29 @@ __auto_type eb = _t935.data.SIf.else_b;
         _tr_obj_release(s1, _trdrop_PfState);
         _tr_obj_release(s2, _trdrop_PfState);
         _tr_str_release(ntest);
-    } else if (_t935.tag == HirStmt_SWhile) {
-        __auto_type cond = _t935.data.SWhile.cond;
-__auto_type body = _t935.data.SWhile.body;
+    } else if (_t985.tag == HirStmt_SWhile) {
+        __auto_type cond = _t985.data.SWhile.cond;
+__auto_type body = _t985.data.SWhile.body;
 #line 874 "src/ptrflow.tr"
         bool always = false;
 #line 875 "src/ptrflow.tr"
         if ((!pf_null(cond))) {
 #line 876 "src/ptrflow.tr"
-            __auto_type _t943 = (*cond);
-            if (_t943.tag == HirExpr_ELitBool) {
-                __auto_type bv = _t943.data.ELitBool.val;
+            __auto_type _t993 = (*cond);
+            if (_t993.tag == HirExpr_ELitBool) {
+                __auto_type bv = _t993.data.ELitBool.val;
                 always = bv;
             } else if (1) {
-                __auto_type _ = _t943;
+                __auto_type _ = _t993;
                 /* pass */
             }
         }
 #line 879 "src/ptrflow.tr"
         pf_loop(cx, st, cond, _tr_str_lit_len("", 0LL), body, always);
-    } else if (_t935.tag == HirStmt_SFor) {
-        __auto_type var = _t935.data.SFor.var;
-__auto_type it = _t935.data.SFor.iter;
-__auto_type body = _t935.data.SFor.body;
+    } else if (_t985.tag == HirStmt_SFor) {
+        __auto_type var = _t985.data.SFor.var;
+__auto_type it = _t985.data.SFor.iter;
+__auto_type body = _t985.data.SFor.body;
 #line 881 "src/ptrflow.tr"
         pf_expr(cx, it, st);
 #line 882 "src/ptrflow.tr"
@@ -2099,10 +2101,10 @@ __auto_type body = _t935.data.SFor.body;
         }
 #line 883 "src/ptrflow.tr"
         pf_loop(cx, st, (HirExpr*)(0LL), var, body, false);
-    } else if (_t935.tag == HirStmt_SForUnpack) {
-        __auto_type vars = _t935.data.SForUnpack.vars;
-__auto_type it = _t935.data.SForUnpack.iter;
-__auto_type body = _t935.data.SForUnpack.body;
+    } else if (_t985.tag == HirStmt_SForUnpack) {
+        __auto_type vars = _t985.data.SForUnpack.vars;
+__auto_type it = _t985.data.SForUnpack.iter;
+__auto_type body = _t985.data.SForUnpack.body;
 #line 885 "src/ptrflow.tr"
         pf_expr(cx, it, st);
 #line 886 "src/ptrflow.tr"
@@ -2110,18 +2112,18 @@ __auto_type body = _t935.data.SForUnpack.body;
 #line 887 "src/ptrflow.tr"
         while ((vi < vars->len)) {
 #line 888 "src/ptrflow.tr"
-            if (({ __auto_type _ord_t945 = (cx->locals); TrStr _at_t944 = (List_TrStr_get(vars, vi)); __auto_type _wr = ((!pf_has(_ord_t945, _at_t944))); _tr_str_release(_at_t944); _wr; })) {
+            if (({ __auto_type _ord_t995 = (cx->locals); TrStr _at_t994 = (List_TrStr_get(vars, vi)); __auto_type _wr = ((!pf_has(_ord_t995, _at_t994))); _tr_str_release(_at_t994); _wr; })) {
 #line 888 "src/ptrflow.tr"
-                ({ TrStr _ord_t946 = (List_TrStr_get(vars, vi)); List_TrStr_append(cx->locals, _ord_t946); _tr_str_release(_ord_t946); });
+                ({ TrStr _ord_t996 = (List_TrStr_get(vars, vi)); List_TrStr_append(cx->locals, _ord_t996); _tr_str_release(_ord_t996); });
             }
 #line 889 "src/ptrflow.tr"
             vi = (vi + 1LL);
         }
 #line 890 "src/ptrflow.tr"
         pf_loop(cx, st, (HirExpr*)(0LL), _tr_str_lit_len("", 0LL), body, false);
-    } else if (_t935.tag == HirStmt_SMatch) {
-        __auto_type subj = _t935.data.SMatch.expr;
-__auto_type arms = _t935.data.SMatch.arms;
+    } else if (_t985.tag == HirStmt_SMatch) {
+        __auto_type subj = _t985.data.SMatch.expr;
+__auto_type arms = _t985.data.SMatch.arms;
 #line 892 "src/ptrflow.tr"
         pf_expr(cx, subj, st);
 #line 893 "src/ptrflow.tr"
@@ -2152,10 +2154,10 @@ __auto_type arms = _t935.data.SMatch.arms;
             pf_assign_from(st, acc);
         }
         _tr_obj_release(acc, _trdrop_PfState);
-    } else if (_t935.tag == HirStmt_STry) {
-        __auto_type tb = _t935.data.STry.try_body;
-__auto_type catches = _t935.data.STry.catches;
-__auto_type fb = _t935.data.STry.finally_b;
+    } else if (_t985.tag == HirStmt_STry) {
+        __auto_type tb = _t985.data.STry.try_body;
+__auto_type catches = _t985.data.STry.catches;
+__auto_type fb = _t985.data.STry.finally_b;
 #line 906 "src/ptrflow.tr"
         PfState* entry = PfState_copy(st);
 #line 907 "src/ptrflow.tr"
@@ -2192,31 +2194,31 @@ __auto_type fb = _t935.data.STry.finally_b;
         _tr_obj_release(s1, _trdrop_PfState);
         _tr_obj_release(acc, _trdrop_PfState);
         _tr_obj_release(hs, _trdrop_PfState);
-    } else if (_t935.tag == HirStmt_SAssert) {
-        __auto_type c = _t935.data.SAssert.cond;
-__auto_type m = _t935.data.SAssert.msg;
+    } else if (_t985.tag == HirStmt_SAssert) {
+        __auto_type c = _t985.data.SAssert.cond;
+__auto_type m = _t985.data.SAssert.msg;
 #line 922 "src/ptrflow.tr"
         pf_expr(cx, c, st);
 #line 923 "src/ptrflow.tr"
         pf_expr(cx, m, st);
-    } else if (_t935.tag == HirStmt_SWith) {
-        __auto_type items = _t935.data.SWith.items;
-__auto_type body = _t935.data.SWith.body;
+    } else if (_t985.tag == HirStmt_SWith) {
+        __auto_type items = _t985.data.SWith.items;
+__auto_type body = _t985.data.SWith.body;
 #line 925 "src/ptrflow.tr"
         pf_exprs(cx, items, st);
 #line 926 "src/ptrflow.tr"
         pf_block(cx, body, st);
-    } else if (_t935.tag == HirStmt_SSpawn) {
-        __auto_type e = _t935.data.SSpawn.expr;
+    } else if (_t985.tag == HirStmt_SSpawn) {
+        __auto_type e = _t985.data.SSpawn.expr;
         pf_expr(cx, e, st);
-    } else if (_t935.tag == HirStmt_STaskGroup) {
-        __auto_type body = _t935.data.STaskGroup.body;
+    } else if (_t985.tag == HirStmt_STaskGroup) {
+        __auto_type body = _t985.data.STaskGroup.body;
         pf_branchy_block(cx, body, st);
-    } else if (_t935.tag == HirStmt_SGpuBlock) {
-        __auto_type body = _t935.data.SGpuBlock.body;
+    } else if (_t985.tag == HirStmt_SGpuBlock) {
+        __auto_type body = _t985.data.SGpuBlock.body;
         pf_branchy_block(cx, body, st);
     } else if (1) {
-        __auto_type _ = _t935;
+        __auto_type _ = _t985;
         /* pass */
     }
 }
@@ -2229,7 +2231,9 @@ __attribute__((hot)) List_i64* pf_run_fn(HirFunction* hf, TrMap* summaries, TrMa
 #line 937 "src/ptrflow.tr"
     cx->report = report;
 #line 938 "src/ptrflow.tr"
+    TrStr _sfo_t997 = cx->fn_name;
     cx->fn_name = _tr_str_retain(hf->name);
+    _tr_str_release(_sfo_t997);
 #line 939 "src/ptrflow.tr"
     cx->is_main = (_tr_str_eqv((hf->name), (_tr_str_lit_len("main", 4LL))) && _tr_str_eqv((hf->class_name), (_tr_str_lit_len("", 0LL))));
 #line 940 "src/ptrflow.tr"
@@ -2239,7 +2243,7 @@ __attribute__((hot)) List_i64* pf_run_fn(HirFunction* hf, TrMap* summaries, TrMa
 #line 942 "src/ptrflow.tr"
     while ((pi < hf->params->len)) {
 #line 943 "src/ptrflow.tr"
-        ({ __auto_type _ord_t947 = (((HirParam*)List_ptr_get(hf->params, pi))->name); List_TrStr_append(cx->params, _ord_t947); });
+        ({ __auto_type _ord_t998 = (((HirParam*)List_ptr_get(hf->params, pi))->name); List_TrStr_append(cx->params, _ord_t998); });
 #line 944 "src/ptrflow.tr"
         pi = (pi + 1LL);
     }
@@ -2258,7 +2262,7 @@ __attribute__((hot)) List_i64* pf_run_fn(HirFunction* hf, TrMap* summaries, TrMa
 #line 951 "src/ptrflow.tr"
     while ((pi < hf->params->len)) {
 #line 952 "src/ptrflow.tr"
-        if ((({ __auto_type _ord_t949 = (cx->ret_acc->freed); TrStr _apt_t948 = _tr_str_retain(((HirParam*)List_ptr_get(hf->params, pi))->name); __auto_type _wr = (pf_has(_ord_t949, _apt_t948)); _tr_str_release(_apt_t948); _wr; }) && _tr_str_eqv((((HirParam*)List_ptr_get(hf->params, pi))->ty->name), (_tr_str_lit_len("Pointer", 7LL))))) {
+        if ((({ __auto_type _ord_t1000 = (cx->ret_acc->freed); TrStr _apt_t999 = _tr_str_retain(((HirParam*)List_ptr_get(hf->params, pi))->name); __auto_type _wr = (pf_has(_ord_t1000, _apt_t999)); _tr_str_release(_apt_t999); _wr; }) && _tr_str_eqv((((HirParam*)List_ptr_get(hf->params, pi))->ty->name), (_tr_str_lit_len("Pointer", 7LL))))) {
 #line 952 "src/ptrflow.tr"
             List_i64_append(out, pi);
         }
@@ -2270,7 +2274,7 @@ __attribute__((hot)) List_i64* pf_run_fn(HirFunction* hf, TrMap* summaries, TrMa
 #line 955 "src/ptrflow.tr"
     while ((ei < cx->errs->len)) {
 #line 956 "src/ptrflow.tr"
-        ({ TrStr _at_t950 = (List_TrStr_get(cx->errs, ei)); List_TrStr_append(errs, _at_t950); _tr_str_release(_at_t950); });
+        ({ TrStr _at_t1001 = (List_TrStr_get(cx->errs, ei)); List_TrStr_append(errs, _at_t1001); _tr_str_release(_at_t1001); });
 #line 957 "src/ptrflow.tr"
         ei = (ei + 1LL);
     }
@@ -2326,7 +2330,7 @@ __attribute__((hot)) List_TrStr* ptrflow_check(List_ptr* fns, TrMap* externs) {
 #line 981 "src/ptrflow.tr"
         while ((ei < errs->len)) {
 #line 982 "src/ptrflow.tr"
-            ({ __auto_type _ord_t951 = (({ TrStr _tr_cl = (_tr_str_wrap(_tr_int_to_str((long long)(fi2)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("@", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t952 = (({ TrStr _tr_cl = (_ord_t951); TrStr _tr_cr = (List_TrStr_get(errs, ei)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); List_TrStr_append(out, _at_t952); _tr_str_release(_at_t952); });
+            ({ __auto_type _ord_t1002 = (({ TrStr _tr_cl = (_tr_str_wrap(_tr_int_to_str((long long)(fi2)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("@", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t1003 = (({ TrStr _tr_cl = (_ord_t1002); TrStr _tr_cr = (List_TrStr_get(errs, ei)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); List_TrStr_append(out, _at_t1003); _tr_str_release(_at_t1003); });
 #line 983 "src/ptrflow.tr"
             ei = (ei + 1LL);
         }

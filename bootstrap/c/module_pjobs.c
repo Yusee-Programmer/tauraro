@@ -39,9 +39,9 @@ __attribute__((hot)) void pj_worker(_TrSharedBox* job) {
             break;
         }
 #line 36 "src/pjobs.tr"
-        long long rc = ({ TrStr _apt_t614 = _tr_str_retain(((PJob*)(job->data))->blob); TrStr _aet_t615 = (pj_line(_apt_t614, i)); __auto_type _wr = (_tr_system(_aet_t615.data)); _tr_str_release(_apt_t614); _tr_str_release(_aet_t615); _wr; });
+        long long rc = ({ TrStr _apt_t644 = _tr_str_retain(((PJob*)(job->data))->blob); TrStr _aet_t645 = (pj_line(_apt_t644, i)); __auto_type _wr = (_tr_system(_aet_t645.data)); _tr_str_release(_apt_t644); _tr_str_release(_aet_t645); _wr; });
 #line 37 "src/pjobs.tr"
-        ({ __auto_type _ord_t616 = (((PJob*)(job->data))->base); TrStr _at_t617 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv((_ord_t616), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".rc", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t618 = (_tr_str_wrap(_tr_int_to_str((long long)(rc)))); write_file(_at_t617, _at_t618); _tr_str_release(_at_t617); _tr_str_release(_at_t618); });
+        ({ __auto_type _ord_t646 = (((PJob*)(job->data))->base); TrStr _at_t647 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv((_ord_t646), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".rc", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t648 = (_tr_str_wrap(_tr_int_to_str((long long)(rc)))); write_file(_at_t647, _at_t648); _tr_str_release(_at_t647); _tr_str_release(_at_t648); });
     }
 #line 38 "src/pjobs.tr"
     _tr_atomic_add(((PJob*)(job->data))->done, (long long)(1LL));
@@ -79,7 +79,7 @@ __attribute__((hot)) long long pjobs_workers(long long njobs) {
 #line 53 "src/pjobs.tr"
     long long w = _tr_cpu_count();
 #line 54 "src/pjobs.tr"
-    long long env = ({ TrStr _at_t619 = (_tr_str_lit(_tr_getenv(_tr_strz(_tr_str_lit_len("TAURARO_JOBS", 12LL))))); __auto_type _wr = (pj_parse_int(_at_t619)); _tr_str_release(_at_t619); _wr; });
+    long long env = ({ TrStr _at_t649 = (_tr_str_lit(_tr_getenv(_tr_strz(_tr_str_lit_len("TAURARO_JOBS", 12LL))))); __auto_type _wr = (pj_parse_int(_at_t649)); _tr_str_release(_at_t649); _wr; });
 #line 55 "src/pjobs.tr"
     if ((env > 0LL)) {
 #line 55 "src/pjobs.tr"
@@ -114,7 +114,7 @@ __attribute__((hot)) List_i64* pjobs_run(List_TrStr* cmds, long long workers, Tr
 #line 67 "src/pjobs.tr"
         while ((k < cmds->len)) {
 #line 68 "src/pjobs.tr"
-            ({ TrStr _aet_t620 = (List_TrStr_get(cmds, k)); List_i64_append(rcs, _tr_system(_aet_t620.data)); _tr_str_release(_aet_t620); });
+            ({ TrStr _aet_t650 = (List_TrStr_get(cmds, k)); List_i64_append(rcs, _tr_system(_aet_t650.data)); _tr_str_release(_aet_t650); });
 #line 69 "src/pjobs.tr"
             k = (k + 1LL);
         }
@@ -130,10 +130,10 @@ __attribute__((hot)) List_i64* pjobs_run(List_TrStr* cmds, long long workers, Tr
 #line 74 "src/pjobs.tr"
         if ((k > 0LL)) {
 #line 74 "src/pjobs.tr"
-            ({ TrStr _ap_t621 = (_tr_str_lit_len("\n", 1LL)); _tr_str_append(&blob, _ap_t621); });
+            ({ TrStr _ap_t651 = (_tr_str_lit_len("\n", 1LL)); _tr_str_append(&blob, _ap_t651); });
         }
 #line 75 "src/pjobs.tr"
-        ({ TrStr _ap_t622 = (List_TrStr_get(cmds, k)); _tr_str_append(&blob, _ap_t622); _tr_str_release(_ap_t622); });
+        ({ TrStr _ap_t652 = (List_TrStr_get(cmds, k)); _tr_str_append(&blob, _ap_t652); _tr_str_release(_ap_t652); });
 #line 76 "src/pjobs.tr"
         k = (k + 1LL);
     }
@@ -144,9 +144,13 @@ __attribute__((hot)) List_i64* pjobs_run(List_TrStr* cmds, long long workers, Tr
 #line 79 "src/pjobs.tr"
     ((PJob*)(job->data))->total = _tr_atomic_new((long long)(cmds->len));
 #line 80 "src/pjobs.tr"
+    TrStr _sfo_t653 = ((PJob*)(job->data))->blob;
     ((PJob*)(job->data))->blob = _tr_str_retain(blob);
+    _tr_str_release(_sfo_t653);
 #line 81 "src/pjobs.tr"
+    TrStr _sfo_t654 = ((PJob*)(job->data))->base;
     ((PJob*)(job->data))->base = _tr_str_retain(rcbase);
+    _tr_str_release(_sfo_t654);
 #line 82 "src/pjobs.tr"
     ((PJob*)(job->data))->done = _tr_atomic_new((long long)(0LL));
 #line 83 "src/pjobs.tr"
@@ -172,7 +176,7 @@ __attribute__((hot)) List_i64* pjobs_run(List_TrStr* cmds, long long workers, Tr
 #line 92 "src/pjobs.tr"
         if (file_exists(rf)) {
 #line 93 "src/pjobs.tr"
-            ({ TrStr _at_t623 = (read_file(rf)); List_i64_append(rcs, pj_parse_int(_at_t623)); _tr_str_release(_at_t623); });
+            ({ TrStr _at_t655 = (read_file(rf)); List_i64_append(rcs, pj_parse_int(_at_t655)); _tr_str_release(_at_t655); });
 #line 94 "src/pjobs.tr"
             _tr_file_delete(_tr_strz(rf));
         } else {

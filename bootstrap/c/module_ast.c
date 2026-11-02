@@ -53,7 +53,9 @@ __attribute__((malloc,returns_nonnull,hot)) GenericConstraint* GenericConstraint
 #line 64 "src/ast.tr"
     GenericConstraint* g = ((GenericConstraint*)_tr_obj_alloc(sizeof(GenericConstraint)));
 #line 65 "src/ast.tr"
+    TrStr _sfo_t32 = g->target;
     g->target = _tr_str_retain(target);
+    _tr_str_release(_sfo_t32);
 #line 66 "src/ast.tr"
     g->bounds = (void*)List_ptr_new();
 #line 67 "src/ast.tr"
@@ -64,7 +66,9 @@ __attribute__((malloc,returns_nonnull,hot)) Decorator* Decorator_init(TrStr name
 #line 77 "src/ast.tr"
     Decorator* d = ((Decorator*)_tr_obj_alloc(sizeof(Decorator)));
 #line 78 "src/ast.tr"
+    TrStr _sfo_t33 = d->name;
     d->name = _tr_str_retain(name);
+    _tr_str_release(_sfo_t33);
 #line 79 "src/ast.tr"
     d->args = (void*)List_ptr_new();
 #line 80 "src/ast.tr"
@@ -118,13 +122,17 @@ __attribute__((hot)) FStringPart* FStringPart_init_text(TrStr s, long long blen)
 #line 155 "src/ast.tr"
     p->is_expr = false;
 #line 156 "src/ast.tr"
+    TrStr _sfo_t34 = p->text;
     p->text = _tr_str_retain(s);
+    _tr_str_release(_sfo_t34);
 #line 157 "src/ast.tr"
     p->text_len = blen;
 #line 158 "src/ast.tr"
     p->expr = (Expr*)(0LL);
 #line 159 "src/ast.tr"
+    TrStr _sfo_t35 = p->fmt_spec;
     p->fmt_spec = _tr_str_lit_len("", 0LL);
+    _tr_str_release(_sfo_t35);
 #line 160 "src/ast.tr"
     p->spec_args = (void*)List_ptr_new();
 #line 161 "src/ast.tr"
@@ -137,13 +145,17 @@ __attribute__((hot)) FStringPart* FStringPart_init_expr(Expr* e) {
 #line 165 "src/ast.tr"
     p->is_expr = true;
 #line 166 "src/ast.tr"
+    TrStr _sfo_t36 = p->text;
     p->text = _tr_str_lit_len("", 0LL);
+    _tr_str_release(_sfo_t36);
 #line 167 "src/ast.tr"
     p->text_len = 0LL;
 #line 168 "src/ast.tr"
     p->expr = e;
 #line 169 "src/ast.tr"
+    TrStr _sfo_t37 = p->fmt_spec;
     p->fmt_spec = _tr_str_lit_len("", 0LL);
+    _tr_str_release(_sfo_t37);
 #line 170 "src/ast.tr"
     p->spec_args = (void*)List_ptr_new();
 #line 171 "src/ast.tr"
@@ -156,13 +168,17 @@ __attribute__((hot)) FStringPart* FStringPart_init_expr_fmt(Expr* e, TrStr spec)
 #line 175 "src/ast.tr"
     p->is_expr = true;
 #line 176 "src/ast.tr"
+    TrStr _sfo_t38 = p->text;
     p->text = _tr_str_lit_len("", 0LL);
+    _tr_str_release(_sfo_t38);
 #line 177 "src/ast.tr"
     p->text_len = 0LL;
 #line 178 "src/ast.tr"
     p->expr = e;
 #line 179 "src/ast.tr"
+    TrStr _sfo_t39 = p->fmt_spec;
     p->fmt_spec = _tr_str_retain(spec);
+    _tr_str_release(_sfo_t39);
 #line 180 "src/ast.tr"
     p->spec_args = (void*)List_ptr_new();
 #line 181 "src/ast.tr"
@@ -284,7 +300,9 @@ __attribute__((malloc,returns_nonnull,hot)) Param* Param_init(TrStr name, AstTyp
 #line 345 "src/ast.tr"
     Param* p = ((Param*)_tr_obj_alloc(sizeof(Param)));
 #line 346 "src/ast.tr"
+    TrStr _sfo_t40 = p->name;
     p->name = _tr_str_retain(name);
+    _tr_str_release(_sfo_t40);
 #line 347 "src/ast.tr"
     p->ty = ty;
 #line 348 "src/ast.tr"
@@ -301,7 +319,9 @@ __attribute__((malloc,returns_nonnull,hot)) FunctionDef* FunctionDef_init(TrStr 
 #line 378 "src/ast.tr"
     FunctionDef* f = ((FunctionDef*)_tr_obj_alloc(sizeof(FunctionDef)));
 #line 379 "src/ast.tr"
+    TrStr _sfo_t41 = f->name;
     f->name = _tr_str_retain(name);
+    _tr_str_release(_sfo_t41);
 #line 380 "src/ast.tr"
     f->generics = (void*)List_TrStr_new();
 #line 381 "src/ast.tr"
@@ -344,7 +364,9 @@ __attribute__((malloc,returns_nonnull,hot)) FieldDef* FieldDef_init(TrStr name, 
 #line 406 "src/ast.tr"
     FieldDef* fd = ((FieldDef*)_tr_obj_alloc(sizeof(FieldDef)));
 #line 407 "src/ast.tr"
+    TrStr _sfo_t42 = fd->name;
     fd->name = _tr_str_retain(name);
+    _tr_str_release(_sfo_t42);
 #line 408 "src/ast.tr"
     fd->ty = ty;
 #line 409 "src/ast.tr"
@@ -357,7 +379,9 @@ __attribute__((malloc,returns_nonnull,hot)) ClassDef* ClassDef_init(TrStr name) 
 #line 430 "src/ast.tr"
     ClassDef* c = ((ClassDef*)_tr_obj_alloc(sizeof(ClassDef)));
 #line 431 "src/ast.tr"
+    TrStr _sfo_t43 = c->name;
     c->name = _tr_str_retain(name);
+    _tr_str_release(_sfo_t43);
 #line 432 "src/ast.tr"
     c->generics = (void*)List_TrStr_new();
 #line 433 "src/ast.tr"
@@ -381,7 +405,9 @@ __attribute__((malloc,returns_nonnull,hot)) ClassDef* ClassDef_init(TrStr name) 
 #line 442 "src/ast.tr"
     c->line = 0LL;
 #line 443 "src/ast.tr"
+    TrStr _sfo_t44 = c->docstring;
     c->docstring = _tr_str_lit_len("", 0LL);
+    _tr_str_release(_sfo_t44);
 #line 444 "src/ast.tr"
     c->region_params = (void*)List_TrStr_new();
 #line 445 "src/ast.tr"
@@ -392,7 +418,9 @@ __attribute__((malloc,returns_nonnull,hot)) VariantDef* VariantDef_init(TrStr na
 #line 453 "src/ast.tr"
     VariantDef* v = ((VariantDef*)_tr_obj_alloc(sizeof(VariantDef)));
 #line 454 "src/ast.tr"
+    TrStr _sfo_t45 = v->name;
     v->name = _tr_str_retain(name);
+    _tr_str_release(_sfo_t45);
 #line 455 "src/ast.tr"
     v->fields = (void*)List_ptr_new();
 #line 456 "src/ast.tr"
@@ -403,7 +431,9 @@ __attribute__((malloc,returns_nonnull,hot)) EnumDef* EnumDef_init(TrStr name) {
 #line 472 "src/ast.tr"
     EnumDef* e = ((EnumDef*)_tr_obj_alloc(sizeof(EnumDef)));
 #line 473 "src/ast.tr"
+    TrStr _sfo_t46 = e->name;
     e->name = _tr_str_retain(name);
+    _tr_str_release(_sfo_t46);
 #line 474 "src/ast.tr"
     e->generics = (void*)List_TrStr_new();
 #line 475 "src/ast.tr"
@@ -428,7 +458,9 @@ __attribute__((malloc,returns_nonnull,hot)) InterfaceDef* InterfaceDef_init(TrSt
 #line 496 "src/ast.tr"
     InterfaceDef* i = ((InterfaceDef*)_tr_obj_alloc(sizeof(InterfaceDef)));
 #line 497 "src/ast.tr"
+    TrStr _sfo_t47 = i->name;
     i->name = _tr_str_retain(name);
+    _tr_str_release(_sfo_t47);
 #line 498 "src/ast.tr"
     i->generics = (void*)List_TrStr_new();
 #line 499 "src/ast.tr"
@@ -449,9 +481,13 @@ __attribute__((malloc,returns_nonnull,hot)) ImportItem* ImportItem_init(TrStr na
 #line 512 "src/ast.tr"
     ImportItem* it = ((ImportItem*)_tr_obj_alloc(sizeof(ImportItem)));
 #line 513 "src/ast.tr"
+    TrStr _sfo_t48 = it->name;
     it->name = _tr_str_retain(name);
+    _tr_str_release(_sfo_t48);
 #line 514 "src/ast.tr"
+    TrStr _sfo_t49 = it->alias;
     it->alias = _tr_str_lit_len("", 0LL);
+    _tr_str_release(_sfo_t49);
 #line 515 "src/ast.tr"
     return it;
 }
@@ -501,7 +537,7 @@ __attribute__((hot)) TrStr unify_generic(AstType* pty, AstType* aty, TrStr gp) {
 #line 560 "src/ast.tr"
     while (((i < pty->args->len) && (i < aty->args->len))) {
 #line 561 "src/ast.tr"
-        TrStr r = ({ __auto_type _ord_t32 = ((*((AstType**)List_ptr_get(pty->args, i)))); __auto_type _wr = (unify_generic(_ord_t32, (*((AstType**)List_ptr_get(aty->args, i))), gp)); _wr; });
+        TrStr r = ({ __auto_type _ord_t50 = ((*((AstType**)List_ptr_get(pty->args, i)))); __auto_type _wr = (unify_generic(_ord_t50, (*((AstType**)List_ptr_get(aty->args, i))), gp)); _wr; });
 #line 562 "src/ast.tr"
         if ((!_tr_str_eqv((r), (_tr_str_lit_len("", 0LL))))) {
 #line 562 "src/ast.tr"

@@ -4260,6 +4260,31 @@ static _TrExcChain* _tr_excchain_new(void) {
  * `_tr_exc_chain_get()` below). Lazily created on first use. */
 _TR_GLOBAL _TR_THREAD_LOCAL _TrExcChain* _tr_root_exc_chain;
 
+/* ── Autorelease stack: owned references handed out by Weak[T].upgrade() ──────────────
+ * upgrade() must give the caller a reference that survives the strong owner being
+ * dropped. It retains the object and parks the reference here; the function that
+ * made the upgrade call drains back to its entry mark at exit (cleanup attribute),
+ * so the object lives at least as long as that function's frame. */
+typedef struct { void* p; void (*drop)(void*); } _TrArEnt;
+_TR_GLOBAL _TR_THREAD_LOCAL _TrArEnt* _tr_ar_buf;
+_TR_GLOBAL _TR_THREAD_LOCAL size_t _tr_ar_len;
+_TR_GLOBAL _TR_THREAD_LOCAL size_t _tr_ar_cap;
+static inline size_t _tr_ar_mark(void) { return _tr_ar_len; }
+static inline void* _tr_ar_retain(void* p, void (*drop)(void*)) {
+    if (!p) return p;
+    _tr_obj_retain(p);
+    if (_tr_ar_len == _tr_ar_cap) {
+        _tr_ar_cap = _tr_ar_cap ? _tr_ar_cap * 2 : 16;
+        _tr_ar_buf = (_TrArEnt*)realloc(_tr_ar_buf, _tr_ar_cap * sizeof(_TrArEnt));
+    }
+    _tr_ar_buf[_tr_ar_len].p = p; _tr_ar_buf[_tr_ar_len].drop = drop; _tr_ar_len++;
+    return p;
+}
+static inline void _tr_ar_drain(size_t mark) {
+    while (_tr_ar_len > mark) { _TrArEnt e = _tr_ar_buf[--_tr_ar_len]; _tr_obj_release(e.p, e.drop); }
+}
+static inline void _tr_ar_cleanup(size_t* mark) { _tr_ar_drain(*mark); }
+
 #if !defined(TAURARO_BARE) && !defined(TAURARO_WASM)
 #define _TR_HAS_CORO 1
 #endif
@@ -9734,6 +9759,66 @@ static void _tr_idict_free_objval(TrIDict* d, void(*drop)(void*)) {
         while(n){ _TrIDictNode* nx=n->next; _tr_obj_release(n->value, drop); _tr_free(n); n=nx; }
     }
     _tr_free(d->buckets); _tr_free(d);
+}
+
+/* Dict[K, HeapClass|str] mutation helpers: the dict CO-OWNS each value (insert retains), so an
+   overwrite / remove / clear must release the value it displaces (it leaked before). The new
+   value is stored BEFORE the old one is released, so `d[k] = d[k]` stays valid. */
+static inline void _tr_dict_set_obj(TrMap* d, char* k, void* v, void(*drop)(void*)) {
+    if (!d) return;
+    void* old = Dict_get(d, k); Dict_set(d, k, v); if (old) _tr_obj_release(old, drop);
+}
+static inline void _tr_dict_set_str(TrMap* d, char* k, void* bv) {
+    if (!d) return;
+    void* old = Dict_get(d, k); Dict_set(d, k, bv);
+    if (old) { _tr_str_release(*(TrStr*)old); _tr_free(old); }
+}
+static inline void _tr_dict_remove_obj(TrMap* d, char* k, void(*drop)(void*)) {
+    if (!d) return;
+    void* old = Dict_get(d, k); Dict_remove(d, k); if (old) _tr_obj_release(old, drop);
+}
+static inline void _tr_dict_remove_str(TrMap* d, char* k) {
+    if (!d) return;
+    void* old = Dict_get(d, k); Dict_remove(d, k);
+    if (old) { _tr_str_release(*(TrStr*)old); _tr_free(old); }
+}
+static inline void _tr_dict_clear_obj(TrMap* d, void(*drop)(void*)) {
+    if (!d) return;
+    for (size_t i=0;i<d->cap;i++) for (_DictNode* n=d->buckets[i]; n; n=n->next) { _tr_obj_release(n->value, drop); n->value = NULL; }
+    Dict_clear_entries(d);
+}
+static inline void _tr_dict_clear_str(TrMap* d) {
+    if (!d) return;
+    for (size_t i=0;i<d->cap;i++) for (_DictNode* n=d->buckets[i]; n; n=n->next) { if (n->value) { _tr_str_release(*(TrStr*)n->value); _tr_free(n->value); n->value = NULL; } }
+    Dict_clear_entries(d);
+}
+static inline void _tr_idict_set_obj(TrIDict* d, long long k, void* v, void(*drop)(void*)) {
+    if (!d) return;
+    void* old = _tr_idict_get(d, k); _tr_idict_set(d, k, v); if (old) _tr_obj_release(old, drop);
+}
+static inline void _tr_idict_set_str(TrIDict* d, long long k, void* bv) {
+    if (!d) return;
+    void* old = _tr_idict_get(d, k); _tr_idict_set(d, k, bv);
+    if (old) { _tr_str_release(*(TrStr*)old); _tr_free(old); }
+}
+static inline void _tr_idict_remove_obj(TrIDict* d, long long k, void(*drop)(void*)) {
+    if (!d) return;
+    void* old = _tr_idict_get(d, k); _tr_idict_remove(d, k); if (old) _tr_obj_release(old, drop);
+}
+static inline void _tr_idict_remove_str(TrIDict* d, long long k) {
+    if (!d) return;
+    void* old = _tr_idict_get(d, k); _tr_idict_remove(d, k);
+    if (old) { _tr_str_release(*(TrStr*)old); _tr_free(old); }
+}
+static inline void _tr_idict_clear_obj(TrIDict* d, void(*drop)(void*)) {
+    if (!d) return;
+    for (size_t i=0;i<d->cap;i++) for (_TrIDictNode* n=d->buckets[i]; n; n=n->next) { _tr_obj_release(n->value, drop); n->value = NULL; }
+    _tr_idict_clear(d);
+}
+static inline void _tr_idict_clear_str(TrIDict* d) {
+    if (!d) return;
+    for (size_t i=0;i<d->cap;i++) for (_TrIDictNode* n=d->buckets[i]; n; n=n->next) { if (n->value) { _tr_str_release(*(TrStr*)n->value); _tr_free(n->value); n->value = NULL; } }
+    _tr_idict_clear(d);
 }
 
 /* Set[HeapClass] — hash set of heap instances keyed by POINTER IDENTITY. The set

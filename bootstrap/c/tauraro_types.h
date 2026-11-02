@@ -3399,6 +3399,7 @@ typedef struct CGenerator {
     TrMap* overloaded_sigs;
     TrMap* type_alias_map;
     TrMap* type_alias_tr;
+    bool fn_uses_ar;
     List_TrStr* defer_stack;
     bool defers_pre_flushed;
     unsigned long long func_body_blk;
@@ -4335,6 +4336,7 @@ __attribute__((hot)) bool _block_invalidates_iter(Block* b, TrStr name);
 __attribute__((hot)) bool _pblock_invalidates_iter(Block** pb, TrStr name);
 __attribute__((hot)) bool _stmt_nested_invalidates_iter(Stmt* s, TrStr name);
 __attribute__((hot)) bool _ty_has_borrow(AstType* t, long long depth);
+__attribute__((hot)) List_ptr* _single_hir(HirExpr* e);
 __attribute__((hot)) AstType** Sema_build_ast_type(Sema* self, Expr* e);
 __attribute__((hot)) AstType** Sema__targ_of(Sema* self, Expr* e);
 __attribute__((malloc,returns_nonnull,hot)) Sema* Sema_init();
@@ -4552,6 +4554,12 @@ __attribute__((hot)) void Sema_check_pattern_subject(Sema* self, Pattern pat, Hi
 __attribute__((hot)) void Sema_check_match_expr_exhaustive(Sema* self, TrStr ty_name, List_ptr* arms);
 __attribute__((hot)) HirExpr* Sema_retype_none(Sema* self, HirExpr* e, AstType* expected);
 __attribute__((hot)) AstType* Sema_str_method_ret_ty(Sema* self, TrStr method);
+__attribute__((hot)) bool Sema__cap_copy_safe(Sema* self, AstType* t);
+__attribute__((hot)) void Sema__esc_closure_check(Sema* self, HirExpr* e);
+__attribute__((hot)) void Sema__esc_closure_block(Sema* self, HirBlock* b);
+__attribute__((hot)) void Sema__esc_closure_stmt(Sema* self, HirStmt* s);
+__attribute__((hot)) void Sema_collect_block_assigns(Sema* self, HirBlock* b, List_TrStr* out);
+__attribute__((hot)) void Sema_collect_stmt_assigns(Sema* self, HirStmt* s, List_TrStr* out);
 __attribute__((hot)) void Sema_collect_block_refs(Sema* self, HirBlock* b, List_TrStr* out);
 __attribute__((hot)) void Sema_collect_stmt_refs(Sema* self, HirStmt* s, List_TrStr* out);
 __attribute__((hot)) HirExpr* Sema_lower_do_value(Sema* self, Block* do_body);
@@ -5476,6 +5484,8 @@ __attribute__((hot)) void CGenerator__reg_fn_owned(CGenerator* self, TrStr key, 
 __attribute__((hot)) bool CGenerator__obj_expr_owns_ref(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__is_user_borrow_wrapper_call(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__store_target_is_borrow_field(CGenerator* self, HirExpr* t);
+__attribute__((hot)) bool CGenerator__str_field_target_ok(CGenerator* self, HirExpr* t);
+__attribute__((hot)) bool CGenerator__pure_path(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__store_is_weak_field(CGenerator* self, HirExpr* t);
 __attribute__((hot)) bool CGenerator__is_downgrade_call(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__store_is_opt_obj_field(CGenerator* self, HirExpr* t);
@@ -5519,6 +5529,10 @@ __attribute__((hot)) TrStr CGenerator_take_payload(CGenerator* self, TrStr slot,
 __attribute__((hot)) TrStr CGenerator_payload_free_stmt(CGenerator* self, TrStr slot, TrStr tn);
 __attribute__((hot)) TrStr CGenerator_unwrap_voidp_as(CGenerator* self, TrStr expr_s, AstType* ty);
 __attribute__((hot)) TrStr CGenerator_dict_key_arg(CGenerator* self, HirExpr* e);
+__attribute__((hot)) TrStr CGenerator__dict_val_kind(CGenerator* self, HirExpr* o);
+__attribute__((hot)) TrStr CGenerator__dict_val_drop(CGenerator* self, HirExpr* o);
+__attribute__((hot)) TrStr CGenerator_dict_set_call(CGenerator* self, HirExpr* o, TrStr obj_s, bool is_idict, TrStr key_s, TrStr val_s);
+__attribute__((hot)) TrStr CGenerator__list_elem_obj_drop(CGenerator* self, HirExpr* o);
 __attribute__((hot)) TrStr CGenerator_dict_val_arg(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_gen_args_extern(CGenerator* self, List_ptr* args);
 __attribute__((hot)) bool CGenerator__is_fresh_str_expr(CGenerator* self, HirExpr* e);
