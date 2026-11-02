@@ -1498,7 +1498,14 @@ static uint8_t* tf_raster(tf_font* f, int gid, double scale_x, double scale_y, d
     return cov;
 }
 
-static uint8_t* g_last_cov; static int g_last_box[4];
+#ifndef TRC_TLS
+#  if defined(_MSC_VER)
+#    define TRC_TLS __declspec(thread)
+#  else
+#    define TRC_TLS __thread
+#  endif
+#endif
+static TRC_TLS uint8_t* g_last_cov; static TRC_TLS int g_last_box[4];
 /* Rasterize to a coverage bitmap kept until the next call; box via _box. */
 int64_t trc_font_raster(int64_t h, int64_t gid, double size_px, double ox, double oy) {
     tf_font* f = F(h); double sc = size_px / f->upem;
@@ -1656,7 +1663,7 @@ static uint32_t tbl_sum(const uint8_t* p, size_t n) {
     return s;
 }
 
-static uint8_t* g_sub_out; static int64_t g_sub_len;
+static TRC_TLS uint8_t* g_sub_out; static TRC_TLS int64_t g_sub_len;
 /* Build the subset font; returns its length (bytes via trc_font_subset_take). */
 int64_t trc_font_subset_build(int64_t sh) {
     tf_subset* s = SB(sh); tf_font* f = s->f;
@@ -1818,7 +1825,7 @@ static void scan_dir(const char* dir, tf_out* o, int depth) {
     }
 #endif
 }
-static uint8_t* g_scan; static int64_t g_scan_len;
+static TRC_TLS uint8_t* g_scan; static TRC_TLS int64_t g_scan_len;
 /* Recursively list font files under `dir` (newline separated). */
 int64_t trc_font_scan(const char* dir, int64_t n) {
     char path[1024]; tf_out o = { 0 };

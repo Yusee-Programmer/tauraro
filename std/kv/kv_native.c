@@ -239,19 +239,28 @@ int64_t trc_kv_nanos(void) {
 /* CRC-32 (IEEE, reflected), continuing from `crc` (pass 0 to start). */
 static uint32_t crc_table[256];
 static int crc_ready = 0;
+static int crc_lk = 0;
+/* init-once guard: tables are filled under a tiny spin lock and published with release/acquire */
+#define TRC_LK(l) while (__atomic_exchange_n(&(l), 1, __ATOMIC_ACQUIRE)) {}
+#define TRC_UNLK(l) __atomic_store_n(&(l), 0, __ATOMIC_RELEASE)
+#define TRC_RDY(f) __atomic_load_n(&(f), __ATOMIC_ACQUIRE)
+#define TRC_SETRDY(f) __atomic_store_n(&(f), 1, __ATOMIC_RELEASE)
 static void crc_init(void) {
     uint32_t i, j, c;
+    TRC_LK(crc_lk);
+    if (crc_ready) { TRC_UNLK(crc_lk); return; }
     for (i = 0; i < 256; ++i) {
         c = i;
         for (j = 0; j < 8; ++j) c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
         crc_table[i] = c;
     }
-    crc_ready = 1;
+    TRC_SETRDY(crc_ready);
+    TRC_UNLK(crc_lk);
 }
 int64_t trc_kv_crc32(int64_t crc, const char* buf, int64_t n) {
     uint32_t c = ~(uint32_t)crc;
     int64_t i;
-    if (!crc_ready) crc_init();
+    if (!TRC_RDY(crc_ready)) crc_init();
     for (i = 0; i < n; ++i) c = crc_table[(c ^ (uint8_t)buf[i]) & 0xFF] ^ (c >> 8);
     return (int64_t)(~c);
 }

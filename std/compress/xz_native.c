@@ -104,12 +104,22 @@ static int trc_xzd_map(enum xz_ret r) {
 }
 
 static int trc_xz_crc_ready = 0;
+static int trc_xz_lk = 0;
+/* init-once guard: tables are filled under a tiny spin lock and published with release/acquire */
+#define TRC_LK(l) while (__atomic_exchange_n(&(l), 1, __ATOMIC_ACQUIRE)) {}
+#define TRC_UNLK(l) __atomic_store_n(&(l), 0, __ATOMIC_RELEASE)
+#define TRC_RDY(f) __atomic_load_n(&(f), __ATOMIC_ACQUIRE)
+#define TRC_SETRDY(f) __atomic_store_n(&(f), 1, __ATOMIC_RELEASE)
 
 int64_t trc_xzd_new(int64_t max_out) {
-    if (!trc_xz_crc_ready) {
-        xz_crc32_init();
-        xz_crc64_init();
-        trc_xz_crc_ready = 1;
+    if (!TRC_RDY(trc_xz_crc_ready)) {
+        TRC_LK(trc_xz_lk);
+        if (!trc_xz_crc_ready) {
+            xz_crc32_init();
+            xz_crc64_init();
+            TRC_SETRDY(trc_xz_crc_ready);
+        }
+        TRC_UNLK(trc_xz_lk);
     }
     trc_xzd *d = (trc_xzd *)calloc(1, sizeof(trc_xzd));
     if (!d) return 0;

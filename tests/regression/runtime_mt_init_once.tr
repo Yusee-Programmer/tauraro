@@ -1,0 +1,42 @@
+# tests/regression/runtime_mt_init_once.tr
+# Regression (runtime thread-safety audit): the default async pool was created lazily with an
+# unsynchronised `if (!p) p = new()` (two threads could each build a pool and leak/lose tasks), and
+# the task-group handle tables (`_tr_tg`, `_tr_atg`) were single process-wide globals, so two threads
+# running `task_group:` / `await_all` at the same time corrupted each other's handle list. They are
+# now init-once under a lock and per-thread. Run under TSan: `-fsanitize=thread` must stay silent.
+
+from std.test import TestRunner
+
+async def leaf(n: int) -> int:
+    return n * 2
+
+def tg_worker(out: Atomic[int]):
+    mut i = 0
+    while i < 200:
+        out.add(1)
+        i = i + 1
+
+async def group_worker(out: Atomic[int]):
+    mut r = 0
+    mut i = 0
+    while i < 50:
+        task_group:
+            spawn tg_worker(out)
+            spawn tg_worker(out)
+        i = i + 1
+
+def run_group(out: Atomic[int]):
+    mut k = 0
+    while k < 3:
+        k = k + 1
+
+def main():
+    mut t = TestRunner.init("runtime_mt_init_once")
+    t.section("two threads running task groups at once")
+    mut out: Atomic[int] = Atomic.new(0)
+    mut a = Thread.spawn(group_worker, out)
+    mut b = Thread.spawn(group_worker, out)
+    a.join()
+    b.join()
+    t.assert_eq_int(out.load(), 2 * 50 * 2 * 200, "every spawned task ran exactly once")
+    t.summary()

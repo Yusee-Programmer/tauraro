@@ -34,7 +34,14 @@
 #  include <linux/audit.h>
 #endif
 
-static char sb_err[256];
+#ifndef TRC_TLS
+#  if defined(_MSC_VER)
+#    define TRC_TLS __declspec(thread)
+#  else
+#    define TRC_TLS __thread
+#  endif
+#endif
+static TRC_TLS char sb_err[256];
 /* Copy the last error message into dst (cap bytes); returns its length. */
 int64_t trc_sb_error_into(char* dst, int64_t cap) {
     size_t n = strlen(sb_err);

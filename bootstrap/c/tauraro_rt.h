@@ -648,6 +648,15 @@ extern int _tr_mt_active;
 #  define _TR_RC_DEC(p) (--(*(p)))
 #endif
 
+/* Init-once guard for lazily created process singletons (default pools): a tiny spin lock, only
+ * taken on the first use, so two threads cannot both create the pool. */
+static _Atomic int _tr_init_lock_flag = 0;
+static inline void _tr_init_lock(void) {
+    int exp = 0;
+    while (!atomic_compare_exchange_weak_explicit(&_tr_init_lock_flag, &exp, 1, memory_order_acquire, memory_order_relaxed)) { exp = 0; }
+}
+static inline void _tr_init_unlock(void) { atomic_store_explicit(&_tr_init_lock_flag, 0, memory_order_release); }
+
 /* ── Class-instance ARC ──────────────────────────────────────────────────────
  * A heap class instance carries a refcount as its FIRST member (`size_t __rc`,
  * so it sits at offset 0). Instances are shared by retain/released by scope-exit
@@ -966,8 +975,8 @@ static inline bool _tr_weak_is_alive(_TrWeakBox* w) {
 static inline _TrSharedBox* _tr_weak_upgrade(_TrWeakBox* w) {
     if (!w || !w->box) return NULL;
     int old = atomic_load(&w->box->refcount);
-    if (old <= 0) return NULL;
-    atomic_fetch_add(&w->box->refcount, 1);
+    do { if (old <= 0) return NULL; }
+    while (!atomic_compare_exchange_weak(&w->box->refcount, &old, old + 1));
     return w->box;
 }
 /* Drop a Weak[T]: decrement the box's weak count; if the payload is already gone
@@ -2141,7 +2150,7 @@ _TR_XLINK void _tr_rwlbox_cleanup_w(_TrRWLBox** bp) {
 typedef struct { void*(*fn)(void*); void* arg; } _TrPoolItem;
 typedef struct {
     _TrChan* queue; _TrThread* workers; int n_workers;
-    _TrWG* wg; volatile int shutdown;
+    _TrWG* wg; _Atomic int shutdown;
 } _TrThreadPool;
 static void* _tr_pool_worker(void* arg) {
     _TrThreadPool* pool = (_TrThreadPool*)arg;
@@ -4596,8 +4605,9 @@ static void _tr_co_sleep_ms(long long ms) {
 #if defined(__linux__) && !defined(_WIN32)
 static void _tr_co_reclaim_stack(_TrCoro* c) {
     static int enabled = -1;
-    if (enabled < 0) enabled = (getenv("TAURARO_CORO_NORECLAIM") == NULL) ? 1 : 0;
-    if (!enabled || !c->stack) return;
+    int en = __atomic_load_n(&enabled, __ATOMIC_RELAXED);
+    if (en < 0) { en = (getenv("TAURARO_CORO_NORECLAIM") == NULL) ? 1 : 0; __atomic_store_n(&enabled, en, __ATOMIC_RELAXED); }
+    if (!en || !c->stack) return;
     volatile char probe;
     uintptr_t sp   = (uintptr_t)&probe;
     uintptr_t base = (uintptr_t)c->stack;
@@ -4903,7 +4913,7 @@ typedef struct _TrAsyncPool {
     int             n_workers;
     _TrChan*        injector;   /* overflow + external (non-worker-thread) submissions */
     _TrCondMutex    parkcv;     /* idle-worker park/wake */
-    volatile int    shutdown;
+    _Atomic int    shutdown;
     _Atomic long long rr;       /* round-robin submission counter */
 } _TrAsyncPool;
 
@@ -5007,8 +5017,13 @@ static void _tr_asyncpool_free(_TrAsyncPool* pool) {
  * `AsyncPool.auto()`-without-an-explicit-instance both submit here. */
 _TR_GLOBAL _TrAsyncPool* _tr_global_asyncpool;
 static _TrAsyncPool* _tr_asyncpool_default(void) {
-    if (!_tr_global_asyncpool) _tr_global_asyncpool = _tr_asyncpool_new(_tr_threadpool_auto_n());
-    return _tr_global_asyncpool;
+    _TrAsyncPool* p = __atomic_load_n(&_tr_global_asyncpool, __ATOMIC_ACQUIRE);
+    if (p) return p;
+    _tr_init_lock();
+    p = __atomic_load_n(&_tr_global_asyncpool, __ATOMIC_ACQUIRE);
+    if (!p) { p = _tr_asyncpool_new(_tr_threadpool_auto_n()); __atomic_store_n(&_tr_global_asyncpool, p, __ATOMIC_RELEASE); }
+    _tr_init_unlock();
+    return p;
 }
 static void _tr_asyncpool_default_shutdown(void) {
     if (_tr_global_asyncpool) { _tr_asyncpool_free(_tr_global_asyncpool); _tr_global_asyncpool = NULL; }
@@ -5350,7 +5365,8 @@ static inline char*     _tr_get_arg(long long n) { return _tr_str_dup_owned((_tr
 
 /* ── TaskGroup: spawn threads + join all (dynamic, unlimited) ────────── */
 typedef struct { _TrThread* ths; int count; int cap; } _TrTaskGroup;
-_TR_GLOBAL _TrTaskGroup _tr_tg;
+/* per-thread: two threads each running a task_group/await_all must not share one handle table */
+_TR_GLOBAL _TR_THREAD_LOCAL _TrTaskGroup _tr_tg;
 _TR_GLOBAL _TrThreadPool* _tr_global_async_pool;
 /* Shared async worker pool, created LAZILY on first use so pure-compute
    programs (the overwhelming common case) never pay the per-core worker-
@@ -5358,8 +5374,13 @@ _TR_GLOBAL _TrThreadPool* _tr_global_async_pool;
    this was spawned eagerly in every program's main(), which made even
    "hello world" allocate one stack per CPU. */
 static inline _TrThreadPool* _tr_async_pool(void) {
-    if (!_tr_global_async_pool) _tr_global_async_pool = _tr_threadpool_auto();
-    return _tr_global_async_pool;
+    _TrThreadPool* p = __atomic_load_n(&_tr_global_async_pool, __ATOMIC_ACQUIRE);
+    if (p) return p;
+    _tr_init_lock();
+    p = __atomic_load_n(&_tr_global_async_pool, __ATOMIC_ACQUIRE);
+    if (!p) { p = _tr_threadpool_auto(); __atomic_store_n(&_tr_global_async_pool, p, __ATOMIC_RELEASE); }
+    _tr_init_unlock();
+    return p;
 }
 static inline void _tr_async_pool_shutdown(void) {
     if (_tr_global_async_pool) { _tr_threadpool_free(_tr_global_async_pool); _tr_global_async_pool = NULL; }
@@ -5392,7 +5413,7 @@ _TR_XLINK void _tr_taskgroup_wait(void) {
  * cannot nest inside another `await_all` on the same thread - unchanged
  * from before this migration, not a new limitation). */
 typedef struct { _TrAsyncTask** tasks; int count; int cap; } _TrAsyncTaskGroup;
-_TR_GLOBAL _TrAsyncTaskGroup _tr_atg;
+_TR_GLOBAL _TR_THREAD_LOCAL _TrAsyncTaskGroup _tr_atg;
 
 _TR_XLINK void _tr_atg_begin(void) {
     _tr_atg.cap = 16; _tr_atg.count = 0;
@@ -5780,7 +5801,7 @@ static const char* _tr_f32_buf(double x) {
     return b;
 }
 #else
-static const char* _tr_f64_buf(double x) { static char b[40]; snprintf(b, sizeof b, "%g", x); return b; }
+static const char* _tr_f64_buf(double x) { static _Thread_local char b[40]; snprintf(b, sizeof b, "%g", x); return b; }
 static const char* _tr_f32_buf(double x) { return _tr_f64_buf(x); }
 #endif
 

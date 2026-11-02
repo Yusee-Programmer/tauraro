@@ -35,15 +35,24 @@
 /* ── Ogg pages ── */
 static uint32_t ogg_crc_table[256];
 static int ogg_crc_ready = 0;
+static int ogg_crc_lk = 0;
+/* init-once guard: tables are filled under a tiny spin lock and published with release/acquire */
+#define TRC_LK(l) while (__atomic_exchange_n(&(l), 1, __ATOMIC_ACQUIRE)) {}
+#define TRC_UNLK(l) __atomic_store_n(&(l), 0, __ATOMIC_RELEASE)
+#define TRC_RDY(f) __atomic_load_n(&(f), __ATOMIC_ACQUIRE)
+#define TRC_SETRDY(f) __atomic_store_n(&(f), 1, __ATOMIC_RELEASE)
 static void ogg_crc_init(void) {
     uint32_t i, j, r;
-    if (ogg_crc_ready) return;
+    if (TRC_RDY(ogg_crc_ready)) return;
+    TRC_LK(ogg_crc_lk);
+    if (ogg_crc_ready) { TRC_UNLK(ogg_crc_lk); return; }
     for (i = 0; i < 256; i++) {
         r = i << 24;
         for (j = 0; j < 8; j++) r = (r & 0x80000000u) ? (r << 1) ^ 0x04c11db7u : (r << 1);
         ogg_crc_table[i] = r;
     }
-    ogg_crc_ready = 1;
+    TRC_SETRDY(ogg_crc_ready);
+    TRC_UNLK(ogg_crc_lk);
 }
 static uint32_t ogg_crc(const uint8_t* p, size_t n) {
     uint32_t c = 0; size_t i;

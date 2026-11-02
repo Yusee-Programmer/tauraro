@@ -200,10 +200,18 @@ static void hb_free(hbuf* b) { free(b->p); b->p = NULL; b->n = b->cap = 0; }
  * values with bit 15 set are leaves (symbol = v & 0x7fff). Built once. */
 #define HP_NONE 0xffff
 static uint16_t hp_tree[512][2]; static int hp_tree_n = 0;
-static volatile int hp_tree_ready = 0;
+static int hp_tree_ready = 0;
+static int hp_tree_lk = 0;
+/* init-once guard: tables are filled under a tiny spin lock and published with release/acquire */
+#define TRC_LK(l) while (__atomic_exchange_n(&(l), 1, __ATOMIC_ACQUIRE)) {}
+#define TRC_UNLK(l) __atomic_store_n(&(l), 0, __ATOMIC_RELEASE)
+#define TRC_RDY(f) __atomic_load_n(&(f), __ATOMIC_ACQUIRE)
+#define TRC_SETRDY(f) __atomic_store_n(&(f), 1, __ATOMIC_RELEASE)
 static void hp_build_tree(void) {
     int s, nodes = 1, i;
-    if (hp_tree_ready) return;
+    if (TRC_RDY(hp_tree_ready)) return;
+    TRC_LK(hp_tree_lk);
+    if (hp_tree_ready) { TRC_UNLK(hp_tree_lk); return; }
     for (i = 0; i < 512; i++) hp_tree[i][0] = hp_tree[i][1] = HP_NONE;
     for (s = 0; s < 257; s++) {
         int cur = 0, b;
@@ -215,7 +223,8 @@ static void hp_build_tree(void) {
         }
     }
     hp_tree_n = nodes;
-    hp_tree_ready = 1;
+    TRC_SETRDY(hp_tree_ready);
+    TRC_UNLK(hp_tree_lk);
 }
 static int huff_decode(const u8* in, size_t n, hbuf* out) {
     int cur = 0, depth = 0, ones = 1; size_t i; int b;

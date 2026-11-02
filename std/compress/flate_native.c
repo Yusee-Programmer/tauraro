@@ -231,12 +231,22 @@ static int fl_inflate_raw(fl_state* s) {
 
 static uint32_t fl_crc_table[256];
 static int fl_crc_ready = 0;
+static int fl_crc_lk = 0;
+/* init-once guard: tables are filled under a tiny spin lock and published with release/acquire */
+#define TRC_LK(l) while (__atomic_exchange_n(&(l), 1, __ATOMIC_ACQUIRE)) {}
+#define TRC_UNLK(l) __atomic_store_n(&(l), 0, __ATOMIC_RELEASE)
+#define TRC_RDY(f) __atomic_load_n(&(f), __ATOMIC_ACQUIRE)
+#define TRC_SETRDY(f) __atomic_store_n(&(f), 1, __ATOMIC_RELEASE)
 static uint32_t fl_crc32(uint32_t crc, const unsigned char* p, size_t n) {
     size_t i;
-    if (!fl_crc_ready) {
+    if (!TRC_RDY(fl_crc_ready)) {
         uint32_t c; int k; unsigned j;
+        TRC_LK(fl_crc_lk);
+        if (!fl_crc_ready) {
         for (j = 0; j < 256; j++) { c = j; for (k = 0; k < 8; k++) c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1; fl_crc_table[j] = c; }
-        fl_crc_ready = 1;
+        TRC_SETRDY(fl_crc_ready);
+        }
+        TRC_UNLK(fl_crc_lk);
     }
     crc = ~crc;
     for (i = 0; i < n; i++) crc = fl_crc_table[(crc ^ p[i]) & 0xff] ^ (crc >> 8);

@@ -22,7 +22,14 @@
 /* Same layout as the runtime's TrStr (char* data; size_t len; long* rc). */
 typedef struct { char* data; size_t len; long* rc; } dl_str;
 
-static char dl_err[512];
+#ifndef TRC_TLS
+#  if defined(_MSC_VER)
+#    define TRC_TLS __declspec(thread)
+#  else
+#    define TRC_TLS __thread
+#  endif
+#endif
+static TRC_TLS char dl_err[512];
 
 static void dl_set_err(const char* what, const char* detail) {
     size_t a = strlen(what), b = detail ? strlen(detail) : 0;

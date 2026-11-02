@@ -320,13 +320,22 @@ static int jscan(jdec* j, const u8* sos, int len) {
 /* Float IDCT (separable, exact cosines). */
 static float jcos[8][8];
 static int jcos_ready = 0;
+static int jcos_lk = 0;
+/* init-once guard: tables are filled under a tiny spin lock and published with release/acquire */
+#define TRC_LK(l) while (__atomic_exchange_n(&(l), 1, __ATOMIC_ACQUIRE)) {}
+#define TRC_UNLK(l) __atomic_store_n(&(l), 0, __ATOMIC_RELEASE)
+#define TRC_RDY(f) __atomic_load_n(&(f), __ATOMIC_ACQUIRE)
+#define TRC_SETRDY(f) __atomic_store_n(&(f), 1, __ATOMIC_RELEASE)
 static void jinit_cos(void) {
     int x, u;
-    if (jcos_ready) return;
+    if (TRC_RDY(jcos_ready)) return;
+    TRC_LK(jcos_lk);
+    if (jcos_ready) { TRC_UNLK(jcos_lk); return; }
     for (x = 0; x < 8; x++)
         for (u = 0; u < 8; u++)
             jcos[x][u] = (float)((u == 0 ? sqrt(0.125) : 0.5) * cos((2 * x + 1) * u * 3.14159265358979323846 / 16.0));
-    jcos_ready = 1;
+    TRC_SETRDY(jcos_ready);
+    TRC_UNLK(jcos_lk);
 }
 static void jidct(const int16_t* in, const u16* q, u8* out, int stride) {
     float t[64], r[64]; int x, y, u;
@@ -597,10 +606,10 @@ static void ebuild(ehuff* h, const u8* bits, const u8* vals) {
 }
 static int ebitlen(int v) { int n = 0; if (v < 0) v = -v; while (v) { n++; v >>= 1; } return n; }
 
-static float ecos[8][8]; static int ecos_ready = 0;
+static float ecos[8][8]; static int ecos_ready = 0; static int ecos_lk = 0;
 static void eencode_block(ebuf* b, const float* px, const u16* q, int* dcp, const ehuff* dc, const ehuff* ac) {
     float t[64], coef[64]; int x, y, u, v, z[64], k, run, diff, s;
-    if (!ecos_ready) { for (x = 0; x < 8; x++) for (u = 0; u < 8; u++) ecos[x][u] = (float)((u == 0 ? sqrt(0.125) : 0.5) * cos((2 * x + 1) * u * 3.14159265358979323846 / 16.0)); ecos_ready = 1; }
+    if (!TRC_RDY(ecos_ready)) { TRC_LK(ecos_lk); if (!ecos_ready) { for (x = 0; x < 8; x++) for (u = 0; u < 8; u++) ecos[x][u] = (float)((u == 0 ? sqrt(0.125) : 0.5) * cos((2 * x + 1) * u * 3.14159265358979323846 / 16.0)); TRC_SETRDY(ecos_ready); } TRC_UNLK(ecos_lk); }
     for (y = 0; y < 8; y++)
         for (u = 0; u < 8; u++) { float sum = 0; for (x = 0; x < 8; x++) sum += px[y * 8 + x] * ecos[x][u]; t[y * 8 + u] = sum; }
     for (u = 0; u < 8; u++)
