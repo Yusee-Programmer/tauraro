@@ -10096,15 +10096,19 @@ static char* _tr_fmt_bool(const void* p); static char* _tr_fmt_char(const void* 
 static char* _tr_fmt_str_box(const void* p); static char* _tr_fmt_str_raw(const void* p);
 /* True for the runtime's own element formatters, which always return a fresh heap string the
    caller must free (user-class / nested formatters may return literals or borrowed text). */
+/* 0 = not owned (literal / borrowed: bool, nested collections, user classes); 1 = TAURARO_ALLOC'd
+   (ints, floats); 2 = _tr_checked_alloc'd (char, str forms). The count differs only for MEMCOUNT. */
 static int _tr_fmt_owns_result(_TrElemFmt f) {
-    return f == _tr_fmt_i64 || f == _tr_fmt_i32 || f == _tr_fmt_i16 || f == _tr_fmt_i8 || f == _tr_fmt_u8 ||
-           f == _tr_fmt_u16 || f == _tr_fmt_u32 || f == _tr_fmt_u64 || f == _tr_fmt_f64 || f == _tr_fmt_bool ||
-           f == _tr_fmt_char || f == _tr_fmt_str || f == _tr_fmt_str_box || f == _tr_fmt_str_raw;
+    if (f == _tr_fmt_i64 || f == _tr_fmt_i32 || f == _tr_fmt_i16 || f == _tr_fmt_i8 || f == _tr_fmt_u8 ||
+        f == _tr_fmt_u16 || f == _tr_fmt_u32 || f == _tr_fmt_u64 || f == _tr_fmt_f64) return 1;
+    if (f == _tr_fmt_char || f == _tr_fmt_str || f == _tr_fmt_str_box || f == _tr_fmt_str_raw) return 2;
+    return 0;
 }
 static char* _tr_sb_append_fmt(char* buf, size_t* len, size_t* cap, _TrElemFmt f, const void* ep) {
     char* t = f(ep);
     buf = _tr_sb_append(buf, len, cap, t);
-    if (_tr_fmt_owns_result(f)) _tr_free(t);
+    int own = _tr_fmt_owns_result(f);
+    if (own == 1) TAURARO_FREE(t); else if (own == 2) _tr_free(t);
     return buf;
 }
 static char* _tr_collection_to_str(const void* data, size_t len, size_t elem_size, _TrElemFmt fmt, const char* open, const char* close, const char* sep) {

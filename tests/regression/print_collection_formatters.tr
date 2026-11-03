@@ -1,0 +1,19 @@
+# print()/f-string of collections frees only the element strings it owns (bool/nested
+# formatters return literals); covers every primitive element formatter.
+from std.test import TestRunner
+
+def main():
+    mut t = TestRunner.init("print_collection_formatters")
+    b: List[bool] = [true, false]
+    f = [1.5, 2.5]
+    s = ["a", "b"]
+    i = [1, 2, 3]
+    print(b)
+    print(f)
+    print(s)
+    print(i)
+    t.assert_eq_str(f"{b}", "[true, false]", "bool list f-string")
+    t.assert_eq_str(f"{f}", "[1.5, 2.5]", "float list f-string")
+    t.assert_eq_str(f"{s}", "['a', 'b']", "str list f-string")
+    t.assert_eq_str(f"{i}", "[1, 2, 3]", "int list f-string")
+    t.summary()
