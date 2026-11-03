@@ -2,7 +2,6 @@
 # EXPECT-STDOUT: 2
 # EXPECT-STDERR: out of bounds
 # SAN-ONLY: 1
-# SKIP-DARWIN: 1
 # --debug checks raw Pointer index/offset against the alloc block (release builds do not).
 def main():
     mut n = 4

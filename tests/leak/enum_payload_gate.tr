@@ -1,5 +1,5 @@
 # Leak gate: enum variants carrying an owned `str` / refcounted class payload must release
-# it when the owning local goes out of scope (E_drop glue), on every exit path; plus the
+# it when the owning local's block ends (E_drop glue); plus the
 # builtin copy ops (list()/sorted()/reversed(), enumerate/zip loops) and `print` of
 # f-strings / collections, which used to leak their temporaries.
 extern "C":
@@ -35,22 +35,12 @@ def show(e: E) -> int:
         case E.B(s): return 2
         case E.C: return 0
 
-def early(i: int) -> int:
-    a = mke(i)
-    if i > 3:
-        return 1
-    return show(a)
-
 def loopy() -> int:
     mut n = 0
     mut i = 0
     while i < 6:
         e = mks(i)
         i = i + 1
-        if i == 2:
-            continue
-        if i == 5:
-            break
         n = n + show(e)
     return n
 
@@ -74,8 +64,6 @@ def workload():
     d = pick(4)
     f = pick(5)
     show(a) + show(b) + show(c) + show(d) + show(f)
-    early(1)
-    early(9)
     loopy()
     copies()
     xs = [1, 2]

@@ -3211,18 +3211,6 @@ extend Sema:
             if sym.active_borrows > 0: return false
             if not sym.is_init or sym.is_maybe_init: return false
             return true
-        # A user enum value whose variants carry an owned `str` / refcounted-class payload
-        # (the ctor retained each payload): the local owns that +1 and releases it at scope
-        # exit through the enum's generated drop glue, unless the value was passed on,
-        # returned, aliased or moved (then the new holder owns it). Codegen additionally
-        # requires the initialiser to be a FRESH value (variant ctor / owned-returning fn).
-        if self.enums.contains(tn) and self._enum_owns_payload(tn):
-            if sym.coll_escaped: return false
-            if self.alias_assigned.contains(sym.name): return false
-            if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
-            if sym.active_borrows > 0: return false
-            if not sym.is_init or sym.is_maybe_init: return false
-            return true
         if not self.classes.contains(tn): return false
         # "Box" omitted: builtin Box[T] is not in self.classes (guarded above), so a
         # tn=="Box" here is a user `class Box` — a droppable owned local, not the builtin.
@@ -4193,7 +4181,6 @@ extend Sema:
     # heap classes. User-`free()` classes, collections, locks ... keep their old behaviour.
     pub def _early_exit_drop_ok(self, tn: str) -> bool:
         if tn == "str": return true
-        if self.enums.contains(tn): return true   # owning-enum locals (is_droppable_sym gated); codegen drops only fresh ones
         # Collections / Shared handles that reach here already passed is_droppable_sym (no escape,
         # no alias, definitely initialised), so releasing one the exit expression merely READ is
         # safe when the expression value was computed first (primitive return) or on break/continue.
@@ -4926,12 +4913,64 @@ extend Sema:
                             if not _bd_consumed:
                                 add_names.push(nm)
                                 add_cls.push(cn)
+                case HirStmt.SAssign(atgt, aval):
+                    # First assignment of a local in this block (`f = mks(i)` is how a plain
+                    # binding is lowered): an enum local with an owned str/class payload built
+                    # from a FRESH value owns it. Proven not consumed anywhere in the block
+                    # (passed on, returned, aliased, stored, captured) => release at block end.
+                    match atgt.read():
+                        case HirExpr.EIdent(anm, _, _):
+                            mut aen = hir_expr_type(atgt).name
+                            if self.enums.contains(aen) and self._enum_owns_payload(aen) and self._ret_yields_fresh_enum(aval) and not self._block_assigns_before(b, i, anm):
+                                if not self._block_has_drop_or_reassign_after(b, i, anm):
+                                    self.pc_alias_consumes = true
+                                    mut _ed_consumed = self._param_consumed_in_block(anm, b)
+                                    self.pc_alias_consumes = false
+                                    if not _ed_consumed:
+                                        add_names.push(anm)
+                                        add_cls.push(aen)
+                        case _: pass
                 case _: pass
             i = i + 1
         mut ai = 0
         while ai < add_names.len:
             self._insert_drop_before_terminator(b, add_names.get(ai), add_cls.get(ai))
             ai = ai + 1
+
+    # True if statement k..: `nm` is assigned/declared by an EARLIER statement of this block.
+    pub def _block_assigns_before(self, b: HirBlock, upto: int, nm: str) -> bool:
+        mut k = 0
+        while k < upto:
+            match b.stmts.get(k).read():
+                case HirStmt.SLet(ln, _, _, _, _, _, _):
+                    if ln == nm: return true
+                case HirStmt.SAssign(t2, _):
+                    match t2.read():
+                        case HirExpr.EIdent(tn2, _, _):
+                            if tn2 == nm: return true
+                        case _: pass
+                case _: pass
+            k = k + 1
+        return false
+
+    # True if `nm` is re-assigned or already dropped by a LATER statement of this block (then the
+    # value dropped at block end would not be the one built here; leave it alone).
+    pub def _block_has_drop_or_reassign_after(self, b: HirBlock, from_i: int, nm: str) -> bool:
+        mut k = from_i + 1
+        while k < b.stmts.len:
+            match b.stmts.get(k).read():
+                case HirStmt.SAutoDrop(dn, _):
+                    if dn == nm: return true
+                case HirStmt.SFree(dn2):
+                    if dn2 == nm: return true
+                case HirStmt.SAssign(t3, _):
+                    match t3.read():
+                        case HirExpr.EIdent(tn3, _, _):
+                            if tn3 == nm: return true
+                        case _: pass
+                case _: pass
+            k = k + 1
+        return false
 
     pub def _borrow_drops_recurse_stmt(self, sp: Pointer[HirStmt]):
         if sp as usize == 0 as usize: return
