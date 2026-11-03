@@ -1,0 +1,46 @@
+# Regression: Chan[str] send/recv (was a raw [C-1] codegen error), f-string of a tuple
+# (was a raw C "cannot convert to a pointer type" error), and sorted()/list() of a list
+# literal in for / len() position.
+from std.test import TestRunner
+
+def prod(ch: Chan[str]):
+    mut i = 0
+    while i < 20:
+        ch.send(f"m{i}")
+        i = i + 1
+    ch.close()
+
+def main():
+    mut t = TestRunner.init("chan_str_tuple_fstring")
+    t.section("Chan[str]")
+    mut ch: Chan[str] = Chan.init(4)
+    mut s = "hello"
+    ch.send(s)
+    ch.send(s + "!")
+    t.assert_eq_str(ch.recv(), "hello", "recv 1")
+    t.assert_eq_str(ch.recv(), "hello!", "recv 2")
+    t.assert_true(ch.try_send("x"), "try_send")
+    t.assert_eq_str(ch.try_recv(), "x", "try_recv")
+    ch.close()
+    ch.free()
+    mut c2: Chan[str] = Chan.init(2)
+    th = Thread.spawn(prod, c2)
+    mut n = 0
+    mut last = ""
+    for v in c2:
+        n = n + 1
+        last = v
+    th.join()
+    t.assert_eq_int(n, 20, "count")
+    t.assert_eq_str(last, "m19", "last")
+    t.section("tuple f-string")
+    tp = (1, "a", 2)
+    t.assert_eq_str(f"{tp}", "(1, 'a', 2)", "fstring")
+    t.section("fresh list temporaries")
+    mut total = 0
+    for v in sorted([3, 1, 2]):
+        total = total * 10 + v
+    t.assert_eq_int(total, 123, "sorted literal")
+    t.assert_eq_int(len(sorted([3, 1, 2])), 3, "len sorted")
+    t.assert_eq_int(len(list(["a", "b"])), 2, "len list")
+    t.summary()

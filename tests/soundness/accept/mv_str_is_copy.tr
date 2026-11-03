@@ -13,6 +13,15 @@ def main():
     mut n = take(s)
     mut m = Msg.Text(s)
     mut o = Some(s)
+    mut ch: Chan[str] = Chan.init(4)
+    ch.send(s)
+    ch.send(s + "!")
+    ch.close()
+    mut got: List[str] = []
+    for v in ch:
+        got.append(v)
+    if len(got) != 2 or got.get(0) != "hello" or got.get(1) != "hello!":
+        raise("bad chan")
     print(s)
     print(t)
     print(f"{s} {n}")

@@ -1,0 +1,31 @@
+# Leak gate: Chan[str] send/recv/iteration must not leak the boxed string copies.
+extern "C":
+    def _tr_mem_live() -> int
+
+def workload():
+    mut ch: Chan[str] = Chan.init(8)
+    mut base = "hello"
+    ch.send(base)
+    ch.send(base + "!")
+    ch.send(f"{base}?")
+    r = ch.recv()
+    mut n = len(r)
+    ch.close()
+    for v in ch:
+        n = n + len(v)
+    if n != 5 + 6 + 6:
+        raise("bad")
+    ch.free()
+
+def main():
+    workload()
+    mut before = _tr_mem_live()
+    mut r = 0
+    while r < 100:
+        workload()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    if leaked <= 0:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str())

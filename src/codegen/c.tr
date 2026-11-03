@@ -5314,6 +5314,11 @@ pub class CGenerator:
                 if _is_str_type(arg0_ty_n): return "_tr_str_lenv(" + self.strv(self.gen_expr(arg0)) + ")"
                 if self.has_method(arg0_ty_n, "__len__"):
                     return self.cls_method_c_call(arg0_ty_n, "__len__", self.gen_expr(arg0), "")
+                if self._is_fresh_list_do(arg0):
+                    # len(sorted(xs)) / len(list(xs)): the fresh copy is a temporary nothing owns.
+                    mut fl_ct = self.type_to_c(hir_expr_type(arg0))
+                    mut fl_t = "_fl" + self.next_temp()
+                    return "({ " + fl_ct + " " + fl_t + " = " + self.gen_expr(arg0) + "; long long " + fl_t + "n = (long long)" + fl_t + "->len; " + fl_ct.slice(0, fl_ct.length() - 1) + "_free(" + fl_t + "); " + fl_t + "n; })"
                 return self.gen_expr(arg0) + "->len"
             return "0LL"
 
@@ -5903,7 +5908,16 @@ pub class CGenerator:
             # unchanged by the TrFnVal switch: this still can't correctly call a
             # def(...)->R value whose OWN return type is itself def(...)->R or
             # another struct-by-value type like str/Tuple/Option/Result).
-            if ret_cty == "void" or ret_cty == "void*" or ret_cty == "TrFnVal": ret_cty = "long long"
+            if ret_cty == "void" or ret_cty == "void*" or ret_cty == "TrFnVal":
+                ret_cty = "long long"
+                # The callee's own declared `def(P..) -> R` carries R (list element / field / param
+                # of function type): use it, so a str / struct-by-value return is read correctly.
+                mut _dfn_t = hir_expr_type(callee)
+                if _dfn_t.name == "def" and _dfn_t.args.len == args.len + 1:
+                    mut _dfn_r = _dfn_t.args.get(args.len).read()
+                    if _dfn_r.name != "void" and _dfn_r.name != "" and not self.type_subst.contains(_dfn_r.name):
+                        mut _dfn_c = self.type_to_c(_dfn_r)
+                        if _dfn_c != "void" and _dfn_c != "" and (_dfn_c != "TrFnVal" or _dfn_r.name == "def"): ret_cty = _dfn_c
             # Prefer the CALLEE's own declared `def(P1, P2, ...) -> R` parameter
             # types (when the HIR carries the full signature -- true for a
             # callable FIELD like `Mapper[T].load: def(DbResultSet) -> T`, see
@@ -6112,7 +6126,7 @@ pub class CGenerator:
         if ty_n == "List" or ty_n == "Vec" or ty_n == "Set" or ty_n == "Dict" or ty_n == "Map":
             return "({ char* _pcs = " + self.gen_collection_to_str(s, hir_expr_type(arg)) + "; printf(\"%s\", _pcs); _tr_free(_pcs); })"
         if ty_n == "Tuple" or ty_n == "tuple":
-            return "printf(\"%s\", " + self.gen_tuple_to_str(s, hir_expr_type(arg)) + ")"
+            return "({ char* _pts = " + self.gen_tuple_to_str(s, hir_expr_type(arg)) + "; printf(\"%s\", _pts); _tr_free(_pts); })"
         if _is_str_type(ty_n):
             # A FRESH owned string (f-string, concat, call result) is released after printing.
             if self._is_fresh_str_expr(arg): return "({ TrStr _ps = " + s + "; printf(\"%s\", _tr_strz(_ps)); _tr_str_release(_ps); })"
@@ -6175,6 +6189,17 @@ pub class CGenerator:
         if self.value_types.contains(tn): return "(*(" + tn + "*)(" + expr_s + "))"
         mut ct = self.type_to_c(ty)
         return "((" + ct + ")(" + expr_s + "))"
+
+    # Chan[str] send operand: a deep-copied, heap-boxed TrStr as a long long. A fresh str
+    # argument is hoisted to a temp so the statement-end flush releases it after the copy.
+    pub def chan_str_pack(self, e: Pointer[HirExpr]) -> str:
+        mut e_s = self.gen_expr(e)
+        if self._is_fresh_str_expr(e):
+            mut tmp = "_cst" + self.next_temp()
+            self.wrap_temp_decls.push("TrStr " + tmp + " = (" + e_s + ")")
+            self.wrap_temp_names.push(tmp)
+            return "_tr_chan_str_pack(" + tmp + ")"
+        return "_tr_chan_str_pack(" + e_s + ")"
 
     # Dict key arg: TrMap keys are char*, so str-typed keys must be unwrapped.
     # Dict key arg: TrMap keys are stored as the dict's OWN strdup'd copy of the
@@ -6876,24 +6901,41 @@ pub class CGenerator:
                 mut ch_cap_s = "1LL"
                 if args.len > 0: ch_cap_s = self.gen_expr(args.get(0))
                 return "_tr_chan_new(" + ch_cap_s + ")"
+            # Chan[str]: a TrStr is a 24-byte struct, not a long long, so the value travels as a heap
+            # box holding a private deep copy (the sender keeps its own str; str is Copy). The
+            # receiver owns the unpacked result.
+            mut ch_is_str = false
+            if t_n == "Chan" and hir_expr_type(obj).args.len > 0:
+                ch_is_str = _is_str_type(self.resolve_generic_prim(hir_expr_type(obj).args.get(0).read().name))
             if method == "send":
                 mut ch_v = "0LL"
-                if args.len > 0: ch_v = "(long long)(" + self.gen_expr(args.get(0)) + ")"
+                if args.len > 0:
+                    if ch_is_str: ch_v = self.chan_str_pack(args.get(0))
+                    else: ch_v = "(long long)(" + self.gen_expr(args.get(0)) + ")"
                 return "_tr_chan_send(" + obj_s + ", " + ch_v + ")"
-            if method == "recv": return "_tr_chan_recv(" + obj_s + ")"
+            if method == "recv":
+                if ch_is_str: return "_tr_chan_str_take(_tr_chan_recv(" + obj_s + "))"
+                return "_tr_chan_recv(" + obj_s + ")"
             if method == "try_send":
                 mut ch_tv = "0LL"
-                if args.len > 0: ch_tv = "(long long)(" + self.gen_expr(args.get(0)) + ")"
+                if args.len > 0:
+                    if ch_is_str: ch_tv = self.chan_str_pack(args.get(0))
+                    else: ch_tv = "(long long)(" + self.gen_expr(args.get(0)) + ")"
+                if ch_is_str: return "_tr_chan_str_try_send(" + obj_s + ", " + ch_tv + ")"
                 return "_tr_chan_try_send(" + obj_s + ", " + ch_tv + ")"
-            if method == "try_recv": return "_tr_chan_try_recv_val(" + obj_s + ")"
+            if method == "try_recv":
+                if ch_is_str: return "_tr_chan_str_take(_tr_chan_try_recv_val(" + obj_s + "))"
+                return "_tr_chan_try_recv_val(" + obj_s + ")"
             if method == "close": return "_tr_chan_close(" + obj_s + ")"
             if method == "is_closed": return "_tr_chan_is_closed(" + obj_s + ")"
             if method == "len": return "_tr_chan_len(" + obj_s + ")"
             if method == "cap": return "_tr_chan_cap(" + obj_s + ")"
             if method == "free": return "_tr_chan_free(" + obj_s + ")"
             if method == "send_timeout" and args.len >= 2:
+                if ch_is_str: return "_tr_chan_str_send_timeout(" + obj_s + ", " + self.chan_str_pack(args.get(0)) + ", " + self.gen_expr(args.get(1)) + ")"
                 return "_tr_chan_send_timeout(" + obj_s + ", (long long)(" + self.gen_expr(args.get(0)) + "), " + self.gen_expr(args.get(1)) + ")"
             if method == "recv_timeout" and args.len >= 1:
+                if ch_is_str: return "_tr_chan_str_take(_tr_chan_recv_timeout_val(" + obj_s + ", " + self.gen_expr(args.get(0)) + "))"
                 return "_tr_chan_recv_timeout_val(" + obj_s + ", " + self.gen_expr(args.get(0)) + ")"
 
         # Mutex[T] method dispatch - also handles Mutex.init() static constructor
@@ -8439,6 +8481,12 @@ pub class CGenerator:
                     fpre = fpre + "char* " + _fcn + " = " + self.gen_collection_to_str(s, hir_expr_type(part.expr)) + "; "
                     fpost = fpost + "_tr_free(" + _fcn + "); "
                     fargs = fargs + ", " + _fcn
+                elif (ty_n == "Tuple" or ty_n == "tuple") and hir_expr_type(part.expr).args.len > 0:
+                    fmt = fmt + "%s"
+                    mut _ftn = "_ft" + self.next_temp()
+                    fpre = fpre + "char* " + _ftn + " = " + self.gen_tuple_to_str(s, hir_expr_type(part.expr)) + "; "
+                    fpost = fpost + "_tr_free(" + _ftn + "); "
+                    fargs = fargs + ", " + _ftn
                 elif _is_str_type(ty_n):
                     fmt = fmt + "%s"
                     fargs = fargs + ", " + self.strz(s)
@@ -11322,7 +11370,13 @@ pub class CGenerator:
             mut ch_ok_v = self.next_temp()
             self.w(pad + "{ int " + ch_ok_v + " = 1;\n")
             self.w(pad + "  while (" + ch_ok_v + ") {\n")
-            self.w(pad + "    " + ch_elem_c + " " + cvar + " = (" + ch_elem_c + ")_tr_chan_recv_ok(" + iter_s + ", &" + ch_ok_v + ");\n")
+            if iter_ty.args.len > 0 and _is_str_type(self.resolve_generic_prim(iter_ty.args.get(0).read().name)):
+                # The received string is owned by a per-iteration holder released on EVERY exit of the
+                # body (fallthrough, break, continue, return); the loop variable borrows from it.
+                self.w(pad + "    TrStr " + cvar + "_own __attribute__((cleanup(_tr_str_cleanup))) = _tr_chan_str_take(_tr_chan_recv_ok(" + iter_s + ", &" + ch_ok_v + "));\n")
+                self.w(pad + "    " + ch_elem_c + " " + cvar + " = " + cvar + "_own;\n")
+            else:
+                self.w(pad + "    " + ch_elem_c + " " + cvar + " = (" + ch_elem_c + ")_tr_chan_recv_ok(" + iter_s + ", &" + ch_ok_v + ");\n")
             self.w(pad + "    if (!" + ch_ok_v + ") break;\n")
             self.gen_block(body, indent + 2)
             self.w(pad + "  }\n")
@@ -11355,10 +11409,17 @@ pub class CGenerator:
         match iter.read():
             case HirExpr.EList(_, _): _lit_free = true
             case _: pass
+        if self._is_fresh_list_do(iter): _lit_free = true
         if _lit_free and (iter_ty.name == "List" or iter_ty.name == "Vec") and iter_ty.args.len > 0:
             mut _lf_et = self.resolve_generic_tyname(iter_ty.args.get(0).read().name)
             if self.is_heap_class_tn(_lf_et) and not self.has_method(_lf_et, "free") and not self.interfaces.contains(_lf_et) and elem_c != "__auto_type" and elem_c != "TrStr":
                 self.w(pad + "  List_ptr_free_obj((List_ptr*)" + tmp + "_col, " + self.obj_drop_fn(_lf_et) + ");\n")
+            else:
+                # A literal of scalars / strs (`for x in [1, 2]`, `sorted([3, 1, 2])`): free the list
+                # (and the strs it retained) with its typed free function.
+                mut _lf_ct = self.type_to_c(iter_ty)
+                if _lf_ct.ends_with("*") and _lf_ct.starts_with("List_") and (_is_int_type(_lf_et) or _is_float_type(_lf_et) or _lf_et == "bool" or _lf_et == "char" or _is_str_type(_lf_et)):
+                    self.w(pad + "  " + _lf_ct.slice(0, _lf_ct.length() - 1) + "_free(" + tmp + "_col);\n")
         self.w(pad + "}\n")
 
     pub def gen_for_unpack(self, vars: Vec[str], iter: Pointer[HirExpr], body: HirBlock, indent: int):

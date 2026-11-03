@@ -25,6 +25,12 @@ there is no deprecation period.
 
 ### Fixed
 
+- `Chan[str]`: `send` / `recv` / `try_send` / `try_recv` / `send_timeout` / `recv_timeout` and `for v in ch` now work (they were a raw `[C-1]` codegen error). A string travels as a private heap copy (the sender keeps its own `str`); the receiver owns the result, and the loop variable's string is released on every exit of the body.
+- Fresh list temporaries are released: `sorted([3, 1, 2])`, `list(xs)` and a scalar / `str` list literal used as a `for` iterable or as the argument of `len()` no longer leak the temporary.
+- `print(tuple)` no longer leaks its rendered text, and `f"{tuple}"` works (it was a raw C compile error).
+- Calling a function value taken from a list element / field / parameter whose declared return is `str`, `ref str` or another `def` no longer reads the result as `long long` (null dereference).
+- Thread-safe init-once for the vendored geodesic constants and the TIFF fixed-Huffman tables (release/acquire publication); the Windows profiler sampler thread switches refcounting to atomic before it starts.
+- Leak accounting (`-DTAURARO_MEMCOUNT`) now counts `List[int]`/`List[float]`/... and `Chan` allocations, so the leak gates see leaks of those containers (they were counted only on free).
 - `**` now behaves like Python: `-2 ** 2` is `-4` (the unary minus used to bind first), a float
   operand gives a float (`2.0 ** 0.5` used to be truncated to an `int`), `int ** int` is exact
   instead of going through `pow()` on doubles, and `2 ** -1` is `0.5`. A negative non-literal

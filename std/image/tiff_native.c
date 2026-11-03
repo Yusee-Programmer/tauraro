@@ -143,9 +143,12 @@ static long inflate_buf(const u8* p, size_t n, u8* out, size_t cap) {
             if (s.pos + len > s.n) { s.err = 1; break; }
             while (len--) { if (inf_put(&s, s.p[s.pos++])) return (long)s.olen; }
         } else if (type == 1) {
-            static inf_h lc, dc; static int ready = 0;
-            if (!ready) {
+            static inf_h lc, dc; static int ready = 0; static int lk = 0;
+            /* init-once under a tiny spin lock, published with release/acquire (thread-safe) */
+            if (!__atomic_load_n(&ready, __ATOMIC_ACQUIRE)) {
                 short l[288]; int i;
+                while (__atomic_exchange_n(&lk, 1, __ATOMIC_ACQUIRE)) {}
+                if (!ready) {
                 for (i = 0; i < 144; i++) l[i] = 8;
                 for (; i < 256; i++) l[i] = 9;
                 for (; i < 280; i++) l[i] = 7;
@@ -153,7 +156,9 @@ static long inflate_buf(const u8* p, size_t n, u8* out, size_t cap) {
                 inf_build(&lc, l, 288);
                 for (i = 0; i < 30; i++) l[i] = 5;
                 inf_build(&dc, l, 30);
-                ready = 1;
+                __atomic_store_n(&ready, 1, __ATOMIC_RELEASE);
+                }
+                __atomic_store_n(&lk, 0, __ATOMIC_RELEASE);
             }
             rc = inf_codes(&s, &lc, &dc);
             if (rc == 1) return (long)s.olen;

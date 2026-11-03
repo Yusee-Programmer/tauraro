@@ -1066,6 +1066,20 @@ static inline TrStr _tr_str_unbox(void* p) {
      * single-evaluates these expressions via temps. */
     return *(TrStr*)p;
 }
+
+/* Chan[str]: a channel slot is one long long, so a str travels as a heap box holding a PRIVATE
+ * deep copy (refcounts are thread-local, the sender keeps its own reference). _take frees the
+ * box and returns the owned string (empty for the "no value" slot 0 / LLONG_MIN). */
+static inline void _tr_str_cleanup(TrStr* s) { _tr_str_release(*s); }
+static inline long long _tr_chan_str_pack(TrStr s) {
+    TrStr c = _tr_str_new(s.len);
+    if (s.len) memcpy(c.data, s.data, s.len);
+    return (long long)(uintptr_t)_tr_str_box(c);
+}
+static inline TrStr _tr_chan_str_take(long long v) {
+    if (v == 0 || v == (-9223372036854775807LL - 1)) return _tr_str_lit("");
+    TrStr* b = (TrStr*)(uintptr_t)v; TrStr r = *b; _tr_free(b); return r;
+}
 /* ── Shared ownership: reference-counted box (replaces Rc/Arc/Mutex in one keyword) ── */
 /* Control block for Shared[T] (Rc) and Weak[T]. The payload is destroyed when the
  * STRONG count hits 0; the block itself lingers until the WEAK count is also 0, so
@@ -1558,7 +1572,7 @@ typedef struct {
 _TR_XLINK _TrChan* _tr_chan_new(long long cap) {
     if (cap < 1) cap = 1;
     _TrChan* c = (_TrChan*)calloc(1, sizeof(_TrChan));
-    c->buf = (long long*)TAURARO_CALLOC((size_t)cap, sizeof(long long)); c->cap = cap;
+    c->buf = (long long*)TAURARO_CALLOC((size_t)cap, sizeof(long long)); c->cap = cap; _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC();
     InitializeCriticalSection(&c->mu);
     InitializeConditionVariable(&c->not_empty);
     InitializeConditionVariable(&c->not_full);
@@ -1957,7 +1971,7 @@ typedef struct {
 } _TrChan;
 _TR_XLINK _TrChan* _tr_chan_new(long long cap) {
     if(cap<1)cap=1; _TrChan* c=(_TrChan*)calloc(1,sizeof(_TrChan));
-    c->buf=(long long*)TAURARO_CALLOC((size_t)cap,sizeof(long long)); c->cap=cap;
+    c->buf=(long long*)TAURARO_CALLOC((size_t)cap,sizeof(long long)); c->cap=cap; _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC();
     pthread_mutex_init(&c->mu,NULL); pthread_cond_init(&c->not_empty,NULL); pthread_cond_init(&c->not_full,NULL); return c;
 }
 _TR_XLINK void _tr_chan_send(_TrChan* c, long long val) {
@@ -2491,6 +2505,12 @@ _TR_XLINK char* _tr_chan_new_h(long long cap)                              { ret
 _TR_XLINK void  _tr_chan_send_h(char* c, long long v)                      { _tr_chan_send((_TrChan*)c, v); }
 _TR_XLINK long long _tr_chan_recv_h(char* c)                               { return _tr_chan_recv((_TrChan*)c); }
 _TR_XLINK bool  _tr_chan_try_send_h(char* c, long long v)                  { return _tr_chan_try_send((_TrChan*)c, v); }
+static inline bool _tr_chan_str_try_send(_TrChan* c, long long box) {
+    bool ok = _tr_chan_try_send(c, box); if (!ok) _tr_str_release(_tr_chan_str_take(box)); return ok;
+}
+static inline bool _tr_chan_str_send_timeout(_TrChan* c, long long box, long long ms) {
+    bool ok = _tr_chan_send_timeout(c, box, ms); if (!ok) _tr_str_release(_tr_chan_str_take(box)); return ok;
+}
 _TR_XLINK long long _tr_chan_try_recv_val_h(char* c)                       { return _tr_chan_try_recv_val((_TrChan*)c); }
 _TR_XLINK bool  _tr_chan_send_timeout_h(char* c, long long v, long long ms){ return _tr_chan_send_timeout((_TrChan*)c, v, ms); }
 _TR_XLINK long long _tr_chan_recv_timeout_val_h(char* c, long long ms)     { return _tr_chan_recv_timeout_val((_TrChan*)c, ms); }
@@ -6887,7 +6907,7 @@ typedef struct { void* fn; void* env; } TrFnVal;
 /* List_TrFnVal: vector of function values (Vec[def(...)->R]). Predefined
  * here so codegen needn't lazily emit it (mirrors List_TrTuple below). */
 typedef struct { TrFnVal* data; size_t len; size_t capacity; } List_TrFnVal;
-static inline List_TrFnVal* List_TrFnVal_new(void) { List_TrFnVal* l=(List_TrFnVal*)malloc(sizeof(List_TrFnVal)); l->data=(TrFnVal*)malloc(sizeof(TrFnVal)*8); l->len=0; l->capacity=8; return l; }
+static inline List_TrFnVal* List_TrFnVal_new(void) { List_TrFnVal* l=(List_TrFnVal*)malloc(sizeof(List_TrFnVal)); l->data=(TrFnVal*)malloc(sizeof(TrFnVal)*8); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_TrFnVal_append(List_TrFnVal* l, TrFnVal val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(TrFnVal*)realloc(l->data,sizeof(TrFnVal)*l->capacity); } l->data[l->len++]=val; }
 static inline TrFnVal List_TrFnVal_get(List_TrFnVal* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline TrFnVal List_TrFnVal_pop(List_TrFnVal* l) { if(!l||l->len==0){ TrFnVal z={0}; return z; } l->len--; return l->data[l->len]; }
@@ -6900,7 +6920,7 @@ typedef struct { long long data[8]; } TrTuple;
 /* List_TrTuple: vector of builtin tuples (Vec[Tuple]). Predefined here so the
    codegen needn't lazily emit it (which races the types-header global decls). */
 typedef struct { TrTuple* data; size_t len; size_t capacity; } List_TrTuple;
-static inline List_TrTuple* List_TrTuple_new(void) { List_TrTuple* l=(List_TrTuple*)malloc(sizeof(List_TrTuple)); l->data=(TrTuple*)malloc(sizeof(TrTuple)*8); l->len=0; l->capacity=8; return l; }
+static inline List_TrTuple* List_TrTuple_new(void) { List_TrTuple* l=(List_TrTuple*)malloc(sizeof(List_TrTuple)); l->data=(TrTuple*)malloc(sizeof(TrTuple)*8); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_TrTuple_append(List_TrTuple* l, TrTuple val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(TrTuple*)realloc(l->data,sizeof(TrTuple)*l->capacity); } l->data[l->len++]=val; }
 static inline TrTuple List_TrTuple_get(List_TrTuple* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline TrTuple List_TrTuple_pop(List_TrTuple* l) { if(!l||l->len==0) return (TrTuple){0}; l->len--; return l->data[l->len]; }
@@ -6910,7 +6930,7 @@ static inline void List_TrTuple_free(List_TrTuple* l) { if(l){ _tr_free(l->data)
 /* ── List types (bootstrap) ───────────────────────────────────────── */
 
 typedef struct { long long* __restrict__ data; size_t len; size_t capacity; } List_i64;
-static inline List_i64* List_i64_new(void) { List_i64* l=(List_i64*)malloc(sizeof(List_i64)); l->data=(long long*)malloc(sizeof(long long)*8); l->len=0; l->capacity=8; return l; }
+static inline List_i64* List_i64_new(void) { List_i64* l=(List_i64*)malloc(sizeof(List_i64)); l->data=(long long*)malloc(sizeof(long long)*8); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_i64_append(List_i64* l, long long val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(long long*)TAURARO_REALLOC(l->data,sizeof(long long)*l->capacity); } l->data[l->len++]=val; }
 static inline bool List_i64_contains(List_i64* l, long long val) { for (size_t i = 0; i < l->len; i++) { if (l->data[i] == val) return true; } return false; }
 static inline long long List_i64_pop(List_i64* l) { if(!l||l->len==0) return 0LL; l->len--; return l->data[l->len]; }
@@ -6919,7 +6939,7 @@ static inline long long List_i64_get(List_i64* l, long long i) { if(l&&(size_t)i
 static inline void List_i64_free(List_i64* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { double* __restrict__ data; size_t len; size_t capacity; } List_f64;
-static inline List_f64* List_f64_new(void) { List_f64* l=(List_f64*)malloc(sizeof(List_f64)); l->data=(double*)malloc(sizeof(double)*8); l->len=0; l->capacity=8; return l; }
+static inline List_f64* List_f64_new(void) { List_f64* l=(List_f64*)malloc(sizeof(List_f64)); l->data=(double*)malloc(sizeof(double)*8); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_f64_append(List_f64* l, double val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(double*)realloc(l->data,sizeof(double)*l->capacity); } l->data[l->len++]=val; }
 static inline double List_f64_pop(List_f64* l) { if(!l||l->len==0) return 0.0; l->len--; return l->data[l->len]; }
 static inline void List_f64_free(List_f64* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
@@ -6930,7 +6950,7 @@ static inline void List_f64_free(List_f64* l) { if(l){ _tr_free(l->data); _tr_fr
 #undef List_f64
 #undef List_ptr
 typedef struct { char** data; size_t len; size_t capacity; } List_str;
-static inline List_str* List_str_new(void) { List_str* l=(List_str*)malloc(sizeof(List_str)); l->data=(char**)malloc(sizeof(char*)*8); l->len=0; l->capacity=8; return l; }
+static inline List_str* List_str_new(void) { List_str* l=(List_str*)malloc(sizeof(List_str)); l->data=(char**)malloc(sizeof(char*)*8); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_str_append(List_str* l, char* val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(char**)TAURARO_REALLOC(l->data,sizeof(char*)*l->capacity); } l->data[l->len++]=val; }
 static inline char* List_str_pop(List_str* l) { if(!l||l->len==0) return NULL; l->len--; return l->data[l->len]; }
 static inline void List_str_free(List_str* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
@@ -7007,56 +7027,56 @@ static inline void List_ptr_free(List_ptr* l) { if(l){ _TR_MEMCOUNT_LIST_DEC(); 
 static inline void List_ptr_free_obj(List_ptr* l, void(*drop)(void*)) { if(l){ for(size_t _i=0;_i<l->len;_i++){ _tr_obj_release(l->data[_i], drop); } _TR_MEMCOUNT_LIST_DEC(); _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { _Bool* data; size_t len; size_t capacity; } List_bool;
-static inline List_bool* List_bool_new(void) { List_bool* l=(List_bool*)malloc(sizeof(List_bool)); l->data=(_Bool*)malloc(sizeof(_Bool)*8); l->len=0; l->capacity=8; return l; }
+static inline List_bool* List_bool_new(void) { List_bool* l=(List_bool*)malloc(sizeof(List_bool)); l->data=(_Bool*)malloc(sizeof(_Bool)*8); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_bool_append(List_bool* l, _Bool val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(_Bool*)realloc(l->data,sizeof(_Bool)*l->capacity); } l->data[l->len++]=val; }
 static inline _Bool List_bool_get(List_bool* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline void List_bool_set(List_bool* l, long long i, _Bool v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
 static inline void List_bool_free(List_bool* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { int8_t* data; size_t len; size_t capacity; } List_i8;
-static inline List_i8* List_i8_new(void) { List_i8* l=(List_i8*)malloc(sizeof(List_i8)); l->data=(int8_t*)malloc(sizeof(int8_t)*8); l->len=0; l->capacity=8; return l; }
+static inline List_i8* List_i8_new(void) { List_i8* l=(List_i8*)malloc(sizeof(List_i8)); l->data=(int8_t*)malloc(sizeof(int8_t)*8); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_i8_append(List_i8* l, int8_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(int8_t*)realloc(l->data,sizeof(int8_t)*l->capacity); } l->data[l->len++]=val; }
 static inline int8_t List_i8_get(List_i8* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline void List_i8_set(List_i8* l, long long i, int8_t v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
 static inline void List_i8_free(List_i8* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { int* data; size_t len; size_t capacity; } List_i32;
-static inline List_i32* List_i32_new(void) { List_i32* l=(List_i32*)malloc(sizeof(List_i32)); l->data=(int*)malloc(sizeof(int)*8); l->len=0; l->capacity=8; return l; }
+static inline List_i32* List_i32_new(void) { List_i32* l=(List_i32*)malloc(sizeof(List_i32)); l->data=(int*)malloc(sizeof(int)*8); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_i32_append(List_i32* l, int val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(int*)realloc(l->data,sizeof(int)*l->capacity); } l->data[l->len++]=val; }
 static inline int List_i32_get(List_i32* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline void List_i32_set(List_i32* l, long long i, int v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
 static inline void List_i32_free(List_i32* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { uint64_t* data; size_t len; size_t capacity; } List_u64;
-static inline List_u64* List_u64_new(void) { List_u64* l=(List_u64*)malloc(sizeof(List_u64)); l->data=(uint64_t*)malloc(sizeof(uint64_t)*8); l->len=0; l->capacity=8; return l; }
+static inline List_u64* List_u64_new(void) { List_u64* l=(List_u64*)malloc(sizeof(List_u64)); l->data=(uint64_t*)malloc(sizeof(uint64_t)*8); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_u64_append(List_u64* l, uint64_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(uint64_t*)realloc(l->data,sizeof(uint64_t)*l->capacity); } l->data[l->len++]=val; }
 static inline uint64_t List_u64_get(List_u64* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline void List_u64_set(List_u64* l, long long i, uint64_t v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
 static inline void List_u64_free(List_u64* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { uint16_t* data; size_t len; size_t capacity; } List_u16;
-static inline List_u16* List_u16_new(void) { List_u16* l=(List_u16*)malloc(sizeof(List_u16)); l->data=(uint16_t*)malloc(sizeof(uint16_t)*8); l->len=0; l->capacity=8; return l; }
+static inline List_u16* List_u16_new(void) { List_u16* l=(List_u16*)malloc(sizeof(List_u16)); l->data=(uint16_t*)malloc(sizeof(uint16_t)*8); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_u16_append(List_u16* l, uint16_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(uint16_t*)realloc(l->data,sizeof(uint16_t)*l->capacity); } l->data[l->len++]=val; }
 static inline uint16_t List_u16_get(List_u16* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline void List_u16_set(List_u16* l, long long i, uint16_t v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
 static inline void List_u16_free(List_u16* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { short* data; size_t len; size_t capacity; } List_i16;
-static inline List_i16* List_i16_new(void) { List_i16* l=(List_i16*)malloc(sizeof(List_i16)); l->data=(short*)malloc(sizeof(short)*8); l->len=0; l->capacity=8; return l; }
+static inline List_i16* List_i16_new(void) { List_i16* l=(List_i16*)malloc(sizeof(List_i16)); l->data=(short*)malloc(sizeof(short)*8); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_i16_append(List_i16* l, short val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(short*)realloc(l->data,sizeof(short)*l->capacity); } l->data[l->len++]=val; }
 static inline short List_i16_get(List_i16* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline void List_i16_set(List_i16* l, long long i, short v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
 static inline void List_i16_free(List_i16* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { float* data; size_t len; size_t capacity; } List_f32;
-static inline List_f32* List_f32_new(void) { List_f32* l=(List_f32*)malloc(sizeof(List_f32)); l->data=(float*)malloc(sizeof(float)*8); l->len=0; l->capacity=8; return l; }
+static inline List_f32* List_f32_new(void) { List_f32* l=(List_f32*)malloc(sizeof(List_f32)); l->data=(float*)malloc(sizeof(float)*8); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_f32_append(List_f32* l, float val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(float*)realloc(l->data,sizeof(float)*l->capacity); } l->data[l->len++]=val; }
 static inline float List_f32_get(List_f32* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline void List_f32_set(List_f32* l, long long i, float v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
 static inline void List_f32_free(List_f32* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 
 typedef struct { char* data; size_t len; size_t capacity; } List_char;
-static inline List_char* List_char_new(void) { List_char* l=(List_char*)malloc(sizeof(List_char)); l->data=(char*)malloc(sizeof(char)*8); l->len=0; l->capacity=8; return l; }
+static inline List_char* List_char_new(void) { List_char* l=(List_char*)malloc(sizeof(List_char)); l->data=(char*)malloc(sizeof(char)*8); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_char_append(List_char* l, char val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(char*)realloc(l->data,sizeof(char)*l->capacity); } l->data[l->len++]=val; }
 static inline char List_char_get(List_char* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline void List_char_set(List_char* l, long long i, char v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
@@ -7187,7 +7207,7 @@ static inline List_ptr* _tr_idict_items(TrIDict* d) {
 }
 
 typedef struct { uint8_t* data; size_t len; size_t capacity; } List_u8;
-static inline List_u8* List_u8_new(void) { List_u8* l=(List_u8*)malloc(sizeof(List_u8)); l->data=(uint8_t*)malloc(sizeof(uint8_t)*8); l->len=0; l->capacity=8; return l; }
+static inline List_u8* List_u8_new(void) { List_u8* l=(List_u8*)malloc(sizeof(List_u8)); l->data=(uint8_t*)malloc(sizeof(uint8_t)*8); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_u8_append(List_u8* l, uint8_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(uint8_t*)realloc(l->data,sizeof(uint8_t)*l->capacity); } l->data[l->len++]=val; }
 static inline uint8_t List_u8_get(List_u8* l, long long i) { _tr_bounds_check(i, l->len); return l->data[i]; }
 static inline void List_u8_set(List_u8* l, long long i, uint8_t v) { _tr_bounds_check(i, l->len); l->data[i] = v; }
@@ -7203,7 +7223,7 @@ static inline List_u8* _tr_bytes_new(const uint8_t* data, size_t len) {
 }
 
 typedef struct { uint32_t* data; size_t len; size_t capacity; } List_u32;
-static inline List_u32* List_u32_new(void) { List_u32* l=(List_u32*)malloc(sizeof(List_u32)); l->data=(uint32_t*)malloc(sizeof(uint32_t)*8); l->len=0; l->capacity=8; return l; }
+static inline List_u32* List_u32_new(void) { List_u32* l=(List_u32*)malloc(sizeof(List_u32)); l->data=(uint32_t*)malloc(sizeof(uint32_t)*8); _TR_MEMCOUNT_INC(); _TR_MEMCOUNT_INC(); l->len=0; l->capacity=8; return l; }
 static inline void List_u32_append(List_u32* l, uint32_t val) { if(l->len==l->capacity){ l->capacity*=2; l->data=(uint32_t*)realloc(l->data,sizeof(uint32_t)*l->capacity); } l->data[l->len++]=val; }
 static inline void List_u32_free(List_u32* l) { if(l){ _tr_free(l->data); _tr_free(l); } }
 /* Pre-size a List to an EXACT capacity in one allocation (grows only; never shrinks).
@@ -10923,6 +10943,7 @@ _TR_XLINK void _tr_prof_cpu_start(long long interval_us) {
     DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
                      &_tr_prof_target_thread, 0, FALSE, DUPLICATE_SAME_ACCESS);
     _tr_prof_running = 1;
+    _TR_MT_ON();   /* the sampler is a second thread: switch refcounting to atomic before it starts */
     _tr_prof_sampler_thread = CreateThread(NULL, 0, _tr_prof_sampler_fn, NULL, 0, NULL);
 }
 _TR_XLINK void _tr_prof_cpu_stop(void) {

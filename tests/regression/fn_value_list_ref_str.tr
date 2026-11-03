@@ -1,0 +1,29 @@
+# Regression: calling a function value fetched from a list / field / param whose declared
+# return is str / ref str (the call read the result as `long long` -> null deref).
+from std.test import TestRunner
+
+def name_of() -> ref str:
+    return "x"
+
+def plain() -> str:
+    return "yy"
+
+def call(f: def() -> ref str) -> int:
+    return len(f())
+
+class H:
+    pub cb: def() -> ref str
+
+def main():
+    mut t = TestRunner.init("fn_value_list_ref_str")
+    mut fs: List[def() -> ref str] = []
+    fs.append(name_of)
+    t.assert_eq_str(fs[0](), "x", "list element call")
+    mut ps: List[def() -> str] = []
+    ps.append(plain)
+    t.assert_eq_str(ps[0](), "yy", "list element str call")
+    mut h = H()
+    h.cb = name_of
+    t.assert_eq_str(h.cb(), "x", "field call")
+    t.assert_eq_int(call(name_of), 1, "param call")
+    t.summary()

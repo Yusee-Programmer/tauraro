@@ -1,0 +1,33 @@
+# Leak gate: fresh list temporaries (list literal / sorted() / list() / reversed()) used as a
+# for-loop iterable or as the argument of len() are released.
+extern "C":
+    def _tr_mem_live() -> int
+
+def workload():
+    mut n = 0
+    for v in [3, 1, 2]:
+        n = n + v
+    for s in ["a", "bb"]:
+        n = n + len(s)
+    for v in sorted([3, 1, 2]):
+        n = n + v
+    for s in sorted(["b", "a"]):
+        n = n + len(s)
+    n = n + len(sorted([3, 1, 2])) + len(list([1, 2])) + len(sorted(["b", "a"]))
+    x = sorted([3, 1, 2])
+    n = n + len(x)
+    if n != 6 + 3 + 6 + 2 + 7 + 3:
+        raise("bad")
+
+def main():
+    workload()
+    mut before = _tr_mem_live()
+    mut r = 0
+    while r < 100:
+        workload()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    if leaked <= 0:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str())

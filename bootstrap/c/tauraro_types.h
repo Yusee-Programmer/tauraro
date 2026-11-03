@@ -5713,6 +5713,7 @@ __attribute__((hot)) TrStr CGenerator_box_value(CGenerator* self, TrStr s, TrStr
 __attribute__((hot)) TrStr CGenerator_take_payload(CGenerator* self, TrStr slot, TrStr tn);
 __attribute__((hot)) TrStr CGenerator_payload_free_stmt(CGenerator* self, TrStr slot, TrStr tn);
 __attribute__((hot)) TrStr CGenerator_unwrap_voidp_as(CGenerator* self, TrStr expr_s, AstType* ty);
+__attribute__((hot)) TrStr CGenerator_chan_str_pack(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_dict_key_arg(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator__dict_val_kind(CGenerator* self, HirExpr* o);
 __attribute__((hot)) TrStr CGenerator__dict_val_drop(CGenerator* self, HirExpr* o);

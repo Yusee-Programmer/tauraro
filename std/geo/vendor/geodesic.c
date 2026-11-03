@@ -62,7 +62,10 @@ static double epsilon, realmin, pi, degree, NaN,
   tiny, tol0, tol1, tol2, tolb, xthresh;
 
 static void Init(void) {
-  if (!init) {
+  /* Thread-safe init-once: the constants are published with a release store and read
+   * through an acquire load, so concurrent first calls never observe init==1 with stale
+   * constants (identical values are recomputed by racing first callers). */
+  if (!__atomic_load_n(&init, __ATOMIC_ACQUIRE)) {
     digits = DBL_MANT_DIG;
     epsilon = DBL_EPSILON;
     realmin = DBL_MIN;
@@ -85,7 +88,7 @@ static void Init(void) {
     xthresh = 1000 * tol2;
     degree = pi/hd;
     NaN = nan("0");
-    init = 1;
+    __atomic_store_n(&init, 1U, __ATOMIC_RELEASE);
   }
 }
 
@@ -300,7 +303,7 @@ static double areareduceB(double area, double area0,
                           int crossings, boolx reverse, boolx sign);
 
 void geod_init(struct geod_geodesic* g, double a, double f) {
-  if (!init) Init();
+  Init();
   g->a = a;
   g->f = f;
   g->f1 = 1 - g->f;
