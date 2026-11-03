@@ -1,0 +1,13 @@
+# EXPECT: pass
+# Borrowing an inner local into an outer `ref` is fine while the inner local is alive, and after a
+# re-assignment of the ref.
+def main():
+    mut keep: ref str = "init"
+    mut i = 0
+    while i < 3:
+        mut s = "x" + i.to_str()
+        keep = s
+        print(keep)
+        i = i + 1
+    keep = "done"
+    print(keep)

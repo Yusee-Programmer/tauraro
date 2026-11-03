@@ -1,0 +1,10 @@
+# EXPECT: pass
+# Using the closure BEFORE the captured list is moved is fine.
+def take(xs: List[int]) -> int:
+    return len(xs)
+def main():
+    mut xs: List[int] = [1, 2]
+    f = lambda: len(xs)
+    k = f()
+    n = take(xs)
+    print(k + n)

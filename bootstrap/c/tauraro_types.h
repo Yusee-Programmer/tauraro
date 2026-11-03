@@ -2933,6 +2933,7 @@ typedef struct Symbol {
     HirExpr* lam_ptr;
     TrStr open_key;
     bool open_coll;
+    TrStr dangling_src;
     TrStr borrows_region;
 } Symbol;
 static void _trdrop_Symbol(void* vp) {
@@ -2942,6 +2943,7 @@ static void _trdrop_Symbol(void* vp) {
     _tr_str_release(self->firm_cls);
     _tr_str_release(self->firm);
     _tr_str_release(self->open_key);
+    _tr_str_release(self->dangling_src);
     _tr_str_release(self->borrows_region);
 }
 #endif
@@ -2966,6 +2968,8 @@ typedef struct Sema {
     size_t __rc;
     List_TrStr* sendable_tparams;
     TrMap* unset_fields;
+    List_TrStr* esc_keep;
+    List_TrStr* esc_src;
     TrStr unset_skip;
     bool in_defer;
     TrMap* defer_names;
@@ -2989,6 +2993,9 @@ typedef struct Sema {
     TrMap* assigned_names;
     List_TrStr* none_read_names;
     List_TrStr* none_read_msgs;
+    TrMap* real_assigned;
+    List_TrStr* none_arith_names;
+    List_TrStr* none_arith_msgs;
     TrMap* global_firm;
     TrMap* extern_defs;
     TrMap* ambiguous_classes;
@@ -3089,6 +3096,8 @@ typedef struct Sema {
 } Sema;
 static void _trdrop_Sema(void* vp) {
     Sema* self = (Sema*)vp; (void)self;
+    List_TrStr_free(self->esc_keep);
+    List_TrStr_free(self->esc_src);
     _tr_str_release(self->unset_skip);
     Dict_free(self->globals);
     List_ptr_free_obj(self->scopes, _trdrop_Scope);
@@ -3108,6 +3117,9 @@ static void _trdrop_Sema(void* vp) {
     Dict_free(self->assigned_names);
     List_TrStr_free(self->none_read_names);
     List_TrStr_free(self->none_read_msgs);
+    Dict_free(self->real_assigned);
+    List_TrStr_free(self->none_arith_names);
+    List_TrStr_free(self->none_arith_msgs);
     Dict_free_strval(self->global_firm);
     Dict_free_objval(self->extern_defs, _trdrop_FunctionDef);
     Dict_free(self->ambiguous_classes);
@@ -3258,6 +3270,7 @@ static void _trdrop_RcFn(void* vp) {
 #define RcCk_STRUCT_DEFINED
 typedef struct RcCk {
     size_t __rc;
+    TrMap* held_for;
     List_ptr* fns;
     List_ptr* classes;
     List_bool* class_lib;
@@ -3273,6 +3286,7 @@ typedef struct RcCk {
 } RcCk;
 static void _trdrop_RcCk(void* vp) {
     RcCk* self = (RcCk*)vp; (void)self;
+    Dict_free(self->held_for);
     List_ptr_free_obj(self->fns, _trdrop_RcFn);
     List_ptr_free_obj(self->classes, _trdrop_ClassDef);
     List_bool_free(self->class_lib);
@@ -4412,6 +4426,8 @@ __attribute__((hot)) long long pf_alloc_n(HirExpr* val);
 __attribute__((hot)) bool pf_is_null_lit(HirExpr* val);
 __attribute__((hot)) long long pf_size_of(PfState* st, TrStr path);
 __attribute__((hot)) void pf_kill(PfState* st, TrStr path);
+__attribute__((hot)) void pf_kill_consts(PfState* st);
+__attribute__((hot)) long long pf_val(PfState* st, HirExpr* e);
 __attribute__((hot)) List_TrStr* pf_drop_under(List_TrStr* v, TrStr path);
 __attribute__((hot)) void pf_kill_fields(PfState* st, TrStr path);
 __attribute__((hot)) void pf_link(PfState* st, TrStr a, TrStr b);
@@ -4429,6 +4445,7 @@ __attribute__((hot)) void pf_expr(PfCtx* cx, HirExpr* e, PfState* st);
 __attribute__((hot)) void pf_leak_warn(PfCtx* cx, TrStr name, TrStr why);
 __attribute__((hot)) void pf_leak_check(PfCtx* cx, PfState* st, TrStr why);
 __attribute__((hot)) void pf_bind(PfCtx* cx, PfState* st, TrStr path, HirExpr* val, bool simple);
+__attribute__((hot)) long long pf_interior_size(PfState* st, HirExpr* val);
 __attribute__((hot)) void pf_declare(PfCtx* cx, PfState* st, TrStr name, HirExpr* val);
 __attribute__((hot)) void pf_assign(PfCtx* cx, PfState* st, HirExpr* tgt, HirExpr* val);
 __attribute__((hot)) void pf_exit_loop_ctx(PfCtx* cx, PfState* brk_out, PfState* cnt_out);
@@ -4451,6 +4468,7 @@ __attribute__((hot)) bool mv_scalar(TrStr n);
 __attribute__((hot)) bool mv_is_move(MvCtx* cx, AstType* t);
 __attribute__((hot)) bool mv_tracked(MvCtx* cx, TrStr nm);
 __attribute__((hot)) void mv_use(MvCtx* cx, TrStr nm, MvState* st);
+__attribute__((hot)) void mv_reinit_name_quiet(MvState* st, TrStr nm);
 __attribute__((hot)) void mv_mark(MvCtx* cx, TrStr nm, MvState* st);
 __attribute__((hot)) void mv_reinit(MvCtx* cx, TrStr nm, MvState* st);
 __attribute__((hot)) void mv_declare(MvCtx* cx, TrStr nm, MvState* st);
@@ -4555,6 +4573,7 @@ __attribute__((hot)) void Sema_check_str_method_arg_kinds(Sema* self, TrStr meth
 __attribute__((hot)) long long Sema_builtin_method_range(Sema* self, TrStr fam, TrStr method);
 __attribute__((hot)) void Sema_check_builtin_method_arity(Sema* self, TrStr fam, TrStr method, long long nargs);
 __attribute__((hot)) bool Sema_class_has_field(Sema* self, TrStr cls_name, TrStr name);
+__attribute__((hot)) bool Sema_class_has_field_d(Sema* self, TrStr cls_name, TrStr name, long long depth);
 __attribute__((hot)) bool Sema_is_rt_builtin_class(Sema* self, TrStr n);
 __attribute__((hot)) bool Sema_is_builtin_dispatch_class(Sema* self, TrStr n);
 __attribute__((hot)) bool Sema_type_name_known(Sema* self, TrStr n);
@@ -4569,6 +4588,8 @@ __attribute__((hot)) void Sema_check_user_method_call(Sema* self, TrStr cls, Exp
 __attribute__((hot)) bool Sema_known_number_method(Sema* self, TrStr m);
 __attribute__((hot)) void Sema_check_collection_arg_types(Sema* self, AstType* ty, TrStr method, List_ptr* hl);
 __attribute__((hot)) bool Sema_class_method_exists(Sema* self, TrStr cls_name, TrStr method);
+__attribute__((hot)) bool Sema_class_method_exists_d(Sema* self, TrStr cls_name, TrStr method, long long depth);
+__attribute__((hot)) bool Sema__user_class_lacks(Sema* self, TrStr cn, TrStr method);
 __attribute__((hot)) bool Sema_is_universal_method(Sema* self, TrStr method);
 __attribute__((hot)) bool Sema_expr_is_borrow(Sema* self, HirExpr* e);
 __attribute__((hot)) bool Sema__expr_is_shared(Sema* self, HirExpr* e);
@@ -4581,6 +4602,7 @@ __attribute__((hot)) void Sema__check_ret_local_borrow(Sema* self, Expr* e);
 __attribute__((hot)) void Sema_check_loop_moves(Sema* self, List_TrStr* names, HirBlock* body, bool by_block, long long limit);
 __attribute__((hot)) void Sema_check_defer_capture_moved(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_unset_clear(Sema* self, TrStr name);
+__attribute__((hot)) TrStr Sema_unset_factory_class(Sema* self, TrStr g);
 __attribute__((hot)) void Sema_unset_track(Sema* self, TrStr name, Expr* val);
 __attribute__((hot)) void Sema_mark_moved(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_mark_freed(Sema* self, TrStr name);
@@ -4633,6 +4655,10 @@ __attribute__((hot)) void Sema_collect_idents(Sema* self, HirExpr* e, List_TrStr
 __attribute__((hot)) bool Sema_is_local_var(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_mark_defer_used(Sema* self, HirStmt* st);
 __attribute__((hot)) void Sema_mark_str_escaped(Sema* self, TrStr name);
+__attribute__((hot)) void Sema__mark_handle_borrow(Sema* self, TrStr name, Expr* val, HirExpr* hv);
+__attribute__((hot)) void Sema_set_dangling(Sema* self, TrStr name, TrStr src);
+__attribute__((hot)) void Sema__esc_assign(Sema* self, Expr* target, Expr* val);
+__attribute__((hot)) void Sema__esc_end(Sema* self, long long block_id, bool whole_scope);
 __attribute__((hot)) void Sema_set_borrows_region(Sema* self, TrStr name, TrStr region);
 __attribute__((hot)) TrStr Sema_compute_region(Sema* self, Expr* e);
 __attribute__((hot)) bool Sema_region_outlives(Sema* self, TrStr longer, TrStr shorter);
@@ -4666,6 +4692,9 @@ __attribute__((hot)) bool Sema__is_pure_scalar(Sema* self, TrStr tn);
 __attribute__((hot)) bool Sema__pc_owns_return(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_apply_borrow_drops(Sema* self, HirProgram* hp);
 __attribute__((hot)) void Sema__borrow_drops_block(Sema* self, HirBlock* b);
+__attribute__((hot)) bool Sema__stmt_assigns_name(Sema* self, HirStmt* st, TrStr nm);
+__attribute__((hot)) void Sema__insert_early_exit_drops(Sema* self, HirBlock* b, long long from_i, TrStr nm, TrStr cn, long long loop_depth);
+__attribute__((hot)) bool Sema__term_expr_ok(Sema* self, HirExpr* ev, TrStr nm);
 __attribute__((hot)) bool Sema__block_assigns_before(Sema* self, HirBlock* b, long long upto, TrStr nm);
 __attribute__((hot)) bool Sema__block_has_drop_or_reassign_after(Sema* self, HirBlock* b, long long from_i, TrStr nm);
 __attribute__((hot)) void Sema__borrow_drops_recurse_stmt(Sema* self, HirStmt* sp);
@@ -4811,6 +4840,8 @@ __attribute__((hot)) void RcCk_wpath(RcCk* self, Expr* target);
 __attribute__((hot)) void RcCk_block(RcCk* self, Block* b);
 __attribute__((hot)) void RcCk_pblock(RcCk* self, Block** pb);
 __attribute__((hot)) void RcCk_declare(RcCk* self, TrStr name);
+__attribute__((hot)) void RcCk_inherit_held(RcCk* self, Stmt* sp, List_TrStr* held);
+__attribute__((hot)) void RcCk_rescan_held(RcCk* self, Block* nb, List_TrStr* held);
 __attribute__((hot)) void RcCk_lock_scan(RcCk* self, Block* b);
 __attribute__((hot)) void RcCk_stmt(RcCk* self, Stmt* sp);
 __attribute__((hot)) void RcCk_spawn_expr(RcCk* self, Expr* e);
@@ -5672,6 +5703,7 @@ __attribute__((hot)) bool CGenerator__store_target_is_borrow_field(CGenerator* s
 __attribute__((hot)) bool CGenerator__str_field_target_ok(CGenerator* self, HirExpr* t);
 __attribute__((hot)) bool CGenerator__pure_path(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__store_is_weak_field(CGenerator* self, HirExpr* t);
+__attribute__((hot)) bool CGenerator__shared_needs_clone(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__is_downgrade_call(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__store_is_opt_obj_field(CGenerator* self, HirExpr* t);
 __attribute__((hot)) bool CGenerator__is_fresh_some(CGenerator* self, HirExpr* e);
@@ -5718,6 +5750,7 @@ __attribute__((hot)) TrStr CGenerator_dict_key_arg(CGenerator* self, HirExpr* e)
 __attribute__((hot)) TrStr CGenerator__dict_val_kind(CGenerator* self, HirExpr* o);
 __attribute__((hot)) TrStr CGenerator__dict_val_drop(CGenerator* self, HirExpr* o);
 __attribute__((hot)) TrStr CGenerator_dict_set_call(CGenerator* self, HirExpr* o, TrStr obj_s, bool is_idict, TrStr key_s, TrStr val_s);
+__attribute__((hot)) TrStr CGenerator__list_handle_kind(CGenerator* self, HirExpr* o);
 __attribute__((hot)) TrStr CGenerator__list_elem_obj_drop(CGenerator* self, HirExpr* o);
 __attribute__((hot)) TrStr CGenerator_dict_val_arg(CGenerator* self, HirExpr* e);
 __attribute__((hot)) TrStr CGenerator_gen_args_extern(CGenerator* self, List_ptr* args);

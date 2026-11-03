@@ -1,0 +1,8 @@
+# EXPECT: [L-6]
+# An outer `ref` local assigned an if-block local is read after the block ended.
+def main():
+    mut keep: ref str = "init"
+    if true:
+        mut s = "x" + "y"
+        keep = s
+    print(keep)

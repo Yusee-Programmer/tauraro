@@ -1,0 +1,9 @@
+# EXPECT: pass
+class A:
+    pub v: int
+def main():
+    m = Mutex.init(A())
+    g = m.get()
+    g.v = 5
+    m.unlock()
+    print("ok")

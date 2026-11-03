@@ -1,0 +1,19 @@
+# EXPECT: pass
+# Constant-offset tracking must not flag guarded or in-bounds uses.
+def main():
+    unsafe:
+        mut p: Pointer[int] = alloc[int](4)
+        mut n = 3
+        p.offset(n).write(1)
+        n = 9
+        if n < 4:
+            p.offset(n).write(2)
+        mut q: Pointer[int] = p.offset(2)
+        q.offset(1).write(3)
+        mut i = 0
+        while i < 4:
+            p.offset(i).write(i)
+            i = i + 1
+        assert_eq(p.offset(1).read(), 1)
+        dealloc(p)
+    print("ok")

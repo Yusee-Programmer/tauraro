@@ -644,8 +644,8 @@ _TR_XLINK char* _tr_rt_str_new(const char* s);
 /* Alloc-block size table (debug/ASan builds, or -DTAURARO_PTR_CHECK): remembers the extent of every
  * block handed out by _tr_c_calloc / _tr_c_realloc so raw Pointer[T] offset/index on the block's BASE
  * pointer can be range-checked WITHOUT depending on AddressSanitizer internals (portable: works on
- * macOS where __asan_locate_address is unusable). Interior pointers (a.offset(2)) are not in the table
- * and stay unchecked here (ASan redzones / the Linux ASan locate fallback still cover them). */
+ * macOS where __asan_locate_address is unusable). An interior pointer (a.offset(2)) is resolved to its
+ * block by a linear scan of the table (_tr_pt_find), so it is range-checked on every platform. */
 #if defined(TAURARO_PTR_CHECK) && !defined(_TR_NO_CRASH_HANDLER)
 #  define _TR_PTRCHK_WANT 1
 #endif
@@ -712,6 +712,22 @@ static size_t _tr_pt_size(const void* p) {
         while (_tr_ptrtab[h].base) {
             if (_tr_ptrtab[h].base == (uintptr_t)p) { r = _tr_ptrtab[h].size; break; }
             h = (h + 1) & (_tr_ptrtab_cap - 1);
+        }
+    }
+    _tr_pt_unlock();
+    return r;
+}
+/* Like _tr_pt_size, but an INTERIOR pointer (`base.offset(2)`) is resolved to the tracked block that
+ * contains it (linear scan; --debug only). Returns 0 when `p` lies in no tracked block. */
+static size_t _tr_pt_find(const void* p, void** base_out) {
+    size_t r = _tr_pt_size(p);
+    if (r) { *base_out = (void*)p; return r; }
+    if (!p) return 0;
+    _tr_pt_lock();
+    for (size_t i = 0; i < _tr_ptrtab_cap; i++) {
+        uintptr_t b = _tr_ptrtab[i].base;
+        if (b > _TR_PT_TOMB && (uintptr_t)p > b && (uintptr_t)p < b + _tr_ptrtab[i].size) {
+            *base_out = (void*)b; r = _tr_ptrtab[i].size; break;
         }
     }
     _tr_pt_unlock();
@@ -5525,10 +5541,9 @@ extern const char* __asan_locate_address(void* addr, char* name, size_t name_siz
 #  define _TR_HAVE_ASAN_LOCATE 1
 #endif
 static inline void* _tr_dbg_ptr(void* p, long long k, size_t esz, int deref) {
-    void* rb = 0; size_t rs = _tr_pt_size(p);
-    if (rs) rb = p;
+    void* rb = 0; size_t rs = _tr_pt_find(p, &rb);
 #ifdef _TR_HAVE_ASAN_LOCATE
-    else if (p) {   /* interior pointer: let ASan name the heap block it points into (Linux) */
+    if (!rs && p) {   /* interior pointer: let ASan name the heap block it points into (Linux) */
         char nm[16]; const char* cat = __asan_locate_address(p, nm, sizeof nm, &rb, &rs);
         if (!(cat && cat[0] == 'h' && cat[1] == 'e' && cat[2] == 'a' && cat[3] == 'p' && cat[4] == 0 && (char*)p >= (char*)rb && (char*)p < (char*)rb + rs)) rs = 0;
     }
@@ -9961,6 +9976,21 @@ static inline void _tr_idict_update_str(TrIDict* dst, TrIDict* src) {
     for (size_t i=0;i<src->cap;i++) for (_TrIDictNode* n=src->buckets[i]; n; n=n->next) if (n->value) _tr_idict_set_str(dst, n->key, _tr_str_box(_tr_str_retain(*(TrStr*)n->value)));
 }
 
+/* Give every slot at index >= from its OWN handle (used after a bulk copy of handle slots). */
+static inline void List_ptr_clone_shared_from(List_ptr* l, size_t from) {
+    if (!l) return;
+    for (size_t i=from;i<l->len;i++) _tr_shared_clone((_TrSharedBox*)l->data[i]);
+}
+static inline void List_ptr_clone_weak_from(List_ptr* l, size_t from) {
+    if (!l) return;
+    for (size_t i=from;i<l->len;i++) l->data[i] = (void*)_tr_weak_clone((_TrWeakBox*)l->data[i]);
+}
+/* List[Shared[T]]: every slot owns one strong handle. */
+static inline void List_ptr_free_shared(List_ptr* l) {
+    if (!l) return;
+    for (size_t i=0;i<l->len;i++) _tr_shared_drop((_TrSharedBox*)l->data[i]);
+    List_ptr_free(l);
+}
 /* List[Weak[T]]: every slot owns one weak handle. */
 static inline void List_ptr_free_weak(List_ptr* l) {
     if (!l) return;

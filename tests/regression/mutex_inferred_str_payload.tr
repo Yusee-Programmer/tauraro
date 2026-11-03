@@ -1,0 +1,27 @@
+# Regression: Mutex.init(A()) infers its payload type (a later m.get().field access was a raw
+# [C-1] error), and Mutex[str] / RwLock[str] work (the str travels as a heap box).
+from std.test import TestRunner
+
+class A:
+    pub v: int
+
+def main():
+    mut t = TestRunner.init("mutex_inferred_str_payload")
+    m = Mutex.init(A())
+    g = m.get()
+    g.v = 5
+    n = g.v
+    m.unlock()
+    t.assert_eq_int(n, 5, "inferred class payload")
+    mut ms: Mutex[str] = Mutex.init("a")
+    v = ms.get()
+    ms.set(v + "b")
+    t.assert_eq_str(ms.get(), "ab", "Mutex[str]")
+    ms.unlock()
+    mut rw: RwLock[str] = RwLock.init("x")
+    s = rw.read()
+    rw.read_unlock()
+    rw.write_set(s + "y")
+    t.assert_eq_str(rw.read(), "xy", "RwLock[str]")
+    rw.read_unlock()
+    t.summary()

@@ -1,0 +1,5 @@
+# EXPECT: [E-4]
+# Built-in Set methods have their arity checked like List / Dict.
+def main():
+    st = set()
+    st.add()

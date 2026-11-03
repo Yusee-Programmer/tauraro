@@ -1,0 +1,14 @@
+# EXPECT: [I-2]
+# A factory function returns a bare C() whose collection field is still null; using it in the caller
+# before assigning it is rejected (the multi-function form of the unset-field check).
+class C:
+    pub n: int
+    pub l: List[int]
+def make() -> C:
+    mut c = C()
+    c.n = 3
+    return c
+def main():
+    mut c = make()
+    c.l.append(1)
+    print(c.l.len())

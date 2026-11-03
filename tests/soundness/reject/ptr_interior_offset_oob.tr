@@ -1,0 +1,8 @@
+# EXPECT: [P-3]
+# An interior pointer (`p.offset(2)` of a 4-element block) has only 2 elements left.
+def main():
+    unsafe:
+        mut p: Pointer[int] = alloc[int](4)
+        mut q: Pointer[int] = p.offset(2)
+        q.offset(2).write(1)
+        dealloc(p)

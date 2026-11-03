@@ -86,9 +86,14 @@ re-bound or stored is owned by its new holder instead. `list(xs)`, `sorted(xs)` 
 `reversed(xs)` return real copies that are freed like any other list local, and
 `print`/f-strings release their temporary strings.
 
-Known remaining gaps: tuples holding a class or `str` are not yet dropped, enum values
-reached through a collection or field are released only by their container, and
-`List[Weak[T]]` / `List[Shared[T]]` are still rejected by `[T-11]`.
+`List[Weak[T]]` and `List[Shared[T]]` (locals and class fields) are supported: every slot owns one
+handle (`append`/`insert`/`set`/index-assign clone a non-fresh handle and transfer a fresh one,
+`remove`/`clear`/overwrite drop the displaced handle, `copy`/`slice`/`reversed`/`extend` clone), and a
+`for w in ws` loop variable or `x = ws[i]` / `ws.get(i)` alias *borrows* the slot instead of dropping it.
+`Shared[T]`/`Weak[T]` as `Dict`/`Set` elements stays rejected by `[T-11]`.
+
+Known remaining gaps: tuples holding a class or `str` are not yet dropped, and enum values
+reached through a collection or field are released only by their container.
 
 ### Common Mistakes
 

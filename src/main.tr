@@ -2370,6 +2370,10 @@ pub def main(args: Vec[str]):
     while ng_i < sema.none_read_names.len:
         if not sema.assigned_names.contains(sema.none_read_names.get(ng_i)): sema.errors.push(sema.none_read_msgs.get(ng_i))
         ng_i = ng_i + 1
+    mut na_i = 0
+    while na_i < sema.none_arith_names.len:
+        if not sema.real_assigned.contains(sema.none_arith_names.get(na_i)): sema.errors.push(sema.none_arith_msgs.get(na_i))
+        na_i = na_i + 1
     _tr_set_ice_ctx("generating C for " + input_path)
 
     if sema.warnings.len > 0:

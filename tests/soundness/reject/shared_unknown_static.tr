@@ -1,0 +1,6 @@
+# EXPECT: [E-1]
+# A misspelt static member of Shared[T] is a clean diagnostic (it used to surface as a late [C-1]).
+class Item:
+    pub v: int
+def main():
+    h = Shared[Item].init_zz(Item())

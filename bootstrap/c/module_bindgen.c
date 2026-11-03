@@ -98,9 +98,9 @@ __attribute__((malloc,returns_nonnull,hot)) CTok* CTok_init(long long kind, TrSt
 #line 24 "src/bindgen.tr"
     t->kind = kind;
 #line 25 "src/bindgen.tr"
-    TrStr _sfo_t4018 = t->text;
+    TrStr _sfo_t4125 = t->text;
     t->text = _tr_str_retain(text);
-    _tr_str_release(_sfo_t4018);
+    _tr_str_release(_sfo_t4125);
 #line 26 "src/bindgen.tr"
     return t;
 }
@@ -170,7 +170,7 @@ __attribute__((hot)) void Bindgen_adv(Bindgen* self) {
 
 __attribute__((hot)) bool Bindgen_is_punct(Bindgen* self, TrStr p) {
 #line 337 "src/bindgen.tr"
-    return ((Bindgen_ck(self) == 4LL) && ({ TrStr _cmpa_t4019 = (Bindgen_ct(self)); TrStr _cmpb_t4020 = (p); _Bool _cmpr_t4021 = _tr_str_eqv(_cmpa_t4019, _cmpb_t4020); _tr_str_release(_cmpa_t4019); _cmpr_t4021; }));
+    return ((Bindgen_ck(self) == 4LL) && ({ TrStr _cmpa_t4126 = (Bindgen_ct(self)); TrStr _cmpb_t4127 = (p); _Bool _cmpr_t4128 = _tr_str_eqv(_cmpa_t4126, _cmpb_t4127); _tr_str_release(_cmpa_t4126); _cmpr_t4128; }));
 }
 
 __attribute__((hot)) long long Bindgen_nk(Bindgen* self) {
@@ -320,7 +320,7 @@ __attribute__((hot)) void Bindgen_skip_braces(Bindgen* self) {
 
 __attribute__((hot)) void Bindgen_skip_attributes(Bindgen* self) {
 #line 398 "src/bindgen.tr"
-    while (((Bindgen_ck(self) == 0LL) && (({ TrStr _cmpa_t4022 = (Bindgen_ct(self)); TrStr _cmpb_t4023 = (_tr_str_lit_len("__attribute__", 13LL)); _Bool _cmpr_t4024 = _tr_str_eqv(_cmpa_t4022, _cmpb_t4023); _tr_str_release(_cmpa_t4022); _cmpr_t4024; }) || ({ TrStr _cmpa_t4025 = (Bindgen_ct(self)); TrStr _cmpb_t4026 = (_tr_str_lit_len("__declspec", 10LL)); _Bool _cmpr_t4027 = _tr_str_eqv(_cmpa_t4025, _cmpb_t4026); _tr_str_release(_cmpa_t4025); _cmpr_t4027; })))) {
+    while (((Bindgen_ck(self) == 0LL) && (({ TrStr _cmpa_t4129 = (Bindgen_ct(self)); TrStr _cmpb_t4130 = (_tr_str_lit_len("__attribute__", 13LL)); _Bool _cmpr_t4131 = _tr_str_eqv(_cmpa_t4129, _cmpb_t4130); _tr_str_release(_cmpa_t4129); _cmpr_t4131; }) || ({ TrStr _cmpa_t4132 = (Bindgen_ct(self)); TrStr _cmpb_t4133 = (_tr_str_lit_len("__declspec", 10LL)); _Bool _cmpr_t4134 = _tr_str_eqv(_cmpa_t4132, _cmpb_t4133); _tr_str_release(_cmpa_t4132); _cmpr_t4134; })))) {
 #line 399 "src/bindgen.tr"
         Bindgen_adv(self);
 #line 400 "src/bindgen.tr"
@@ -366,7 +366,7 @@ __attribute__((hot)) List_TrStr* Bindgen_read_type_words(Bindgen* self) {
             } else if (((_tr_str_eqv((w), (_tr_str_lit_len("struct", 6LL))) || _tr_str_eqv((w), (_tr_str_lit_len("union", 5LL)))) || _tr_str_eqv((w), (_tr_str_lit_len("enum", 4LL))))) {
 #line 430 "src/bindgen.tr"
                 Bindgen_adv(self);
-            } else if (((((words->len >= 1LL) || (stars > 0LL)) && ({ __auto_type _ord_t4029 = (Bindgen_nk(self)); TrStr _at_t4028 = (Bindgen_nt(self)); __auto_type _wr = (_is_decl_term(_ord_t4029, _at_t4028)); _tr_str_release(_at_t4028); _wr; })) && (!_is_prim_type_word(w)))) {
+            } else if (((((words->len >= 1LL) || (stars > 0LL)) && ({ __auto_type _ord_t4136 = (Bindgen_nk(self)); TrStr _at_t4135 = (Bindgen_nt(self)); __auto_type _wr = (_is_decl_term(_ord_t4136, _at_t4135)); _tr_str_release(_at_t4135); _wr; })) && (!_is_prim_type_word(w)))) {
 #line 432 "src/bindgen.tr"
                 going = false;
             } else {
@@ -388,9 +388,9 @@ __attribute__((hot)) List_TrStr* Bindgen_read_type_words(Bindgen* self) {
 #line 441 "src/bindgen.tr"
     List_TrStr* res = (void*)List_TrStr_new();
 #line 442 "src/bindgen.tr"
-    ({ TrStr _at_t4030 = (_join_words(words)); List_TrStr_append(res, _at_t4030); _tr_str_release(_at_t4030); });
+    ({ TrStr _at_t4137 = (_join_words(words)); List_TrStr_append(res, _at_t4137); _tr_str_release(_at_t4137); });
 #line 443 "src/bindgen.tr"
-    ({ TrStr _at_t4031 = (_tr_str_wrap(_tr_int_to_str((long long)(stars)))); List_TrStr_append(res, _at_t4031); _tr_str_release(_at_t4031); });
+    ({ TrStr _at_t4138 = (_tr_str_wrap(_tr_int_to_str((long long)(stars)))); List_TrStr_append(res, _at_t4138); _tr_str_release(_at_t4138); });
 #line 444 "src/bindgen.tr"
     return res;
 }
@@ -406,7 +406,7 @@ __attribute__((hot)) void Bindgen_emit_func(Bindgen* self, TrStr ret_words, long
         return;
     }
 #line 452 "src/bindgen.tr"
-    ({ TrStr _sbt_t4032 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    def ", 8LL)), (name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->funcs, _sbt_t4032); _tr_str_release(_sbt_t4032); });
+    ({ TrStr _sbt_t4139 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    def ", 8LL)), (name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->funcs, _sbt_t4139); _tr_str_release(_sbt_t4139); });
 #line 453 "src/bindgen.tr"
     Bindgen_adv(self);
 #line 454 "src/bindgen.tr"
@@ -440,11 +440,11 @@ __attribute__((hot)) void Bindgen_emit_func(Bindgen* self, TrStr ret_words, long
 #line 467 "src/bindgen.tr"
         TrStr pbase = List_TrStr_get(tw, 0LL);
 #line 468 "src/bindgen.tr"
-        long long pstars = ({ TrStr _at_t4033 = (List_TrStr_get(tw, 1LL)); __auto_type _wr = (_to_int(_at_t4033)); _tr_str_release(_at_t4033); _wr; });
+        long long pstars = ({ TrStr _at_t4140 = (List_TrStr_get(tw, 1LL)); __auto_type _wr = (_to_int(_at_t4140)); _tr_str_release(_at_t4140); _wr; });
 #line 469 "src/bindgen.tr"
         TrStr pname = _tr_str_lit_len("", 0LL);
 #line 473 "src/bindgen.tr"
-        if ((Bindgen_is_punct(self, _tr_str_lit_len("(", 1LL)) && ({ TrStr _cmpa_t4034 = (Bindgen_nt(self)); TrStr _cmpb_t4035 = (_tr_str_lit_len("*", 1LL)); _Bool _cmpr_t4036 = _tr_str_eqv(_cmpa_t4034, _cmpb_t4035); _tr_str_release(_cmpa_t4034); _cmpr_t4036; }))) {
+        if ((Bindgen_is_punct(self, _tr_str_lit_len("(", 1LL)) && ({ TrStr _cmpa_t4141 = (Bindgen_nt(self)); TrStr _cmpb_t4142 = (_tr_str_lit_len("*", 1LL)); _Bool _cmpr_t4143 = _tr_str_eqv(_cmpa_t4141, _cmpb_t4142); _tr_str_release(_cmpa_t4141); _cmpr_t4143; }))) {
 #line 474 "src/bindgen.tr"
             Bindgen_adv(self);
 #line 475 "src/bindgen.tr"
@@ -455,9 +455,9 @@ __attribute__((hot)) void Bindgen_emit_func(Bindgen* self, TrStr ret_words, long
 #line 476 "src/bindgen.tr"
             if ((Bindgen_ck(self) == 0LL)) {
 #line 477 "src/bindgen.tr"
-                TrStr _strtmp_t4037 = Bindgen_ct(self);
+                TrStr _strtmp_t4144 = Bindgen_ct(self);
                 _tr_str_release(pname);
-                pname = _strtmp_t4037;
+                pname = _strtmp_t4144;
 #line 478 "src/bindgen.tr"
                 Bindgen_adv(self);
             }
@@ -471,14 +471,14 @@ __attribute__((hot)) void Bindgen_emit_func(Bindgen* self, TrStr ret_words, long
 #line 481 "src/bindgen.tr"
             if (_tr_str_eqv((pname), (_tr_str_lit_len("", 0LL)))) {
 #line 481 "src/bindgen.tr"
-                TrStr _strtmp_t4038 = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(argn)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("arg", 3LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+                TrStr _strtmp_t4145 = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(argn)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("arg", 3LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
                 _tr_str_release(pname);
-                pname = _strtmp_t4038;
+                pname = _strtmp_t4145;
             }
 #line 482 "src/bindgen.tr"
             if (_is_tr_keyword(pname)) {
 #line 482 "src/bindgen.tr"
-                ({ TrStr _ap_t4039 = (_tr_str_lit_len("_", 1LL)); _tr_str_append(&pname, _ap_t4039); });
+                ({ TrStr _ap_t4146 = (_tr_str_lit_len("_", 1LL)); _tr_str_append(&pname, _ap_t4146); });
             }
 #line 483 "src/bindgen.tr"
             if ((!first)) {
@@ -488,7 +488,7 @@ __attribute__((hot)) void Bindgen_emit_func(Bindgen* self, TrStr ret_words, long
 #line 484 "src/bindgen.tr"
             first = false;
 #line 485 "src/bindgen.tr"
-            ({ TrStr _sbt_t4040 = (_tr_strx_concatv((pname), (_tr_str_lit_len(": Pointer[void]", 15LL)))); StringBuilder_append(self->funcs, _sbt_t4040); _tr_str_release(_sbt_t4040); });
+            ({ TrStr _sbt_t4147 = (_tr_strx_concatv((pname), (_tr_str_lit_len(": Pointer[void]", 15LL)))); StringBuilder_append(self->funcs, _sbt_t4147); _tr_str_release(_sbt_t4147); });
 #line 486 "src/bindgen.tr"
             argn = (argn + 1LL);
 #line 487 "src/bindgen.tr"
@@ -504,9 +504,9 @@ __attribute__((hot)) void Bindgen_emit_func(Bindgen* self, TrStr ret_words, long
 #line 489 "src/bindgen.tr"
         if ((Bindgen_ck(self) == 0LL)) {
 #line 490 "src/bindgen.tr"
-            TrStr _strtmp_t4041 = Bindgen_ct(self);
+            TrStr _strtmp_t4148 = Bindgen_ct(self);
             _tr_str_release(pname);
-            pname = _strtmp_t4041;
+            pname = _strtmp_t4148;
 #line 491 "src/bindgen.tr"
             Bindgen_adv(self);
         }
@@ -537,14 +537,14 @@ __attribute__((hot)) void Bindgen_emit_func(Bindgen* self, TrStr ret_words, long
 #line 499 "src/bindgen.tr"
         if (_tr_str_eqv((pname), (_tr_str_lit_len("", 0LL)))) {
 #line 500 "src/bindgen.tr"
-            TrStr _strtmp_t4042 = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(argn)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("arg", 3LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+            TrStr _strtmp_t4149 = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(argn)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("arg", 3LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
             _tr_str_release(pname);
-            pname = _strtmp_t4042;
+            pname = _strtmp_t4149;
         }
 #line 501 "src/bindgen.tr"
         if (_is_tr_keyword(pname)) {
 #line 501 "src/bindgen.tr"
-            ({ TrStr _ap_t4043 = (_tr_str_lit_len("_", 1LL)); _tr_str_append(&pname, _ap_t4043); });
+            ({ TrStr _ap_t4150 = (_tr_str_lit_len("_", 1LL)); _tr_str_append(&pname, _ap_t4150); });
         }
 #line 502 "src/bindgen.tr"
         if ((!first)) {
@@ -554,7 +554,7 @@ __attribute__((hot)) void Bindgen_emit_func(Bindgen* self, TrStr ret_words, long
 #line 503 "src/bindgen.tr"
         first = false;
 #line 504 "src/bindgen.tr"
-        ({ TrStr _ord_t4044 = (({ TrStr _tr_cl = (_tr_strx_concatv((pname), (_tr_str_lit_len(": ", 2LL)))); TrStr _tr_cr = (map_type(pbase, pstars)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); StringBuilder_append(self->funcs, _ord_t4044); _tr_str_release(_ord_t4044); });
+        ({ TrStr _ord_t4151 = (({ TrStr _tr_cl = (_tr_strx_concatv((pname), (_tr_str_lit_len(": ", 2LL)))); TrStr _tr_cr = (map_type(pbase, pstars)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); StringBuilder_append(self->funcs, _ord_t4151); _tr_str_release(_ord_t4151); });
 #line 505 "src/bindgen.tr"
         argn = (argn + 1LL);
 #line 506 "src/bindgen.tr"
@@ -582,7 +582,7 @@ __attribute__((hot)) void Bindgen_emit_func(Bindgen* self, TrStr ret_words, long
 #line 511 "src/bindgen.tr"
     if ((!_tr_str_eqv((rt), (_tr_str_lit_len("void", 4LL))))) {
 #line 511 "src/bindgen.tr"
-        ({ TrStr _sbt_t4045 = (_tr_strx_concatv((_tr_str_lit_len(" -> ", 4LL)), (rt))); StringBuilder_append(self->funcs, _sbt_t4045); _tr_str_release(_sbt_t4045); });
+        ({ TrStr _sbt_t4152 = (_tr_strx_concatv((_tr_str_lit_len(" -> ", 4LL)), (rt))); StringBuilder_append(self->funcs, _sbt_t4152); _tr_str_release(_sbt_t4152); });
     }
 #line 512 "src/bindgen.tr"
     StringBuilder_append(self->funcs, _tr_str_lit_len("\n", 1LL));
@@ -615,7 +615,7 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
         StringBuilder_append(self->structs, _tr_str_lit_len("@union\n", 7LL));
     }
 #line 522 "src/bindgen.tr"
-    ({ TrStr _sbt_t4046 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("@value_type\nclass ", 18LL)), (name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _sbt_t4046); _tr_str_release(_sbt_t4046); });
+    ({ TrStr _sbt_t4153 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("@value_type\nclass ", 18LL)), (name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _sbt_t4153); _tr_str_release(_sbt_t4153); });
 #line 523 "src/bindgen.tr"
     Bindgen_adv(self);
 #line 524 "src/bindgen.tr"
@@ -625,7 +625,7 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
 #line 526 "src/bindgen.tr"
         long long floop_before = self->pos;
 #line 531 "src/bindgen.tr"
-        if ((({ TrStr _cmpa_t4047 = (Bindgen_ct(self)); TrStr _cmpb_t4048 = (_tr_str_lit_len("struct", 6LL)); _Bool _cmpr_t4049 = _tr_str_eqv(_cmpa_t4047, _cmpb_t4048); _tr_str_release(_cmpa_t4047); _cmpr_t4049; }) || ({ TrStr _cmpa_t4050 = (Bindgen_ct(self)); TrStr _cmpb_t4051 = (_tr_str_lit_len("union", 5LL)); _Bool _cmpr_t4052 = _tr_str_eqv(_cmpa_t4050, _cmpb_t4051); _tr_str_release(_cmpa_t4050); _cmpr_t4052; }))) {
+        if ((({ TrStr _cmpa_t4154 = (Bindgen_ct(self)); TrStr _cmpb_t4155 = (_tr_str_lit_len("struct", 6LL)); _Bool _cmpr_t4156 = _tr_str_eqv(_cmpa_t4154, _cmpb_t4155); _tr_str_release(_cmpa_t4154); _cmpr_t4156; }) || ({ TrStr _cmpa_t4157 = (Bindgen_ct(self)); TrStr _cmpb_t4158 = (_tr_str_lit_len("union", 5LL)); _Bool _cmpr_t4159 = _tr_str_eqv(_cmpa_t4157, _cmpb_t4158); _tr_str_release(_cmpa_t4157); _cmpr_t4159; }))) {
 #line 532 "src/bindgen.tr"
             long long nsave = self->pos;
 #line 533 "src/bindgen.tr"
@@ -648,7 +648,7 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
 #line 540 "src/bindgen.tr"
                     long long nb = self->pos;
 #line 557 "src/bindgen.tr"
-                    if ((({ TrStr _cmpa_t4053 = (Bindgen_ct(self)); TrStr _cmpb_t4054 = (_tr_str_lit_len("struct", 6LL)); _Bool _cmpr_t4055 = _tr_str_eqv(_cmpa_t4053, _cmpb_t4054); _tr_str_release(_cmpa_t4053); _cmpr_t4055; }) || ({ TrStr _cmpa_t4056 = (Bindgen_ct(self)); TrStr _cmpb_t4057 = (_tr_str_lit_len("union", 5LL)); _Bool _cmpr_t4058 = _tr_str_eqv(_cmpa_t4056, _cmpb_t4057); _tr_str_release(_cmpa_t4056); _cmpr_t4058; }))) {
+                    if ((({ TrStr _cmpa_t4160 = (Bindgen_ct(self)); TrStr _cmpb_t4161 = (_tr_str_lit_len("struct", 6LL)); _Bool _cmpr_t4162 = _tr_str_eqv(_cmpa_t4160, _cmpb_t4161); _tr_str_release(_cmpa_t4160); _cmpr_t4162; }) || ({ TrStr _cmpa_t4163 = (Bindgen_ct(self)); TrStr _cmpb_t4164 = (_tr_str_lit_len("union", 5LL)); _Bool _cmpr_t4165 = _tr_str_eqv(_cmpa_t4163, _cmpb_t4164); _tr_str_release(_cmpa_t4163); _cmpr_t4165; }))) {
 #line 558 "src/bindgen.tr"
                         Bindgen_adv(self);
 #line 559 "src/bindgen.tr"
@@ -676,7 +676,7 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
 #line 566 "src/bindgen.tr"
                     TrStr nbase = List_TrStr_get(ntw, 0LL);
 #line 567 "src/bindgen.tr"
-                    long long nstars = ({ TrStr _at_t4059 = (List_TrStr_get(ntw, 1LL)); __auto_type _wr = (_to_int(_at_t4059)); _tr_str_release(_at_t4059); _wr; });
+                    long long nstars = ({ TrStr _at_t4166 = (List_TrStr_get(ntw, 1LL)); __auto_type _wr = (_to_int(_at_t4166)); _tr_str_release(_at_t4166); _wr; });
 #line 568 "src/bindgen.tr"
                     bool nmore = true;
 #line 569 "src/bindgen.tr"
@@ -701,9 +701,9 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
 #line 577 "src/bindgen.tr"
                             if ((Bindgen_ck(self) == 1LL)) {
 #line 577 "src/bindgen.tr"
-                                TrStr _strtmp_t4060 = Bindgen_ct(self);
+                                TrStr _strtmp_t4167 = Bindgen_ct(self);
                                 _tr_str_release(narr);
-                                narr = _strtmp_t4060;
+                                narr = _strtmp_t4167;
                             }
 #line 578 "src/bindgen.tr"
                             while (((!Bindgen_is_punct(self, _tr_str_lit_len("]", 1LL))) && (Bindgen_ck(self) != 5LL))) {
@@ -723,10 +723,10 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
 #line 582 "src/bindgen.tr"
                         if ((nisarr && (!_tr_str_eqv((narr), (_tr_str_lit_len("", 0LL)))))) {
 #line 582 "src/bindgen.tr"
-                            ({ TrStr _at_t4061 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (map_type(nbase, nstars)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("[", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (narr)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(ntypes, _at_t4061); _tr_str_release(_at_t4061); });
+                            ({ TrStr _at_t4168 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (map_type(nbase, nstars)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("[", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (narr)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(ntypes, _at_t4168); _tr_str_release(_at_t4168); });
                         } else {
 #line 583 "src/bindgen.tr"
-                            ({ TrStr _at_t4062 = (map_type(nbase, nstars)); List_TrStr_append(ntypes, _at_t4062); _tr_str_release(_at_t4062); });
+                            ({ TrStr _at_t4169 = (map_type(nbase, nstars)); List_TrStr_append(ntypes, _at_t4169); _tr_str_release(_at_t4169); });
                         }
 #line 584 "src/bindgen.tr"
                         if (Bindgen_is_punct(self, _tr_str_lit_len(",", 1LL))) {
@@ -761,9 +761,9 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
 #line 590 "src/bindgen.tr"
                 if ((Bindgen_ck(self) == 0LL)) {
 #line 591 "src/bindgen.tr"
-                    TrStr _strtmp_t4063 = Bindgen_ct(self);
+                    TrStr _strtmp_t4170 = Bindgen_ct(self);
                     _tr_str_release(pfx);
-                    pfx = _strtmp_t4063;
+                    pfx = _strtmp_t4170;
 #line 592 "src/bindgen.tr"
                     Bindgen_adv(self);
                 }
@@ -786,12 +786,12 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
 #line 598 "src/bindgen.tr"
                     if ((!_tr_str_eqv((pfx), (_tr_str_lit_len("", 0LL))))) {
 #line 598 "src/bindgen.tr"
-                        TrStr _strtmp_t4064 = ({ TrStr _tr_cl = (_tr_strx_concatv((pfx), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (nfn)); _tr_str_release(_tr_cl); _tr_cres; });
+                        TrStr _strtmp_t4171 = ({ TrStr _tr_cl = (_tr_strx_concatv((pfx), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (nfn)); _tr_str_release(_tr_cl); _tr_cres; });
                         _tr_str_release(nfn);
-                        nfn = _strtmp_t4064;
+                        nfn = _strtmp_t4171;
                     }
 #line 599 "src/bindgen.tr"
-                    ({ TrStr _ord_t4065 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    pub ", 8LL)), (nfn))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (List_TrStr_get(ntypes, nk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _ord_t4065); _tr_str_release(_ord_t4065); });
+                    ({ TrStr _ord_t4172 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    pub ", 8LL)), (nfn))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (List_TrStr_get(ntypes, nk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _ord_t4172); _tr_str_release(_ord_t4172); });
 #line 600 "src/bindgen.tr"
                     nfields = (nfields + 1LL);
 #line 601 "src/bindgen.tr"
@@ -817,9 +817,9 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
 #line 606 "src/bindgen.tr"
         TrStr fbase = List_TrStr_get(tw, 0LL);
 #line 607 "src/bindgen.tr"
-        long long fstars = ({ TrStr _at_t4066 = (List_TrStr_get(tw, 1LL)); __auto_type _wr = (_to_int(_at_t4066)); _tr_str_release(_at_t4066); _wr; });
+        long long fstars = ({ TrStr _at_t4173 = (List_TrStr_get(tw, 1LL)); __auto_type _wr = (_to_int(_at_t4173)); _tr_str_release(_at_t4173); _wr; });
 #line 612 "src/bindgen.tr"
-        if ((Bindgen_is_punct(self, _tr_str_lit_len("(", 1LL)) && ({ TrStr _cmpa_t4067 = (Bindgen_nt(self)); TrStr _cmpb_t4068 = (_tr_str_lit_len("*", 1LL)); _Bool _cmpr_t4069 = _tr_str_eqv(_cmpa_t4067, _cmpb_t4068); _tr_str_release(_cmpa_t4067); _cmpr_t4069; }))) {
+        if ((Bindgen_is_punct(self, _tr_str_lit_len("(", 1LL)) && ({ TrStr _cmpa_t4174 = (Bindgen_nt(self)); TrStr _cmpb_t4175 = (_tr_str_lit_len("*", 1LL)); _Bool _cmpr_t4176 = _tr_str_eqv(_cmpa_t4174, _cmpb_t4175); _tr_str_release(_cmpa_t4174); _cmpr_t4176; }))) {
 #line 613 "src/bindgen.tr"
             Bindgen_adv(self);
 #line 614 "src/bindgen.tr"
@@ -832,9 +832,9 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
 #line 616 "src/bindgen.tr"
             if ((Bindgen_ck(self) == 0LL)) {
 #line 617 "src/bindgen.tr"
-                TrStr _strtmp_t4070 = Bindgen_ct(self);
+                TrStr _strtmp_t4177 = Bindgen_ct(self);
                 _tr_str_release(fpname);
-                fpname = _strtmp_t4070;
+                fpname = _strtmp_t4177;
 #line 618 "src/bindgen.tr"
                 Bindgen_adv(self);
             }
@@ -853,7 +853,7 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
 #line 622 "src/bindgen.tr"
             if ((!_tr_str_eqv((fpname), (_tr_str_lit_len("", 0LL))))) {
 #line 623 "src/bindgen.tr"
-                ({ TrStr _sbt_t4071 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    pub ", 8LL)), (fpname))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": Pointer[void]\n", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _sbt_t4071); _tr_str_release(_sbt_t4071); });
+                ({ TrStr _sbt_t4178 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    pub ", 8LL)), (fpname))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": Pointer[void]\n", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _sbt_t4178); _tr_str_release(_sbt_t4178); });
 #line 624 "src/bindgen.tr"
                 nfields = (nfields + 1LL);
             }
@@ -916,9 +916,9 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
 #line 650 "src/bindgen.tr"
                 if ((Bindgen_ck(self) == 1LL)) {
 #line 650 "src/bindgen.tr"
-                    TrStr _strtmp_t4072 = Bindgen_ct(self);
+                    TrStr _strtmp_t4179 = Bindgen_ct(self);
                     _tr_str_release(arrn);
-                    arrn = _strtmp_t4072;
+                    arrn = _strtmp_t4179;
                 }
 #line 651 "src/bindgen.tr"
                 while (((!Bindgen_is_punct(self, _tr_str_lit_len("]", 1LL))) && (Bindgen_ck(self) != 5LL))) {
@@ -933,7 +933,7 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
 #line 653 "src/bindgen.tr"
                 if ((!_tr_str_eqv((arrn), (_tr_str_lit_len("", 0LL))))) {
 #line 654 "src/bindgen.tr"
-                    ({ TrStr _ord_t4073 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    pub ", 8LL)), (fname))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": [", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (map_type(fbase, dstars)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (arrn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _ord_t4073); _tr_str_release(_ord_t4073); });
+                    ({ TrStr _ord_t4180 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    pub ", 8LL)), (fname))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": [", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (map_type(fbase, dstars)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (arrn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _ord_t4180); _tr_str_release(_ord_t4180); });
 #line 655 "src/bindgen.tr"
                     nfields = (nfields + 1LL);
 #line 656 "src/bindgen.tr"
@@ -944,7 +944,7 @@ __attribute__((hot)) void Bindgen_emit_struct(Bindgen* self, TrStr name, bool is
 #line 657 "src/bindgen.tr"
             if ((!is_arr)) {
 #line 658 "src/bindgen.tr"
-                ({ TrStr _ord_t4074 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    pub ", 8LL)), (fname))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (map_type(fbase, dstars)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _ord_t4074); _tr_str_release(_ord_t4074); });
+                ({ TrStr _ord_t4181 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    pub ", 8LL)), (fname))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (map_type(fbase, dstars)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _ord_t4181); _tr_str_release(_ord_t4181); });
 #line 659 "src/bindgen.tr"
                 nfields = (nfields + 1LL);
             }
@@ -1023,7 +1023,7 @@ __attribute__((hot)) void Bindgen_emit_enum(Bindgen* self, TrStr name) {
 #line 684 "src/bindgen.tr"
     if (((!_tr_str_eqv((name), (_tr_str_lit_len("", 0LL)))) && Bindgen_fresh(self, name))) {
 #line 684 "src/bindgen.tr"
-        ({ TrStr _sbt_t4075 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("type ", 5LL)), (name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = c_int\n", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->types, _sbt_t4075); _tr_str_release(_sbt_t4075); });
+        ({ TrStr _sbt_t4182 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("type ", 5LL)), (name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = c_int\n", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->types, _sbt_t4182); _tr_str_release(_sbt_t4182); });
     }
 #line 685 "src/bindgen.tr"
     Bindgen_adv(self);
@@ -1062,7 +1062,7 @@ __attribute__((hot)) void Bindgen_emit_enum(Bindgen* self, TrStr name) {
 #line 702 "src/bindgen.tr"
             if ((Bindgen_ck(self) == 1LL)) {
 #line 703 "src/bindgen.tr"
-                ev = ({ TrStr _at_t4076 = (Bindgen_ct(self)); __auto_type _wr = (_to_int(_at_t4076)); _tr_str_release(_at_t4076); _wr; });
+                ev = ({ TrStr _at_t4183 = (Bindgen_ct(self)); __auto_type _wr = (_to_int(_at_t4183)); _tr_str_release(_at_t4183); _wr; });
 #line 704 "src/bindgen.tr"
                 Bindgen_adv(self);
 #line 705 "src/bindgen.tr"
@@ -1082,7 +1082,7 @@ __attribute__((hot)) void Bindgen_emit_enum(Bindgen* self, TrStr name) {
 #line 711 "src/bindgen.tr"
         if ((simple && Bindgen_fresh(self, ename))) {
 #line 712 "src/bindgen.tr"
-            ({ TrStr _ord_t4077 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), (ename))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": c_int = ", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ev)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->consts, _ord_t4077); _tr_str_release(_ord_t4077); });
+            ({ TrStr _ord_t4184 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), (ename))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": c_int = ", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ev)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->consts, _ord_t4184); _tr_str_release(_ord_t4184); });
 #line 713 "src/bindgen.tr"
             next_val = (ev + 1LL);
         }
@@ -1135,9 +1135,9 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
 #line 729 "src/bindgen.tr"
             if ((Bindgen_ck(self) == 0LL)) {
 #line 730 "src/bindgen.tr"
-                TrStr _strtmp_t4078 = Bindgen_ct(self);
+                TrStr _strtmp_t4185 = Bindgen_ct(self);
                 _tr_str_release(tag);
-                tag = _strtmp_t4078;
+                tag = _strtmp_t4185;
 #line 731 "src/bindgen.tr"
                 Bindgen_adv(self);
             }
@@ -1150,9 +1150,9 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
 #line 735 "src/bindgen.tr"
                 if (_tr_str_eqv((cname), (_tr_str_lit_len("", 0LL)))) {
 #line 735 "src/bindgen.tr"
-                    TrStr _strtmp_t4079 = _tr_str_retain(tag);
+                    TrStr _strtmp_t4186 = _tr_str_retain(tag);
                     _tr_str_release(cname);
-                    cname = _strtmp_t4079;
+                    cname = _strtmp_t4186;
                 }
 #line 736 "src/bindgen.tr"
                 Bindgen_emit_struct(self, cname, is_u);
@@ -1178,27 +1178,27 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
 #line 744 "src/bindgen.tr"
             if ((Bindgen_ck(self) == 0LL)) {
 #line 745 "src/bindgen.tr"
-                TrStr _strtmp_t4080 = Bindgen_ct(self);
+                TrStr _strtmp_t4187 = Bindgen_ct(self);
                 _tr_str_release(oname);
-                oname = _strtmp_t4080;
+                oname = _strtmp_t4187;
             }
 #line 746 "src/bindgen.tr"
             if ((((ostars > 0LL) && (!_tr_str_eqv((oname), (_tr_str_lit_len("", 0LL))))) && (!_tr_str_eqv((tag), (_tr_str_lit_len("", 0LL)))))) {
 #line 748 "src/bindgen.tr"
                 if (Bindgen_fresh(self, tag)) {
 #line 749 "src/bindgen.tr"
-                    ({ TrStr _sbt_t4081 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("class ", 6LL)), (tag))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n    pass    # opaque handle\n\n", 31LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _sbt_t4081); _tr_str_release(_sbt_t4081); });
+                    ({ TrStr _sbt_t4188 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("class ", 6LL)), (tag))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n    pass    # opaque handle\n\n", 31LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _sbt_t4188); _tr_str_release(_sbt_t4188); });
 #line 750 "src/bindgen.tr"
                     self->n_structs = (self->n_structs + 1LL);
                 }
 #line 751 "src/bindgen.tr"
                 if (Bindgen_fresh(self, oname)) {
 #line 752 "src/bindgen.tr"
-                    ({ TrStr _sbt_t4082 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("type ", 5LL)), (oname))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = Pointer[", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tag)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->types, _sbt_t4082); _tr_str_release(_sbt_t4082); });
+                    ({ TrStr _sbt_t4189 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("type ", 5LL)), (oname))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = Pointer[", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tag)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->types, _sbt_t4189); _tr_str_release(_sbt_t4189); });
                 }
             } else if (((!_tr_str_eqv((oname), (_tr_str_lit_len("", 0LL)))) && Bindgen_fresh(self, oname))) {
 #line 754 "src/bindgen.tr"
-                ({ TrStr _sbt_t4083 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("class ", 6LL)), (oname))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n    pass    # opaque handle\n\n", 31LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _sbt_t4083); _tr_str_release(_sbt_t4083); });
+                ({ TrStr _sbt_t4190 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("class ", 6LL)), (oname))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n    pass    # opaque handle\n\n", 31LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _sbt_t4190); _tr_str_release(_sbt_t4190); });
 #line 755 "src/bindgen.tr"
                 self->n_structs = (self->n_structs + 1LL);
             }
@@ -1246,7 +1246,7 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
 #line 769 "src/bindgen.tr"
             if (((!_tr_str_eqv((fpn), (_tr_str_lit_len("", 0LL)))) && Bindgen_fresh(self, fpn))) {
 #line 769 "src/bindgen.tr"
-                ({ TrStr _sbt_t4084 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("type ", 5LL)), (fpn))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = Pointer[void]    # C function pointer\n", 41LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->types, _sbt_t4084); _tr_str_release(_sbt_t4084); });
+                ({ TrStr _sbt_t4191 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("type ", 5LL)), (fpn))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = Pointer[void]    # C function pointer\n", 41LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->types, _sbt_t4191); _tr_str_release(_sbt_t4191); });
             }
 #line 770 "src/bindgen.tr"
             Bindgen_skip_to_semi(self);
@@ -1261,20 +1261,20 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
 #line 773 "src/bindgen.tr"
         TrStr abase = List_TrStr_get(tw, 0LL);
 #line 774 "src/bindgen.tr"
-        long long astars = ({ TrStr _at_t4085 = (List_TrStr_get(tw, 1LL)); __auto_type _wr = (_to_int(_at_t4085)); _tr_str_release(_at_t4085); _wr; });
+        long long astars = ({ TrStr _at_t4192 = (List_TrStr_get(tw, 1LL)); __auto_type _wr = (_to_int(_at_t4192)); _tr_str_release(_at_t4192); _wr; });
 #line 775 "src/bindgen.tr"
         TrStr aname = _tr_str_lit_len("", 0LL);
 #line 776 "src/bindgen.tr"
         if ((Bindgen_ck(self) == 0LL)) {
 #line 776 "src/bindgen.tr"
-            TrStr _strtmp_t4086 = Bindgen_ct(self);
+            TrStr _strtmp_t4193 = Bindgen_ct(self);
             _tr_str_release(aname);
-            aname = _strtmp_t4086;
+            aname = _strtmp_t4193;
         }
 #line 777 "src/bindgen.tr"
         if (((((!_tr_str_eqv((aname), (_tr_str_lit_len("", 0LL)))) && (!_tr_str_eqv((abase), (_tr_str_lit_len("", 0LL))))) && (!_tr_str_eqv((aname), (abase)))) && Bindgen_fresh(self, aname))) {
 #line 778 "src/bindgen.tr"
-            ({ TrStr _ord_t4087 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("type ", 5LL)), (aname))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (map_type(abase, astars)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->types, _ord_t4087); _tr_str_release(_ord_t4087); });
+            ({ TrStr _ord_t4194 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("type ", 5LL)), (aname))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (map_type(abase, astars)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->types, _ord_t4194); _tr_str_release(_ord_t4194); });
         }
 #line 779 "src/bindgen.tr"
         Bindgen_skip_to_semi(self);
@@ -1296,9 +1296,9 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
 #line 785 "src/bindgen.tr"
         if ((Bindgen_ck(self) == 0LL)) {
 #line 786 "src/bindgen.tr"
-            TrStr _strtmp_t4088 = Bindgen_ct(self);
+            TrStr _strtmp_t4195 = Bindgen_ct(self);
             _tr_str_release(tag2);
-            tag2 = _strtmp_t4088;
+            tag2 = _strtmp_t4195;
 #line 787 "src/bindgen.tr"
             Bindgen_adv(self);
         }
@@ -1314,7 +1314,7 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
 #line 794 "src/bindgen.tr"
         if (((Bindgen_is_punct(self, _tr_str_lit_len(";", 1LL)) && (!_tr_str_eqv((tag2), (_tr_str_lit_len("", 0LL))))) && Bindgen_fresh(self, tag2))) {
 #line 795 "src/bindgen.tr"
-            ({ TrStr _sbt_t4089 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("class ", 6LL)), (tag2))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n    pass    # opaque (forward-declared)\n\n", 43LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _sbt_t4089); _tr_str_release(_sbt_t4089); });
+            ({ TrStr _sbt_t4196 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("class ", 6LL)), (tag2))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n    pass    # opaque (forward-declared)\n\n", 43LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(self->structs, _sbt_t4196); _tr_str_release(_sbt_t4196); });
 #line 796 "src/bindgen.tr"
             self->n_structs = (self->n_structs + 1LL);
         }
@@ -1334,9 +1334,9 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
 #line 802 "src/bindgen.tr"
         if ((Bindgen_ck(self) == 0LL)) {
 #line 803 "src/bindgen.tr"
-            TrStr _strtmp_t4090 = Bindgen_ct(self);
+            TrStr _strtmp_t4197 = Bindgen_ct(self);
             _tr_str_release(etag);
-            etag = _strtmp_t4090;
+            etag = _strtmp_t4197;
 #line 804 "src/bindgen.tr"
             Bindgen_adv(self);
         }
@@ -1361,15 +1361,15 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
 #line 811 "src/bindgen.tr"
     TrStr rbase = List_TrStr_get(rw, 0LL);
 #line 812 "src/bindgen.tr"
-    long long rstars = ({ TrStr _at_t4091 = (List_TrStr_get(rw, 1LL)); __auto_type _wr = (_to_int(_at_t4091)); _tr_str_release(_at_t4091); _wr; });
+    long long rstars = ({ TrStr _at_t4198 = (List_TrStr_get(rw, 1LL)); __auto_type _wr = (_to_int(_at_t4198)); _tr_str_release(_at_t4198); _wr; });
 #line 813 "src/bindgen.tr"
     TrStr fname = _tr_str_lit_len("", 0LL);
 #line 814 "src/bindgen.tr"
     if ((Bindgen_ck(self) == 0LL)) {
 #line 815 "src/bindgen.tr"
-        TrStr _strtmp_t4092 = Bindgen_ct(self);
+        TrStr _strtmp_t4199 = Bindgen_ct(self);
         _tr_str_release(fname);
-        fname = _strtmp_t4092;
+        fname = _strtmp_t4199;
 #line 816 "src/bindgen.tr"
         Bindgen_adv(self);
     }
@@ -1444,9 +1444,9 @@ __attribute__((hot)) void Bindgen_parse_decl(Bindgen* self) {
 #line 851 "src/bindgen.tr"
         if ((Bindgen_ck(self) == 0LL)) {
 #line 852 "src/bindgen.tr"
-            TrStr _strtmp_t4093 = Bindgen_ct(self);
+            TrStr _strtmp_t4200 = Bindgen_ct(self);
             _tr_str_release(pdname);
-            pdname = _strtmp_t4093;
+            pdname = _strtmp_t4200;
 #line 853 "src/bindgen.tr"
             Bindgen_adv(self);
         }
@@ -1591,7 +1591,7 @@ __attribute__((hot)) List_ptr* tokenize_c(TrStr src) {
                 i = (i + 1LL);
             }
 #line 60 "src/bindgen.tr"
-            ({ TrStr _at_t4094 = (_tr_str_slicev((src), start, i)); List_ptr_append(toks, CTok_init(0LL, _at_t4094)); _tr_str_release(_at_t4094); });
+            ({ TrStr _at_t4201 = (_tr_str_slicev((src), start, i)); List_ptr_append(toks, CTok_init(0LL, _at_t4201)); _tr_str_release(_at_t4201); });
 #line 61 "src/bindgen.tr"
             continue;
         }
@@ -1605,7 +1605,7 @@ __attribute__((hot)) List_ptr* tokenize_c(TrStr src) {
                 i = (i + 1LL);
             }
 #line 65 "src/bindgen.tr"
-            ({ TrStr _at_t4095 = (_tr_str_slicev((src), start, i)); List_ptr_append(toks, CTok_init(1LL, _at_t4095)); _tr_str_release(_at_t4095); });
+            ({ TrStr _at_t4202 = (_tr_str_slicev((src), start, i)); List_ptr_append(toks, CTok_init(1LL, _at_t4202)); _tr_str_release(_at_t4202); });
 #line 66 "src/bindgen.tr"
             continue;
         }
@@ -1628,7 +1628,7 @@ __attribute__((hot)) List_ptr* tokenize_c(TrStr src) {
 #line 73 "src/bindgen.tr"
             i = (i + 1LL);
 #line 74 "src/bindgen.tr"
-            ({ TrStr _at_t4096 = (_tr_str_slicev((src), start, i)); List_ptr_append(toks, CTok_init(2LL, _at_t4096)); _tr_str_release(_at_t4096); });
+            ({ TrStr _at_t4203 = (_tr_str_slicev((src), start, i)); List_ptr_append(toks, CTok_init(2LL, _at_t4203)); _tr_str_release(_at_t4203); });
 #line 75 "src/bindgen.tr"
             continue;
         }
@@ -1651,12 +1651,12 @@ __attribute__((hot)) List_ptr* tokenize_c(TrStr src) {
 #line 82 "src/bindgen.tr"
             i = (i + 1LL);
 #line 83 "src/bindgen.tr"
-            ({ TrStr _at_t4097 = (_tr_str_slicev((src), start, i)); List_ptr_append(toks, CTok_init(3LL, _at_t4097)); _tr_str_release(_at_t4097); });
+            ({ TrStr _at_t4204 = (_tr_str_slicev((src), start, i)); List_ptr_append(toks, CTok_init(3LL, _at_t4204)); _tr_str_release(_at_t4204); });
 #line 84 "src/bindgen.tr"
             continue;
         }
 #line 85 "src/bindgen.tr"
-        ({ TrStr _at_t4098 = (_tr_str_slicev((src), i, (i + 1LL))); List_ptr_append(toks, CTok_init(4LL, _at_t4098)); _tr_str_release(_at_t4098); });
+        ({ TrStr _at_t4205 = (_tr_str_slicev((src), i, (i + 1LL))); List_ptr_append(toks, CTok_init(4LL, _at_t4205)); _tr_str_release(_at_t4205); });
 #line 86 "src/bindgen.tr"
         i = (i + 1LL);
     }
@@ -1827,25 +1827,25 @@ __attribute__((hot)) TrStr map_type(TrStr words, long long stars) {
 #line 126 "src/bindgen.tr"
     if ((stars <= 0LL)) {
 #line 126 "src/bindgen.tr"
-        TrStr _trret688 = _tr_str_retain(base);
+        TrStr _trret697 = _tr_str_retain(base);
         _tr_str_release(base);
-        return _trret688;
+        return _trret697;
     }
 #line 127 "src/bindgen.tr"
     TrStr inner = _tr_str_retain(base);
 #line 128 "src/bindgen.tr"
     if (_tr_str_eqv((base), (_tr_str_lit_len("c_char", 6LL)))) {
 #line 128 "src/bindgen.tr"
-        TrStr _strtmp_t4099 = _tr_str_lit_len("char", 4LL);
+        TrStr _strtmp_t4206 = _tr_str_lit_len("char", 4LL);
         _tr_str_release(inner);
-        inner = _strtmp_t4099;
+        inner = _strtmp_t4206;
     }
 #line 129 "src/bindgen.tr"
     if (_tr_str_eqv((base), (_tr_str_lit_len("void", 4LL)))) {
 #line 129 "src/bindgen.tr"
-        TrStr _strtmp_t4100 = _tr_str_lit_len("void", 4LL);
+        TrStr _strtmp_t4207 = _tr_str_lit_len("void", 4LL);
         _tr_str_release(inner);
-        inner = _strtmp_t4100;
+        inner = _strtmp_t4207;
     }
 #line 130 "src/bindgen.tr"
     TrStr ty = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("Pointer[", 8LL)), (inner))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
@@ -1854,35 +1854,35 @@ __attribute__((hot)) TrStr map_type(TrStr words, long long stars) {
 #line 132 "src/bindgen.tr"
     while ((d < stars)) {
 #line 133 "src/bindgen.tr"
-        TrStr _strtmp_t4101 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("Pointer[", 8LL)), (ty))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _strtmp_t4208 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("Pointer[", 8LL)), (ty))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(ty);
-        ty = _strtmp_t4101;
+        ty = _strtmp_t4208;
 #line 134 "src/bindgen.tr"
         d = (d + 1LL);
     }
 #line 135 "src/bindgen.tr"
-    TrStr _trret689 = _tr_str_retain(ty);
+    TrStr _trret698 = _tr_str_retain(ty);
     _tr_str_release(base);
     _tr_str_release(inner);
     _tr_str_release(ty);
-    return _trret689;
+    return _trret698;
 }
 
 __attribute__((hot)) TrMap* _runtime_symbols() {
 #line 145 "src/bindgen.tr"
     TrStr names = _tr_str_lit_len("printf fprintf sprintf snprintf vprintf vfprintf vsprintf vsnprintf scanf fscanf sscanf fopen fclose fread fwrite fseek ftell fgets fputs fgetc fputc getc putc getchar putchar puts perror fflush freopen setvbuf setbuf rewind remove rename tmpfile ungetc feof ferror clearerr ", 275LL);
 #line 146 "src/bindgen.tr"
-    ({ TrStr _ap_t4102 = (_tr_str_lit_len("malloc calloc realloc free aligned_alloc abort exit _Exit atexit quick_exit system getenv setenv unsetenv abs labs llabs atoi atol atoll atof strtol strtoul strtoll strtoull strtod strtof rand srand qsort bsearch div ldiv lldiv ", 228LL)); _tr_str_append(&names, _ap_t4102); });
+    ({ TrStr _ap_t4209 = (_tr_str_lit_len("malloc calloc realloc free aligned_alloc abort exit _Exit atexit quick_exit system getenv setenv unsetenv abs labs llabs atoi atol atoll atof strtol strtoul strtoll strtoull strtod strtof rand srand qsort bsearch div ldiv lldiv ", 228LL)); _tr_str_append(&names, _ap_t4209); });
 #line 147 "src/bindgen.tr"
-    ({ TrStr _ap_t4103 = (_tr_str_lit_len("memcpy memmove memset memcmp memchr strcpy strncpy strcat strncat strcmp strncmp strchr strrchr strstr strlen strnlen strdup strndup strtok strspn strcspn strpbrk strerror strcoll strxfrm strcasecmp strncasecmp ", 211LL)); _tr_str_append(&names, _ap_t4103); });
+    ({ TrStr _ap_t4210 = (_tr_str_lit_len("memcpy memmove memset memcmp memchr strcpy strncpy strcat strncat strcmp strncmp strchr strrchr strstr strlen strnlen strdup strndup strtok strspn strcspn strpbrk strerror strcoll strxfrm strcasecmp strncasecmp ", 211LL)); _tr_str_append(&names, _ap_t4210); });
 #line 148 "src/bindgen.tr"
-    ({ TrStr _ap_t4104 = (_tr_str_lit_len("sqrt sin cos tan asin acos atan atan2 sinh cosh tanh exp exp2 log log2 log10 pow cbrt hypot floor ceil round trunc fabs fmod ldexp frexp modf fmin fmax copysign nextafter nan isnan isinf signbit ", 195LL)); _tr_str_append(&names, _ap_t4104); });
+    ({ TrStr _ap_t4211 = (_tr_str_lit_len("sqrt sin cos tan asin acos atan atan2 sinh cosh tanh exp exp2 log log2 log10 pow cbrt hypot floor ceil round trunc fabs fmod ldexp frexp modf fmin fmax copysign nextafter nan isnan isinf signbit ", 195LL)); _tr_str_append(&names, _ap_t4211); });
 #line 149 "src/bindgen.tr"
-    ({ TrStr _ap_t4105 = (_tr_str_lit_len("read write open close lseek unlink stat fstat mkdir rmdir access dup dup2 pipe fork execve waitpid kill getpid ", 111LL)); _tr_str_append(&names, _ap_t4105); });
+    ({ TrStr _ap_t4212 = (_tr_str_lit_len("read write open close lseek unlink stat fstat mkdir rmdir access dup dup2 pipe fork execve waitpid kill getpid ", 111LL)); _tr_str_append(&names, _ap_t4212); });
 #line 150 "src/bindgen.tr"
-    ({ TrStr _ap_t4106 = (_tr_str_lit_len("CreateWindow CloseWindow CreateWindowExA CreateWindowExW GetMessage DispatchMessage MessageBox MessageBoxA MessageBoxW ", 119LL)); _tr_str_append(&names, _ap_t4106); });
+    ({ TrStr _ap_t4213 = (_tr_str_lit_len("CreateWindow CloseWindow CreateWindowExA CreateWindowExW GetMessage DispatchMessage MessageBox MessageBoxA MessageBoxW ", 119LL)); _tr_str_append(&names, _ap_t4213); });
 #line 153 "src/bindgen.tr"
-    ({ TrStr _ap_t4107 = (_tr_str_lit_len("Rectangle Ellipse Polygon Polyline Arc Chord Pie RoundRect LineTo MoveToEx FillRect FrameRect InvertRect DrawIcon DrawText DrawTextEx TextOut GetObject LoadImage CreateFont PlaySound Polygon PolyBezier ", 202LL)); _tr_str_append(&names, _ap_t4107); });
+    ({ TrStr _ap_t4214 = (_tr_str_lit_len("Rectangle Ellipse Polygon Polyline Arc Chord Pie RoundRect LineTo MoveToEx FillRect FrameRect InvertRect DrawIcon DrawText DrawTextEx TextOut GetObject LoadImage CreateFont PlaySound Polygon PolyBezier ", 202LL)); _tr_str_append(&names, _ap_t4214); });
 #line 154 "src/bindgen.tr"
     TrMap* m = _tr_dict_new(512LL);
 #line 155 "src/bindgen.tr"
@@ -1892,9 +1892,9 @@ __attribute__((hot)) TrMap* _runtime_symbols() {
 #line 157 "src/bindgen.tr"
     while ((i < parts->len)) {
 #line 158 "src/bindgen.tr"
-        if (({ TrStr _cmpa_t4108 = (List_TrStr_get(parts, i)); TrStr _cmpb_t4109 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4110 = !_tr_str_eqv(_cmpa_t4108, _cmpb_t4109); _tr_str_release(_cmpa_t4108); _cmpr_t4110; })) {
+        if (({ TrStr _cmpa_t4215 = (List_TrStr_get(parts, i)); TrStr _cmpb_t4216 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4217 = !_tr_str_eqv(_cmpa_t4215, _cmpb_t4216); _tr_str_release(_cmpa_t4215); _cmpr_t4217; })) {
 #line 158 "src/bindgen.tr"
-            ({ TrStr _dkt_t4111 = (List_TrStr_get(parts, i)); _tr_dict_set(m, _tr_strz(_dkt_t4111), true); _tr_str_release(_dkt_t4111); });
+            ({ TrStr _dkt_t4218 = (List_TrStr_get(parts, i)); _tr_dict_set(m, _tr_strz(_dkt_t4218), true); _tr_str_release(_dkt_t4218); });
         }
 #line 159 "src/bindgen.tr"
         i = (i + 1LL);
@@ -1940,21 +1940,21 @@ __attribute__((hot)) TrStr _join_words(List_TrStr* words) {
 #line 182 "src/bindgen.tr"
         if ((i > 0LL)) {
 #line 182 "src/bindgen.tr"
-            TrStr _strtmp_t4113 = _tr_strx_concatv((s), (_tr_str_lit_len(" ", 1LL)));
+            TrStr _strtmp_t4220 = _tr_strx_concatv((s), (_tr_str_lit_len(" ", 1LL)));
             _tr_str_release(s);
-            s = _strtmp_t4113;
+            s = _strtmp_t4220;
         }
 #line 183 "src/bindgen.tr"
-        TrStr _strtmp_t4115 = ({ TrStr _tr_cr = (List_TrStr_get(words, i)); TrStr _tr_cres = _tr_strx_concatv((s), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+        TrStr _strtmp_t4222 = ({ TrStr _tr_cr = (List_TrStr_get(words, i)); TrStr _tr_cres = _tr_strx_concatv((s), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
         _tr_str_release(s);
-        s = _strtmp_t4115;
+        s = _strtmp_t4222;
 #line 184 "src/bindgen.tr"
         i = (i + 1LL);
     }
 #line 185 "src/bindgen.tr"
-    TrStr _trret690 = _tr_str_retain(s);
+    TrStr _trret699 = _tr_str_retain(s);
     _tr_str_release(s);
-    return _trret690;
+    return _trret699;
 }
 
 __attribute__((hot)) long long _to_int(TrStr s) {
@@ -2202,7 +2202,7 @@ __attribute__((hot)) TrStr _rename_word(TrStr text, TrStr old, TrStr new_) {
 #line 887 "src/bindgen.tr"
         bool matched = false;
 #line 888 "src/bindgen.tr"
-        if ((((i + ol) <= n) && ({ TrStr _cmpa_t4116 = (_tr_str_slicev((text), i, (i + ol))); TrStr _cmpb_t4117 = (old); _Bool _cmpr_t4118 = _tr_str_eqv(_cmpa_t4116, _cmpb_t4117); _tr_str_release(_cmpa_t4116); _cmpr_t4118; }))) {
+        if ((((i + ol) <= n) && ({ TrStr _cmpa_t4223 = (_tr_str_slicev((text), i, (i + ol))); TrStr _cmpb_t4224 = (old); _Bool _cmpr_t4225 = _tr_str_eqv(_cmpa_t4223, _cmpb_t4224); _tr_str_release(_cmpa_t4223); _cmpr_t4225; }))) {
 #line 889 "src/bindgen.tr"
             bool before_ok = ((i == 0LL) || (!_is_ident_byte(_tr_str_at((text), (long long)((i - 1LL))))));
 #line 890 "src/bindgen.tr"
@@ -2220,7 +2220,7 @@ __attribute__((hot)) TrStr _rename_word(TrStr text, TrStr old, TrStr new_) {
 #line 895 "src/bindgen.tr"
         if ((!matched)) {
 #line 896 "src/bindgen.tr"
-            ({ TrStr _sbt_t4119 = (_tr_str_slicev((text), i, (i + 1LL))); StringBuilder_append(sb, _sbt_t4119); _tr_str_release(_sbt_t4119); });
+            ({ TrStr _sbt_t4226 = (_tr_str_slicev((text), i, (i + 1LL))); StringBuilder_append(sb, _sbt_t4226); _tr_str_release(_sbt_t4226); });
 #line 897 "src/bindgen.tr"
             i = (i + 1LL);
         }
@@ -2274,9 +2274,9 @@ __attribute__((hot)) TrStr _marker_file(TrStr line) {
         return _tr_str_lit_len("", 0LL);
     }
 #line 918 "src/bindgen.tr"
-    TrStr _trret691 = _tr_str_slicev((rest), 0LL, q2);
+    TrStr _trret700 = _tr_str_slicev((rest), 0LL, q2);
     _tr_str_release(rest);
-    return _trret691;
+    return _trret700;
 }
 
 __attribute__((hot)) bool _marker_is_system(TrStr line) {
@@ -2298,9 +2298,9 @@ __attribute__((hot)) bool _marker_is_system(TrStr line) {
         return false;
     }
 #line 931 "src/bindgen.tr"
-    bool _trret692 = (_tr_str_index_ofv((_tr_str_slicev((rest), (q2 + 1LL), _tr_str_lenv((rest)))), (_tr_str_lit_len(" 3", 2LL))) >= 0LL);
+    bool _trret701 = (_tr_str_index_ofv((_tr_str_slicev((rest), (q2 + 1LL), _tr_str_lenv((rest)))), (_tr_str_lit_len(" 3", 2LL))) >= 0LL);
     _tr_str_release(rest);
-    return _trret692;
+    return _trret701;
 }
 
 __attribute__((hot)) TrStr _filter_to_target(TrStr raw, TrStr target) {
@@ -2319,7 +2319,7 @@ __attribute__((hot)) TrStr _filter_to_target(TrStr raw, TrStr target) {
 #line 943 "src/bindgen.tr"
         i = (i + 1LL);
 #line 944 "src/bindgen.tr"
-        if (({ TrStr _cmpa_t4120 = (_marker_file(ln)); TrStr _cmpb_t4121 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4122 = !_tr_str_eqv(_cmpa_t4120, _cmpb_t4121); _tr_str_release(_cmpa_t4120); _cmpr_t4122; })) {
+        if (({ TrStr _cmpa_t4227 = (_marker_file(ln)); TrStr _cmpb_t4228 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4229 = !_tr_str_eqv(_cmpa_t4227, _cmpb_t4228); _tr_str_release(_cmpa_t4227); _cmpr_t4229; })) {
 #line 945 "src/bindgen.tr"
             cur_ok = (!_marker_is_system(ln));
 #line 946 "src/bindgen.tr"
@@ -2336,10 +2336,10 @@ __attribute__((hot)) TrStr _filter_to_target(TrStr raw, TrStr target) {
         _tr_str_release(ln);
     }
 #line 950 "src/bindgen.tr"
-    TrStr _trret693 = StringObj_as_str(StringBuilder_to_string(sb));
+    TrStr _trret702 = StringObj_as_str(StringBuilder_to_string(sb));
     List_TrStr_free(lines);
     StringBuilder__tr_fn_free(sb);
-    return _trret693;
+    return _trret702;
 }
 
 __attribute__((hot)) TrStr _macro_name(TrStr rest) {
@@ -2367,7 +2367,7 @@ __attribute__((hot)) TrMap* _load_baseline(TrStr cc) {
 #line 965 "src/bindgen.tr"
     write_file(_tr_str_lit_len("_bindgen_empty.h", 16LL), _tr_str_lit_len("", 0LL));
 #line 966 "src/bindgen.tr"
-    ({ TrStr _aet_t4123 = (_tr_strx_concatv((cc), (_tr_str_lit_len(" -E -dM \"_bindgen_empty.h\" > \"_bindgen_base.i\" 2>_bindgen_err.txt", 65LL)))); _tr_system(_aet_t4123.data); _tr_str_release(_aet_t4123); });
+    ({ TrStr _aet_t4230 = (_tr_strx_concatv((cc), (_tr_str_lit_len(" -E -dM \"_bindgen_empty.h\" > \"_bindgen_base.i\" 2>_bindgen_err.txt", 65LL)))); _tr_system(_aet_t4230.data); _tr_str_release(_aet_t4230); });
 #line 967 "src/bindgen.tr"
     if ((!file_exists(_tr_str_lit_len("_bindgen_base.i", 15LL)))) {
 #line 967 "src/bindgen.tr"
@@ -2390,7 +2390,7 @@ __attribute__((hot)) TrMap* _load_baseline(TrStr cc) {
             continue;
         }
 #line 974 "src/bindgen.tr"
-        TrStr nm = ({ TrStr _at_t4124 = (_tr_str_slicev((ln), 8LL, _tr_str_lenv((ln)))); __auto_type _wr = (_macro_name(_at_t4124)); _tr_str_release(_at_t4124); _wr; });
+        TrStr nm = ({ TrStr _at_t4231 = (_tr_str_slicev((ln), 8LL, _tr_str_lenv((ln)))); __auto_type _wr = (_macro_name(_at_t4231)); _tr_str_release(_at_t4231); _wr; });
 #line 975 "src/bindgen.tr"
         if ((!_tr_str_eqv((nm), (_tr_str_lit_len("", 0LL))))) {
 #line 975 "src/bindgen.tr"
@@ -2419,7 +2419,7 @@ __attribute__((hot)) TrMap* _target_define_names(TrStr header) {
 #line 985 "src/bindgen.tr"
     while ((i < lines->len)) {
 #line 986 "src/bindgen.tr"
-        TrStr ln = ({ TrStr _at_t4125 = (List_TrStr_get(lines, i)); __auto_type _wr = (_lstrip(_at_t4125)); _tr_str_release(_at_t4125); _wr; });
+        TrStr ln = ({ TrStr _at_t4232 = (List_TrStr_get(lines, i)); __auto_type _wr = (_lstrip(_at_t4232)); _tr_str_release(_at_t4232); _wr; });
 #line 987 "src/bindgen.tr"
         i = (i + 1LL);
 #line 988 "src/bindgen.tr"
@@ -2429,7 +2429,7 @@ __attribute__((hot)) TrMap* _target_define_names(TrStr header) {
             continue;
         }
 #line 989 "src/bindgen.tr"
-        TrStr nm = ({ TrStr _at_t4126 = (_tr_str_slicev((ln), 8LL, _tr_str_lenv((ln)))); __auto_type _wr = (_macro_name(_at_t4126)); _tr_str_release(_at_t4126); _wr; });
+        TrStr nm = ({ TrStr _at_t4233 = (_tr_str_slicev((ln), 8LL, _tr_str_lenv((ln)))); __auto_type _wr = (_macro_name(_at_t4233)); _tr_str_release(_at_t4233); _wr; });
 #line 990 "src/bindgen.tr"
         if ((!_tr_str_eqv((nm), (_tr_str_lit_len("", 0LL))))) {
 #line 990 "src/bindgen.tr"
@@ -2602,23 +2602,23 @@ __attribute__((hot)) TrStr _opaque_fallbacks(TrStr body, TrMap* defined) {
 #line 1064 "src/bindgen.tr"
         if ((c == 58LL)) {
 #line 1065 "src/bindgen.tr"
-            TrStr _strtmp_t4127 = _ident_at(body, (i + 1LL));
+            TrStr _strtmp_t4234 = _ident_at(body, (i + 1LL));
             _tr_str_release(nm);
-            nm = _strtmp_t4127;
+            nm = _strtmp_t4234;
 #line 1065 "src/bindgen.tr"
             i = (i + 1LL);
         } else if ((((c == 45LL) && ((i + 1LL) < n)) && (_tr_str_at((body), (long long)((i + 1LL))) == 62LL))) {
 #line 1067 "src/bindgen.tr"
-            TrStr _strtmp_t4128 = _ident_at(body, (i + 2LL));
+            TrStr _strtmp_t4235 = _ident_at(body, (i + 2LL));
             _tr_str_release(nm);
-            nm = _strtmp_t4128;
+            nm = _strtmp_t4235;
 #line 1067 "src/bindgen.tr"
             i = (i + 2LL);
         } else if ((c == 91LL)) {
 #line 1069 "src/bindgen.tr"
-            TrStr _strtmp_t4129 = _ident_at(body, (i + 1LL));
+            TrStr _strtmp_t4236 = _ident_at(body, (i + 1LL));
             _tr_str_release(nm);
-            nm = _strtmp_t4129;
+            nm = _strtmp_t4236;
 #line 1069 "src/bindgen.tr"
             i = (i + 1LL);
         } else {
@@ -2679,18 +2679,18 @@ __attribute__((hot)) TrStr _opaque_fallbacks(TrStr body, TrMap* defined) {
 #line 1084 "src/bindgen.tr"
     while ((k < order->len)) {
 #line 1085 "src/bindgen.tr"
-        ({ TrStr _sbt_t4130 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (List_TrStr_get(order, k)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("type ", 5LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = Pointer[void]\n", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4130); _tr_str_release(_sbt_t4130); });
+        ({ TrStr _sbt_t4237 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (List_TrStr_get(order, k)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("type ", 5LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = Pointer[void]\n", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4237); _tr_str_release(_sbt_t4237); });
 #line 1086 "src/bindgen.tr"
         k = (k + 1LL);
     }
 #line 1087 "src/bindgen.tr"
     StringBuilder_append(sb, _tr_str_lit_len("\n", 1LL));
 #line 1088 "src/bindgen.tr"
-    TrStr _trret694 = StringObj_as_str(StringBuilder_to_string(sb));
+    TrStr _trret703 = StringObj_as_str(StringBuilder_to_string(sb));
     Dict_free(want);
     List_TrStr_free(order);
     StringBuilder__tr_fn_free(sb);
-    return _trret694;
+    return _trret703;
 }
 
 __attribute__((hot)) bool _is_single_string_literal(TrStr val) {
@@ -2859,7 +2859,7 @@ __attribute__((hot)) void emit_defines(Bindgen* bg, TrStr defs, TrMap* baseline,
             continue;
         }
 #line 1149 "src/bindgen.tr"
-        TrStr val = ({ TrStr _at_t4131 = (_tr_str_slicev((rest), (sp + 1LL), _tr_str_lenv((rest)))); __auto_type _wr = (_lstrip(_at_t4131)); _tr_str_release(_at_t4131); _wr; });
+        TrStr val = ({ TrStr _at_t4238 = (_tr_str_slicev((rest), (sp + 1LL), _tr_str_lenv((rest)))); __auto_type _wr = (_lstrip(_at_t4238)); _tr_str_release(_at_t4238); _wr; });
 #line 1150 "src/bindgen.tr"
         if ((_tr_str_lenv((val)) == 0LL)) {
 #line 1150 "src/bindgen.tr"
@@ -2876,7 +2876,7 @@ __attribute__((hot)) void emit_defines(Bindgen* bg, TrStr defs, TrMap* baseline,
 #line 1156 "src/bindgen.tr"
             if (_is_single_string_literal(val)) {
 #line 1157 "src/bindgen.tr"
-                ({ TrStr _sbt_t4132 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), (nm))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (val)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(bg->consts, _sbt_t4132); _tr_str_release(_sbt_t4132); });
+                ({ TrStr _sbt_t4239 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), (nm))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (val)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(bg->consts, _sbt_t4239); _tr_str_release(_sbt_t4239); });
             }
         } else if ((((c0 >= 48LL) && (c0 <= 57LL)) || (c0 == 45LL))) {
 #line 1160 "src/bindgen.tr"
@@ -2884,7 +2884,7 @@ __attribute__((hot)) void emit_defines(Bindgen* bg, TrStr defs, TrMap* baseline,
 #line 1161 "src/bindgen.tr"
                 long long iv = _to_int(val);
 #line 1162 "src/bindgen.tr"
-                ({ TrStr _ord_t4133 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), (nm))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": c_int = ", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(iv)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(bg->consts, _ord_t4133); _tr_str_release(_ord_t4133); });
+                ({ TrStr _ord_t4240 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), (nm))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": c_int = ", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(iv)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(bg->consts, _ord_t4240); _tr_str_release(_ord_t4240); });
             }
         }
         _tr_str_release(ln);
@@ -2931,14 +2931,14 @@ __attribute__((hot)) TrStr _macro_args(long long n, long long mode, long long at
 #line 1192 "src/bindgen.tr"
                 if ((!first)) {
 #line 1192 "src/bindgen.tr"
-                    TrStr _strtmp_t4135 = _tr_strx_concatv((s), (_tr_str_lit_len(", ", 2LL)));
+                    TrStr _strtmp_t4242 = _tr_strx_concatv((s), (_tr_str_lit_len(", ", 2LL)));
                     _tr_str_release(s);
-                    s = _strtmp_t4135;
+                    s = _strtmp_t4242;
                 }
 #line 1193 "src/bindgen.tr"
-                TrStr _strtmp_t4137 = _tr_strx_concatv((s), (_tr_str_lit_len("char", 4LL)));
+                TrStr _strtmp_t4244 = _tr_strx_concatv((s), (_tr_str_lit_len("char", 4LL)));
                 _tr_str_release(s);
-                s = _strtmp_t4137;
+                s = _strtmp_t4244;
 #line 1194 "src/bindgen.tr"
                 first = false;
             }
@@ -2950,9 +2950,9 @@ __attribute__((hot)) TrStr _macro_args(long long n, long long mode, long long at
 #line 1197 "src/bindgen.tr"
         if ((!first)) {
 #line 1197 "src/bindgen.tr"
-            TrStr _strtmp_t4139 = _tr_strx_concatv((s), (_tr_str_lit_len(", ", 2LL)));
+            TrStr _strtmp_t4246 = _tr_strx_concatv((s), (_tr_str_lit_len(", ", 2LL)));
             _tr_str_release(s);
-            s = _strtmp_t4139;
+            s = _strtmp_t4246;
         }
 #line 1198 "src/bindgen.tr"
         first = false;
@@ -2961,41 +2961,41 @@ __attribute__((hot)) TrStr _macro_args(long long n, long long mode, long long at
 #line 1200 "src/bindgen.tr"
             if ((atype == 0LL)) {
 #line 1200 "src/bindgen.tr"
-                TrStr _strtmp_t4142 = ({ TrStr _tr_cl = (_tr_strx_concatv((s), (_tr_str_lit_len("void* a", 7LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; });
+                TrStr _strtmp_t4249 = ({ TrStr _tr_cl = (_tr_strx_concatv((s), (_tr_str_lit_len("void* a", 7LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; });
                 _tr_str_release(s);
-                s = _strtmp_t4142;
+                s = _strtmp_t4249;
             } else {
 #line 1201 "src/bindgen.tr"
-                TrStr _strtmp_t4145 = ({ TrStr _tr_cl = (_tr_strx_concatv((s), (_tr_str_lit_len("intptr_t a", 10LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; });
+                TrStr _strtmp_t4252 = ({ TrStr _tr_cl = (_tr_strx_concatv((s), (_tr_str_lit_len("intptr_t a", 10LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; });
                 _tr_str_release(s);
-                s = _strtmp_t4145;
+                s = _strtmp_t4252;
             }
         } else if ((mode == 1LL)) {
 #line 1203 "src/bindgen.tr"
-            TrStr _strtmp_t4148 = ({ TrStr _tr_cl = (_tr_strx_concatv((s), (_tr_str_lit_len("a", 1LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; });
+            TrStr _strtmp_t4255 = ({ TrStr _tr_cl = (_tr_strx_concatv((s), (_tr_str_lit_len("a", 1LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; });
             _tr_str_release(s);
-            s = _strtmp_t4148;
+            s = _strtmp_t4255;
         } else {
 #line 1205 "src/bindgen.tr"
             if ((atype == 0LL)) {
 #line 1205 "src/bindgen.tr"
-                TrStr _strtmp_t4152 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((s), (_tr_str_lit_len("a", 1LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": Pointer[void]", 15LL))); _tr_str_release(_tr_cl); _tr_cres; });
+                TrStr _strtmp_t4259 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((s), (_tr_str_lit_len("a", 1LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": Pointer[void]", 15LL))); _tr_str_release(_tr_cl); _tr_cres; });
                 _tr_str_release(s);
-                s = _strtmp_t4152;
+                s = _strtmp_t4259;
             } else {
 #line 1206 "src/bindgen.tr"
-                TrStr _strtmp_t4156 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((s), (_tr_str_lit_len("a", 1LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": c_intptr_t", 12LL))); _tr_str_release(_tr_cl); _tr_cres; });
+                TrStr _strtmp_t4263 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((s), (_tr_str_lit_len("a", 1LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": c_intptr_t", 12LL))); _tr_str_release(_tr_cl); _tr_cres; });
                 _tr_str_release(s);
-                s = _strtmp_t4156;
+                s = _strtmp_t4263;
             }
         }
 #line 1207 "src/bindgen.tr"
         i = (i + 1LL);
     }
 #line 1208 "src/bindgen.tr"
-    TrStr _trret695 = _tr_str_retain(s);
+    TrStr _trret704 = _tr_str_retain(s);
     _tr_str_release(s);
-    return _trret695;
+    return _trret704;
 }
 
 __attribute__((hot)) TrStr _ent_name(TrStr e) {
@@ -3005,25 +3005,25 @@ __attribute__((hot)) TrStr _ent_name(TrStr e) {
 
 __attribute__((hot)) long long _ent_arity(TrStr e) {
 #line 1215 "src/bindgen.tr"
-    TrStr r = ({ __auto_type _ord_t4157 = ((_tr_str_index_ofv((e), (_tr_str_lit_len("|", 1LL))) + 1LL)); __auto_type _ord_t4158 = (_tr_str_lenv((e))); __auto_type _wr = (_tr_str_slicev((e), _ord_t4157, _ord_t4158)); _wr; });
+    TrStr r = ({ __auto_type _ord_t4264 = ((_tr_str_index_ofv((e), (_tr_str_lit_len("|", 1LL))) + 1LL)); __auto_type _ord_t4265 = (_tr_str_lenv((e))); __auto_type _wr = (_tr_str_slicev((e), _ord_t4264, _ord_t4265)); _wr; });
 #line 1216 "src/bindgen.tr"
     long long b = _tr_str_index_ofv((r), (_tr_str_lit_len("|", 1LL)));
 #line 1217 "src/bindgen.tr"
     if ((b < 0LL)) {
 #line 1217 "src/bindgen.tr"
-        long long _trret696 = _to_int(r);
+        long long _trret705 = _to_int(r);
         _tr_str_release(r);
-        return _trret696;
+        return _trret705;
     }
 #line 1218 "src/bindgen.tr"
-    long long _trret697 = ({ TrStr _at_t4159 = (_tr_str_slicev((r), 0LL, b)); __auto_type _wr = (_to_int(_at_t4159)); _tr_str_release(_at_t4159); _wr; });
+    long long _trret706 = ({ TrStr _at_t4266 = (_tr_str_slicev((r), 0LL, b)); __auto_type _wr = (_to_int(_at_t4266)); _tr_str_release(_at_t4266); _wr; });
     _tr_str_release(r);
-    return _trret697;
+    return _trret706;
 }
 
 __attribute__((hot)) long long _ent_typepos(TrStr e) {
 #line 1220 "src/bindgen.tr"
-    TrStr r = ({ __auto_type _ord_t4160 = ((_tr_str_index_ofv((e), (_tr_str_lit_len("|", 1LL))) + 1LL)); __auto_type _ord_t4161 = (_tr_str_lenv((e))); __auto_type _wr = (_tr_str_slicev((e), _ord_t4160, _ord_t4161)); _wr; });
+    TrStr r = ({ __auto_type _ord_t4267 = ((_tr_str_index_ofv((e), (_tr_str_lit_len("|", 1LL))) + 1LL)); __auto_type _ord_t4268 = (_tr_str_lenv((e))); __auto_type _wr = (_tr_str_slicev((e), _ord_t4267, _ord_t4268)); _wr; });
 #line 1221 "src/bindgen.tr"
     long long b = _tr_str_index_ofv((r), (_tr_str_lit_len("|", 1LL)));
 #line 1222 "src/bindgen.tr"
@@ -3033,9 +3033,9 @@ __attribute__((hot)) long long _ent_typepos(TrStr e) {
         return (-1LL);
     }
 #line 1223 "src/bindgen.tr"
-    long long _trret698 = ({ TrStr _at_t4162 = (_tr_str_slicev((r), (b + 1LL), _tr_str_lenv((r)))); __auto_type _wr = (_to_int(_at_t4162)); _tr_str_release(_at_t4162); _wr; });
+    long long _trret707 = ({ TrStr _at_t4269 = (_tr_str_slicev((r), (b + 1LL), _tr_str_lenv((r)))); __auto_type _wr = (_to_int(_at_t4269)); _tr_str_release(_at_t4269); _wr; });
     _tr_str_release(r);
-    return _trret698;
+    return _trret707;
 }
 
 __attribute__((hot)) bool _is_ident_ch(long long c) {
@@ -3056,7 +3056,7 @@ __attribute__((hot)) bool _param_ptr_type(TrStr body, TrStr pname) {
 #line 1235 "src/bindgen.tr"
     while (((i + plen) <= _tr_str_lenv((body)))) {
 #line 1236 "src/bindgen.tr"
-        if (({ TrStr _cmpa_t4163 = (_tr_str_slicev((body), i, (i + plen))); TrStr _cmpb_t4164 = (pname); _Bool _cmpr_t4165 = _tr_str_eqv(_cmpa_t4163, _cmpb_t4164); _tr_str_release(_cmpa_t4163); _cmpr_t4165; })) {
+        if (({ TrStr _cmpa_t4270 = (_tr_str_slicev((body), i, (i + plen))); TrStr _cmpb_t4271 = (pname); _Bool _cmpr_t4272 = _tr_str_eqv(_cmpa_t4270, _cmpb_t4271); _tr_str_release(_cmpa_t4270); _cmpr_t4272; })) {
 #line 1237 "src/bindgen.tr"
             bool okb = true;
 #line 1238 "src/bindgen.tr"
@@ -3212,7 +3212,7 @@ __attribute__((hot)) List_TrStr* _collect_fn_macros(TrStr defs, TrMap* baseline)
             continue;
         }
 #line 1286 "src/bindgen.tr"
-        TrStr body = ({ TrStr _at_t4166 = (_tr_str_slicev((rest), (_tr_v_close + 1LL), _tr_str_lenv((rest)))); __auto_type _wr = (_lstrip(_at_t4166)); _tr_str_release(_at_t4166); _wr; });
+        TrStr body = ({ TrStr _at_t4273 = (_tr_str_slicev((rest), (_tr_v_close + 1LL), _tr_str_lenv((rest)))); __auto_type _wr = (_lstrip(_at_t4273)); _tr_str_release(_at_t4273); _wr; });
 #line 1287 "src/bindgen.tr"
         if (_tr_str_eqv((body), (_tr_str_lit_len("", 0LL)))) {
 #line 1287 "src/bindgen.tr"
@@ -3299,7 +3299,7 @@ __attribute__((hot)) List_TrStr* _collect_fn_macros(TrStr defs, TrMap* baseline)
 #line 1314 "src/bindgen.tr"
         _tr_dict_set(seen, _tr_strz(nm), true);
 #line 1315 "src/bindgen.tr"
-        ({ __auto_type _ord_t4167 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((nm), (_tr_str_lit_len("|", 1LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(arity)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("|", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t4168 = (({ TrStr _tr_cl = (_ord_t4167); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(typepos)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); List_TrStr_append(out, _at_t4168); _tr_str_release(_at_t4168); });
+        ({ __auto_type _ord_t4274 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((nm), (_tr_str_lit_len("|", 1LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(arity)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("|", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t4275 = (({ TrStr _tr_cl = (_ord_t4274); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(typepos)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); List_TrStr_append(out, _at_t4275); _tr_str_release(_at_t4275); });
         _tr_str_release(ln);
         _tr_str_release(rest);
         _tr_str_release(nm);
@@ -3342,7 +3342,7 @@ __attribute__((hot)) TrMap* _macro_bad_names(TrStr errtxt) {
             continue;
         }
 #line 1336 "src/bindgen.tr"
-        TrStr after = ({ __auto_type _ord_t4169 = ((fp + _tr_str_lenv((key)))); __auto_type _ord_t4170 = (_tr_str_lenv((ln))); __auto_type _wr = (_tr_str_slicev((ln), _ord_t4169, _ord_t4170)); _wr; });
+        TrStr after = ({ __auto_type _ord_t4276 = ((fp + _tr_str_lenv((key)))); __auto_type _ord_t4277 = (_tr_str_lenv((ln))); __auto_type _wr = (_tr_str_slicev((ln), _ord_t4276, _ord_t4277)); _wr; });
 #line 1337 "src/bindgen.tr"
         long long q1 = _tr_str_index_ofv((after), (_tr_str_lit_len("'", 1LL)));
 #line 1338 "src/bindgen.tr"
@@ -3386,17 +3386,17 @@ __attribute__((hot)) TrStr _macro_shim_line(TrStr sym, TrStr nm, long long ar, l
 #line 1352 "src/bindgen.tr"
     if ((form == 0LL)) {
 #line 1353 "src/bindgen.tr"
-        return ({ __auto_type _ord_t4171 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("void* ", 6LL)), (sym))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_macro_args(ar, 0LL, atype, tp)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("){ return (void*)(intptr_t)(", 28LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (nm)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4171); TrStr _tr_cr = (_macro_args(ar, 1LL, atype, tp)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")); }\n", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+        return ({ __auto_type _ord_t4278 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("void* ", 6LL)), (sym))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_macro_args(ar, 0LL, atype, tp)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("){ return (void*)(intptr_t)(", 28LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (nm)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4278); TrStr _tr_cr = (_macro_args(ar, 1LL, atype, tp)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")); }\n", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
     }
 #line 1357 "src/bindgen.tr"
-    return ({ __auto_type _ord_t4172 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("void ", 5LL)), (sym))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_macro_args(ar, 0LL, atype, tp)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("){ ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (nm)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4172); TrStr _tr_cr = (_macro_args(ar, 1LL, atype, tp)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+    return ({ __auto_type _ord_t4279 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("void ", 5LL)), (sym))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_macro_args(ar, 0LL, atype, tp)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("){ ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (nm)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4279); TrStr _tr_cr = (_macro_args(ar, 1LL, atype, tp)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
 }
 
 __attribute__((hot)) List_TrStr* _macro_probe_write(TrStr header, List_TrStr* macros, TrMap* cand, long long form, long long atype, bool bake) {
 #line 1362 "src/bindgen.tr"
     StringBuilder* probe = StringBuilder_init(8192LL);
 #line 1363 "src/bindgen.tr"
-    ({ TrStr _sbt_t4173 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("#include \"", 10LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\"\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(probe, _sbt_t4173); _tr_str_release(_sbt_t4173); });
+    ({ TrStr _sbt_t4280 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("#include \"", 10LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\"\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(probe, _sbt_t4280); _tr_str_release(_sbt_t4280); });
 #line 1364 "src/bindgen.tr"
     StringBuilder_append(probe, _tr_str_lit_len("#include <stdint.h>\n", 20LL));
 #line 1365 "src/bindgen.tr"
@@ -3433,14 +3433,14 @@ __attribute__((hot)) List_TrStr* _macro_probe_write(TrStr header, List_TrStr* ma
             }
         }
 #line 1376 "src/bindgen.tr"
-        ({ TrStr _at_t4174 = (_tr_strx_concatv((_tr_str_lit_len("mP_", 3LL)), (nm))); TrStr _sbt_t4175 = (_macro_shim_line(_at_t4174, nm, _ent_arity(ent), form, atype, tp)); StringBuilder_append(probe, _sbt_t4175); _tr_str_release(_at_t4174); _tr_str_release(_sbt_t4175); });
+        ({ TrStr _at_t4281 = (_tr_strx_concatv((_tr_str_lit_len("mP_", 3LL)), (nm))); TrStr _sbt_t4282 = (_macro_shim_line(_at_t4281, nm, _ent_arity(ent), form, atype, tp)); StringBuilder_append(probe, _sbt_t4282); _tr_str_release(_at_t4281); _tr_str_release(_sbt_t4282); });
 #line 1377 "src/bindgen.tr"
         List_TrStr_append(order, nm);
         _tr_str_release(ent);
         _tr_str_release(nm);
     }
 #line 1378 "src/bindgen.tr"
-    ({ TrStr _at_t4176 = (StringObj_as_str(StringBuilder_to_string(probe))); write_file(_tr_str_lit_len("_macroprobe.c", 13LL), _at_t4176); _tr_str_release(_at_t4176); });
+    ({ TrStr _at_t4283 = (StringObj_as_str(StringBuilder_to_string(probe))); write_file(_tr_str_lit_len("_macroprobe.c", 13LL), _at_t4283); _tr_str_release(_at_t4283); });
 #line 1379 "src/bindgen.tr"
     StringBuilder__tr_fn_free(probe);
     return order;
@@ -3450,15 +3450,15 @@ __attribute__((hot)) TrMap* _macro_form_bad(TrStr header, List_TrStr* macros, Tr
 #line 1388 "src/bindgen.tr"
     List_TrStr* order = _macro_probe_write(header, macros, cand, form, atype, bake);
 #line 1389 "src/bindgen.tr"
-    ({ TrStr _aet_t4177 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((cxx), (_tr_str_lit_len(" -std=c++17 -fsyntax-only -fmax-errors=0 -fpermissive -w ", 57LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (extra)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" _macroprobe.c > _macroprobe.err 2>&1", 37LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4177.data); _tr_str_release(_aet_t4177); });
+    ({ TrStr _aet_t4284 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((cxx), (_tr_str_lit_len(" -std=c++17 -fsyntax-only -fmax-errors=0 -fpermissive -w ", 57LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (extra)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" _macroprobe.c > _macroprobe.err 2>&1", 37LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4284.data); _tr_str_release(_aet_t4284); });
 #line 1390 "src/bindgen.tr"
     TrStr errtxt = _tr_str_lit_len("", 0LL);
 #line 1391 "src/bindgen.tr"
     if (file_exists(_tr_str_lit_len("_macroprobe.err", 15LL))) {
 #line 1391 "src/bindgen.tr"
-        TrStr _strtmp_t4178 = read_file(_tr_str_lit_len("_macroprobe.err", 15LL));
+        TrStr _strtmp_t4285 = read_file(_tr_str_lit_len("_macroprobe.err", 15LL));
         _tr_str_release(errtxt);
-        errtxt = _strtmp_t4178;
+        errtxt = _strtmp_t4285;
     }
 #line 1392 "src/bindgen.tr"
     TrMap* bad = _macro_bad_names(errtxt);
@@ -3507,7 +3507,7 @@ __attribute__((hot)) TrMap* _macro_form_bad(TrStr header, List_TrStr* macros, Tr
             continue;
         }
 #line 1405 "src/bindgen.tr"
-        TrStr after = ({ __auto_type _ord_t4179 = ((fp + _tr_str_lenv((key)))); __auto_type _ord_t4180 = (_tr_str_lenv((ln))); __auto_type _wr = (_tr_str_slicev((ln), _ord_t4179, _ord_t4180)); _wr; });
+        TrStr after = ({ __auto_type _ord_t4286 = ((fp + _tr_str_lenv((key)))); __auto_type _ord_t4287 = (_tr_str_lenv((ln))); __auto_type _wr = (_tr_str_slicev((ln), _ord_t4286, _ord_t4287)); _wr; });
 #line 1406 "src/bindgen.tr"
         long long colon = _tr_str_index_ofv((after), (_tr_str_lit_len(":", 1LL)));
 #line 1407 "src/bindgen.tr"
@@ -3518,11 +3518,11 @@ __attribute__((hot)) TrMap* _macro_form_bad(TrStr header, List_TrStr* macros, Tr
             continue;
         }
 #line 1408 "src/bindgen.tr"
-        long long idx = ({ TrStr _at_t4181 = (_tr_str_slicev((after), 0LL, colon)); __auto_type _wr = ((_to_int(_at_t4181) - 3LL)); _tr_str_release(_at_t4181); _wr; });
+        long long idx = ({ TrStr _at_t4288 = (_tr_str_slicev((after), 0LL, colon)); __auto_type _wr = ((_to_int(_at_t4288) - 3LL)); _tr_str_release(_at_t4288); _wr; });
 #line 1409 "src/bindgen.tr"
         if (((idx >= 0LL) && (idx < order->len))) {
 #line 1409 "src/bindgen.tr"
-            ({ TrStr _dkt_t4182 = (List_TrStr_get(order, idx)); _tr_dict_set(bad, _tr_strz(_dkt_t4182), true); _tr_str_release(_dkt_t4182); });
+            ({ TrStr _dkt_t4289 = (List_TrStr_get(order, idx)); _tr_dict_set(bad, _tr_strz(_dkt_t4289), true); _tr_str_release(_dkt_t4289); });
         }
         _tr_str_release(ln);
         _tr_str_release(after);
@@ -3668,9 +3668,9 @@ __attribute__((hot)) void _macro_pass(TrStr header, List_TrStr* macros, TrMap* d
 #line 1468 "src/bindgen.tr"
     if (bake) {
 #line 1468 "src/bindgen.tr"
-        TrStr _strtmp_t4183 = _tr_str_lit_len("1", 1LL);
+        TrStr _strtmp_t4290 = _tr_str_lit_len("1", 1LL);
         _tr_str_release(bk);
-        bk = _strtmp_t4183;
+        bk = _strtmp_t4290;
     }
 #line 1469 "src/bindgen.tr"
     long long k = 0LL;
@@ -3687,7 +3687,7 @@ __attribute__((hot)) void _macro_pass(TrStr header, List_TrStr* macros, TrMap* d
 #line 1475 "src/bindgen.tr"
             _tr_dict_set(done, _tr_strz(nm), true);
 #line 1476 "src/bindgen.tr"
-            ({ __auto_type _ord_t4184 = (({ TrStr _tr_cl = (_tr_str_wrap(_tr_int_to_str((long long)(form)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("|", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _dvt_t4185 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4184); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(atype)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("|", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (bk)); _tr_str_release(_tr_cl); _tr_cres; })); _tr_dict_set_str(plan, _tr_strz(nm), _tr_str_box(_tr_str_retain(_dvt_t4185))); _tr_str_release(_dvt_t4185); });
+            ({ __auto_type _ord_t4291 = (({ TrStr _tr_cl = (_tr_str_wrap(_tr_int_to_str((long long)(form)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("|", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _dvt_t4292 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4291); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(atype)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("|", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (bk)); _tr_str_release(_tr_cl); _tr_cres; })); _tr_dict_set_str(plan, _tr_strz(nm), _tr_str_box(_tr_str_retain(_dvt_t4292))); _tr_str_release(_dvt_t4292); });
         }
         _tr_str_release(ent);
         _tr_str_release(nm);
@@ -3725,9 +3725,9 @@ __attribute__((hot)) TrStr _gen_macro_shims(TrStr header, TrStr out, List_TrStr*
 #line 1501 "src/bindgen.tr"
     StringBuilder* shim = StringBuilder_init(8192LL);
 #line 1502 "src/bindgen.tr"
-    ({ TrStr _sbt_t4186 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("// Auto-generated macro shims for ", 34LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" (tauraro-bindgen --macros).\n", 29LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4186); _tr_str_release(_sbt_t4186); });
+    ({ TrStr _sbt_t4293 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("// Auto-generated macro shims for ", 34LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" (tauraro-bindgen --macros).\n", 29LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4293); _tr_str_release(_sbt_t4293); });
 #line 1503 "src/bindgen.tr"
-    ({ TrStr _sbt_t4187 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("#include \"", 10LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\"\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4187); _tr_str_release(_sbt_t4187); });
+    ({ TrStr _sbt_t4294 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("#include \"", 10LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\"\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4294); _tr_str_release(_sbt_t4294); });
 #line 1504 "src/bindgen.tr"
     StringBuilder_append(shim, _tr_str_lit_len("#include <stdint.h>\n", 20LL));
 #line 1505 "src/bindgen.tr"
@@ -3762,27 +3762,27 @@ __attribute__((hot)) TrStr _gen_macro_shims(TrStr header, TrStr out, List_TrStr*
 #line 1517 "src/bindgen.tr"
         List_TrStr* spec = _tr_str_splitv((_tr_str_retain(_tr_str_unbox(_tr_dict_get(plan, _tr_strz(nm))))), (_tr_str_lit_len("|", 1LL)));
 #line 1518 "src/bindgen.tr"
-        long long form = ({ TrStr _at_t4188 = (List_TrStr_get(spec, 0LL)); __auto_type _wr = (_to_int(_at_t4188)); _tr_str_release(_at_t4188); _wr; });
+        long long form = ({ TrStr _at_t4295 = (List_TrStr_get(spec, 0LL)); __auto_type _wr = (_to_int(_at_t4295)); _tr_str_release(_at_t4295); _wr; });
 #line 1519 "src/bindgen.tr"
-        long long atype = ({ TrStr _at_t4189 = (List_TrStr_get(spec, 1LL)); __auto_type _wr = (_to_int(_at_t4189)); _tr_str_release(_at_t4189); _wr; });
+        long long atype = ({ TrStr _at_t4296 = (List_TrStr_get(spec, 1LL)); __auto_type _wr = (_to_int(_at_t4296)); _tr_str_release(_at_t4296); _wr; });
 #line 1520 "src/bindgen.tr"
         long long tp = (0LL - 1LL);
 #line 1521 "src/bindgen.tr"
-        if (({ TrStr _cmpa_t4190 = (List_TrStr_get(spec, 2LL)); TrStr _cmpb_t4191 = (_tr_str_lit_len("1", 1LL)); _Bool _cmpr_t4192 = _tr_str_eqv(_cmpa_t4190, _cmpb_t4191); _tr_str_release(_cmpa_t4190); _cmpr_t4192; })) {
+        if (({ TrStr _cmpa_t4297 = (List_TrStr_get(spec, 2LL)); TrStr _cmpb_t4298 = (_tr_str_lit_len("1", 1LL)); _Bool _cmpr_t4299 = _tr_str_eqv(_cmpa_t4297, _cmpb_t4298); _tr_str_release(_cmpa_t4297); _cmpr_t4299; })) {
 #line 1521 "src/bindgen.tr"
             tp = _ent_typepos(ent);
         }
 #line 1522 "src/bindgen.tr"
-        ({ TrStr _at_t4193 = (_tr_strx_concatv((_tr_str_lit_len("m_", 2LL)), (nm))); TrStr _sbt_t4194 = (_macro_shim_line(_at_t4193, nm, ar, form, atype, tp)); StringBuilder_append(shim, _sbt_t4194); _tr_str_release(_at_t4193); _tr_str_release(_sbt_t4194); });
+        ({ TrStr _at_t4300 = (_tr_strx_concatv((_tr_str_lit_len("m_", 2LL)), (nm))); TrStr _sbt_t4301 = (_macro_shim_line(_at_t4300, nm, ar, form, atype, tp)); StringBuilder_append(shim, _sbt_t4301); _tr_str_release(_at_t4300); _tr_str_release(_sbt_t4301); });
 #line 1523 "src/bindgen.tr"
         TrStr bl = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    def m_", 10LL)), (nm))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_macro_args(ar, 2LL, atype, tp)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
 #line 1524 "src/bindgen.tr"
         if ((form == 0LL)) {
 #line 1524 "src/bindgen.tr"
-            ({ TrStr _ap_t4195 = (_tr_str_lit_len(" -> Pointer[void]", 17LL)); _tr_str_append(&bl, _ap_t4195); });
+            ({ TrStr _ap_t4302 = (_tr_str_lit_len(" -> Pointer[void]", 17LL)); _tr_str_append(&bl, _ap_t4302); });
         }
 #line 1525 "src/bindgen.tr"
-        ({ TrStr _sbt_t4196 = (_tr_strx_concatv((bl), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(binds, _sbt_t4196); _tr_str_release(_sbt_t4196); });
+        ({ TrStr _sbt_t4303 = (_tr_strx_concatv((bl), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(binds, _sbt_t4303); _tr_str_release(_sbt_t4303); });
 #line 1526 "src/bindgen.tr"
         kept = (kept + 1LL);
 #line 1527 "src/bindgen.tr"
@@ -3805,12 +3805,13 @@ __attribute__((hot)) TrStr _gen_macro_shims(TrStr header, TrStr out, List_TrStr*
 #line 1530 "src/bindgen.tr"
     if ((kept == 0LL)) {
 #line 1530 "src/bindgen.tr"
+        StringBuilder__tr_fn_free(shim);
         return _tr_str_lit_len("", 0LL);
     }
 #line 1531 "src/bindgen.tr"
-    ({ TrStr _at_t4197 = (_tr_strx_concatv((out), (_tr_str_lit_len("_macros.c", 9LL)))); TrStr _at_t4198 = (StringObj_as_str(StringBuilder_to_string(shim))); write_file(_at_t4197, _at_t4198); _tr_str_release(_at_t4197); _tr_str_release(_at_t4198); });
+    ({ TrStr _at_t4304 = (_tr_strx_concatv((out), (_tr_str_lit_len("_macros.c", 9LL)))); TrStr _at_t4305 = (StringObj_as_str(StringBuilder_to_string(shim))); write_file(_at_t4304, _at_t4305); _tr_str_release(_at_t4304); _tr_str_release(_at_t4305); });
 #line 1532 "src/bindgen.tr"
-    ({ __auto_type _ord_t4199 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(kept)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("bindgen: macro shims: ", 22LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" of ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t4200 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4199); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(n_total)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" function-like macros bound (", 29LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t4201 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4200); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(n_ip)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" intptr, ", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); ({ ({ TrStr _ps = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4201); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(n_te)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" type-erased) -> ", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (out)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_macros.c (m_<NAME>)", 20LL))); _tr_str_release(_tr_cl); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); }); });
+    ({ __auto_type _ord_t4306 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(kept)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("bindgen: macro shims: ", 22LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" of ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t4307 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4306); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(n_total)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" function-like macros bound (", 29LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t4308 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4307); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(n_ip)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" intptr, ", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); ({ ({ TrStr _ps = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4308); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(n_te)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" type-erased) -> ", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (out)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_macros.c (m_<NAME>)", 20LL))); _tr_str_release(_tr_cl); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); }); });
 #line 1533 "src/bindgen.tr"
     StringBuilder__tr_fn_free(shim);
     return StringObj_as_str(StringBuilder_to_string(binds));
@@ -3822,9 +3823,9 @@ __attribute__((hot)) void run_bindgen(TrStr header, TrStr out, TrStr cc, TrStr e
 #line 1537 "src/bindgen.tr"
     TrStr tmp_defs = _tr_str_lit_len("_bindgen_defs.i", 15LL);
 #line 1540 "src/bindgen.tr"
-    ({ TrStr _aet_t4202 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((cc), (extra))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" -E \"", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (header)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" > \"", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tmp_decls)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" 2>_bindgen_err.txt", 20LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4202.data); _tr_str_release(_aet_t4202); });
+    ({ TrStr _aet_t4309 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((cc), (extra))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" -E \"", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (header)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" > \"", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tmp_decls)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" 2>_bindgen_err.txt", 20LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4309.data); _tr_str_release(_aet_t4309); });
 #line 1541 "src/bindgen.tr"
-    ({ TrStr _aet_t4203 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((cc), (extra))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" -E -dM \"", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (header)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" > \"", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tmp_defs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" 2>>_bindgen_err.txt", 21LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4203.data); _tr_str_release(_aet_t4203); });
+    ({ TrStr _aet_t4310 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((cc), (extra))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" -E -dM \"", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (header)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" > \"", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tmp_defs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" 2>>_bindgen_err.txt", 21LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4310.data); _tr_str_release(_aet_t4310); });
 #line 1542 "src/bindgen.tr"
     if ((!file_exists(tmp_decls))) {
 #line 1543 "src/bindgen.tr"
@@ -3835,7 +3836,7 @@ __attribute__((hot)) void run_bindgen(TrStr header, TrStr out, TrStr cc, TrStr e
         return;
     }
 #line 1545 "src/bindgen.tr"
-    TrStr src = ({ TrStr _at_t4204 = (read_file(tmp_decls)); __auto_type _wr = (_filter_to_target(_at_t4204, header)); _tr_str_release(_at_t4204); _wr; });
+    TrStr src = ({ TrStr _at_t4311 = (read_file(tmp_decls)); __auto_type _wr = (_filter_to_target(_at_t4311, header)); _tr_str_release(_at_t4311); _wr; });
 #line 1546 "src/bindgen.tr"
     List_ptr* toks = tokenize_c(src);
 #line 1547 "src/bindgen.tr"
@@ -3845,7 +3846,7 @@ __attribute__((hot)) void run_bindgen(TrStr header, TrStr out, TrStr cc, TrStr e
 #line 1549 "src/bindgen.tr"
     TrMap* baseline = _load_baseline(cc);
 #line 1550 "src/bindgen.tr"
-    ({ TrStr _at_t4205 = (read_file(tmp_defs)); emit_defines(bg, _at_t4205, baseline, _target_define_names(header)); _tr_str_release(_at_t4205); });
+    ({ TrStr _at_t4312 = (read_file(tmp_defs)); emit_defines(bg, _at_t4312, baseline, _target_define_names(header)); _tr_str_release(_at_t4312); });
 #line 1551 "src/bindgen.tr"
     TrStr macro_binds = _tr_str_lit_len("", 0LL);
 #line 1552 "src/bindgen.tr"
@@ -3853,32 +3854,32 @@ __attribute__((hot)) void run_bindgen(TrStr header, TrStr out, TrStr cc, TrStr e
 #line 1553 "src/bindgen.tr"
     if (want_macros) {
 #line 1554 "src/bindgen.tr"
-        TrStr _strtmp_t4209 = ({ TrStr _at_t4206 = (read_file(tmp_defs)); __auto_type _ord_t4208 = (_collect_fn_macros(_at_t4206, baseline)); TrStr _at_t4207 = (_cxx_of(cc)); __auto_type _wr = (_gen_macro_shims(header, out, _ord_t4208, _at_t4207, extra)); _tr_str_release(_at_t4206); _tr_str_release(_at_t4207); _wr; });
+        TrStr _strtmp_t4316 = ({ TrStr _at_t4313 = (read_file(tmp_defs)); __auto_type _ord_t4315 = (_collect_fn_macros(_at_t4313, baseline)); TrStr _at_t4314 = (_cxx_of(cc)); __auto_type _wr = (_gen_macro_shims(header, out, _ord_t4315, _at_t4314, extra)); _tr_str_release(_at_t4313); _tr_str_release(_at_t4314); _wr; });
         _tr_str_release(macro_binds);
-        macro_binds = _strtmp_t4209;
+        macro_binds = _strtmp_t4316;
 #line 1555 "src/bindgen.tr"
         if ((!_tr_str_eqv((macro_binds), (_tr_str_lit_len("", 0LL))))) {
 #line 1555 "src/bindgen.tr"
-            TrStr _strtmp_t4210 = ({ TrStr _tr_cl = (_basename(out)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_macros.c", 9LL))); _tr_str_release(_tr_cl); _tr_cres; });
+            TrStr _strtmp_t4317 = ({ TrStr _tr_cl = (_basename(out)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_macros.c", 9LL))); _tr_str_release(_tr_cl); _tr_cres; });
             _tr_str_release(macro_shim);
-            macro_shim = _strtmp_t4210;
+            macro_shim = _strtmp_t4317;
         }
     }
 #line 1556 "src/bindgen.tr"
     StringBuilder* sb = StringBuilder_init(4096LL);
 #line 1557 "src/bindgen.tr"
-    ({ TrStr _sbt_t4211 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# Auto-generated FFI bindings for ", 34LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" (tauraro-bindgen).\n", 20LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4211); _tr_str_release(_sbt_t4211); });
+    ({ TrStr _sbt_t4318 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# Auto-generated FFI bindings for ", 34LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" (tauraro-bindgen).\n", 20LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4318); _tr_str_release(_sbt_t4318); });
 #line 1558 "src/bindgen.tr"
     if ((!_tr_str_eqv((macro_shim), (_tr_str_lit_len("", 0LL))))) {
 #line 1559 "src/bindgen.tr"
-        ({ TrStr _sbt_t4212 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# tauraro-cpp-shim: ", 20LL)), (macro_shim))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4212); _tr_str_release(_sbt_t4212); });
+        ({ TrStr _sbt_t4319 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# tauraro-cpp-shim: ", 20LL)), (macro_shim))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4319); _tr_str_release(_sbt_t4319); });
 #line 1561 "src/bindgen.tr"
-        ({ TrStr _sbt_t4213 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# tauraro-cpp-cflags: -fpermissive ", 35LL)), (extra))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4213); _tr_str_release(_sbt_t4213); });
+        ({ TrStr _sbt_t4320 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# tauraro-cpp-cflags: -fpermissive ", 35LL)), (extra))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4320); _tr_str_release(_sbt_t4320); });
     }
 #line 1564 "src/bindgen.tr"
     if ((!_tr_str_eqv((pkglibs), (_tr_str_lit_len("", 0LL))))) {
 #line 1564 "src/bindgen.tr"
-        ({ TrStr _sbt_t4214 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# tauraro-cpp-linkflags:", 24LL)), (pkglibs))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4214); _tr_str_release(_sbt_t4214); });
+        ({ TrStr _sbt_t4321 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# tauraro-cpp-linkflags:", 24LL)), (pkglibs))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4321); _tr_str_release(_sbt_t4321); });
     }
 #line 1565 "src/bindgen.tr"
     StringBuilder_append(sb, _tr_str_lit_len("\n", 1LL));
@@ -3893,10 +3894,10 @@ __attribute__((hot)) void run_bindgen(TrStr header, TrStr out, TrStr cc, TrStr e
 #line 1570 "src/bindgen.tr"
     if ((!_tr_str_eqv((macro_binds), (_tr_str_lit_len("", 0LL))))) {
 #line 1570 "src/bindgen.tr"
-        ({ TrStr _ap_t4215 = (macro_binds); _tr_str_append(&fs, _ap_t4215); });
+        ({ TrStr _ap_t4322 = (macro_binds); _tr_str_append(&fs, _ap_t4322); });
     }
 #line 1573 "src/bindgen.tr"
-    TrStr fb = ({ TrStr _at_t4216 = (({ TrStr _tr_cl = (_tr_strx_concatv((ts), (ss))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fs)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (_opaque_fallbacks(_at_t4216, bg->seen)); _tr_str_release(_at_t4216); _wr; });
+    TrStr fb = ({ TrStr _at_t4323 = (({ TrStr _tr_cl = (_tr_strx_concatv((ts), (ss))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fs)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (_opaque_fallbacks(_at_t4323, bg->seen)); _tr_str_release(_at_t4323); _wr; });
 #line 1574 "src/bindgen.tr"
     if ((!_tr_str_eqv((fb), (_tr_str_lit_len("", 0LL))))) {
 #line 1574 "src/bindgen.tr"
@@ -3905,7 +3906,7 @@ __attribute__((hot)) void run_bindgen(TrStr header, TrStr out, TrStr cc, TrStr e
 #line 1575 "src/bindgen.tr"
     if ((!_tr_str_eqv((ts), (_tr_str_lit_len("", 0LL))))) {
 #line 1575 "src/bindgen.tr"
-        ({ TrStr _sbt_t4217 = (_tr_strx_concatv((ts), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(sb, _sbt_t4217); _tr_str_release(_sbt_t4217); });
+        ({ TrStr _sbt_t4324 = (_tr_strx_concatv((ts), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(sb, _sbt_t4324); _tr_str_release(_sbt_t4324); });
     }
 #line 1576 "src/bindgen.tr"
     if ((!_tr_str_eqv((ss), (_tr_str_lit_len("", 0LL))))) {
@@ -3915,7 +3916,7 @@ __attribute__((hot)) void run_bindgen(TrStr header, TrStr out, TrStr cc, TrStr e
 #line 1577 "src/bindgen.tr"
     if ((!_tr_str_eqv((cs), (_tr_str_lit_len("", 0LL))))) {
 #line 1577 "src/bindgen.tr"
-        ({ TrStr _sbt_t4218 = (_tr_strx_concatv((cs), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(sb, _sbt_t4218); _tr_str_release(_sbt_t4218); });
+        ({ TrStr _sbt_t4325 = (_tr_strx_concatv((cs), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(sb, _sbt_t4325); _tr_str_release(_sbt_t4325); });
     }
 #line 1578 "src/bindgen.tr"
     if ((!_tr_str_eqv((fs), (_tr_str_lit_len("", 0LL))))) {
@@ -3939,9 +3940,9 @@ __attribute__((hot)) void run_bindgen(TrStr header, TrStr out, TrStr cc, TrStr e
 #line 1591 "src/bindgen.tr"
         if (_tr_dict_contains(bg->skip_syms, _tr_strz(dn))) {
 #line 1592 "src/bindgen.tr"
-            TrStr _strtmp_t4220 = ({ TrStr _at_t4219 = (_tr_strx_concatv((dn), (_tr_str_lit_len("_", 1LL)))); __auto_type _wr = (_rename_word(result, dn, _at_t4219)); _tr_str_release(_at_t4219); _wr; });
+            TrStr _strtmp_t4327 = ({ TrStr _at_t4326 = (_tr_strx_concatv((dn), (_tr_str_lit_len("_", 1LL)))); __auto_type _wr = (_rename_word(result, dn, _at_t4326)); _tr_str_release(_at_t4326); _wr; });
             _tr_str_release(result);
-            result = _strtmp_t4220;
+            result = _strtmp_t4327;
 #line 1593 "src/bindgen.tr"
             n_renamed = (n_renamed + 1LL);
         }
@@ -3952,11 +3953,11 @@ __attribute__((hot)) void run_bindgen(TrStr header, TrStr out, TrStr cc, TrStr e
 #line 1595 "src/bindgen.tr"
     _rm_files(_tr_str_lit_len("_bindgen_decls.i _bindgen_defs.i _bindgen_base.i _bindgen_empty.h _bindgen_err.txt", 82LL));
 #line 1596 "src/bindgen.tr"
-    TrStr msg = ({ __auto_type _ord_t4221 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("bindgen: wrote ", 15LL)), (out))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" — ", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(bg->n_structs)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" types, ", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4221); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(bg->n_funcs)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" functions", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+    TrStr msg = ({ __auto_type _ord_t4328 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("bindgen: wrote ", 15LL)), (out))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" — ", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(bg->n_structs)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" types, ", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4328); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(bg->n_funcs)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" functions", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
 #line 1597 "src/bindgen.tr"
     if ((bg->n_skipped > 0LL)) {
 #line 1597 "src/bindgen.tr"
-        ({ TrStr _ap_t4222 = (_tr_str_lit_len(" (", 2LL)); TrStr _ap_t4223 = (_tr_str_wrap(_tr_int_to_str((long long)(bg->n_skipped)))); TrStr _ap_t4224 = (_tr_str_lit_len(" runtime/libc symbols skipped)", 30LL)); _tr_str_append(&msg, _ap_t4222); _tr_str_append(&msg, _ap_t4223); _tr_str_append(&msg, _ap_t4224); _tr_str_release(_ap_t4223); });
+        ({ TrStr _ap_t4329 = (_tr_str_lit_len(" (", 2LL)); TrStr _ap_t4330 = (_tr_str_wrap(_tr_int_to_str((long long)(bg->n_skipped)))); TrStr _ap_t4331 = (_tr_str_lit_len(" runtime/libc symbols skipped)", 30LL)); _tr_str_append(&msg, _ap_t4329); _tr_str_append(&msg, _ap_t4330); _tr_str_append(&msg, _ap_t4331); _tr_str_release(_ap_t4330); });
     }
 #line 1598 "src/bindgen.tr"
     ({ printf("%s", _tr_strz(msg)); printf("\n"); });
@@ -4692,10 +4693,10 @@ __attribute__((hot)) void _rm_files(TrStr files) {
 #line 1983 "src/bindgen.tr"
     if (_tr_is_windows()) {
 #line 1984 "src/bindgen.tr"
-        ({ TrStr _aet_t4225 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("del /q ", 7LL)), (files))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" >nul 2>&1", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4225.data); _tr_str_release(_aet_t4225); });
+        ({ TrStr _aet_t4332 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("del /q ", 7LL)), (files))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" >nul 2>&1", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4332.data); _tr_str_release(_aet_t4332); });
     } else {
 #line 1986 "src/bindgen.tr"
-        ({ TrStr _aet_t4226 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("rm -f ", 6LL)), (files))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" 2>/dev/null", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4226.data); _tr_str_release(_aet_t4226); });
+        ({ TrStr _aet_t4333 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("rm -f ", 6LL)), (files))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" 2>/dev/null", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4333.data); _tr_str_release(_aet_t4333); });
     }
 }
 
@@ -4713,7 +4714,7 @@ __attribute__((hot)) TrStr _detect_libclang(TrStr cc) {
 #line 1995 "src/bindgen.tr"
     write_file(_tr_str_lit_len("_cxxprobe.c", 11LL), _tr_str_lit_len("#include <clang-c/Index.h>\nint main(){ clang_createIndex(0,0); return 0; }\n", 75LL));
 #line 1996 "src/bindgen.tr"
-    long long rc = ({ TrStr _aet_t4227 = (_tr_strx_concatv((cc), (_tr_str_lit_len(" _cxxprobe.c -o _cxxprobe.exe -lclang 2>_cxx_err.txt", 52LL)))); __auto_type _wr = (_tr_system(_aet_t4227.data)); _tr_str_release(_aet_t4227); _wr; });
+    long long rc = ({ TrStr _aet_t4334 = (_tr_strx_concatv((cc), (_tr_str_lit_len(" _cxxprobe.c -o _cxxprobe.exe -lclang 2>_cxx_err.txt", 52LL)))); __auto_type _wr = (_tr_system(_aet_t4334.data)); _tr_str_release(_aet_t4334); _wr; });
 #line 1997 "src/bindgen.tr"
     _rm_files(_tr_str_lit_len("_cxxprobe.c _cxxprobe.exe _cxx_err.txt", 38LL));
 #line 1998 "src/bindgen.tr"
@@ -4751,9 +4752,9 @@ __attribute__((hot)) CppType* _cpp_parse_type(TrStr spelling) {
 #line 2021 "src/bindgen.tr"
     CppType* t = ((CppType*)_tr_obj_alloc(sizeof(CppType)));
 #line 2022 "src/bindgen.tr"
-    TrStr _sfo_t4228 = t->base;
+    TrStr _sfo_t4335 = t->base;
     t->base = _tr_str_lit_len("", 0LL);
-    _tr_str_release(_sfo_t4228);
+    _tr_str_release(_sfo_t4335);
 #line 2023 "src/bindgen.tr"
     t->ptr = 0LL;
 #line 2024 "src/bindgen.tr"
@@ -4773,13 +4774,13 @@ __attribute__((hot)) CppType* _cpp_parse_type(TrStr spelling) {
 #line 2031 "src/bindgen.tr"
         if (_tr_str_eqv((ch), (_tr_str_lit_len("*", 1LL)))) {
 #line 2031 "src/bindgen.tr"
-            ({ TrStr _ap_t4229 = (_tr_str_lit_len(" * ", 3LL)); _tr_str_append(&norm, _ap_t4229); });
+            ({ TrStr _ap_t4336 = (_tr_str_lit_len(" * ", 3LL)); _tr_str_append(&norm, _ap_t4336); });
         } else if (_tr_str_eqv((ch), (_tr_str_lit_len("&", 1LL)))) {
 #line 2032 "src/bindgen.tr"
-            ({ TrStr _ap_t4230 = (_tr_str_lit_len(" & ", 3LL)); _tr_str_append(&norm, _ap_t4230); });
+            ({ TrStr _ap_t4337 = (_tr_str_lit_len(" & ", 3LL)); _tr_str_append(&norm, _ap_t4337); });
         } else {
 #line 2033 "src/bindgen.tr"
-            ({ TrStr _ap_t4231 = (ch); _tr_str_append(&norm, _ap_t4231); });
+            ({ TrStr _ap_t4338 = (ch); _tr_str_append(&norm, _ap_t4338); });
         }
 #line 2034 "src/bindgen.tr"
         i = (i + 1LL);
@@ -4832,19 +4833,19 @@ __attribute__((hot)) CppType* _cpp_parse_type(TrStr spelling) {
 #line 2045 "src/bindgen.tr"
         if (_tr_str_eqv((bw), (_tr_str_lit_len("", 0LL)))) {
 #line 2045 "src/bindgen.tr"
-            TrStr _strtmp_t4232 = _tr_str_retain(w);
+            TrStr _strtmp_t4339 = _tr_str_retain(w);
             _tr_str_release(bw);
-            bw = _strtmp_t4232;
+            bw = _strtmp_t4339;
         } else {
 #line 2046 "src/bindgen.tr"
-            ({ TrStr _ap_t4233 = (_tr_str_lit_len(" ", 1LL)); TrStr _ap_t4234 = (w); _tr_str_append(&bw, _ap_t4233); _tr_str_append(&bw, _ap_t4234); });
+            ({ TrStr _ap_t4340 = (_tr_str_lit_len(" ", 1LL)); TrStr _ap_t4341 = (w); _tr_str_append(&bw, _ap_t4340); _tr_str_append(&bw, _ap_t4341); });
         }
         _tr_str_release(w);
     }
 #line 2047 "src/bindgen.tr"
-    TrStr _sfo_t4235 = t->base;
+    TrStr _sfo_t4342 = t->base;
     t->base = _tr_str_retain(bw);
-    _tr_str_release(_sfo_t4235);
+    _tr_str_release(_sfo_t4342);
 #line 2048 "src/bindgen.tr"
     TrStr mb = map_base(bw);
 #line 2049 "src/bindgen.tr"
@@ -4866,14 +4867,14 @@ __attribute__((hot)) TrStr _last_seg(TrStr s) {
 #line 2055 "src/bindgen.tr"
     if ((parts->len == 0LL)) {
 #line 2055 "src/bindgen.tr"
-        TrStr _trret699 = _tr_str_retain(s);
+        TrStr _trret708 = _tr_str_retain(s);
         List_TrStr_free(parts);
-        return _trret699;
+        return _trret708;
     }
 #line 2056 "src/bindgen.tr"
-    TrStr _trret700 = List_TrStr_get(parts, (parts->len - 1LL));
+    TrStr _trret709 = List_TrStr_get(parts, (parts->len - 1LL));
     List_TrStr_free(parts);
-    return _trret700;
+    return _trret709;
 }
 
 __attribute__((hot)) TrStr _cpp_op_name(TrStr mname, long long nparams, bool is_member) {
@@ -5141,10 +5142,10 @@ __attribute__((hot)) TrStr _cpp_ident(TrStr s) {
 #line 2126 "src/bindgen.tr"
         if ((((((c >= 65LL) && (c <= 90LL)) || ((c >= 97LL) && (c <= 122LL))) || ((c >= 48LL) && (c <= 57LL))) || (c == 95LL))) {
 #line 2127 "src/bindgen.tr"
-            ({ TrStr _ap_t4236 = (_tr_str_slicev((s), i, (i + 1LL))); _tr_str_append(&out, _ap_t4236); _tr_str_release(_ap_t4236); });
+            ({ TrStr _ap_t4343 = (_tr_str_slicev((s), i, (i + 1LL))); _tr_str_append(&out, _ap_t4343); _tr_str_release(_ap_t4343); });
         } else {
 #line 2129 "src/bindgen.tr"
-            ({ TrStr _ap_t4237 = (_tr_str_lit_len("_", 1LL)); _tr_str_append(&out, _ap_t4237); });
+            ({ TrStr _ap_t4344 = (_tr_str_lit_len("_", 1LL)); _tr_str_append(&out, _ap_t4344); });
         }
 #line 2130 "src/bindgen.tr"
         i = (i + 1LL);
@@ -5160,14 +5161,14 @@ __attribute__((hot)) TrStr _cpp_ident(TrStr s) {
 #line 2133 "src/bindgen.tr"
     if (((c0 >= 48LL) && (c0 <= 57LL))) {
 #line 2133 "src/bindgen.tr"
-        TrStr _trret701 = _tr_strx_concatv((_tr_str_lit_len("T_", 2LL)), (out));
+        TrStr _trret710 = _tr_strx_concatv((_tr_str_lit_len("T_", 2LL)), (out));
         _tr_str_release(out);
-        return _trret701;
+        return _trret710;
     }
 #line 2134 "src/bindgen.tr"
-    TrStr _trret702 = _tr_str_retain(out);
+    TrStr _trret711 = _tr_str_retain(out);
     _tr_str_release(out);
-    return _trret702;
+    return _trret711;
 }
 
 __attribute__((hot)) bool _is_clean_ident(TrStr s) {
@@ -5280,23 +5281,23 @@ __attribute__((hot)) TrStr _cpp_ctype(CppType* t) {
 #line 2181 "src/bindgen.tr"
     while ((i < t->ptr)) {
 #line 2182 "src/bindgen.tr"
-        TrStr _strtmp_t4239 = _tr_strx_concatv((s), (_tr_str_lit_len("*", 1LL)));
+        TrStr _strtmp_t4346 = _tr_strx_concatv((s), (_tr_str_lit_len("*", 1LL)));
         _tr_str_release(s);
-        s = _strtmp_t4239;
+        s = _strtmp_t4346;
 #line 2183 "src/bindgen.tr"
         i = (i + 1LL);
     }
 #line 2184 "src/bindgen.tr"
-    TrStr _trret703 = _tr_str_retain(s);
+    TrStr _trret712 = _tr_str_retain(s);
     _tr_str_release(s);
-    return _trret703;
+    return _trret712;
 }
 
 __attribute__((hot)) TrStr _cpp_tr_type(CppType* t) {
 #line 2191 "src/bindgen.tr"
     if (t->is_prim) {
 #line 2191 "src/bindgen.tr"
-        return ({ TrStr _apt_t4240 = _tr_str_retain(t->base); __auto_type _wr = (map_type(_apt_t4240, t->ptr)); _tr_str_release(_apt_t4240); _wr; });
+        return ({ TrStr _apt_t4347 = _tr_str_retain(t->base); __auto_type _wr = (map_type(_apt_t4347, t->ptr)); _tr_str_release(_apt_t4347); _wr; });
     }
 #line 2192 "src/bindgen.tr"
     long long eff = t->ptr;
@@ -5306,22 +5307,22 @@ __attribute__((hot)) TrStr _cpp_tr_type(CppType* t) {
         eff = 1LL;
     }
 #line 2194 "src/bindgen.tr"
-    TrStr ty = ({ TrStr _apt_t4241 = _tr_str_retain(t->base); __auto_type _wr = (_last_seg(_apt_t4241)); _tr_str_release(_apt_t4241); _wr; });
+    TrStr ty = ({ TrStr _apt_t4348 = _tr_str_retain(t->base); __auto_type _wr = (_last_seg(_apt_t4348)); _tr_str_release(_apt_t4348); _wr; });
 #line 2195 "src/bindgen.tr"
     long long k = 1LL;
 #line 2196 "src/bindgen.tr"
     while ((k < eff)) {
 #line 2197 "src/bindgen.tr"
-        TrStr _strtmp_t4242 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("Pointer[", 8LL)), (ty))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _strtmp_t4349 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("Pointer[", 8LL)), (ty))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(ty);
-        ty = _strtmp_t4242;
+        ty = _strtmp_t4349;
 #line 2198 "src/bindgen.tr"
         k = (k + 1LL);
     }
 #line 2199 "src/bindgen.tr"
-    TrStr _trret704 = _tr_str_retain(ty);
+    TrStr _trret713 = _tr_str_retain(ty);
     _tr_str_release(ty);
-    return _trret704;
+    return _trret713;
 }
 
 __attribute__((hot)) List_TrStr* _cpp_ret(CppType* rt, TrStr call) {
@@ -5332,7 +5333,7 @@ __attribute__((hot)) List_TrStr* _cpp_ret(CppType* rt, TrStr call) {
 #line 2205 "src/bindgen.tr"
         List_TrStr_append(r, _tr_str_lit_len("void", 4LL));
 #line 2205 "src/bindgen.tr"
-        ({ TrStr _at_t4243 = (_tr_strx_concatv((call), (_tr_str_lit_len(";", 1LL)))); List_TrStr_append(r, _at_t4243); _tr_str_release(_at_t4243); });
+        ({ TrStr _at_t4350 = (_tr_strx_concatv((call), (_tr_str_lit_len(";", 1LL)))); List_TrStr_append(r, _at_t4350); _tr_str_release(_at_t4350); });
 #line 2205 "src/bindgen.tr"
         List_TrStr_append(r, _tr_str_lit_len("", 0LL));
 #line 2206 "src/bindgen.tr"
@@ -5341,11 +5342,11 @@ __attribute__((hot)) List_TrStr* _cpp_ret(CppType* rt, TrStr call) {
 #line 2207 "src/bindgen.tr"
     if (rt->is_prim) {
 #line 2208 "src/bindgen.tr"
-        ({ TrStr _at_t4244 = (_cpp_ctype(rt)); List_TrStr_append(r, _at_t4244); _tr_str_release(_at_t4244); });
+        ({ TrStr _at_t4351 = (_cpp_ctype(rt)); List_TrStr_append(r, _at_t4351); _tr_str_release(_at_t4351); });
 #line 2208 "src/bindgen.tr"
-        ({ TrStr _at_t4245 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4245); _tr_str_release(_at_t4245); });
+        ({ TrStr _at_t4352 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4352); _tr_str_release(_at_t4352); });
 #line 2208 "src/bindgen.tr"
-        ({ TrStr _at_t4246 = (_cpp_tr_type(rt)); List_TrStr_append(r, _at_t4246); _tr_str_release(_at_t4246); });
+        ({ TrStr _at_t4353 = (_cpp_tr_type(rt)); List_TrStr_append(r, _at_t4353); _tr_str_release(_at_t4353); });
 #line 2209 "src/bindgen.tr"
         return r;
     }
@@ -5354,23 +5355,23 @@ __attribute__((hot)) List_TrStr* _cpp_ret(CppType* rt, TrStr call) {
 #line 2211 "src/bindgen.tr"
     if (rt->was_ptr) {
 #line 2212 "src/bindgen.tr"
-        ({ TrStr _at_t4247 = (_tr_strx_concatv((rt->base), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4247); _tr_str_release(_at_t4247); });
+        ({ TrStr _at_t4354 = (_tr_strx_concatv((rt->base), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4354); _tr_str_release(_at_t4354); });
 #line 2212 "src/bindgen.tr"
-        ({ TrStr _at_t4248 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4248); _tr_str_release(_at_t4248); });
+        ({ TrStr _at_t4355 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4355); _tr_str_release(_at_t4355); });
 #line 2212 "src/bindgen.tr"
         List_TrStr_append(r, trret);
     } else if (rt->was_ref) {
 #line 2214 "src/bindgen.tr"
-        ({ TrStr _at_t4249 = (_tr_strx_concatv((rt->base), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4249); _tr_str_release(_at_t4249); });
+        ({ TrStr _at_t4356 = (_tr_strx_concatv((rt->base), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4356); _tr_str_release(_at_t4356); });
 #line 2214 "src/bindgen.tr"
-        ({ TrStr _at_t4250 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return &(", 9LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4250); _tr_str_release(_at_t4250); });
+        ({ TrStr _at_t4357 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return &(", 9LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4357); _tr_str_release(_at_t4357); });
 #line 2214 "src/bindgen.tr"
         List_TrStr_append(r, trret);
     } else {
 #line 2216 "src/bindgen.tr"
-        ({ TrStr _at_t4251 = (_tr_strx_concatv((rt->base), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4251); _tr_str_release(_at_t4251); });
+        ({ TrStr _at_t4358 = (_tr_strx_concatv((rt->base), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4358); _tr_str_release(_at_t4358); });
 #line 2216 "src/bindgen.tr"
-        ({ TrStr _at_t4252 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return new ", 11LL)), (rt->base))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4252); _tr_str_release(_at_t4252); });
+        ({ TrStr _at_t4359 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return new ", 11LL)), (rt->base))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4359); _tr_str_release(_at_t4359); });
 #line 2216 "src/bindgen.tr"
         List_TrStr_append(r, trret);
     }
@@ -5387,25 +5388,25 @@ __attribute__((hot)) TrStr _cpp_opaque_handle(TrStr base, long long nd, TrMap* c
 #line 2226 "src/bindgen.tr"
     if ((_is_libc_ty_name(seg) || _is_system_record_ty(seg))) {
 #line 2230 "src/bindgen.tr"
-        TrStr _strtmp_t4253 = _tr_str_retain(seg);
+        TrStr _strtmp_t4360 = _tr_str_retain(seg);
         _tr_str_release(handle);
-        handle = _strtmp_t4253;
+        handle = _strtmp_t4360;
     } else if (_tr_dict_contains(value_structs, _tr_strz(seg))) {
 #line 2233 "src/bindgen.tr"
-        TrStr _strtmp_t4254 = _tr_str_retain(seg);
+        TrStr _strtmp_t4361 = _tr_str_retain(seg);
         _tr_str_release(handle);
-        handle = _strtmp_t4254;
+        handle = _strtmp_t4361;
     } else if ((!_tr_dict_contains(class_names, _tr_strz(seg)))) {
 #line 2235 "src/bindgen.tr"
-        TrStr _strtmp_t4255 = _cpp_ident(base);
+        TrStr _strtmp_t4362 = _cpp_ident(base);
         _tr_str_release(handle);
-        handle = _strtmp_t4255;
+        handle = _strtmp_t4362;
 #line 2236 "src/bindgen.tr"
-        if (({ TrStr _dkt_t4256 = (_tr_strx_concatv((_tr_str_lit_len("class:", 6LL)), (handle))); __auto_type _wr = ((!_tr_dict_contains(seen, _tr_strz(_dkt_t4256)))); _tr_str_release(_dkt_t4256); _wr; })) {
+        if (({ TrStr _dkt_t4363 = (_tr_strx_concatv((_tr_str_lit_len("class:", 6LL)), (handle))); __auto_type _wr = ((!_tr_dict_contains(seen, _tr_strz(_dkt_t4363)))); _tr_str_release(_dkt_t4363); _wr; })) {
 #line 2237 "src/bindgen.tr"
-            ({ TrStr _sbt_t4257 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("class ", 6LL)), (handle))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n    pass\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(opaque, _sbt_t4257); _tr_str_release(_sbt_t4257); });
+            ({ TrStr _sbt_t4364 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("class ", 6LL)), (handle))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n    pass\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(opaque, _sbt_t4364); _tr_str_release(_sbt_t4364); });
 #line 2238 "src/bindgen.tr"
-            ({ TrStr _dkt_t4258 = (_tr_strx_concatv((_tr_str_lit_len("class:", 6LL)), (handle))); _tr_dict_set(seen, _tr_strz(_dkt_t4258), true); _tr_str_release(_dkt_t4258); });
+            ({ TrStr _dkt_t4365 = (_tr_strx_concatv((_tr_str_lit_len("class:", 6LL)), (handle))); _tr_dict_set(seen, _tr_strz(_dkt_t4365), true); _tr_str_release(_dkt_t4365); });
         }
     }
 #line 2242 "src/bindgen.tr"
@@ -5420,18 +5421,18 @@ __attribute__((hot)) TrStr _cpp_opaque_handle(TrStr base, long long nd, TrMap* c
 #line 2245 "src/bindgen.tr"
     while ((k < nd)) {
 #line 2246 "src/bindgen.tr"
-        TrStr _strtmp_t4259 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("Pointer[", 8LL)), (ty))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _strtmp_t4366 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("Pointer[", 8LL)), (ty))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(ty);
-        ty = _strtmp_t4259;
+        ty = _strtmp_t4366;
 #line 2247 "src/bindgen.tr"
         k = (k + 1LL);
     }
 #line 2248 "src/bindgen.tr"
-    TrStr _trret705 = _tr_str_retain(ty);
+    TrStr _trret714 = _tr_str_retain(ty);
     _tr_str_release(seg);
     _tr_str_release(handle);
     _tr_str_release(ty);
-    return _trret705;
+    return _trret714;
 }
 
 __attribute__((hot)) TrStr _cpp_qual(TrStr base, TrMap* class_qual) {
@@ -5440,14 +5441,14 @@ __attribute__((hot)) TrStr _cpp_qual(TrStr base, TrMap* class_qual) {
 #line 2255 "src/bindgen.tr"
     if (_tr_dict_contains(class_qual, _tr_strz(seg))) {
 #line 2255 "src/bindgen.tr"
-        TrStr _trret706 = _tr_str_retain(_tr_str_unbox(_tr_dict_get(class_qual, _tr_strz(seg))));
+        TrStr _trret715 = _tr_str_retain(_tr_str_unbox(_tr_dict_get(class_qual, _tr_strz(seg))));
         _tr_str_release(seg);
-        return _trret706;
+        return _trret715;
     }
 #line 2256 "src/bindgen.tr"
-    TrStr _trret707 = _tr_str_retain(base);
+    TrStr _trret716 = _tr_str_retain(base);
     _tr_str_release(seg);
-    return _trret707;
+    return _trret716;
 }
 
 __attribute__((hot)) List_TrStr* _cpp_ret_ex(TrStr desc, TrStr call, TrMap* value_structs, TrMap* class_names, TrMap* class_qual, TrMap* seen, StringBuilder* opaque) {
@@ -5456,9 +5457,9 @@ __attribute__((hot)) List_TrStr* _cpp_ret_ex(TrStr desc, TrStr call, TrMap* valu
 #line 2263 "src/bindgen.tr"
     List_TrStr* d4 = _desc4(desc);
 #line 2264 "src/bindgen.tr"
-    long long rdepth = ({ TrStr _at_t4260 = (List_TrStr_get(d4, 0LL)); __auto_type _wr = (_to_int(_at_t4260)); _tr_str_release(_at_t4260); _wr; });
+    long long rdepth = ({ TrStr _at_t4367 = (List_TrStr_get(d4, 0LL)); __auto_type _wr = (_to_int(_at_t4367)); _tr_str_release(_at_t4367); _wr; });
 #line 2265 "src/bindgen.tr"
-    bool rref = ({ TrStr _cmpa_t4261 = (List_TrStr_get(d4, 1LL)); TrStr _cmpb_t4262 = (_tr_str_lit_len("0", 1LL)); _Bool _cmpr_t4263 = !_tr_str_eqv(_cmpa_t4261, _cmpb_t4262); _tr_str_release(_cmpa_t4261); _cmpr_t4263; });
+    bool rref = ({ TrStr _cmpa_t4368 = (List_TrStr_get(d4, 1LL)); TrStr _cmpb_t4369 = (_tr_str_lit_len("0", 1LL)); _Bool _cmpr_t4370 = !_tr_str_eqv(_cmpa_t4368, _cmpb_t4369); _tr_str_release(_cmpa_t4368); _cmpr_t4370; });
 #line 2266 "src/bindgen.tr"
     TrStr cat = List_TrStr_get(d4, 2LL);
 #line 2267 "src/bindgen.tr"
@@ -5468,7 +5469,7 @@ __attribute__((hot)) List_TrStr* _cpp_ret_ex(TrStr desc, TrStr call, TrMap* valu
 #line 2269 "src/bindgen.tr"
         List_TrStr_append(r, _tr_str_lit_len("void", 4LL));
 #line 2269 "src/bindgen.tr"
-        ({ TrStr _at_t4264 = (_tr_strx_concatv((call), (_tr_str_lit_len(";", 1LL)))); List_TrStr_append(r, _at_t4264); _tr_str_release(_at_t4264); });
+        ({ TrStr _at_t4371 = (_tr_strx_concatv((call), (_tr_str_lit_len(";", 1LL)))); List_TrStr_append(r, _at_t4371); _tr_str_release(_at_t4371); });
 #line 2269 "src/bindgen.tr"
         List_TrStr_append(r, _tr_str_lit_len("", 0LL));
 #line 2269 "src/bindgen.tr"
@@ -5486,7 +5487,7 @@ __attribute__((hot)) List_TrStr* _cpp_ret_ex(TrStr desc, TrStr call, TrMap* valu
 #line 2273 "src/bindgen.tr"
             List_TrStr_append(r, cpp);
 #line 2273 "src/bindgen.tr"
-            ({ TrStr _at_t4265 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4265); _tr_str_release(_at_t4265); });
+            ({ TrStr _at_t4372 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4372); _tr_str_release(_at_t4372); });
 #line 2273 "src/bindgen.tr"
             List_TrStr_append(r, detail);
 #line 2273 "src/bindgen.tr"
@@ -5503,16 +5504,16 @@ __attribute__((hot)) List_TrStr* _cpp_ret_ex(TrStr desc, TrStr call, TrMap* valu
 #line 2277 "src/bindgen.tr"
             List_TrStr_append(r, cty);
 #line 2277 "src/bindgen.tr"
-            ({ TrStr _at_t4266 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return (", 8LL)), (cty))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")(&(", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("));", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4266); _tr_str_release(_at_t4266); });
+            ({ TrStr _at_t4373 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return (", 8LL)), (cty))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")(&(", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("));", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4373); _tr_str_release(_at_t4373); });
 #line 2277 "src/bindgen.tr"
-            ({ TrStr _at_t4267 = (_ptr_wrap(detail, rdepth)); List_TrStr_append(r, _at_t4267); _tr_str_release(_at_t4267); });
+            ({ TrStr _at_t4374 = (_ptr_wrap(detail, rdepth)); List_TrStr_append(r, _at_t4374); _tr_str_release(_at_t4374); });
         } else {
 #line 2278 "src/bindgen.tr"
             List_TrStr_append(r, cty);
 #line 2278 "src/bindgen.tr"
-            ({ TrStr _at_t4268 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return (", 8LL)), (cty))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")(", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4268); _tr_str_release(_at_t4268); });
+            ({ TrStr _at_t4375 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return (", 8LL)), (cty))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")(", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4375); _tr_str_release(_at_t4375); });
 #line 2278 "src/bindgen.tr"
-            ({ TrStr _at_t4269 = (_ptr_wrap(detail, rdepth)); List_TrStr_append(r, _at_t4269); _tr_str_release(_at_t4269); });
+            ({ TrStr _at_t4376 = (_ptr_wrap(detail, rdepth)); List_TrStr_append(r, _at_t4376); _tr_str_release(_at_t4376); });
         }
 #line 2279 "src/bindgen.tr"
         List_TrStr_free(d4);
@@ -5533,7 +5534,7 @@ __attribute__((hot)) List_TrStr* _cpp_ret_ex(TrStr desc, TrStr call, TrMap* valu
 #line 2284 "src/bindgen.tr"
             List_TrStr_append(r, espell);
 #line 2284 "src/bindgen.tr"
-            ({ TrStr _at_t4270 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4270); _tr_str_release(_at_t4270); });
+            ({ TrStr _at_t4377 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4377); _tr_str_release(_at_t4377); });
 #line 2284 "src/bindgen.tr"
             List_TrStr_append(r, ealias);
 #line 2284 "src/bindgen.tr"
@@ -5547,18 +5548,18 @@ __attribute__((hot)) List_TrStr* _cpp_ret_ex(TrStr desc, TrStr call, TrMap* valu
 #line 2285 "src/bindgen.tr"
         if (rref) {
 #line 2285 "src/bindgen.tr"
-            ({ TrStr _at_t4271 = (_tr_strx_concatv((espell), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4271); _tr_str_release(_at_t4271); });
+            ({ TrStr _at_t4378 = (_tr_strx_concatv((espell), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4378); _tr_str_release(_at_t4378); });
 #line 2285 "src/bindgen.tr"
-            ({ TrStr _at_t4272 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return &(", 9LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4272); _tr_str_release(_at_t4272); });
+            ({ TrStr _at_t4379 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return &(", 9LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4379); _tr_str_release(_at_t4379); });
 #line 2285 "src/bindgen.tr"
-            ({ TrStr _at_t4273 = (_ptr_wrap(ealias, rdepth)); List_TrStr_append(r, _at_t4273); _tr_str_release(_at_t4273); });
+            ({ TrStr _at_t4380 = (_ptr_wrap(ealias, rdepth)); List_TrStr_append(r, _at_t4380); _tr_str_release(_at_t4380); });
         } else {
 #line 2286 "src/bindgen.tr"
-            ({ TrStr _at_t4274 = (_tr_strx_concatv((espell), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4274); _tr_str_release(_at_t4274); });
+            ({ TrStr _at_t4381 = (_tr_strx_concatv((espell), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4381); _tr_str_release(_at_t4381); });
 #line 2286 "src/bindgen.tr"
-            ({ TrStr _at_t4275 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4275); _tr_str_release(_at_t4275); });
+            ({ TrStr _at_t4382 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4382); _tr_str_release(_at_t4382); });
 #line 2286 "src/bindgen.tr"
-            ({ TrStr _at_t4276 = (_ptr_wrap(ealias, rdepth)); List_TrStr_append(r, _at_t4276); _tr_str_release(_at_t4276); });
+            ({ TrStr _at_t4383 = (_ptr_wrap(ealias, rdepth)); List_TrStr_append(r, _at_t4383); _tr_str_release(_at_t4383); });
         }
 #line 2287 "src/bindgen.tr"
         List_TrStr_free(d4);
@@ -5573,7 +5574,7 @@ __attribute__((hot)) List_TrStr* _cpp_ret_ex(TrStr desc, TrStr call, TrMap* valu
 #line 2290 "src/bindgen.tr"
         List_TrStr_append(r, _tr_str_lit_len("char*", 5LL));
 #line 2290 "src/bindgen.tr"
-        ({ TrStr _at_t4277 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return _tr_cpp_strdup(", 22LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4277); _tr_str_release(_at_t4277); });
+        ({ TrStr _at_t4384 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return _tr_cpp_strdup(", 22LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4384); _tr_str_release(_at_t4384); });
 #line 2290 "src/bindgen.tr"
         List_TrStr_append(r, _tr_str_lit_len("Pointer[char]", 13LL));
 #line 2290 "src/bindgen.tr"
@@ -5587,7 +5588,7 @@ __attribute__((hot)) List_TrStr* _cpp_ret_ex(TrStr desc, TrStr call, TrMap* valu
 #line 2292 "src/bindgen.tr"
         List_TrStr_append(r, _tr_str_lit_len("void*", 5LL));
 #line 2292 "src/bindgen.tr"
-        ({ TrStr _at_t4278 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return (void*)(", 15LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4278); _tr_str_release(_at_t4278); });
+        ({ TrStr _at_t4385 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return (void*)(", 15LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4385); _tr_str_release(_at_t4385); });
 #line 2292 "src/bindgen.tr"
         List_TrStr_append(r, _tr_str_lit_len("Pointer[void]", 13LL));
 #line 2292 "src/bindgen.tr"
@@ -5601,9 +5602,9 @@ __attribute__((hot)) List_TrStr* _cpp_ret_ex(TrStr desc, TrStr call, TrMap* valu
 #line 2294 "src/bindgen.tr"
     if (((_tr_str_eqv((cat), (_tr_str_lit_len("r", 1LL))) && _tr_dict_contains(value_structs, _tr_strz(seg))) && (rdepth == 0LL))) {
 #line 2295 "src/bindgen.tr"
-        ({ TrStr _at_t4279 = (_cpp_qual(detail, class_qual)); List_TrStr_append(r, _at_t4279); _tr_str_release(_at_t4279); });
+        ({ TrStr _at_t4386 = (_cpp_qual(detail, class_qual)); List_TrStr_append(r, _at_t4386); _tr_str_release(_at_t4386); });
 #line 2295 "src/bindgen.tr"
-        ({ TrStr _at_t4280 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4280); _tr_str_release(_at_t4280); });
+        ({ TrStr _at_t4387 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4387); _tr_str_release(_at_t4387); });
 #line 2295 "src/bindgen.tr"
         List_TrStr_append(r, seg);
 #line 2295 "src/bindgen.tr"
@@ -5627,23 +5628,23 @@ __attribute__((hot)) List_TrStr* _cpp_ret_ex(TrStr desc, TrStr call, TrMap* valu
 #line 2301 "src/bindgen.tr"
     if ((rdepth == 0LL)) {
 #line 2302 "src/bindgen.tr"
-        ({ TrStr _at_t4281 = (_tr_strx_concatv((cb), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4281); _tr_str_release(_at_t4281); });
+        ({ TrStr _at_t4388 = (_tr_strx_concatv((cb), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4388); _tr_str_release(_at_t4388); });
 #line 2302 "src/bindgen.tr"
-        ({ TrStr _at_t4282 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return new ", 11LL)), (cb))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4282); _tr_str_release(_at_t4282); });
+        ({ TrStr _at_t4389 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return new ", 11LL)), (cb))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4389); _tr_str_release(_at_t4389); });
 #line 2302 "src/bindgen.tr"
         List_TrStr_append(r, handle);
     } else if (rref) {
 #line 2304 "src/bindgen.tr"
-        ({ TrStr _at_t4283 = (_tr_strx_concatv((cb), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4283); _tr_str_release(_at_t4283); });
+        ({ TrStr _at_t4390 = (_tr_strx_concatv((cb), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4390); _tr_str_release(_at_t4390); });
 #line 2304 "src/bindgen.tr"
-        ({ TrStr _at_t4284 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return (", 8LL)), (cb))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)(&(", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("));", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4284); _tr_str_release(_at_t4284); });
+        ({ TrStr _at_t4391 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return (", 8LL)), (cb))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)(&(", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("));", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4391); _tr_str_release(_at_t4391); });
 #line 2304 "src/bindgen.tr"
         List_TrStr_append(r, handle);
     } else {
 #line 2306 "src/bindgen.tr"
-        ({ TrStr _at_t4285 = (_tr_strx_concatv((cb), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4285); _tr_str_release(_at_t4285); });
+        ({ TrStr _at_t4392 = (_tr_strx_concatv((cb), (_tr_str_lit_len("*", 1LL)))); List_TrStr_append(r, _at_t4392); _tr_str_release(_at_t4392); });
 #line 2306 "src/bindgen.tr"
-        ({ TrStr _at_t4286 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return (", 8LL)), (cb))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)(", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4286); _tr_str_release(_at_t4286); });
+        ({ TrStr _at_t4393 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return (", 8LL)), (cb))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)(", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(r, _at_t4393); _tr_str_release(_at_t4393); });
 #line 2306 "src/bindgen.tr"
         List_TrStr_append(r, handle);
     }
@@ -5675,23 +5676,23 @@ __attribute__((hot)) TrStr _ns_pop(TrStr path) {
 #line 2316 "src/bindgen.tr"
         if (_tr_str_eqv((r), (_tr_str_lit_len("", 0LL)))) {
 #line 2316 "src/bindgen.tr"
-            TrStr _strtmp_t4287 = List_TrStr_get(parts, i);
+            TrStr _strtmp_t4394 = List_TrStr_get(parts, i);
             _tr_str_release(r);
-            r = _strtmp_t4287;
+            r = _strtmp_t4394;
         } else {
 #line 2317 "src/bindgen.tr"
-            TrStr _strtmp_t4290 = ({ TrStr _tr_cl = (_tr_strx_concatv((r), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cr = (List_TrStr_get(parts, i)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; });
+            TrStr _strtmp_t4397 = ({ TrStr _tr_cl = (_tr_strx_concatv((r), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cr = (List_TrStr_get(parts, i)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; });
             _tr_str_release(r);
-            r = _strtmp_t4290;
+            r = _strtmp_t4397;
         }
 #line 2318 "src/bindgen.tr"
         i = (i + 1LL);
     }
 #line 2319 "src/bindgen.tr"
-    TrStr _trret708 = _tr_str_retain(r);
+    TrStr _trret717 = _tr_str_retain(r);
     List_TrStr_free(parts);
     _tr_str_release(r);
-    return _trret708;
+    return _trret717;
 }
 
 __attribute__((hot)) TrStr _ns_us(TrStr path) {
@@ -5704,35 +5705,35 @@ __attribute__((hot)) TrStr _ns_us(TrStr path) {
 #line 2326 "src/bindgen.tr"
     while ((i < parts->len)) {
 #line 2327 "src/bindgen.tr"
-        if (({ TrStr _cmpa_t4291 = (List_TrStr_get(parts, i)); TrStr _cmpb_t4292 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4293 = !_tr_str_eqv(_cmpa_t4291, _cmpb_t4292); _tr_str_release(_cmpa_t4291); _cmpr_t4293; })) {
+        if (({ TrStr _cmpa_t4398 = (List_TrStr_get(parts, i)); TrStr _cmpb_t4399 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4400 = !_tr_str_eqv(_cmpa_t4398, _cmpb_t4399); _tr_str_release(_cmpa_t4398); _cmpr_t4400; })) {
 #line 2328 "src/bindgen.tr"
             if (_tr_str_eqv((r), (_tr_str_lit_len("", 0LL)))) {
 #line 2328 "src/bindgen.tr"
-                TrStr _strtmp_t4294 = List_TrStr_get(parts, i);
+                TrStr _strtmp_t4401 = List_TrStr_get(parts, i);
                 _tr_str_release(r);
-                r = _strtmp_t4294;
+                r = _strtmp_t4401;
             } else {
 #line 2329 "src/bindgen.tr"
-                TrStr _strtmp_t4297 = ({ TrStr _tr_cl = (_tr_strx_concatv((r), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cr = (List_TrStr_get(parts, i)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; });
+                TrStr _strtmp_t4404 = ({ TrStr _tr_cl = (_tr_strx_concatv((r), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cr = (List_TrStr_get(parts, i)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; });
                 _tr_str_release(r);
-                r = _strtmp_t4297;
+                r = _strtmp_t4404;
             }
         }
 #line 2330 "src/bindgen.tr"
         i = (i + 1LL);
     }
 #line 2331 "src/bindgen.tr"
-    TrStr _trret709 = _tr_str_retain(r);
+    TrStr _trret718 = _tr_str_retain(r);
     List_TrStr_free(parts);
     _tr_str_release(r);
-    return _trret709;
+    return _trret718;
 }
 
 __attribute__((hot)) TrStr _rstrip_cr(TrStr s) {
 #line 2334 "src/bindgen.tr"
     long long n = _tr_str_lenv((s));
 #line 2335 "src/bindgen.tr"
-    while (((n > 0LL) && ({ TrStr _cmpa_t4298 = (_tr_str_slicev((s), (n - 1LL), n)); TrStr _cmpb_t4299 = (_tr_str_lit_len("\r", 1LL)); _Bool _cmpr_t4300 = _tr_str_eqv(_cmpa_t4298, _cmpb_t4299); _tr_str_release(_cmpa_t4298); _cmpr_t4300; }))) {
+    while (((n > 0LL) && ({ TrStr _cmpa_t4405 = (_tr_str_slicev((s), (n - 1LL), n)); TrStr _cmpb_t4406 = (_tr_str_lit_len("\r", 1LL)); _Bool _cmpr_t4407 = _tr_str_eqv(_cmpa_t4405, _cmpb_t4406); _tr_str_release(_cmpa_t4405); _cmpr_t4407; }))) {
 #line 2335 "src/bindgen.tr"
         n = (n - 1LL);
     }
@@ -5930,26 +5931,26 @@ __attribute__((hot)) List_TrStr* _desc4(TrStr desc) {
         return r;
     }
 #line 2387 "src/bindgen.tr"
-    ({ TrStr _at_t4301 = (List_TrStr_get(parts, 0LL)); List_TrStr_append(r, _at_t4301); _tr_str_release(_at_t4301); });
+    ({ TrStr _at_t4408 = (List_TrStr_get(parts, 0LL)); List_TrStr_append(r, _at_t4408); _tr_str_release(_at_t4408); });
 #line 2388 "src/bindgen.tr"
-    ({ TrStr _at_t4302 = (List_TrStr_get(parts, 1LL)); List_TrStr_append(r, _at_t4302); _tr_str_release(_at_t4302); });
+    ({ TrStr _at_t4409 = (List_TrStr_get(parts, 1LL)); List_TrStr_append(r, _at_t4409); _tr_str_release(_at_t4409); });
 #line 2389 "src/bindgen.tr"
-    ({ TrStr _at_t4303 = (List_TrStr_get(parts, 2LL)); List_TrStr_append(r, _at_t4303); _tr_str_release(_at_t4303); });
+    ({ TrStr _at_t4410 = (List_TrStr_get(parts, 2LL)); List_TrStr_append(r, _at_t4410); _tr_str_release(_at_t4410); });
 #line 2390 "src/bindgen.tr"
     TrStr det = _tr_str_lit_len("", 0LL);
 #line 2391 "src/bindgen.tr"
     if ((parts->len > 3LL)) {
 #line 2391 "src/bindgen.tr"
-        TrStr _strtmp_t4304 = List_TrStr_get(parts, 3LL);
+        TrStr _strtmp_t4411 = List_TrStr_get(parts, 3LL);
         _tr_str_release(det);
-        det = _strtmp_t4304;
+        det = _strtmp_t4411;
     }
 #line 2392 "src/bindgen.tr"
     long long k = 4LL;
 #line 2393 "src/bindgen.tr"
     while ((k < parts->len)) {
 #line 2394 "src/bindgen.tr"
-        ({ TrStr _ap_t4305 = (_tr_str_lit_len("~", 1LL)); TrStr _ap_t4306 = (List_TrStr_get(parts, k)); _tr_str_append(&det, _ap_t4305); _tr_str_append(&det, _ap_t4306); _tr_str_release(_ap_t4306); });
+        ({ TrStr _ap_t4412 = (_tr_str_lit_len("~", 1LL)); TrStr _ap_t4413 = (List_TrStr_get(parts, k)); _tr_str_append(&det, _ap_t4412); _tr_str_append(&det, _ap_t4413); _tr_str_release(_ap_t4413); });
 #line 2395 "src/bindgen.tr"
         k = (k + 1LL);
     }
@@ -5987,12 +5988,12 @@ __attribute__((hot)) List_TrStr* _parse_tclass(TrStr rest) {
 #line 2410 "src/bindgen.tr"
         if (_tr_str_eqv((sp), (_tr_str_lit_len("", 0LL)))) {
 #line 2410 "src/bindgen.tr"
-            TrStr _strtmp_t4307 = List_TrStr_get(parts, i);
+            TrStr _strtmp_t4414 = List_TrStr_get(parts, i);
             _tr_str_release(sp);
-            sp = _strtmp_t4307;
+            sp = _strtmp_t4414;
         } else {
 #line 2411 "src/bindgen.tr"
-            ({ TrStr _ap_t4308 = (_tr_str_lit_len(" ", 1LL)); TrStr _ap_t4309 = (List_TrStr_get(parts, i)); _tr_str_append(&sp, _ap_t4308); _tr_str_append(&sp, _ap_t4309); _tr_str_release(_ap_t4309); });
+            ({ TrStr _ap_t4415 = (_tr_str_lit_len(" ", 1LL)); TrStr _ap_t4416 = (List_TrStr_get(parts, i)); _tr_str_append(&sp, _ap_t4415); _tr_str_append(&sp, _ap_t4416); _tr_str_release(_ap_t4416); });
         }
 #line 2412 "src/bindgen.tr"
         i = (i + 1LL);
@@ -6016,16 +6017,16 @@ __attribute__((hot)) TrStr _stars(long long n) {
 #line 2420 "src/bindgen.tr"
     while ((i < n)) {
 #line 2421 "src/bindgen.tr"
-        TrStr _strtmp_t4311 = _tr_strx_concatv((s), (_tr_str_lit_len("*", 1LL)));
+        TrStr _strtmp_t4418 = _tr_strx_concatv((s), (_tr_str_lit_len("*", 1LL)));
         _tr_str_release(s);
-        s = _strtmp_t4311;
+        s = _strtmp_t4418;
 #line 2422 "src/bindgen.tr"
         i = (i + 1LL);
     }
 #line 2423 "src/bindgen.tr"
-    TrStr _trret710 = _tr_str_retain(s);
+    TrStr _trret719 = _tr_str_retain(s);
     _tr_str_release(s);
-    return _trret710;
+    return _trret719;
 }
 
 __attribute__((hot)) TrStr _ptr_wrap(TrStr inner, long long n) {
@@ -6036,23 +6037,23 @@ __attribute__((hot)) TrStr _ptr_wrap(TrStr inner, long long n) {
 #line 2429 "src/bindgen.tr"
     while ((i < n)) {
 #line 2430 "src/bindgen.tr"
-        TrStr _strtmp_t4312 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("Pointer[", 8LL)), (t))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _strtmp_t4419 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("Pointer[", 8LL)), (t))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(t);
-        t = _strtmp_t4312;
+        t = _strtmp_t4419;
 #line 2431 "src/bindgen.tr"
         i = (i + 1LL);
     }
 #line 2432 "src/bindgen.tr"
-    TrStr _trret711 = _tr_str_retain(t);
+    TrStr _trret720 = _tr_str_retain(t);
     _tr_str_release(t);
-    return _trret711;
+    return _trret720;
 }
 
 __attribute__((hot)) TrStr _cpp_field_type(TrStr desc, TrMap* value_structs, TrMap* enum_names) {
 #line 2438 "src/bindgen.tr"
     List_TrStr* d4 = _desc4(desc);
 #line 2439 "src/bindgen.tr"
-    long long depth = ({ TrStr _at_t4313 = (List_TrStr_get(d4, 0LL)); __auto_type _wr = (_to_int(_at_t4313)); _tr_str_release(_at_t4313); _wr; });
+    long long depth = ({ TrStr _at_t4420 = (List_TrStr_get(d4, 0LL)); __auto_type _wr = (_to_int(_at_t4420)); _tr_str_release(_at_t4420); _wr; });
 #line 2440 "src/bindgen.tr"
     TrStr cat = List_TrStr_get(d4, 2LL);
 #line 2441 "src/bindgen.tr"
@@ -6062,40 +6063,40 @@ __attribute__((hot)) TrStr _cpp_field_type(TrStr desc, TrMap* value_structs, TrM
 #line 2443 "src/bindgen.tr"
         if ((depth == 0LL)) {
 #line 2443 "src/bindgen.tr"
-            TrStr _trret712 = _tr_str_retain(detail);
+            TrStr _trret721 = _tr_str_retain(detail);
             List_TrStr_free(d4);
             _tr_str_release(cat);
             _tr_str_release(detail);
-            return _trret712;
+            return _trret721;
         }
 #line 2444 "src/bindgen.tr"
-        TrStr _trret713 = _ptr_wrap(detail, depth);
+        TrStr _trret722 = _ptr_wrap(detail, depth);
         List_TrStr_free(d4);
         _tr_str_release(cat);
         _tr_str_release(detail);
-        return _trret713;
+        return _trret722;
     }
 #line 2445 "src/bindgen.tr"
     if (_tr_str_eqv((cat), (_tr_str_lit_len("e", 1LL)))) {
 #line 2446 "src/bindgen.tr"
-        TrStr ealias = ({ TrStr _at_t4314 = (List_TrStr_get(_tr_str_splitv((detail), (_tr_str_lit_len("#", 1LL))), 0LL)); __auto_type _wr = (_last_seg(_at_t4314)); _tr_str_release(_at_t4314); _wr; });
+        TrStr ealias = ({ TrStr _at_t4421 = (List_TrStr_get(_tr_str_splitv((detail), (_tr_str_lit_len("#", 1LL))), 0LL)); __auto_type _wr = (_last_seg(_at_t4421)); _tr_str_release(_at_t4421); _wr; });
 #line 2447 "src/bindgen.tr"
         if ((depth == 0LL)) {
 #line 2447 "src/bindgen.tr"
-            TrStr _trret714 = _tr_str_retain(ealias);
+            TrStr _trret723 = _tr_str_retain(ealias);
             List_TrStr_free(d4);
             _tr_str_release(cat);
             _tr_str_release(detail);
             _tr_str_release(ealias);
-            return _trret714;
+            return _trret723;
         }
 #line 2448 "src/bindgen.tr"
-        TrStr _trret715 = _ptr_wrap(ealias, depth);
+        TrStr _trret724 = _ptr_wrap(ealias, depth);
         List_TrStr_free(d4);
         _tr_str_release(cat);
         _tr_str_release(detail);
         _tr_str_release(ealias);
-        return _trret715;
+        return _trret724;
     }
 #line 2449 "src/bindgen.tr"
     if (_tr_str_eqv((cat), (_tr_str_lit_len("r", 1LL)))) {
@@ -6106,12 +6107,12 @@ __attribute__((hot)) TrStr _cpp_field_type(TrStr desc, TrMap* value_structs, TrM
 #line 2452 "src/bindgen.tr"
             if (_tr_dict_contains(value_structs, _tr_strz(seg))) {
 #line 2452 "src/bindgen.tr"
-                TrStr _trret716 = _tr_str_retain(seg);
+                TrStr _trret725 = _tr_str_retain(seg);
                 List_TrStr_free(d4);
                 _tr_str_release(cat);
                 _tr_str_release(detail);
                 _tr_str_release(seg);
-                return _trret716;
+                return _trret725;
             }
 #line 2453 "src/bindgen.tr"
             List_TrStr_free(d4);
@@ -6121,12 +6122,12 @@ __attribute__((hot)) TrStr _cpp_field_type(TrStr desc, TrMap* value_structs, TrM
             return _tr_str_lit_len("Pointer[void]", 13LL);
         }
 #line 2454 "src/bindgen.tr"
-        TrStr _trret717 = _ptr_wrap(seg, depth);
+        TrStr _trret726 = _ptr_wrap(seg, depth);
         List_TrStr_free(d4);
         _tr_str_release(cat);
         _tr_str_release(detail);
         _tr_str_release(seg);
-        return _trret717;
+        return _trret726;
     }
 #line 2455 "src/bindgen.tr"
     if ((depth == 0LL)) {
@@ -6137,11 +6138,11 @@ __attribute__((hot)) TrStr _cpp_field_type(TrStr desc, TrMap* value_structs, TrM
         return _tr_str_lit_len("Pointer[void]", 13LL);
     }
 #line 2456 "src/bindgen.tr"
-    TrStr _trret718 = _ptr_wrap(_tr_str_lit_len("void", 4LL), depth);
+    TrStr _trret727 = _ptr_wrap(_tr_str_lit_len("void", 4LL), depth);
     List_TrStr_free(d4);
     _tr_str_release(cat);
     _tr_str_release(detail);
-    return _trret718;
+    return _trret727;
 }
 
 __attribute__((hot)) TrStr _shim_body(TrStr ret_ctype, TrStr body) {
@@ -6150,14 +6151,14 @@ __attribute__((hot)) TrStr _shim_body(TrStr ret_ctype, TrStr body) {
 #line 2464 "src/bindgen.tr"
     if (_tr_str_eqv((ret_ctype), (_tr_str_lit_len("void", 4LL)))) {
 #line 2464 "src/bindgen.tr"
-        TrStr _strtmp_t4315 = _tr_str_lit_len("return;", 7LL);
+        TrStr _strtmp_t4422 = _tr_str_lit_len("return;", 7LL);
         _tr_str_release(zero);
-        zero = _strtmp_t4315;
+        zero = _strtmp_t4422;
     }
 #line 2465 "src/bindgen.tr"
-    TrStr _trret719 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("try { ", 6LL)), (body))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" } catch (const std::exception& e) { _tr_cpp_set_error(e.what()); ", 66LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (zero)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" } catch (...) { _tr_cpp_set_error(\"C++ exception\"); ", 53LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (zero)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }", 2LL))); _tr_str_release(_tr_cl); _tr_cres; });
+    TrStr _trret728 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("try { ", 6LL)), (body))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" } catch (const std::exception& e) { _tr_cpp_set_error(e.what()); ", 66LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (zero)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" } catch (...) { _tr_cpp_set_error(\"C++ exception\"); ", 53LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (zero)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }", 2LL))); _tr_str_release(_tr_cl); _tr_cres; });
     _tr_str_release(zero);
-    return _trret719;
+    return _trret728;
 }
 
 __attribute__((hot)) TrStr _fnptr_cast(TrStr fnty) {
@@ -6169,7 +6170,7 @@ __attribute__((hot)) TrStr _fnptr_cast(TrStr fnty) {
         return _tr_str_retain(fnty);
     }
 #line 2473 "src/bindgen.tr"
-    return ({ __auto_type _ord_t4316 = (({ TrStr _tr_cl = (_tr_str_slicev((fnty), 0LL, p)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(*)", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (_ord_t4316); TrStr _tr_cr = (_tr_str_slicev((fnty), p, _tr_str_lenv((fnty)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); _wr; });
+    return ({ __auto_type _ord_t4423 = (({ TrStr _tr_cl = (_tr_str_slicev((fnty), 0LL, p)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(*)", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (_ord_t4423); TrStr _tr_cr = (_tr_str_slicev((fnty), p, _tr_str_lenv((fnty)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); _wr; });
 }
 
 __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr shim_cflags, TrStr pkglibs) {
@@ -6224,7 +6225,7 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2512 "src/bindgen.tr"
     while ((pli < plines->len)) {
 #line 2513 "src/bindgen.tr"
-        TrStr pl = ({ TrStr _at_t4317 = (List_TrStr_get(plines, pli)); __auto_type _wr = (_rstrip_cr(_at_t4317)); _tr_str_release(_at_t4317); _wr; });
+        TrStr pl = ({ TrStr _at_t4424 = (List_TrStr_get(plines, pli)); __auto_type _wr = (_rstrip_cr(_at_t4424)); _tr_str_release(_at_t4424); _wr; });
 #line 2514 "src/bindgen.tr"
         pli = (pli + 1LL);
 #line 2515 "src/bindgen.tr"
@@ -6251,9 +6252,9 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2524 "src/bindgen.tr"
             if ((cparts->len > 1LL)) {
 #line 2524 "src/bindgen.tr"
-                TrStr _strtmp_t4318 = List_TrStr_get(cparts, 1LL);
+                TrStr _strtmp_t4425 = List_TrStr_get(cparts, 1LL);
                 _tr_str_release(cpod);
-                cpod = _strtmp_t4318;
+                cpod = _strtmp_t4425;
             }
 #line 2525 "src/bindgen.tr"
             _tr_dict_set(class_names, _tr_strz(cnm), true);
@@ -6268,15 +6269,15 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
             _tr_str_release(cpod);
         } else if (_tr_str_starts_withv((pl), (_tr_str_lit_len("TCLASS ", 7LL)))) {
 #line 2528 "src/bindgen.tr"
-            List_TrStr* tp = ({ TrStr _at_t4319 = (_tr_str_slicev((pl), 7LL, _tr_str_lenv((pl)))); __auto_type _wr = (_parse_tclass(_at_t4319)); _tr_str_release(_at_t4319); _wr; });
+            List_TrStr* tp = ({ TrStr _at_t4426 = (_tr_str_slicev((pl), 7LL, _tr_str_lenv((pl)))); __auto_type _wr = (_parse_tclass(_at_t4426)); _tr_str_release(_at_t4426); _wr; });
 #line 2529 "src/bindgen.tr"
-            TrStr tnm = ({ TrStr _at_t4320 = (List_TrStr_get(tp, 0LL)); __auto_type _wr = (_cpp_ident(_at_t4320)); _tr_str_release(_at_t4320); _wr; });
+            TrStr tnm = ({ TrStr _at_t4427 = (List_TrStr_get(tp, 0LL)); __auto_type _wr = (_cpp_ident(_at_t4427)); _tr_str_release(_at_t4427); _wr; });
 #line 2530 "src/bindgen.tr"
             _tr_dict_set(class_names, _tr_strz(tnm), true);
 #line 2531 "src/bindgen.tr"
             List_TrStr_append(ps_name, tnm);
 #line 2531 "src/bindgen.tr"
-            ({ TrStr _at_t4321 = (List_TrStr_get(tp, 1LL)); List_TrStr_append(ps_pod, _at_t4321); _tr_str_release(_at_t4321); });
+            ({ TrStr _at_t4428 = (List_TrStr_get(tp, 1LL)); List_TrStr_append(ps_pod, _at_t4428); _tr_str_release(_at_t4428); });
 #line 2531 "src/bindgen.tr"
             List_TrStr_append(ps_nf, _tr_str_lit_len("0", 1LL));
             List_TrStr_free(tp);
@@ -6342,7 +6343,7 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2558 "src/bindgen.tr"
     while ((li < lines->len)) {
 #line 2559 "src/bindgen.tr"
-        TrStr line = ({ TrStr _at_t4322 = (List_TrStr_get(lines, li)); __auto_type _wr = (_rstrip_cr(_at_t4322)); _tr_str_release(_at_t4322); _wr; });
+        TrStr line = ({ TrStr _at_t4429 = (List_TrStr_get(lines, li)); __auto_type _wr = (_rstrip_cr(_at_t4429)); _tr_str_release(_at_t4429); _wr; });
 #line 2560 "src/bindgen.tr"
         li = (li + 1LL);
 #line 2561 "src/bindgen.tr"
@@ -6366,17 +6367,17 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2568 "src/bindgen.tr"
         if ((cstk_name->len > 0LL)) {
 #line 2569 "src/bindgen.tr"
-            TrStr _strtmp_t4323 = List_TrStr_get(cstk_name, (cstk_name->len - 1LL));
+            TrStr _strtmp_t4430 = List_TrStr_get(cstk_name, (cstk_name->len - 1LL));
             _tr_str_release(cur_class);
-            cur_class = _strtmp_t4323;
+            cur_class = _strtmp_t4430;
 #line 2570 "src/bindgen.tr"
-            TrStr _strtmp_t4324 = List_TrStr_get(cstk_qual, (cstk_qual->len - 1LL));
+            TrStr _strtmp_t4431 = List_TrStr_get(cstk_qual, (cstk_qual->len - 1LL));
             _tr_str_release(cur_class_qual);
-            cur_class_qual = _strtmp_t4324;
+            cur_class_qual = _strtmp_t4431;
 #line 2571 "src/bindgen.tr"
-            TrStr _strtmp_t4325 = List_TrStr_get(cstk_pfx, (cstk_pfx->len - 1LL));
+            TrStr _strtmp_t4432 = List_TrStr_get(cstk_pfx, (cstk_pfx->len - 1LL));
             _tr_str_release(class_pfx);
-            class_pfx = _strtmp_t4325;
+            class_pfx = _strtmp_t4432;
         }
 #line 2573 "src/bindgen.tr"
         if (_tr_str_starts_withv((line), (_tr_str_lit_len("CTOR", 4LL)))) {
@@ -6385,12 +6386,12 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2575 "src/bindgen.tr"
             if ((_tr_str_lenv((line)) > 5LL)) {
 #line 2575 "src/bindgen.tr"
-                m_ndef = ({ TrStr _at_t4326 = (_tr_str_slicev((line), 5LL, _tr_str_lenv((line)))); __auto_type _wr = (_to_int(_at_t4326)); _tr_str_release(_at_t4326); _wr; });
+                m_ndef = ({ TrStr _at_t4433 = (_tr_str_slicev((line), 5LL, _tr_str_lenv((line)))); __auto_type _wr = (_to_int(_at_t4433)); _tr_str_release(_at_t4433); _wr; });
             }
 #line 2576 "src/bindgen.tr"
-            TrStr _strtmp_t4327 = _tr_str_lit_len("ctor", 4LL);
+            TrStr _strtmp_t4434 = _tr_str_lit_len("ctor", 4LL);
             _tr_str_release(mode);
-            mode = _strtmp_t4327;
+            mode = _strtmp_t4434;
 #line 2576 "src/bindgen.tr"
             params = (void*)List_TrStr_new();
 #line 2576 "src/bindgen.tr"
@@ -6412,11 +6413,11 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
                 continue;
             }
 #line 2579 "src/bindgen.tr"
-            TrStr ds = ({ TrStr _at_t4328 = (_tr_strx_concatv((class_pfx), (_tr_str_lit_len("_delete", 7LL)))); __auto_type _wr = (_uniq_sym(_at_t4328, sym_used)); _tr_str_release(_at_t4328); _wr; });
+            TrStr ds = ({ TrStr _at_t4435 = (_tr_strx_concatv((class_pfx), (_tr_str_lit_len("_delete", 7LL)))); __auto_type _wr = (_uniq_sym(_at_t4435, sym_used)); _tr_str_release(_at_t4435); _wr; });
 #line 2580 "src/bindgen.tr"
-            ({ TrStr _sbt_t4329 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("void ", 5LL)), (ds))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cur_class_qual)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("* self) { ", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_shim_body(_tr_str_lit_len("void", 4LL), _tr_str_lit_len("delete self;", 12LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4329); _tr_str_release(_sbt_t4329); });
+            ({ TrStr _sbt_t4436 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("void ", 5LL)), (ds))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cur_class_qual)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("* self) { ", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_shim_body(_tr_str_lit_len("void", 4LL), _tr_str_lit_len("delete self;", 12LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4436); _tr_str_release(_sbt_t4436); });
 #line 2581 "src/bindgen.tr"
-            ({ TrStr _sbt_t4330 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    def ", 8LL)), (ds))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(obj: ", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cur_class)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(decls, _sbt_t4330); _tr_str_release(_sbt_t4330); });
+            ({ TrStr _sbt_t4437 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    def ", 8LL)), (ds))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(obj: ", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cur_class)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(decls, _sbt_t4437); _tr_str_release(_sbt_t4437); });
 #line 2582 "src/bindgen.tr"
             n_fns = (n_fns + 1LL);
 #line 2583 "src/bindgen.tr"
@@ -6430,17 +6431,17 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2584 "src/bindgen.tr"
         if (_tr_str_eqv((line), (_tr_str_lit_len("ECLASS", 6LL)))) {
 #line 2587 "src/bindgen.tr"
-            if ((_is_clean_ident(cur_class) && ({ TrStr _dkt_t4331 = (_tr_strx_concatv((_tr_str_lit_len("class:", 6LL)), (cur_class))); __auto_type _wr = ((!_tr_dict_contains(seen, _tr_strz(_dkt_t4331)))); _tr_str_release(_dkt_t4331); _wr; }))) {
+            if ((_is_clean_ident(cur_class) && ({ TrStr _dkt_t4438 = (_tr_strx_concatv((_tr_str_lit_len("class:", 6LL)), (cur_class))); __auto_type _wr = ((!_tr_dict_contains(seen, _tr_strz(_dkt_t4438)))); _tr_str_release(_dkt_t4438); _wr; }))) {
 #line 2588 "src/bindgen.tr"
                 if ((_tr_dict_contains(value_structs, _tr_strz(cur_class)) && (!_tr_str_eqv((fld_buf), (_tr_str_lit_len("", 0LL)))))) {
 #line 2589 "src/bindgen.tr"
-                    ({ TrStr _sbt_t4332 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("@value_type\nclass ", 18LL)), (cur_class))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fld_buf)); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(opaque, _sbt_t4332); _tr_str_release(_sbt_t4332); });
+                    ({ TrStr _sbt_t4439 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("@value_type\nclass ", 18LL)), (cur_class))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fld_buf)); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(opaque, _sbt_t4439); _tr_str_release(_sbt_t4439); });
                 } else {
 #line 2591 "src/bindgen.tr"
-                    ({ TrStr _sbt_t4333 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("class ", 6LL)), (cur_class))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n    pass\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(opaque, _sbt_t4333); _tr_str_release(_sbt_t4333); });
+                    ({ TrStr _sbt_t4440 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("class ", 6LL)), (cur_class))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n    pass\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(opaque, _sbt_t4440); _tr_str_release(_sbt_t4440); });
                 }
 #line 2592 "src/bindgen.tr"
-                ({ TrStr _dkt_t4334 = (_tr_strx_concatv((_tr_str_lit_len("class:", 6LL)), (cur_class))); _tr_dict_set(seen, _tr_strz(_dkt_t4334), true); _tr_str_release(_dkt_t4334); });
+                ({ TrStr _dkt_t4441 = (_tr_strx_concatv((_tr_str_lit_len("class:", 6LL)), (cur_class))); _tr_dict_set(seen, _tr_strz(_dkt_t4441), true); _tr_str_release(_dkt_t4441); });
 #line 2593 "src/bindgen.tr"
                 n_classes = (n_classes + 1LL);
             }
@@ -6456,14 +6457,14 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2598 "src/bindgen.tr"
             if ((fld_stack->len > 0LL)) {
 #line 2598 "src/bindgen.tr"
-                TrStr _strtmp_t4335 = List_TrStr_pop(fld_stack);
+                TrStr _strtmp_t4442 = List_TrStr_pop(fld_stack);
                 _tr_str_release(fld_buf);
-                fld_buf = _strtmp_t4335;
+                fld_buf = _strtmp_t4442;
             } else {
 #line 2599 "src/bindgen.tr"
-                TrStr _strtmp_t4336 = _tr_str_lit_len("", 0LL);
+                TrStr _strtmp_t4443 = _tr_str_lit_len("", 0LL);
                 _tr_str_release(fld_buf);
-                fld_buf = _strtmp_t4336;
+                fld_buf = _strtmp_t4443;
             }
 #line 2600 "src/bindgen.tr"
             _tr_str_release(line);
@@ -6485,9 +6486,9 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2612 "src/bindgen.tr"
             if ((fbar->len > 1LL)) {
 #line 2612 "src/bindgen.tr"
-                TrStr _strtmp_t4337 = List_TrStr_get(fbar, 1LL);
+                TrStr _strtmp_t4444 = List_TrStr_get(fbar, 1LL);
                 _tr_str_release(fnm);
-                fnm = _strtmp_t4337;
+                fnm = _strtmp_t4444;
             }
 #line 2613 "src/bindgen.tr"
             if (_is_clean_ident(fnm)) {
@@ -6496,24 +6497,24 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2615 "src/bindgen.tr"
                     TrStr fmap = _cpp_field_type(fdesc, value_structs, enum_names);
 #line 2616 "src/bindgen.tr"
-                    ({ TrStr _ap_t4338 = (_tr_str_lit_len("    pub ", 8LL)); TrStr _ap_t4339 = (_cpp_tr_pname(fnm)); TrStr _ap_t4340 = (_tr_str_lit_len(": ", 2LL)); TrStr _ap_t4341 = (fmap); TrStr _ap_t4342 = (_tr_str_lit_len("\n", 1LL)); _tr_str_append(&fld_buf, _ap_t4338); _tr_str_append(&fld_buf, _ap_t4339); _tr_str_append(&fld_buf, _ap_t4340); _tr_str_append(&fld_buf, _ap_t4341); _tr_str_append(&fld_buf, _ap_t4342); _tr_str_release(_ap_t4339); });
+                    ({ TrStr _ap_t4445 = (_tr_str_lit_len("    pub ", 8LL)); TrStr _ap_t4446 = (_cpp_tr_pname(fnm)); TrStr _ap_t4447 = (_tr_str_lit_len(": ", 2LL)); TrStr _ap_t4448 = (fmap); TrStr _ap_t4449 = (_tr_str_lit_len("\n", 1LL)); _tr_str_append(&fld_buf, _ap_t4445); _tr_str_append(&fld_buf, _ap_t4446); _tr_str_append(&fld_buf, _ap_t4447); _tr_str_append(&fld_buf, _ap_t4448); _tr_str_append(&fld_buf, _ap_t4449); _tr_str_release(_ap_t4446); });
                     _tr_str_release(fmap);
                 } else if (((_is_clean_ident(cur_class) && (_tr_str_index_ofv((fdesc), (_tr_str_lit_len("type-parameter", 14LL))) < 0LL)) && (_tr_str_index_ofv((fdesc), (_tr_str_lit_len("~d~", 3LL))) < 0LL))) {
 #line 2620 "src/bindgen.tr"
-                    List_TrStr* fri = ({ TrStr _at_t4343 = (_tr_strx_concatv((_tr_str_lit_len("self->", 6LL)), (fnm))); __auto_type _wr = (_cpp_ret_ex(fdesc, _at_t4343, value_structs, class_names, class_qual, seen, opaque)); _tr_str_release(_at_t4343); _wr; });
+                    List_TrStr* fri = ({ TrStr _at_t4450 = (_tr_strx_concatv((_tr_str_lit_len("self->", 6LL)), (fnm))); __auto_type _wr = (_cpp_ret_ex(fdesc, _at_t4450, value_structs, class_names, class_qual, seen, opaque)); _tr_str_release(_at_t4450); _wr; });
 #line 2621 "src/bindgen.tr"
-                    TrStr fsym = ({ TrStr _at_t4344 = (({ TrStr _tr_cl = (_tr_strx_concatv((class_pfx), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fnm)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (_uniq_sym(_at_t4344, sym_used)); _tr_str_release(_at_t4344); _wr; });
+                    TrStr fsym = ({ TrStr _at_t4451 = (({ TrStr _tr_cl = (_tr_strx_concatv((class_pfx), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fnm)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (_uniq_sym(_at_t4451, sym_used)); _tr_str_release(_at_t4451); _wr; });
 #line 2622 "src/bindgen.tr"
-                    ({ __auto_type _ord_t4347 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (List_TrStr_get(fri, 0LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fsym)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cur_class_qual)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("* self) { ", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t4345 = (List_TrStr_get(fri, 0LL)); TrStr _at_t4346 = (List_TrStr_get(fri, 1LL)); TrStr _sbt_t4348 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4347); TrStr _tr_cr = (_shim_body(_at_t4345, _at_t4346)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4348); _tr_str_release(_at_t4345); _tr_str_release(_at_t4346); _tr_str_release(_sbt_t4348); });
+                    ({ __auto_type _ord_t4454 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (List_TrStr_get(fri, 0LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fsym)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cur_class_qual)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("* self) { ", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t4452 = (List_TrStr_get(fri, 0LL)); TrStr _at_t4453 = (List_TrStr_get(fri, 1LL)); TrStr _sbt_t4455 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4454); TrStr _tr_cr = (_shim_body(_at_t4452, _at_t4453)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4455); _tr_str_release(_at_t4452); _tr_str_release(_at_t4453); _tr_str_release(_sbt_t4455); });
 #line 2623 "src/bindgen.tr"
                     TrStr fd = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    def ", 8LL)), (fsym))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(obj: ", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cur_class)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
 #line 2624 "src/bindgen.tr"
-                    if (({ TrStr _cmpa_t4349 = (List_TrStr_get(fri, 2LL)); TrStr _cmpb_t4350 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4351 = !_tr_str_eqv(_cmpa_t4349, _cmpb_t4350); _tr_str_release(_cmpa_t4349); _cmpr_t4351; })) {
+                    if (({ TrStr _cmpa_t4456 = (List_TrStr_get(fri, 2LL)); TrStr _cmpb_t4457 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4458 = !_tr_str_eqv(_cmpa_t4456, _cmpb_t4457); _tr_str_release(_cmpa_t4456); _cmpr_t4458; })) {
 #line 2624 "src/bindgen.tr"
-                        ({ TrStr _ap_t4352 = (_tr_str_lit_len(" -> ", 4LL)); TrStr _ap_t4353 = (List_TrStr_get(fri, 2LL)); _tr_str_append(&fd, _ap_t4352); _tr_str_append(&fd, _ap_t4353); _tr_str_release(_ap_t4353); });
+                        ({ TrStr _ap_t4459 = (_tr_str_lit_len(" -> ", 4LL)); TrStr _ap_t4460 = (List_TrStr_get(fri, 2LL)); _tr_str_append(&fd, _ap_t4459); _tr_str_append(&fd, _ap_t4460); _tr_str_release(_ap_t4460); });
                     }
 #line 2625 "src/bindgen.tr"
-                    ({ TrStr _sbt_t4354 = (_tr_strx_concatv((fd), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(decls, _sbt_t4354); _tr_str_release(_sbt_t4354); });
+                    ({ TrStr _sbt_t4461 = (_tr_strx_concatv((fd), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(decls, _sbt_t4461); _tr_str_release(_sbt_t4461); });
 #line 2626 "src/bindgen.tr"
                     n_fns = (n_fns + 1LL);
                     _tr_str_release(fsym);
@@ -6540,18 +6541,18 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2636 "src/bindgen.tr"
                 List_TrStr* iri = _cpp_ret_ex(idesc, _tr_str_lit_len("(*it)", 5LL), value_structs, class_names, class_qual, seen, opaque);
 #line 2637 "src/bindgen.tr"
-                TrStr isym = ({ TrStr _at_t4355 = (_tr_strx_concatv((class_pfx), (_tr_str_lit_len("_nth", 4LL)))); __auto_type _wr = (_uniq_sym(_at_t4355, sym_used)); _tr_str_release(_at_t4355); _wr; });
+                TrStr isym = ({ TrStr _at_t4462 = (_tr_strx_concatv((class_pfx), (_tr_str_lit_len("_nth", 4LL)))); __auto_type _wr = (_uniq_sym(_at_t4462, sym_used)); _tr_str_release(_at_t4462); _wr; });
 #line 2638 "src/bindgen.tr"
-                ({ __auto_type _ord_t4358 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (List_TrStr_get(iri, 0LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (isym)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cur_class_qual)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("* self, long i) { ", 18LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t4356 = (List_TrStr_get(iri, 0LL)); TrStr _at_t4357 = (({ TrStr _tr_cr = (List_TrStr_get(iri, 1LL)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("auto it = self->begin(); std::advance(it, (long)i); ", 52LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _sbt_t4359 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4358); TrStr _tr_cr = (_shim_body(_at_t4356, _at_t4357)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4359); _tr_str_release(_at_t4356); _tr_str_release(_at_t4357); _tr_str_release(_sbt_t4359); });
+                ({ __auto_type _ord_t4465 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (List_TrStr_get(iri, 0LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (isym)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cur_class_qual)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("* self, long i) { ", 18LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t4463 = (List_TrStr_get(iri, 0LL)); TrStr _at_t4464 = (({ TrStr _tr_cr = (List_TrStr_get(iri, 1LL)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("auto it = self->begin(); std::advance(it, (long)i); ", 52LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _sbt_t4466 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4465); TrStr _tr_cr = (_shim_body(_at_t4463, _at_t4464)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4466); _tr_str_release(_at_t4463); _tr_str_release(_at_t4464); _tr_str_release(_sbt_t4466); });
 #line 2639 "src/bindgen.tr"
                 TrStr id = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    def ", 8LL)), (isym))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(obj: ", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cur_class)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", i: c_long)", 12LL))); _tr_str_release(_tr_cl); _tr_cres; });
 #line 2640 "src/bindgen.tr"
-                if (({ TrStr _cmpa_t4360 = (List_TrStr_get(iri, 2LL)); TrStr _cmpb_t4361 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4362 = !_tr_str_eqv(_cmpa_t4360, _cmpb_t4361); _tr_str_release(_cmpa_t4360); _cmpr_t4362; })) {
+                if (({ TrStr _cmpa_t4467 = (List_TrStr_get(iri, 2LL)); TrStr _cmpb_t4468 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4469 = !_tr_str_eqv(_cmpa_t4467, _cmpb_t4468); _tr_str_release(_cmpa_t4467); _cmpr_t4469; })) {
 #line 2640 "src/bindgen.tr"
-                    ({ TrStr _ap_t4363 = (_tr_str_lit_len(" -> ", 4LL)); TrStr _ap_t4364 = (List_TrStr_get(iri, 2LL)); _tr_str_append(&id, _ap_t4363); _tr_str_append(&id, _ap_t4364); _tr_str_release(_ap_t4364); });
+                    ({ TrStr _ap_t4470 = (_tr_str_lit_len(" -> ", 4LL)); TrStr _ap_t4471 = (List_TrStr_get(iri, 2LL)); _tr_str_append(&id, _ap_t4470); _tr_str_append(&id, _ap_t4471); _tr_str_release(_ap_t4471); });
                 }
 #line 2641 "src/bindgen.tr"
-                ({ TrStr _sbt_t4365 = (_tr_strx_concatv((id), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(decls, _sbt_t4365); _tr_str_release(_sbt_t4365); });
+                ({ TrStr _sbt_t4472 = (_tr_strx_concatv((id), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(decls, _sbt_t4472); _tr_str_release(_sbt_t4472); });
 #line 2642 "src/bindgen.tr"
                 n_fns = (n_fns + 1LL);
                 _tr_str_release(isym);
@@ -6580,29 +6581,29 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2653 "src/bindgen.tr"
                 if (is_key) {
 #line 2654 "src/bindgen.tr"
-                    TrStr _strtmp_t4366 = _tr_str_lit_len("(it->first)", 11LL);
+                    TrStr _strtmp_t4473 = _tr_str_lit_len("(it->first)", 11LL);
                     _tr_str_release(mfield);
-                    mfield = _strtmp_t4366;
+                    mfield = _strtmp_t4473;
 #line 2655 "src/bindgen.tr"
-                    TrStr _strtmp_t4367 = _tr_str_lit_len("_key_nth", 8LL);
+                    TrStr _strtmp_t4474 = _tr_str_lit_len("_key_nth", 8LL);
                     _tr_str_release(mname);
-                    mname = _strtmp_t4367;
+                    mname = _strtmp_t4474;
                 }
 #line 2656 "src/bindgen.tr"
                 List_TrStr* mri = _cpp_ret_ex(mdesc, mfield, value_structs, class_names, class_qual, seen, opaque);
 #line 2657 "src/bindgen.tr"
-                TrStr msym = ({ TrStr _at_t4368 = (_tr_strx_concatv((class_pfx), (mname))); __auto_type _wr = (_uniq_sym(_at_t4368, sym_used)); _tr_str_release(_at_t4368); _wr; });
+                TrStr msym = ({ TrStr _at_t4475 = (_tr_strx_concatv((class_pfx), (mname))); __auto_type _wr = (_uniq_sym(_at_t4475, sym_used)); _tr_str_release(_at_t4475); _wr; });
 #line 2658 "src/bindgen.tr"
-                ({ __auto_type _ord_t4371 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (List_TrStr_get(mri, 0LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (msym)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cur_class_qual)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("* self, long i) { ", 18LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t4369 = (List_TrStr_get(mri, 0LL)); TrStr _at_t4370 = (({ TrStr _tr_cr = (List_TrStr_get(mri, 1LL)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("auto it = self->begin(); std::advance(it, (long)i); ", 52LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _sbt_t4372 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4371); TrStr _tr_cr = (_shim_body(_at_t4369, _at_t4370)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4372); _tr_str_release(_at_t4369); _tr_str_release(_at_t4370); _tr_str_release(_sbt_t4372); });
+                ({ __auto_type _ord_t4478 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (List_TrStr_get(mri, 0LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (msym)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cur_class_qual)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("* self, long i) { ", 18LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t4476 = (List_TrStr_get(mri, 0LL)); TrStr _at_t4477 = (({ TrStr _tr_cr = (List_TrStr_get(mri, 1LL)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("auto it = self->begin(); std::advance(it, (long)i); ", 52LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _sbt_t4479 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4478); TrStr _tr_cr = (_shim_body(_at_t4476, _at_t4477)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4479); _tr_str_release(_at_t4476); _tr_str_release(_at_t4477); _tr_str_release(_sbt_t4479); });
 #line 2659 "src/bindgen.tr"
                 TrStr md = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    def ", 8LL)), (msym))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(obj: ", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cur_class)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", i: c_long)", 12LL))); _tr_str_release(_tr_cl); _tr_cres; });
 #line 2660 "src/bindgen.tr"
-                if (({ TrStr _cmpa_t4373 = (List_TrStr_get(mri, 2LL)); TrStr _cmpb_t4374 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4375 = !_tr_str_eqv(_cmpa_t4373, _cmpb_t4374); _tr_str_release(_cmpa_t4373); _cmpr_t4375; })) {
+                if (({ TrStr _cmpa_t4480 = (List_TrStr_get(mri, 2LL)); TrStr _cmpb_t4481 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4482 = !_tr_str_eqv(_cmpa_t4480, _cmpb_t4481); _tr_str_release(_cmpa_t4480); _cmpr_t4482; })) {
 #line 2660 "src/bindgen.tr"
-                    ({ TrStr _ap_t4376 = (_tr_str_lit_len(" -> ", 4LL)); TrStr _ap_t4377 = (List_TrStr_get(mri, 2LL)); _tr_str_append(&md, _ap_t4376); _tr_str_append(&md, _ap_t4377); _tr_str_release(_ap_t4377); });
+                    ({ TrStr _ap_t4483 = (_tr_str_lit_len(" -> ", 4LL)); TrStr _ap_t4484 = (List_TrStr_get(mri, 2LL)); _tr_str_append(&md, _ap_t4483); _tr_str_append(&md, _ap_t4484); _tr_str_release(_ap_t4484); });
                 }
 #line 2661 "src/bindgen.tr"
-                ({ TrStr _sbt_t4378 = (_tr_strx_concatv((md), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(decls, _sbt_t4378); _tr_str_release(_sbt_t4378); });
+                ({ TrStr _sbt_t4485 = (_tr_strx_concatv((md), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(decls, _sbt_t4485); _tr_str_release(_sbt_t4485); });
 #line 2662 "src/bindgen.tr"
                 n_fns = (n_fns + 1LL);
                 _tr_str_release(mfield);
@@ -6631,9 +6632,9 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2672 "src/bindgen.tr"
             if ((gbar->len > 1LL)) {
 #line 2672 "src/bindgen.tr"
-                TrStr _strtmp_t4379 = List_TrStr_get(gbar, 1LL);
+                TrStr _strtmp_t4486 = List_TrStr_get(gbar, 1LL);
                 _tr_str_release(gvnm);
-                gvnm = _strtmp_t4379;
+                gvnm = _strtmp_t4486;
             }
 #line 2673 "src/bindgen.tr"
             TrStr gcat = List_TrStr_get(_desc4(gvdesc), 2LL);
@@ -6646,38 +6647,38 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2681 "src/bindgen.tr"
                 if ((!_tr_str_eqv((cur_class), (_tr_str_lit_len("", 0LL))))) {
 #line 2682 "src/bindgen.tr"
-                    TrStr _strtmp_t4380 = ({ TrStr _tr_cl = (_tr_strx_concatv((cur_class_qual), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (gvnm)); _tr_str_release(_tr_cl); _tr_cres; });
+                    TrStr _strtmp_t4487 = ({ TrStr _tr_cl = (_tr_strx_concatv((cur_class_qual), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (gvnm)); _tr_str_release(_tr_cl); _tr_cres; });
                     _tr_str_release(gqual);
-                    gqual = _strtmp_t4380;
+                    gqual = _strtmp_t4487;
 #line 2683 "src/bindgen.tr"
-                    TrStr _strtmp_t4381 = ({ TrStr _tr_cl = (_tr_strx_concatv((class_pfx), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (gvnm)); _tr_str_release(_tr_cl); _tr_cres; });
+                    TrStr _strtmp_t4488 = ({ TrStr _tr_cl = (_tr_strx_concatv((class_pfx), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (gvnm)); _tr_str_release(_tr_cl); _tr_cres; });
                     _tr_str_release(gsym0);
-                    gsym0 = _strtmp_t4381;
+                    gsym0 = _strtmp_t4488;
                 } else if ((!_tr_str_eqv((ns_path), (_tr_str_lit_len("", 0LL))))) {
 #line 2685 "src/bindgen.tr"
-                    TrStr _strtmp_t4382 = ({ TrStr _tr_cl = (_tr_strx_concatv((ns_path), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (gvnm)); _tr_str_release(_tr_cl); _tr_cres; });
+                    TrStr _strtmp_t4489 = ({ TrStr _tr_cl = (_tr_strx_concatv((ns_path), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (gvnm)); _tr_str_release(_tr_cl); _tr_cres; });
                     _tr_str_release(gqual);
-                    gqual = _strtmp_t4382;
+                    gqual = _strtmp_t4489;
 #line 2686 "src/bindgen.tr"
-                    TrStr _strtmp_t4383 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ns_us(ns_path)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (gvnm)); _tr_str_release(_tr_cl); _tr_cres; });
+                    TrStr _strtmp_t4490 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ns_us(ns_path)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (gvnm)); _tr_str_release(_tr_cl); _tr_cres; });
                     _tr_str_release(gsym0);
-                    gsym0 = _strtmp_t4383;
+                    gsym0 = _strtmp_t4490;
                 }
 #line 2687 "src/bindgen.tr"
                 List_TrStr* gvri = _cpp_ret_ex(gvdesc, gqual, value_structs, class_names, class_qual, seen, opaque);
 #line 2688 "src/bindgen.tr"
                 TrStr gvs = _uniq_sym(gsym0, sym_used);
 #line 2689 "src/bindgen.tr"
-                ({ __auto_type _ord_t4386 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (List_TrStr_get(gvri, 0LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (gvs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("() { ", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t4384 = (List_TrStr_get(gvri, 0LL)); TrStr _at_t4385 = (List_TrStr_get(gvri, 1LL)); TrStr _sbt_t4387 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4386); TrStr _tr_cr = (_shim_body(_at_t4384, _at_t4385)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4387); _tr_str_release(_at_t4384); _tr_str_release(_at_t4385); _tr_str_release(_sbt_t4387); });
+                ({ __auto_type _ord_t4493 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (List_TrStr_get(gvri, 0LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (gvs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("() { ", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t4491 = (List_TrStr_get(gvri, 0LL)); TrStr _at_t4492 = (List_TrStr_get(gvri, 1LL)); TrStr _sbt_t4494 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4493); TrStr _tr_cr = (_shim_body(_at_t4491, _at_t4492)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4494); _tr_str_release(_at_t4491); _tr_str_release(_at_t4492); _tr_str_release(_sbt_t4494); });
 #line 2690 "src/bindgen.tr"
                 TrStr gvd = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    def ", 8LL)), (gvs))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("()", 2LL))); _tr_str_release(_tr_cl); _tr_cres; });
 #line 2691 "src/bindgen.tr"
-                if (({ TrStr _cmpa_t4388 = (List_TrStr_get(gvri, 2LL)); TrStr _cmpb_t4389 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4390 = !_tr_str_eqv(_cmpa_t4388, _cmpb_t4389); _tr_str_release(_cmpa_t4388); _cmpr_t4390; })) {
+                if (({ TrStr _cmpa_t4495 = (List_TrStr_get(gvri, 2LL)); TrStr _cmpb_t4496 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4497 = !_tr_str_eqv(_cmpa_t4495, _cmpb_t4496); _tr_str_release(_cmpa_t4495); _cmpr_t4497; })) {
 #line 2691 "src/bindgen.tr"
-                    ({ TrStr _ap_t4391 = (_tr_str_lit_len(" -> ", 4LL)); TrStr _ap_t4392 = (List_TrStr_get(gvri, 2LL)); _tr_str_append(&gvd, _ap_t4391); _tr_str_append(&gvd, _ap_t4392); _tr_str_release(_ap_t4392); });
+                    ({ TrStr _ap_t4498 = (_tr_str_lit_len(" -> ", 4LL)); TrStr _ap_t4499 = (List_TrStr_get(gvri, 2LL)); _tr_str_append(&gvd, _ap_t4498); _tr_str_append(&gvd, _ap_t4499); _tr_str_release(_ap_t4499); });
                 }
 #line 2692 "src/bindgen.tr"
-                ({ TrStr _sbt_t4393 = (_tr_strx_concatv((gvd), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(decls, _sbt_t4393); _tr_str_release(_sbt_t4393); });
+                ({ TrStr _sbt_t4500 = (_tr_strx_concatv((gvd), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(decls, _sbt_t4500); _tr_str_release(_sbt_t4500); });
 #line 2693 "src/bindgen.tr"
                 n_fns = (n_fns + 1LL);
                 _tr_str_release(gqual);
@@ -6704,15 +6705,15 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2700 "src/bindgen.tr"
             List_TrStr* ftbar = _tr_str_splitv((ftrest), (_tr_str_lit_len("|", 1LL)));
 #line 2701 "src/bindgen.tr"
-            long long ftnp = ({ TrStr _at_t4394 = (List_TrStr_get(ftbar, 0LL)); __auto_type _wr = (_to_int(_at_t4394)); _tr_str_release(_at_t4394); _wr; });
+            long long ftnp = ({ TrStr _at_t4501 = (List_TrStr_get(ftbar, 0LL)); __auto_type _wr = (_to_int(_at_t4501)); _tr_str_release(_at_t4501); _wr; });
 #line 2702 "src/bindgen.tr"
             TrStr ftnm = _tr_str_lit_len("", 0LL);
 #line 2703 "src/bindgen.tr"
             if ((ftbar->len > 1LL)) {
 #line 2703 "src/bindgen.tr"
-                TrStr _strtmp_t4395 = List_TrStr_get(ftbar, 1LL);
+                TrStr _strtmp_t4502 = List_TrStr_get(ftbar, 1LL);
                 _tr_str_release(ftnm);
-                ftnm = _strtmp_t4395;
+                ftnm = _strtmp_t4502;
             }
 #line 2704 "src/bindgen.tr"
             if ((_is_clean_ident(ftnm) && (ftnp >= 0LL))) {
@@ -6755,24 +6756,24 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2723 "src/bindgen.tr"
                         if ((!_tr_str_eqv((fshimp), (_tr_str_lit_len("", 0LL))))) {
 #line 2723 "src/bindgen.tr"
-                            ({ TrStr _ap_t4396 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&fshimp, _ap_t4396); });
+                            ({ TrStr _ap_t4503 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&fshimp, _ap_t4503); });
                         }
 #line 2724 "src/bindgen.tr"
-                        ({ TrStr _ap_t4397 = (fcpp); TrStr _ap_t4398 = (_tr_str_lit_len(" ", 1LL)); TrStr _ap_t4399 = (fan); _tr_str_append(&fshimp, _ap_t4397); _tr_str_append(&fshimp, _ap_t4398); _tr_str_append(&fshimp, _ap_t4399); });
+                        ({ TrStr _ap_t4504 = (fcpp); TrStr _ap_t4505 = (_tr_str_lit_len(" ", 1LL)); TrStr _ap_t4506 = (fan); _tr_str_append(&fshimp, _ap_t4504); _tr_str_append(&fshimp, _ap_t4505); _tr_str_append(&fshimp, _ap_t4506); });
 #line 2725 "src/bindgen.tr"
                         if ((!_tr_str_eqv((ftrp), (_tr_str_lit_len("", 0LL))))) {
 #line 2725 "src/bindgen.tr"
-                            ({ TrStr _ap_t4400 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&ftrp, _ap_t4400); });
+                            ({ TrStr _ap_t4507 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&ftrp, _ap_t4507); });
                         }
 #line 2726 "src/bindgen.tr"
-                        ({ TrStr _ap_t4401 = (fan); TrStr _ap_t4402 = (_tr_str_lit_len(": ", 2LL)); TrStr _ap_t4403 = (fcty); _tr_str_append(&ftrp, _ap_t4401); _tr_str_append(&ftrp, _ap_t4402); _tr_str_append(&ftrp, _ap_t4403); });
+                        ({ TrStr _ap_t4508 = (fan); TrStr _ap_t4509 = (_tr_str_lit_len(": ", 2LL)); TrStr _ap_t4510 = (fcty); _tr_str_append(&ftrp, _ap_t4508); _tr_str_append(&ftrp, _ap_t4509); _tr_str_append(&ftrp, _ap_t4510); });
 #line 2727 "src/bindgen.tr"
                         if ((!_tr_str_eqv((fcallargs), (_tr_str_lit_len("", 0LL))))) {
 #line 2727 "src/bindgen.tr"
-                            ({ TrStr _ap_t4404 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&fcallargs, _ap_t4404); });
+                            ({ TrStr _ap_t4511 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&fcallargs, _ap_t4511); });
                         }
 #line 2728 "src/bindgen.tr"
-                        ({ TrStr _ap_t4405 = (fan); _tr_str_append(&fcallargs, _ap_t4405); });
+                        ({ TrStr _ap_t4512 = (fan); _tr_str_append(&fcallargs, _ap_t4512); });
                         _tr_str_release(fan);
                     }
 #line 2729 "src/bindgen.tr"
@@ -6782,22 +6783,22 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2731 "src/bindgen.tr"
                     if ((!_tr_str_eqv((ns_path), (_tr_str_lit_len("", 0LL))))) {
 #line 2732 "src/bindgen.tr"
-                        TrStr _strtmp_t4406 = ({ TrStr _tr_cl = (_tr_strx_concatv((ns_path), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ftnm)); _tr_str_release(_tr_cl); _tr_cres; });
+                        TrStr _strtmp_t4513 = ({ TrStr _tr_cl = (_tr_strx_concatv((ns_path), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ftnm)); _tr_str_release(_tr_cl); _tr_cres; });
                         _tr_str_release(fqual);
-                        fqual = _strtmp_t4406;
+                        fqual = _strtmp_t4513;
 #line 2733 "src/bindgen.tr"
-                        TrStr _strtmp_t4407 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ns_us(ns_path)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ftnm)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fcpp)); _tr_str_release(_tr_cl); _tr_cres; });
+                        TrStr _strtmp_t4514 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ns_us(ns_path)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ftnm)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fcpp)); _tr_str_release(_tr_cl); _tr_cres; });
                         _tr_str_release(ftsym0);
-                        ftsym0 = _strtmp_t4407;
+                        ftsym0 = _strtmp_t4514;
                     }
 #line 2734 "src/bindgen.tr"
                     TrStr ftsym = _uniq_sym(ftsym0, sym_used);
 #line 2735 "src/bindgen.tr"
                     TrStr fcall = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((fqual), (_tr_str_lit_len("<", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fcpp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">(", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fcallargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
 #line 2736 "src/bindgen.tr"
-                    ({ TrStr _at_t4408 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (fcall))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t4409 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((fcpp), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ftsym)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fshimp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") { ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_shim_body(fcpp, _at_t4408)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4409); _tr_str_release(_at_t4408); _tr_str_release(_sbt_t4409); });
+                    ({ TrStr _at_t4515 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (fcall))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t4516 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((fcpp), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ftsym)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fshimp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") { ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_shim_body(fcpp, _at_t4515)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4516); _tr_str_release(_at_t4515); _tr_str_release(_sbt_t4516); });
 #line 2737 "src/bindgen.tr"
-                    ({ TrStr _sbt_t4410 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    def ", 8LL)), (ftsym))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ftrp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") -> ", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fcty)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(decls, _sbt_t4410); _tr_str_release(_sbt_t4410); });
+                    ({ TrStr _sbt_t4517 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    def ", 8LL)), (ftsym))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ftrp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") -> ", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fcty)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(decls, _sbt_t4517); _tr_str_release(_sbt_t4517); });
 #line 2738 "src/bindgen.tr"
                     n_fns = (n_fns + 1LL);
                     _tr_str_release(fcpp);
@@ -6836,9 +6837,9 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2746 "src/bindgen.tr"
             List_TrStr_append(fld_stack, fld_buf);
 #line 2747 "src/bindgen.tr"
-            TrStr _strtmp_t4411 = _tr_str_lit_len("", 0LL);
+            TrStr _strtmp_t4518 = _tr_str_lit_len("", 0LL);
             _tr_str_release(fld_buf);
-            fld_buf = _strtmp_t4411;
+            fld_buf = _strtmp_t4518;
 #line 2748 "src/bindgen.tr"
             _tr_str_release(line);
             _tr_str_release(cur_class);
@@ -6860,14 +6861,14 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2755 "src/bindgen.tr"
             if ((sbar->len > 1LL)) {
 #line 2755 "src/bindgen.tr"
-                TrStr _strtmp_t4412 = List_TrStr_get(sbar, 1LL);
+                TrStr _strtmp_t4519 = List_TrStr_get(sbar, 1LL);
                 _tr_str_release(snm);
-                snm = _strtmp_t4412;
+                snm = _strtmp_t4519;
             }
 #line 2756 "src/bindgen.tr"
             if (_is_clean_ident(snm)) {
 #line 2757 "src/bindgen.tr"
-                ({ TrStr _ap_t4413 = (_tr_str_lit_len("    pub ", 8LL)); TrStr _ap_t4414 = (_cpp_tr_pname(snm)); TrStr _ap_t4415 = (_tr_str_lit_len(": ", 2LL)); TrStr _ap_t4416 = (sty); TrStr _ap_t4417 = (_tr_str_lit_len("\n", 1LL)); _tr_str_append(&fld_buf, _ap_t4413); _tr_str_append(&fld_buf, _ap_t4414); _tr_str_append(&fld_buf, _ap_t4415); _tr_str_append(&fld_buf, _ap_t4416); _tr_str_append(&fld_buf, _ap_t4417); _tr_str_release(_ap_t4414); });
+                ({ TrStr _ap_t4520 = (_tr_str_lit_len("    pub ", 8LL)); TrStr _ap_t4521 = (_cpp_tr_pname(snm)); TrStr _ap_t4522 = (_tr_str_lit_len(": ", 2LL)); TrStr _ap_t4523 = (sty); TrStr _ap_t4524 = (_tr_str_lit_len("\n", 1LL)); _tr_str_append(&fld_buf, _ap_t4520); _tr_str_append(&fld_buf, _ap_t4521); _tr_str_append(&fld_buf, _ap_t4522); _tr_str_append(&fld_buf, _ap_t4523); _tr_str_append(&fld_buf, _ap_t4524); _tr_str_release(_ap_t4521); });
             }
 #line 2758 "src/bindgen.tr"
             _tr_str_release(line);
@@ -6883,17 +6884,17 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2759 "src/bindgen.tr"
         if (_tr_str_eqv((line), (_tr_str_lit_len("EXSTRUCT", 8LL)))) {
 #line 2760 "src/bindgen.tr"
-            if ((_is_clean_ident(cur_class) && ({ TrStr _dkt_t4418 = (_tr_strx_concatv((_tr_str_lit_len("class:", 6LL)), (cur_class))); __auto_type _wr = ((!_tr_dict_contains(seen, _tr_strz(_dkt_t4418)))); _tr_str_release(_dkt_t4418); _wr; }))) {
+            if ((_is_clean_ident(cur_class) && ({ TrStr _dkt_t4525 = (_tr_strx_concatv((_tr_str_lit_len("class:", 6LL)), (cur_class))); __auto_type _wr = ((!_tr_dict_contains(seen, _tr_strz(_dkt_t4525)))); _tr_str_release(_dkt_t4525); _wr; }))) {
 #line 2761 "src/bindgen.tr"
                 if ((!_tr_str_eqv((fld_buf), (_tr_str_lit_len("", 0LL))))) {
 #line 2761 "src/bindgen.tr"
-                    ({ TrStr _sbt_t4419 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("@value_type\nclass ", 18LL)), (cur_class))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fld_buf)); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(opaque, _sbt_t4419); _tr_str_release(_sbt_t4419); });
+                    ({ TrStr _sbt_t4526 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("@value_type\nclass ", 18LL)), (cur_class))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fld_buf)); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(opaque, _sbt_t4526); _tr_str_release(_sbt_t4526); });
                 } else {
 #line 2762 "src/bindgen.tr"
-                    ({ TrStr _sbt_t4420 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("class ", 6LL)), (cur_class))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n    pass\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(opaque, _sbt_t4420); _tr_str_release(_sbt_t4420); });
+                    ({ TrStr _sbt_t4527 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("class ", 6LL)), (cur_class))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":\n    pass\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(opaque, _sbt_t4527); _tr_str_release(_sbt_t4527); });
                 }
 #line 2763 "src/bindgen.tr"
-                ({ TrStr _dkt_t4421 = (_tr_strx_concatv((_tr_str_lit_len("class:", 6LL)), (cur_class))); _tr_dict_set(seen, _tr_strz(_dkt_t4421), true); _tr_str_release(_dkt_t4421); });
+                ({ TrStr _dkt_t4528 = (_tr_strx_concatv((_tr_str_lit_len("class:", 6LL)), (cur_class))); _tr_dict_set(seen, _tr_strz(_dkt_t4528), true); _tr_str_release(_dkt_t4528); });
 #line 2764 "src/bindgen.tr"
                 n_classes = (n_classes + 1LL);
             }
@@ -6909,14 +6910,14 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2769 "src/bindgen.tr"
             if ((fld_stack->len > 0LL)) {
 #line 2769 "src/bindgen.tr"
-                TrStr _strtmp_t4422 = List_TrStr_pop(fld_stack);
+                TrStr _strtmp_t4529 = List_TrStr_pop(fld_stack);
                 _tr_str_release(fld_buf);
-                fld_buf = _strtmp_t4422;
+                fld_buf = _strtmp_t4529;
             } else {
 #line 2770 "src/bindgen.tr"
-                TrStr _strtmp_t4423 = _tr_str_lit_len("", 0LL);
+                TrStr _strtmp_t4530 = _tr_str_lit_len("", 0LL);
                 _tr_str_release(fld_buf);
-                fld_buf = _strtmp_t4423;
+                fld_buf = _strtmp_t4530;
             }
 #line 2771 "src/bindgen.tr"
             _tr_str_release(line);
@@ -6928,9 +6929,9 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2772 "src/bindgen.tr"
         if (_tr_str_eqv((line), (_tr_str_lit_len("ENS", 3LL)))) {
 #line 2773 "src/bindgen.tr"
-            TrStr _strtmp_t4424 = _ns_pop(ns_path);
+            TrStr _strtmp_t4531 = _ns_pop(ns_path);
             _tr_str_release(ns_path);
-            ns_path = _strtmp_t4424;
+            ns_path = _strtmp_t4531;
 #line 2773 "src/bindgen.tr"
             _tr_str_release(line);
             _tr_str_release(cur_class);
@@ -6954,19 +6955,19 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2779 "src/bindgen.tr"
             if (_tr_str_eqv((ns_path), (_tr_str_lit_len("", 0LL)))) {
 #line 2779 "src/bindgen.tr"
-                TrStr _strtmp_t4425 = _tr_str_retain(nn);
+                TrStr _strtmp_t4532 = _tr_str_retain(nn);
                 _tr_str_release(ns_path);
-                ns_path = _strtmp_t4425;
+                ns_path = _strtmp_t4532;
             } else {
 #line 2780 "src/bindgen.tr"
-                ({ TrStr _ap_t4426 = (_tr_str_lit_len("::", 2LL)); TrStr _ap_t4427 = (nn); _tr_str_append(&ns_path, _ap_t4426); _tr_str_append(&ns_path, _ap_t4427); });
+                ({ TrStr _ap_t4533 = (_tr_str_lit_len("::", 2LL)); TrStr _ap_t4534 = (nn); _tr_str_append(&ns_path, _ap_t4533); _tr_str_append(&ns_path, _ap_t4534); });
             }
 #line 2781 "src/bindgen.tr"
-            if (({ TrStr _dkt_t4428 = (_tr_strx_concatv((_tr_str_lit_len("using:", 6LL)), (ns_path))); __auto_type _wr = ((!_tr_dict_contains(seen, _tr_strz(_dkt_t4428)))); _tr_str_release(_dkt_t4428); _wr; })) {
+            if (({ TrStr _dkt_t4535 = (_tr_strx_concatv((_tr_str_lit_len("using:", 6LL)), (ns_path))); __auto_type _wr = ((!_tr_dict_contains(seen, _tr_strz(_dkt_t4535)))); _tr_str_release(_dkt_t4535); _wr; })) {
 #line 2782 "src/bindgen.tr"
-                ({ TrStr _sbt_t4429 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("using namespace ", 16LL)), (ns_path))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(usings, _sbt_t4429); _tr_str_release(_sbt_t4429); });
+                ({ TrStr _sbt_t4536 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("using namespace ", 16LL)), (ns_path))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(usings, _sbt_t4536); _tr_str_release(_sbt_t4536); });
 #line 2783 "src/bindgen.tr"
-                ({ TrStr _dkt_t4430 = (_tr_strx_concatv((_tr_str_lit_len("using:", 6LL)), (ns_path))); _tr_dict_set(seen, _tr_strz(_dkt_t4430), true); _tr_str_release(_dkt_t4430); });
+                ({ TrStr _dkt_t4537 = (_tr_strx_concatv((_tr_str_lit_len("using:", 6LL)), (ns_path))); _tr_dict_set(seen, _tr_strz(_dkt_t4537), true); _tr_str_release(_dkt_t4537); });
             }
 #line 2784 "src/bindgen.tr"
             _tr_str_release(line);
@@ -6979,7 +6980,7 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2785 "src/bindgen.tr"
         if (_tr_str_starts_withv((line), (_tr_str_lit_len("TCLASS ", 7LL)))) {
 #line 2788 "src/bindgen.tr"
-            List_TrStr* tp2 = ({ TrStr _at_t4431 = (_tr_str_slicev((line), 7LL, _tr_str_lenv((line)))); __auto_type _wr = (_parse_tclass(_at_t4431)); _tr_str_release(_at_t4431); _wr; });
+            List_TrStr* tp2 = ({ TrStr _at_t4538 = (_tr_str_slicev((line), 7LL, _tr_str_lenv((line)))); __auto_type _wr = (_parse_tclass(_at_t4538)); _tr_str_release(_at_t4538); _wr; });
 #line 2789 "src/bindgen.tr"
             TrStr tspell = List_TrStr_get(tp2, 0LL);
 #line 2790 "src/bindgen.tr"
@@ -6995,9 +6996,9 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2795 "src/bindgen.tr"
             List_TrStr_append(fld_stack, fld_buf);
 #line 2796 "src/bindgen.tr"
-            TrStr _strtmp_t4432 = _tr_str_lit_len("", 0LL);
+            TrStr _strtmp_t4539 = _tr_str_lit_len("", 0LL);
             _tr_str_release(fld_buf);
-            fld_buf = _strtmp_t4432;
+            fld_buf = _strtmp_t4539;
 #line 2797 "src/bindgen.tr"
             _tr_str_release(line);
             _tr_str_release(cur_class);
@@ -7021,26 +7022,26 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2804 "src/bindgen.tr"
             if ((!_tr_str_eqv((cur_class_qual), (_tr_str_lit_len("", 0LL))))) {
 #line 2804 "src/bindgen.tr"
-                TrStr _strtmp_t4433 = ({ TrStr _tr_cl = (_tr_strx_concatv((cur_class_qual), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ncls)); _tr_str_release(_tr_cl); _tr_cres; });
+                TrStr _strtmp_t4540 = ({ TrStr _tr_cl = (_tr_strx_concatv((cur_class_qual), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ncls)); _tr_str_release(_tr_cl); _tr_cres; });
                 _tr_str_release(nqual);
-                nqual = _strtmp_t4433;
+                nqual = _strtmp_t4540;
             } else if ((!_tr_str_eqv((ns_path), (_tr_str_lit_len("", 0LL))))) {
 #line 2805 "src/bindgen.tr"
-                TrStr _strtmp_t4434 = ({ TrStr _tr_cl = (_tr_strx_concatv((ns_path), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ncls)); _tr_str_release(_tr_cl); _tr_cres; });
+                TrStr _strtmp_t4541 = ({ TrStr _tr_cl = (_tr_strx_concatv((ns_path), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ncls)); _tr_str_release(_tr_cl); _tr_cres; });
                 _tr_str_release(nqual);
-                nqual = _strtmp_t4434;
+                nqual = _strtmp_t4541;
             }
 #line 2806 "src/bindgen.tr"
             if ((!_tr_str_eqv((class_pfx), (_tr_str_lit_len("", 0LL))))) {
 #line 2806 "src/bindgen.tr"
-                TrStr _strtmp_t4435 = ({ TrStr _tr_cl = (_tr_strx_concatv((class_pfx), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ncls)); _tr_str_release(_tr_cl); _tr_cres; });
+                TrStr _strtmp_t4542 = ({ TrStr _tr_cl = (_tr_strx_concatv((class_pfx), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ncls)); _tr_str_release(_tr_cl); _tr_cres; });
                 _tr_str_release(npfx);
-                npfx = _strtmp_t4435;
+                npfx = _strtmp_t4542;
             } else if ((!_tr_str_eqv((ns_path), (_tr_str_lit_len("", 0LL))))) {
 #line 2807 "src/bindgen.tr"
-                TrStr _strtmp_t4436 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ns_us(ns_path)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ncls)); _tr_str_release(_tr_cl); _tr_cres; });
+                TrStr _strtmp_t4543 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ns_us(ns_path)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ncls)); _tr_str_release(_tr_cl); _tr_cres; });
                 _tr_str_release(npfx);
-                npfx = _strtmp_t4436;
+                npfx = _strtmp_t4543;
             }
 #line 2808 "src/bindgen.tr"
             List_TrStr_append(cstk_name, ncls);
@@ -7053,9 +7054,9 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2813 "src/bindgen.tr"
             List_TrStr_append(fld_stack, fld_buf);
 #line 2814 "src/bindgen.tr"
-            TrStr _strtmp_t4437 = _tr_str_lit_len("", 0LL);
+            TrStr _strtmp_t4544 = _tr_str_lit_len("", 0LL);
             _tr_str_release(fld_buf);
-            fld_buf = _strtmp_t4437;
+            fld_buf = _strtmp_t4544;
 #line 2815 "src/bindgen.tr"
             _tr_str_release(crest);
             _tr_str_release(line);
@@ -7080,16 +7081,16 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2822 "src/bindgen.tr"
             if ((eps->len > 1LL)) {
 #line 2822 "src/bindgen.tr"
-                TrStr _strtmp_t4438 = List_TrStr_get(eps, 1LL);
+                TrStr _strtmp_t4545 = List_TrStr_get(eps, 1LL);
                 _tr_str_release(eunder);
-                eunder = _strtmp_t4438;
+                eunder = _strtmp_t4545;
             }
 #line 2823 "src/bindgen.tr"
-            if ((_is_clean_ident(en) && ({ TrStr _dkt_t4439 = (_tr_strx_concatv((_tr_str_lit_len("enum:", 5LL)), (en))); __auto_type _wr = ((!_tr_dict_contains(seen, _tr_strz(_dkt_t4439)))); _tr_str_release(_dkt_t4439); _wr; }))) {
+            if ((_is_clean_ident(en) && ({ TrStr _dkt_t4546 = (_tr_strx_concatv((_tr_str_lit_len("enum:", 5LL)), (en))); __auto_type _wr = ((!_tr_dict_contains(seen, _tr_strz(_dkt_t4546)))); _tr_str_release(_dkt_t4546); _wr; }))) {
 #line 2824 "src/bindgen.tr"
-                ({ TrStr _sbt_t4440 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("type ", 5LL)), (en))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (eunder)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(consts, _sbt_t4440); _tr_str_release(_sbt_t4440); });
+                ({ TrStr _sbt_t4547 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("type ", 5LL)), (en))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (eunder)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(consts, _sbt_t4547); _tr_str_release(_sbt_t4547); });
 #line 2825 "src/bindgen.tr"
-                ({ TrStr _dkt_t4441 = (_tr_strx_concatv((_tr_str_lit_len("enum:", 5LL)), (en))); _tr_dict_set(seen, _tr_strz(_dkt_t4441), true); _tr_str_release(_dkt_t4441); });
+                ({ TrStr _dkt_t4548 = (_tr_strx_concatv((_tr_str_lit_len("enum:", 5LL)), (en))); _tr_dict_set(seen, _tr_strz(_dkt_t4548), true); _tr_str_release(_dkt_t4548); });
             }
 #line 2826 "src/bindgen.tr"
             _tr_str_release(erest);
@@ -7115,16 +7116,16 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2832 "src/bindgen.tr"
             if ((ep->len > 1LL)) {
 #line 2832 "src/bindgen.tr"
-                TrStr _strtmp_t4442 = List_TrStr_get(ep, 1LL);
+                TrStr _strtmp_t4549 = List_TrStr_get(ep, 1LL);
                 _tr_str_release(eval_);
-                eval_ = _strtmp_t4442;
+                eval_ = _strtmp_t4549;
             }
 #line 2833 "src/bindgen.tr"
-            if (({ TrStr _dkt_t4443 = (_tr_strx_concatv((_tr_str_lit_len("eval:", 5LL)), (ename))); __auto_type _wr = ((!_tr_dict_contains(seen, _tr_strz(_dkt_t4443)))); _tr_str_release(_dkt_t4443); _wr; })) {
+            if (({ TrStr _dkt_t4550 = (_tr_strx_concatv((_tr_str_lit_len("eval:", 5LL)), (ename))); __auto_type _wr = ((!_tr_dict_contains(seen, _tr_strz(_dkt_t4550)))); _tr_str_release(_dkt_t4550); _wr; })) {
 #line 2834 "src/bindgen.tr"
-                ({ TrStr _sbt_t4444 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), (ename))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (eval_)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(consts, _sbt_t4444); _tr_str_release(_sbt_t4444); });
+                ({ TrStr _sbt_t4551 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), (ename))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (eval_)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(consts, _sbt_t4551); _tr_str_release(_sbt_t4551); });
 #line 2835 "src/bindgen.tr"
-                ({ TrStr _dkt_t4445 = (_tr_strx_concatv((_tr_str_lit_len("eval:", 5LL)), (ename))); _tr_dict_set(seen, _tr_strz(_dkt_t4445), true); _tr_str_release(_dkt_t4445); });
+                ({ TrStr _dkt_t4552 = (_tr_strx_concatv((_tr_str_lit_len("eval:", 5LL)), (ename))); _tr_dict_set(seen, _tr_strz(_dkt_t4552), true); _tr_str_release(_dkt_t4552); });
             }
 #line 2836 "src/bindgen.tr"
             _tr_str_release(line);
@@ -7142,42 +7143,42 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2838 "src/bindgen.tr"
             TrStr r = _tr_str_slicev((line), 7LL, _tr_str_lenv((line)));
 #line 2839 "src/bindgen.tr"
-            TrStr _strtmp_t4446 = _tr_str_slicev((r), 0LL, 2LL);
+            TrStr _strtmp_t4553 = _tr_str_slicev((r), 0LL, 2LL);
             _tr_str_release(m_flags);
-            m_flags = _strtmp_t4446;
+            m_flags = _strtmp_t4553;
 #line 2840 "src/bindgen.tr"
             TrStr r2 = _tr_str_slicev((r), 3LL, _tr_str_lenv((r)));
 #line 2841 "src/bindgen.tr"
             long long sp1 = _tr_str_index_ofv((r2), (_tr_str_lit_len(" ", 1LL)));
 #line 2842 "src/bindgen.tr"
-            m_ndef = ({ TrStr _at_t4447 = (_tr_str_slicev((r2), 0LL, sp1)); __auto_type _wr = (_to_int(_at_t4447)); _tr_str_release(_at_t4447); _wr; });
+            m_ndef = ({ TrStr _at_t4554 = (_tr_str_slicev((r2), 0LL, sp1)); __auto_type _wr = (_to_int(_at_t4554)); _tr_str_release(_at_t4554); _wr; });
 #line 2843 "src/bindgen.tr"
             TrStr r3 = _tr_str_slicev((r2), (sp1 + 1LL), _tr_str_lenv((r2)));
 #line 2844 "src/bindgen.tr"
             List_TrStr* rn = _tr_str_splitv((r3), (_tr_str_lit_len("|", 1LL)));
 #line 2845 "src/bindgen.tr"
-            TrStr _strtmp_t4448 = List_TrStr_get(rn, 0LL);
+            TrStr _strtmp_t4555 = List_TrStr_get(rn, 0LL);
             _tr_str_release(m_ret);
-            m_ret = _strtmp_t4448;
+            m_ret = _strtmp_t4555;
 #line 2846 "src/bindgen.tr"
-            TrStr _strtmp_t4449 = List_TrStr_get(rn, 1LL);
+            TrStr _strtmp_t4556 = List_TrStr_get(rn, 1LL);
             _tr_str_release(m_name);
-            m_name = _strtmp_t4449;
+            m_name = _strtmp_t4556;
 #line 2847 "src/bindgen.tr"
-            TrStr _strtmp_t4450 = _tr_str_lit_len("", 0LL);
+            TrStr _strtmp_t4557 = _tr_str_lit_len("", 0LL);
             _tr_str_release(m_qual);
-            m_qual = _strtmp_t4450;
+            m_qual = _strtmp_t4557;
 #line 2848 "src/bindgen.tr"
             if ((rn->len > 2LL)) {
 #line 2848 "src/bindgen.tr"
-                TrStr _strtmp_t4451 = List_TrStr_get(rn, 2LL);
+                TrStr _strtmp_t4558 = List_TrStr_get(rn, 2LL);
                 _tr_str_release(m_qual);
-                m_qual = _strtmp_t4451;
+                m_qual = _strtmp_t4558;
             }
 #line 2849 "src/bindgen.tr"
-            TrStr _strtmp_t4452 = _tr_str_lit_len("method", 6LL);
+            TrStr _strtmp_t4559 = _tr_str_lit_len("method", 6LL);
             _tr_str_release(mode);
-            mode = _strtmp_t4452;
+            mode = _strtmp_t4559;
 #line 2849 "src/bindgen.tr"
             params = (void*)List_TrStr_new();
 #line 2849 "src/bindgen.tr"
@@ -7198,31 +7199,31 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2852 "src/bindgen.tr"
             long long sp1 = _tr_str_index_ofv((r), (_tr_str_lit_len(" ", 1LL)));
 #line 2853 "src/bindgen.tr"
-            m_ndef = ({ TrStr _at_t4453 = (_tr_str_slicev((r), 0LL, sp1)); __auto_type _wr = (_to_int(_at_t4453)); _tr_str_release(_at_t4453); _wr; });
+            m_ndef = ({ TrStr _at_t4560 = (_tr_str_slicev((r), 0LL, sp1)); __auto_type _wr = (_to_int(_at_t4560)); _tr_str_release(_at_t4560); _wr; });
 #line 2854 "src/bindgen.tr"
             TrStr r3 = _tr_str_slicev((r), (sp1 + 1LL), _tr_str_lenv((r)));
 #line 2855 "src/bindgen.tr"
             List_TrStr* rn = _tr_str_splitv((r3), (_tr_str_lit_len("|", 1LL)));
 #line 2856 "src/bindgen.tr"
-            TrStr _strtmp_t4454 = List_TrStr_get(rn, 0LL);
+            TrStr _strtmp_t4561 = List_TrStr_get(rn, 0LL);
             _tr_str_release(m_ret);
-            m_ret = _strtmp_t4454;
+            m_ret = _strtmp_t4561;
 #line 2857 "src/bindgen.tr"
-            TrStr _strtmp_t4455 = List_TrStr_get(rn, 1LL);
+            TrStr _strtmp_t4562 = List_TrStr_get(rn, 1LL);
             _tr_str_release(m_name);
-            m_name = _strtmp_t4455;
+            m_name = _strtmp_t4562;
 #line 2858 "src/bindgen.tr"
-            TrStr _strtmp_t4456 = _tr_str_lit_len("", 0LL);
+            TrStr _strtmp_t4563 = _tr_str_lit_len("", 0LL);
             _tr_str_release(m_qual);
-            m_qual = _strtmp_t4456;
+            m_qual = _strtmp_t4563;
 #line 2859 "src/bindgen.tr"
-            TrStr _strtmp_t4457 = _tr_str_lit_len("..", 2LL);
+            TrStr _strtmp_t4564 = _tr_str_lit_len("..", 2LL);
             _tr_str_release(m_flags);
-            m_flags = _strtmp_t4457;
+            m_flags = _strtmp_t4564;
 #line 2860 "src/bindgen.tr"
-            TrStr _strtmp_t4458 = _tr_str_lit_len("func", 4LL);
+            TrStr _strtmp_t4565 = _tr_str_lit_len("func", 4LL);
             _tr_str_release(mode);
-            mode = _strtmp_t4458;
+            mode = _strtmp_t4565;
 #line 2860 "src/bindgen.tr"
             params = (void*)List_TrStr_new();
 #line 2860 "src/bindgen.tr"
@@ -7238,7 +7239,7 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2861 "src/bindgen.tr"
         if (_tr_str_starts_withv((line), (_tr_str_lit_len("PARAM ", 6LL)))) {
 #line 2862 "src/bindgen.tr"
-            ({ TrStr _at_t4459 = (_tr_str_slicev((line), 6LL, _tr_str_lenv((line)))); List_TrStr_append(params, _at_t4459); _tr_str_release(_at_t4459); });
+            ({ TrStr _at_t4566 = (_tr_str_slicev((line), 6LL, _tr_str_lenv((line)))); List_TrStr_append(params, _at_t4566); _tr_str_release(_at_t4566); });
 #line 2863 "src/bindgen.tr"
             _tr_str_release(line);
             _tr_str_release(cur_class);
@@ -7249,23 +7250,23 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2865 "src/bindgen.tr"
         if (((_tr_str_eqv((line), (_tr_str_lit_len("EMETHOD", 7LL))) || _tr_str_eqv((line), (_tr_str_lit_len("ECTOR", 5LL)))) || _tr_str_eqv((line), (_tr_str_lit_len("EFUNC", 5LL))))) {
 #line 2866 "src/bindgen.tr"
-            bool is_static = ({ TrStr _cmpa_t4460 = (_tr_str_slicev((m_flags), 0LL, 1LL)); TrStr _cmpb_t4461 = (_tr_str_lit_len("s", 1LL)); _Bool _cmpr_t4462 = _tr_str_eqv(_cmpa_t4460, _cmpb_t4461); _tr_str_release(_cmpa_t4460); _cmpr_t4462; });
+            bool is_static = ({ TrStr _cmpa_t4567 = (_tr_str_slicev((m_flags), 0LL, 1LL)); TrStr _cmpb_t4568 = (_tr_str_lit_len("s", 1LL)); _Bool _cmpr_t4569 = _tr_str_eqv(_cmpa_t4567, _cmpb_t4568); _tr_str_release(_cmpa_t4567); _cmpr_t4569; });
 #line 2867 "src/bindgen.tr"
-            bool is_const = ({ TrStr _cmpa_t4463 = (_tr_str_slicev((m_flags), 1LL, 2LL)); TrStr _cmpb_t4464 = (_tr_str_lit_len("c", 1LL)); _Bool _cmpr_t4465 = _tr_str_eqv(_cmpa_t4463, _cmpb_t4464); _tr_str_release(_cmpa_t4463); _cmpr_t4465; });
+            bool is_const = ({ TrStr _cmpa_t4570 = (_tr_str_slicev((m_flags), 1LL, 2LL)); TrStr _cmpb_t4571 = (_tr_str_lit_len("c", 1LL)); _Bool _cmpr_t4572 = _tr_str_eqv(_cmpa_t4570, _cmpb_t4571); _tr_str_release(_cmpa_t4570); _cmpr_t4572; });
 #line 2872 "src/bindgen.tr"
             TrStr m_sym = _tr_str_retain(m_name);
 #line 2873 "src/bindgen.tr"
-            if ((((!_tr_str_eqv((mode), (_tr_str_lit_len("ctor", 4LL)))) && (_tr_str_lenv((m_name)) >= 8LL)) && ({ TrStr _cmpa_t4466 = (_tr_str_slicev((m_name), 0LL, 8LL)); TrStr _cmpb_t4467 = (_tr_str_lit_len("operator", 8LL)); _Bool _cmpr_t4468 = _tr_str_eqv(_cmpa_t4466, _cmpb_t4467); _tr_str_release(_cmpa_t4466); _cmpr_t4468; }))) {
+            if ((((!_tr_str_eqv((mode), (_tr_str_lit_len("ctor", 4LL)))) && (_tr_str_lenv((m_name)) >= 8LL)) && ({ TrStr _cmpa_t4573 = (_tr_str_slicev((m_name), 0LL, 8LL)); TrStr _cmpb_t4574 = (_tr_str_lit_len("operator", 8LL)); _Bool _cmpr_t4575 = _tr_str_eqv(_cmpa_t4573, _cmpb_t4574); _tr_str_release(_cmpa_t4573); _cmpr_t4575; }))) {
 #line 2874 "src/bindgen.tr"
-                TrStr _strtmp_t4469 = _cpp_op_name(m_name, params->len, _tr_str_eqv((mode), (_tr_str_lit_len("method", 6LL))));
+                TrStr _strtmp_t4576 = _cpp_op_name(m_name, params->len, _tr_str_eqv((mode), (_tr_str_lit_len("method", 6LL))));
                 _tr_str_release(m_sym);
-                m_sym = _strtmp_t4469;
+                m_sym = _strtmp_t4576;
 #line 2875 "src/bindgen.tr"
                 if (_tr_str_eqv((m_sym), (_tr_str_lit_len("", 0LL)))) {
 #line 2876 "src/bindgen.tr"
-                    TrStr _strtmp_t4470 = _tr_str_lit_len("", 0LL);
+                    TrStr _strtmp_t4577 = _tr_str_lit_len("", 0LL);
                     _tr_str_release(mode);
-                    mode = _strtmp_t4470;
+                    mode = _strtmp_t4577;
 #line 2876 "src/bindgen.tr"
                     _tr_str_release(line);
                     _tr_str_release(cur_class);
@@ -7278,9 +7279,9 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2878 "src/bindgen.tr"
             if (((_tr_str_eqv((mode), (_tr_str_lit_len("ctor", 4LL))) || _tr_str_eqv((mode), (_tr_str_lit_len("method", 6LL)))) && (!_is_clean_ident(cur_class)))) {
 #line 2879 "src/bindgen.tr"
-                TrStr _strtmp_t4471 = _tr_str_lit_len("", 0LL);
+                TrStr _strtmp_t4578 = _tr_str_lit_len("", 0LL);
                 _tr_str_release(mode);
-                mode = _strtmp_t4471;
+                mode = _strtmp_t4578;
 #line 2879 "src/bindgen.tr"
                 _tr_str_release(line);
                 _tr_str_release(cur_class);
@@ -7314,9 +7315,9 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2894 "src/bindgen.tr"
             if (has_dep) {
 #line 2895 "src/bindgen.tr"
-                TrStr _strtmp_t4472 = _tr_str_lit_len("", 0LL);
+                TrStr _strtmp_t4579 = _tr_str_lit_len("", 0LL);
                 _tr_str_release(mode);
-                mode = _strtmp_t4472;
+                mode = _strtmp_t4579;
 #line 2895 "src/bindgen.tr"
                 _tr_str_release(line);
                 _tr_str_release(cur_class);
@@ -7332,7 +7333,7 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2900 "src/bindgen.tr"
             while ((fpi < params->len)) {
 #line 2901 "src/bindgen.tr"
-                ({ TrStr _at_t4473 = (List_TrStr_get(params, fpi)); List_TrStr_append(full_params, _at_t4473); _tr_str_release(_at_t4473); });
+                ({ TrStr _at_t4580 = (List_TrStr_get(params, fpi)); List_TrStr_append(full_params, _at_t4580); _tr_str_release(_at_t4580); });
 #line 2902 "src/bindgen.tr"
                 fpi = (fpi + 1LL);
             }
@@ -7354,7 +7355,7 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2909 "src/bindgen.tr"
                 while ((tti < arity)) {
 #line 2910 "src/bindgen.tr"
-                    ({ TrStr _at_t4474 = (List_TrStr_get(full_params, tti)); List_TrStr_append(tparams, _at_t4474); _tr_str_release(_at_t4474); });
+                    ({ TrStr _at_t4581 = (List_TrStr_get(full_params, tti)); List_TrStr_append(tparams, _at_t4581); _tr_str_release(_at_t4581); });
 #line 2911 "src/bindgen.tr"
                     tti = (tti + 1LL);
                 }
@@ -7371,19 +7372,19 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2917 "src/bindgen.tr"
                     if (is_const) {
 #line 2917 "src/bindgen.tr"
-                        TrStr _strtmp_t4475 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), (cur_class_qual))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("* self", 6LL))); _tr_str_release(_tr_cl); _tr_cres; });
+                        TrStr _strtmp_t4582 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), (cur_class_qual))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("* self", 6LL))); _tr_str_release(_tr_cl); _tr_cres; });
                         _tr_str_release(shimp);
-                        shimp = _strtmp_t4475;
+                        shimp = _strtmp_t4582;
                     } else {
 #line 2918 "src/bindgen.tr"
-                        TrStr _strtmp_t4476 = _tr_strx_concatv((cur_class_qual), (_tr_str_lit_len("* self", 6LL)));
+                        TrStr _strtmp_t4583 = _tr_strx_concatv((cur_class_qual), (_tr_str_lit_len("* self", 6LL)));
                         _tr_str_release(shimp);
-                        shimp = _strtmp_t4476;
+                        shimp = _strtmp_t4583;
                     }
 #line 2919 "src/bindgen.tr"
-                    TrStr _strtmp_t4477 = _tr_strx_concatv((_tr_str_lit_len("obj: ", 5LL)), (cur_class));
+                    TrStr _strtmp_t4584 = _tr_strx_concatv((_tr_str_lit_len("obj: ", 5LL)), (cur_class));
                     _tr_str_release(trp);
-                    trp = _strtmp_t4477;
+                    trp = _strtmp_t4584;
                 }
 #line 2920 "src/bindgen.tr"
                 long long pi = 0LL;
@@ -7402,32 +7403,32 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2927 "src/bindgen.tr"
                     if ((bar->len > 1LL)) {
 #line 2927 "src/bindgen.tr"
-                        TrStr _strtmp_t4478 = List_TrStr_get(bar, 1LL);
+                        TrStr _strtmp_t4585 = List_TrStr_get(bar, 1LL);
                         _tr_str_release(pname);
-                        pname = _strtmp_t4478;
+                        pname = _strtmp_t4585;
                     }
 #line 2928 "src/bindgen.tr"
                     if (_tr_str_eqv((pname), (_tr_str_lit_len("", 0LL)))) {
 #line 2928 "src/bindgen.tr"
-                        TrStr _strtmp_t4479 = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(pi)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("a", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+                        TrStr _strtmp_t4586 = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(pi)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("a", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
                         _tr_str_release(pname);
-                        pname = _strtmp_t4479;
+                        pname = _strtmp_t4586;
                     }
 #line 2929 "src/bindgen.tr"
                     TrStr spname = _tr_str_retain(pname);
 #line 2930 "src/bindgen.tr"
                     if (_tr_str_eqv((spname), (_tr_str_lit_len("self", 4LL)))) {
 #line 2930 "src/bindgen.tr"
-                        TrStr _strtmp_t4480 = _tr_str_lit_len("self_", 5LL);
+                        TrStr _strtmp_t4587 = _tr_str_lit_len("self_", 5LL);
                         _tr_str_release(spname);
-                        spname = _strtmp_t4480;
+                        spname = _strtmp_t4587;
                     }
 #line 2931 "src/bindgen.tr"
                     TrStr tpname = _cpp_tr_pname(pname);
 #line 2933 "src/bindgen.tr"
                     List_TrStr* d4 = _desc4(ptype);
 #line 2934 "src/bindgen.tr"
-                    long long pdepth = ({ TrStr _at_t4481 = (List_TrStr_get(d4, 0LL)); __auto_type _wr = (_to_int(_at_t4481)); _tr_str_release(_at_t4481); _wr; });
+                    long long pdepth = ({ TrStr _at_t4588 = (List_TrStr_get(d4, 0LL)); __auto_type _wr = (_to_int(_at_t4588)); _tr_str_release(_at_t4588); _wr; });
 #line 2935 "src/bindgen.tr"
                     TrStr prefk = List_TrStr_get(d4, 1LL);
 #line 2936 "src/bindgen.tr"
@@ -7449,51 +7450,51 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2944 "src/bindgen.tr"
                         if ((pdepth == 0LL)) {
 #line 2945 "src/bindgen.tr"
-                            TrStr _strtmp_t4482 = ({ TrStr _tr_cl = (_tr_strx_concatv((cpp), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
+                            TrStr _strtmp_t4589 = ({ TrStr _tr_cl = (_tr_strx_concatv((cpp), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
                             _tr_str_release(sc);
-                            sc = _strtmp_t4482;
+                            sc = _strtmp_t4589;
 #line 2945 "src/bindgen.tr"
-                            TrStr _strtmp_t4483 = _tr_str_retain(spname);
+                            TrStr _strtmp_t4590 = _tr_str_retain(spname);
                             _tr_str_release(fw);
-                            fw = _strtmp_t4483;
+                            fw = _strtmp_t4590;
 #line 2945 "src/bindgen.tr"
-                            TrStr _strtmp_t4484 = _tr_str_retain(pdet);
+                            TrStr _strtmp_t4591 = _tr_str_retain(pdet);
                             _tr_str_release(trt);
-                            trt = _strtmp_t4484;
+                            trt = _strtmp_t4591;
                         } else if ((_tr_str_eqv((prefk), (_tr_str_lit_len("2", 1LL))) && (pdepth == 1LL))) {
 #line 2949 "src/bindgen.tr"
-                            TrStr _strtmp_t4485 = ({ TrStr _tr_cl = (_tr_strx_concatv((cpp), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
+                            TrStr _strtmp_t4592 = ({ TrStr _tr_cl = (_tr_strx_concatv((cpp), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
                             _tr_str_release(sc);
-                            sc = _strtmp_t4485;
+                            sc = _strtmp_t4592;
 #line 2949 "src/bindgen.tr"
-                            TrStr _strtmp_t4486 = _tr_str_retain(spname);
+                            TrStr _strtmp_t4593 = _tr_str_retain(spname);
                             _tr_str_release(fw);
-                            fw = _strtmp_t4486;
+                            fw = _strtmp_t4593;
 #line 2949 "src/bindgen.tr"
-                            TrStr _strtmp_t4487 = _tr_str_retain(pdet);
+                            TrStr _strtmp_t4594 = _tr_str_retain(pdet);
                             _tr_str_release(trt);
-                            trt = _strtmp_t4487;
+                            trt = _strtmp_t4594;
                         } else {
 #line 2951 "src/bindgen.tr"
-                            TrStr _strtmp_t4488 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((cpp), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cr = (_stars(pdepth)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
+                            TrStr _strtmp_t4595 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((cpp), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cr = (_stars(pdepth)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
                             _tr_str_release(sc);
-                            sc = _strtmp_t4488;
+                            sc = _strtmp_t4595;
 #line 2952 "src/bindgen.tr"
                             if (pref) {
 #line 2952 "src/bindgen.tr"
-                                TrStr _strtmp_t4489 = _tr_strx_concatv((_tr_str_lit_len("*", 1LL)), (spname));
+                                TrStr _strtmp_t4596 = _tr_strx_concatv((_tr_str_lit_len("*", 1LL)), (spname));
                                 _tr_str_release(fw);
-                                fw = _strtmp_t4489;
+                                fw = _strtmp_t4596;
                             } else {
 #line 2953 "src/bindgen.tr"
-                                TrStr _strtmp_t4490 = _tr_str_retain(spname);
+                                TrStr _strtmp_t4597 = _tr_str_retain(spname);
                                 _tr_str_release(fw);
-                                fw = _strtmp_t4490;
+                                fw = _strtmp_t4597;
                             }
 #line 2954 "src/bindgen.tr"
-                            TrStr _strtmp_t4491 = _ptr_wrap(pdet, pdepth);
+                            TrStr _strtmp_t4598 = _ptr_wrap(pdet, pdepth);
                             _tr_str_release(trt);
-                            trt = _strtmp_t4491;
+                            trt = _strtmp_t4598;
                         }
                     } else if (_tr_str_eqv((pcat), (_tr_str_lit_len("e", 1LL)))) {
 #line 2956 "src/bindgen.tr"
@@ -7503,78 +7504,78 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 2958 "src/bindgen.tr"
                         if ((pdepth == 0LL)) {
 #line 2959 "src/bindgen.tr"
-                            TrStr _strtmp_t4492 = ({ TrStr _tr_cl = (_tr_strx_concatv((espell), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
+                            TrStr _strtmp_t4599 = ({ TrStr _tr_cl = (_tr_strx_concatv((espell), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
                             _tr_str_release(sc);
-                            sc = _strtmp_t4492;
+                            sc = _strtmp_t4599;
 #line 2959 "src/bindgen.tr"
-                            TrStr _strtmp_t4493 = _tr_str_retain(spname);
+                            TrStr _strtmp_t4600 = _tr_str_retain(spname);
                             _tr_str_release(fw);
-                            fw = _strtmp_t4493;
+                            fw = _strtmp_t4600;
 #line 2959 "src/bindgen.tr"
-                            TrStr _strtmp_t4494 = _tr_str_retain(ealias);
+                            TrStr _strtmp_t4601 = _tr_str_retain(ealias);
                             _tr_str_release(trt);
-                            trt = _strtmp_t4494;
+                            trt = _strtmp_t4601;
                         } else if ((_tr_str_eqv((prefk), (_tr_str_lit_len("2", 1LL))) && (pdepth == 1LL))) {
 #line 2961 "src/bindgen.tr"
-                            TrStr _strtmp_t4495 = ({ TrStr _tr_cl = (_tr_strx_concatv((espell), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
+                            TrStr _strtmp_t4602 = ({ TrStr _tr_cl = (_tr_strx_concatv((espell), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
                             _tr_str_release(sc);
-                            sc = _strtmp_t4495;
+                            sc = _strtmp_t4602;
 #line 2961 "src/bindgen.tr"
-                            TrStr _strtmp_t4496 = _tr_str_retain(spname);
+                            TrStr _strtmp_t4603 = _tr_str_retain(spname);
                             _tr_str_release(fw);
-                            fw = _strtmp_t4496;
+                            fw = _strtmp_t4603;
 #line 2961 "src/bindgen.tr"
-                            TrStr _strtmp_t4497 = _tr_str_retain(ealias);
+                            TrStr _strtmp_t4604 = _tr_str_retain(ealias);
                             _tr_str_release(trt);
-                            trt = _strtmp_t4497;
+                            trt = _strtmp_t4604;
                         } else {
 #line 2963 "src/bindgen.tr"
-                            TrStr _strtmp_t4498 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((espell), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cr = (_stars(pdepth)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
+                            TrStr _strtmp_t4605 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((espell), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cr = (_stars(pdepth)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
                             _tr_str_release(sc);
-                            sc = _strtmp_t4498;
+                            sc = _strtmp_t4605;
 #line 2964 "src/bindgen.tr"
                             if (pref) {
 #line 2964 "src/bindgen.tr"
-                                TrStr _strtmp_t4499 = _tr_strx_concatv((_tr_str_lit_len("*", 1LL)), (spname));
+                                TrStr _strtmp_t4606 = _tr_strx_concatv((_tr_str_lit_len("*", 1LL)), (spname));
                                 _tr_str_release(fw);
-                                fw = _strtmp_t4499;
+                                fw = _strtmp_t4606;
                             } else {
 #line 2965 "src/bindgen.tr"
-                                TrStr _strtmp_t4500 = _tr_str_retain(spname);
+                                TrStr _strtmp_t4607 = _tr_str_retain(spname);
                                 _tr_str_release(fw);
-                                fw = _strtmp_t4500;
+                                fw = _strtmp_t4607;
                             }
 #line 2966 "src/bindgen.tr"
-                            TrStr _strtmp_t4501 = _ptr_wrap(ealias, pdepth);
+                            TrStr _strtmp_t4608 = _ptr_wrap(ealias, pdepth);
                             _tr_str_release(trt);
-                            trt = _strtmp_t4501;
+                            trt = _strtmp_t4608;
                         }
                     } else if ((_tr_str_eqv((pcat), (_tr_str_lit_len("s", 1LL))) && _tr_str_eqv((pdet), (_tr_str_lit_len("string", 6LL))))) {
 #line 2969 "src/bindgen.tr"
-                        TrStr _strtmp_t4502 = _tr_strx_concatv((_tr_str_lit_len("const char* ", 12LL)), (spname));
+                        TrStr _strtmp_t4609 = _tr_strx_concatv((_tr_str_lit_len("const char* ", 12LL)), (spname));
                         _tr_str_release(sc);
-                        sc = _strtmp_t4502;
+                        sc = _strtmp_t4609;
 #line 2970 "src/bindgen.tr"
-                        TrStr _strtmp_t4503 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("std::string(", 12LL)), (spname))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+                        TrStr _strtmp_t4610 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("std::string(", 12LL)), (spname))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
                         _tr_str_release(fw);
-                        fw = _strtmp_t4503;
+                        fw = _strtmp_t4610;
 #line 2971 "src/bindgen.tr"
-                        TrStr _strtmp_t4504 = _tr_str_lit_len("Pointer[char]", 13LL);
+                        TrStr _strtmp_t4611 = _tr_str_lit_len("Pointer[char]", 13LL);
                         _tr_str_release(trt);
-                        trt = _strtmp_t4504;
+                        trt = _strtmp_t4611;
                     } else if (_tr_str_eqv((pcat), (_tr_str_lit_len("f", 1LL)))) {
 #line 2976 "src/bindgen.tr"
-                        TrStr _strtmp_t4505 = _tr_strx_concatv((_tr_str_lit_len("void* ", 6LL)), (spname));
+                        TrStr _strtmp_t4612 = _tr_strx_concatv((_tr_str_lit_len("void* ", 6LL)), (spname));
                         _tr_str_release(sc);
-                        sc = _strtmp_t4505;
+                        sc = _strtmp_t4612;
 #line 2977 "src/bindgen.tr"
-                        TrStr _strtmp_t4506 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_fnptr_cast(pdet)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("(", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
+                        TrStr _strtmp_t4613 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_fnptr_cast(pdet)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("(", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
                         _tr_str_release(fw);
-                        fw = _strtmp_t4506;
+                        fw = _strtmp_t4613;
 #line 2978 "src/bindgen.tr"
-                        TrStr _strtmp_t4507 = _tr_str_lit_len("Pointer[void]", 13LL);
+                        TrStr _strtmp_t4614 = _tr_str_lit_len("Pointer[void]", 13LL);
                         _tr_str_release(trt);
-                        trt = _strtmp_t4507;
+                        trt = _strtmp_t4614;
                     } else if (_tr_str_eqv((pcat), (_tr_str_lit_len("v", 1LL)))) {
 #line 2983 "src/bindgen.tr"
                         long long nd = pdepth;
@@ -7584,42 +7585,42 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
                             nd = 1LL;
                         }
 #line 2985 "src/bindgen.tr"
-                        TrStr _strtmp_t4508 = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_stars(nd)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("void ", 5LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
+                        TrStr _strtmp_t4615 = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_stars(nd)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("void ", 5LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
                         _tr_str_release(sc);
-                        sc = _strtmp_t4508;
+                        sc = _strtmp_t4615;
 #line 2986 "src/bindgen.tr"
                         if (pref) {
 #line 2986 "src/bindgen.tr"
-                            TrStr _strtmp_t4509 = _tr_strx_concatv((_tr_str_lit_len("*", 1LL)), (spname));
+                            TrStr _strtmp_t4616 = _tr_strx_concatv((_tr_str_lit_len("*", 1LL)), (spname));
                             _tr_str_release(fw);
-                            fw = _strtmp_t4509;
+                            fw = _strtmp_t4616;
                         } else {
 #line 2987 "src/bindgen.tr"
-                            TrStr _strtmp_t4510 = _tr_str_retain(spname);
+                            TrStr _strtmp_t4617 = _tr_str_retain(spname);
                             _tr_str_release(fw);
-                            fw = _strtmp_t4510;
+                            fw = _strtmp_t4617;
                         }
 #line 2988 "src/bindgen.tr"
-                        TrStr _strtmp_t4511 = _ptr_wrap(_tr_str_lit_len("void", 4LL), nd);
+                        TrStr _strtmp_t4618 = _ptr_wrap(_tr_str_lit_len("void", 4LL), nd);
                         _tr_str_release(trt);
-                        trt = _strtmp_t4511;
+                        trt = _strtmp_t4618;
                     } else if (_tr_str_eqv((pcat), (_tr_str_lit_len("r", 1LL)))) {
 #line 2990 "src/bindgen.tr"
                         TrStr seg = _last_seg(pdet);
 #line 2991 "src/bindgen.tr"
                         if ((_tr_dict_contains(value_structs, _tr_strz(seg)) && (pdepth == 0LL))) {
 #line 2992 "src/bindgen.tr"
-                            TrStr _strtmp_t4512 = ({ TrStr _tr_cl = (_tr_strx_concatv((pdet), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
+                            TrStr _strtmp_t4619 = ({ TrStr _tr_cl = (_tr_strx_concatv((pdet), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
                             _tr_str_release(sc);
-                            sc = _strtmp_t4512;
+                            sc = _strtmp_t4619;
 #line 2992 "src/bindgen.tr"
-                            TrStr _strtmp_t4513 = _tr_str_retain(spname);
+                            TrStr _strtmp_t4620 = _tr_str_retain(spname);
                             _tr_str_release(fw);
-                            fw = _strtmp_t4513;
+                            fw = _strtmp_t4620;
 #line 2992 "src/bindgen.tr"
-                            TrStr _strtmp_t4514 = _tr_str_retain(seg);
+                            TrStr _strtmp_t4621 = _tr_str_retain(seg);
                             _tr_str_release(trt);
-                            trt = _strtmp_t4514;
+                            trt = _strtmp_t4621;
                         } else {
 #line 2994 "src/bindgen.tr"
                             long long nd = pdepth;
@@ -7629,30 +7630,30 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
                                 nd = 1LL;
                             }
 #line 2996 "src/bindgen.tr"
-                            TrStr _strtmp_t4516 = ({ __auto_type _ord_t4515 = (({ TrStr _tr_cl = (_cpp_qual(pdet, class_qual)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4515); TrStr _tr_cr = (_stars(nd)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+                            TrStr _strtmp_t4623 = ({ __auto_type _ord_t4622 = (({ TrStr _tr_cl = (_cpp_qual(pdet, class_qual)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4622); TrStr _tr_cr = (_stars(nd)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
                             _tr_str_release(sc);
-                            sc = _strtmp_t4516;
+                            sc = _strtmp_t4623;
 #line 2997 "src/bindgen.tr"
                             if ((pdepth == 0LL)) {
 #line 2997 "src/bindgen.tr"
-                                TrStr _strtmp_t4517 = _tr_strx_concatv((_tr_str_lit_len("*", 1LL)), (spname));
+                                TrStr _strtmp_t4624 = _tr_strx_concatv((_tr_str_lit_len("*", 1LL)), (spname));
                                 _tr_str_release(fw);
-                                fw = _strtmp_t4517;
+                                fw = _strtmp_t4624;
                             } else if (pref) {
 #line 2998 "src/bindgen.tr"
-                                TrStr _strtmp_t4518 = _tr_strx_concatv((_tr_str_lit_len("*", 1LL)), (spname));
+                                TrStr _strtmp_t4625 = _tr_strx_concatv((_tr_str_lit_len("*", 1LL)), (spname));
                                 _tr_str_release(fw);
-                                fw = _strtmp_t4518;
+                                fw = _strtmp_t4625;
                             } else {
 #line 2999 "src/bindgen.tr"
-                                TrStr _strtmp_t4519 = _tr_str_retain(spname);
+                                TrStr _strtmp_t4626 = _tr_str_retain(spname);
                                 _tr_str_release(fw);
-                                fw = _strtmp_t4519;
+                                fw = _strtmp_t4626;
                             }
 #line 3000 "src/bindgen.tr"
-                            TrStr _strtmp_t4520 = _cpp_opaque_handle(pdet, nd, class_names, value_structs, seen, opaque);
+                            TrStr _strtmp_t4627 = _cpp_opaque_handle(pdet, nd, class_names, value_structs, seen, opaque);
                             _tr_str_release(trt);
-                            trt = _strtmp_t4520;
+                            trt = _strtmp_t4627;
                         }
                     } else if (_tr_str_eqv((pdet), (_tr_str_lit_len("", 0LL)))) {
 #line 3004 "src/bindgen.tr"
@@ -7663,17 +7664,17 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
                             nd = 1LL;
                         }
 #line 3006 "src/bindgen.tr"
-                        TrStr _strtmp_t4521 = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_stars(nd)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("void ", 5LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
+                        TrStr _strtmp_t4628 = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_stars(nd)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("void ", 5LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
                         _tr_str_release(sc);
-                        sc = _strtmp_t4521;
+                        sc = _strtmp_t4628;
 #line 3007 "src/bindgen.tr"
-                        TrStr _strtmp_t4522 = _tr_str_retain(spname);
+                        TrStr _strtmp_t4629 = _tr_str_retain(spname);
                         _tr_str_release(fw);
-                        fw = _strtmp_t4522;
+                        fw = _strtmp_t4629;
 #line 3008 "src/bindgen.tr"
-                        TrStr _strtmp_t4523 = _ptr_wrap(_tr_str_lit_len("void", 4LL), nd);
+                        TrStr _strtmp_t4630 = _ptr_wrap(_tr_str_lit_len("void", 4LL), nd);
                         _tr_str_release(trt);
-                        trt = _strtmp_t4523;
+                        trt = _strtmp_t4630;
                     } else {
 #line 3011 "src/bindgen.tr"
                         long long nd = pdepth;
@@ -7683,60 +7684,60 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
                             nd = 1LL;
                         }
 #line 3013 "src/bindgen.tr"
-                        TrStr _strtmp_t4524 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((pdet), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cr = (_stars(nd)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
+                        TrStr _strtmp_t4631 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((pdet), (_tr_str_lit_len(" ", 1LL)))); TrStr _tr_cr = (_stars(nd)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (spname)); _tr_str_release(_tr_cl); _tr_cres; });
                         _tr_str_release(sc);
-                        sc = _strtmp_t4524;
+                        sc = _strtmp_t4631;
 #line 3014 "src/bindgen.tr"
                         if ((pdepth == 0LL)) {
 #line 3014 "src/bindgen.tr"
-                            TrStr _strtmp_t4525 = _tr_strx_concatv((_tr_str_lit_len("*", 1LL)), (spname));
+                            TrStr _strtmp_t4632 = _tr_strx_concatv((_tr_str_lit_len("*", 1LL)), (spname));
                             _tr_str_release(fw);
-                            fw = _strtmp_t4525;
+                            fw = _strtmp_t4632;
                         } else if (pref) {
 #line 3015 "src/bindgen.tr"
-                            TrStr _strtmp_t4526 = _tr_strx_concatv((_tr_str_lit_len("*", 1LL)), (spname));
+                            TrStr _strtmp_t4633 = _tr_strx_concatv((_tr_str_lit_len("*", 1LL)), (spname));
                             _tr_str_release(fw);
-                            fw = _strtmp_t4526;
+                            fw = _strtmp_t4633;
                         } else {
 #line 3016 "src/bindgen.tr"
-                            TrStr _strtmp_t4527 = _tr_str_retain(spname);
+                            TrStr _strtmp_t4634 = _tr_str_retain(spname);
                             _tr_str_release(fw);
-                            fw = _strtmp_t4527;
+                            fw = _strtmp_t4634;
                         }
 #line 3017 "src/bindgen.tr"
-                        TrStr _strtmp_t4528 = _cpp_opaque_handle(pdet, nd, class_names, value_structs, seen, opaque);
+                        TrStr _strtmp_t4635 = _cpp_opaque_handle(pdet, nd, class_names, value_structs, seen, opaque);
                         _tr_str_release(trt);
-                        trt = _strtmp_t4528;
+                        trt = _strtmp_t4635;
                     }
 #line 3018 "src/bindgen.tr"
                     if (_tr_str_eqv((shimp), (_tr_str_lit_len("", 0LL)))) {
 #line 3018 "src/bindgen.tr"
-                        TrStr _strtmp_t4529 = _tr_str_retain(sc);
+                        TrStr _strtmp_t4636 = _tr_str_retain(sc);
                         _tr_str_release(shimp);
-                        shimp = _strtmp_t4529;
+                        shimp = _strtmp_t4636;
                     } else {
 #line 3019 "src/bindgen.tr"
-                        ({ TrStr _ap_t4530 = (_tr_str_lit_len(", ", 2LL)); TrStr _ap_t4531 = (sc); _tr_str_append(&shimp, _ap_t4530); _tr_str_append(&shimp, _ap_t4531); });
+                        ({ TrStr _ap_t4637 = (_tr_str_lit_len(", ", 2LL)); TrStr _ap_t4638 = (sc); _tr_str_append(&shimp, _ap_t4637); _tr_str_append(&shimp, _ap_t4638); });
                     }
 #line 3020 "src/bindgen.tr"
                     if (_tr_str_eqv((fargs), (_tr_str_lit_len("", 0LL)))) {
 #line 3020 "src/bindgen.tr"
-                        TrStr _strtmp_t4532 = _tr_str_retain(fw);
+                        TrStr _strtmp_t4639 = _tr_str_retain(fw);
                         _tr_str_release(fargs);
-                        fargs = _strtmp_t4532;
+                        fargs = _strtmp_t4639;
                     } else {
 #line 3021 "src/bindgen.tr"
-                        ({ TrStr _ap_t4533 = (_tr_str_lit_len(", ", 2LL)); TrStr _ap_t4534 = (fw); _tr_str_append(&fargs, _ap_t4533); _tr_str_append(&fargs, _ap_t4534); });
+                        ({ TrStr _ap_t4640 = (_tr_str_lit_len(", ", 2LL)); TrStr _ap_t4641 = (fw); _tr_str_append(&fargs, _ap_t4640); _tr_str_append(&fargs, _ap_t4641); });
                     }
 #line 3022 "src/bindgen.tr"
                     if (_tr_str_eqv((trp), (_tr_str_lit_len("", 0LL)))) {
 #line 3022 "src/bindgen.tr"
-                        TrStr _strtmp_t4535 = ({ TrStr _tr_cl = (_tr_strx_concatv((tpname), (_tr_str_lit_len(": ", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (trt)); _tr_str_release(_tr_cl); _tr_cres; });
+                        TrStr _strtmp_t4642 = ({ TrStr _tr_cl = (_tr_strx_concatv((tpname), (_tr_str_lit_len(": ", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (trt)); _tr_str_release(_tr_cl); _tr_cres; });
                         _tr_str_release(trp);
-                        trp = _strtmp_t4535;
+                        trp = _strtmp_t4642;
                     } else {
 #line 3023 "src/bindgen.tr"
-                        ({ TrStr _ap_t4536 = (_tr_str_lit_len(", ", 2LL)); TrStr _ap_t4537 = (tpname); TrStr _ap_t4538 = (_tr_str_lit_len(": ", 2LL)); TrStr _ap_t4539 = (trt); _tr_str_append(&trp, _ap_t4536); _tr_str_append(&trp, _ap_t4537); _tr_str_append(&trp, _ap_t4538); _tr_str_append(&trp, _ap_t4539); });
+                        ({ TrStr _ap_t4643 = (_tr_str_lit_len(", ", 2LL)); TrStr _ap_t4644 = (tpname); TrStr _ap_t4645 = (_tr_str_lit_len(": ", 2LL)); TrStr _ap_t4646 = (trt); _tr_str_append(&trp, _ap_t4643); _tr_str_append(&trp, _ap_t4644); _tr_str_append(&trp, _ap_t4645); _tr_str_append(&trp, _ap_t4646); });
                     }
                     _tr_str_release(pv);
                     List_TrStr_free(bar);
@@ -7757,30 +7758,30 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 3026 "src/bindgen.tr"
                 if (_tr_str_eqv((mode), (_tr_str_lit_len("ctor", 4LL)))) {
 #line 3027 "src/bindgen.tr"
-                    TrStr _strtmp_t4540 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("new ", 4LL)), (cur_class_qual))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+                    TrStr _strtmp_t4647 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("new ", 4LL)), (cur_class_qual))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
                     _tr_str_release(call);
-                    call = _strtmp_t4540;
+                    call = _strtmp_t4647;
                 } else if (_tr_str_eqv((mode), (_tr_str_lit_len("method", 6LL)))) {
 #line 3032 "src/bindgen.tr"
                     TrStr mcall = _tr_str_retain(m_name);
 #line 3033 "src/bindgen.tr"
                     if ((!_tr_str_eqv((m_qual), (_tr_str_lit_len("", 0LL))))) {
 #line 3033 "src/bindgen.tr"
-                        TrStr _strtmp_t4541 = ({ TrStr _tr_cl = (_tr_strx_concatv((m_qual), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m_name)); _tr_str_release(_tr_cl); _tr_cres; });
+                        TrStr _strtmp_t4648 = ({ TrStr _tr_cl = (_tr_strx_concatv((m_qual), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m_name)); _tr_str_release(_tr_cl); _tr_cres; });
                         _tr_str_release(mcall);
-                        mcall = _strtmp_t4541;
+                        mcall = _strtmp_t4648;
                     }
 #line 3034 "src/bindgen.tr"
                     if (is_static) {
 #line 3034 "src/bindgen.tr"
-                        TrStr _strtmp_t4542 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((cur_class_qual), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m_name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+                        TrStr _strtmp_t4649 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((cur_class_qual), (_tr_str_lit_len("::", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m_name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
                         _tr_str_release(call);
-                        call = _strtmp_t4542;
+                        call = _strtmp_t4649;
                     } else {
 #line 3035 "src/bindgen.tr"
-                        TrStr _strtmp_t4543 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("self->", 6LL)), (mcall))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+                        TrStr _strtmp_t4650 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("self->", 6LL)), (mcall))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
                         _tr_str_release(call);
-                        call = _strtmp_t4543;
+                        call = _strtmp_t4650;
                     }
                 } else {
 #line 3037 "src/bindgen.tr"
@@ -7788,24 +7789,24 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 3038 "src/bindgen.tr"
                     if ((!_tr_str_eqv((ns_path), (_tr_str_lit_len("", 0LL))))) {
 #line 3038 "src/bindgen.tr"
-                        TrStr _strtmp_t4544 = _tr_strx_concatv((ns_path), (_tr_str_lit_len("::", 2LL)));
+                        TrStr _strtmp_t4651 = _tr_strx_concatv((ns_path), (_tr_str_lit_len("::", 2LL)));
                         _tr_str_release(pre);
-                        pre = _strtmp_t4544;
+                        pre = _strtmp_t4651;
                     }
 #line 3039 "src/bindgen.tr"
-                    TrStr _strtmp_t4545 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((pre), (m_name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+                    TrStr _strtmp_t4652 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((pre), (m_name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
                     _tr_str_release(call);
-                    call = _strtmp_t4545;
+                    call = _strtmp_t4652;
                     _tr_str_release(pre);
                 }
 #line 3041 "src/bindgen.tr"
                 if (_tr_str_eqv((mode), (_tr_str_lit_len("ctor", 4LL)))) {
 #line 3042 "src/bindgen.tr"
-                    TrStr sym = ({ TrStr _at_t4546 = (_tr_strx_concatv((class_pfx), (_tr_str_lit_len("_new", 4LL)))); __auto_type _wr = (_uniq_sym(_at_t4546, sym_used)); _tr_str_release(_at_t4546); _wr; });
+                    TrStr sym = ({ TrStr _at_t4653 = (_tr_strx_concatv((class_pfx), (_tr_str_lit_len("_new", 4LL)))); __auto_type _wr = (_uniq_sym(_at_t4653, sym_used)); _tr_str_release(_at_t4653); _wr; });
 #line 3043 "src/bindgen.tr"
-                    ({ TrStr _at_t4547 = (_tr_strx_concatv((cur_class_qual), (_tr_str_lit_len("*", 1LL)))); TrStr _at_t4548 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t4549 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((cur_class_qual), (_tr_str_lit_len("* ", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sym)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (shimp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") { ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_shim_body(_at_t4547, _at_t4548)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4549); _tr_str_release(_at_t4547); _tr_str_release(_at_t4548); _tr_str_release(_sbt_t4549); });
+                    ({ TrStr _at_t4654 = (_tr_strx_concatv((cur_class_qual), (_tr_str_lit_len("*", 1LL)))); TrStr _at_t4655 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t4656 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((cur_class_qual), (_tr_str_lit_len("* ", 2LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sym)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (shimp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") { ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_shim_body(_at_t4654, _at_t4655)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4656); _tr_str_release(_at_t4654); _tr_str_release(_at_t4655); _tr_str_release(_sbt_t4656); });
 #line 3044 "src/bindgen.tr"
-                    ({ TrStr _sbt_t4550 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    def ", 8LL)), (sym))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (trp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") -> ", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cur_class)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(decls, _sbt_t4550); _tr_str_release(_sbt_t4550); });
+                    ({ TrStr _sbt_t4657 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    def ", 8LL)), (sym))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (trp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") -> ", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cur_class)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(decls, _sbt_t4657); _tr_str_release(_sbt_t4657); });
 #line 3045 "src/bindgen.tr"
                     n_fns = (n_fns + 1LL);
                     _tr_str_release(sym);
@@ -7817,36 +7818,36 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 3049 "src/bindgen.tr"
                     if (_tr_str_eqv((mode), (_tr_str_lit_len("method", 6LL)))) {
 #line 3049 "src/bindgen.tr"
-                        TrStr _strtmp_t4551 = ({ TrStr _tr_cl = (_tr_strx_concatv((class_pfx), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m_sym)); _tr_str_release(_tr_cl); _tr_cres; });
+                        TrStr _strtmp_t4658 = ({ TrStr _tr_cl = (_tr_strx_concatv((class_pfx), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m_sym)); _tr_str_release(_tr_cl); _tr_cres; });
                         _tr_str_release(sym0);
-                        sym0 = _strtmp_t4551;
+                        sym0 = _strtmp_t4658;
                     } else {
 #line 3055 "src/bindgen.tr"
                         if (_tr_str_eqv((ns_path), (_tr_str_lit_len("", 0LL)))) {
 #line 3055 "src/bindgen.tr"
-                            TrStr _strtmp_t4552 = _tr_strx_concatv((_tr_str_lit_len("g_", 2LL)), (m_sym));
+                            TrStr _strtmp_t4659 = _tr_strx_concatv((_tr_str_lit_len("g_", 2LL)), (m_sym));
                             _tr_str_release(sym0);
-                            sym0 = _strtmp_t4552;
+                            sym0 = _strtmp_t4659;
                         } else {
 #line 3056 "src/bindgen.tr"
-                            TrStr _strtmp_t4553 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ns_us(ns_path)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m_sym)); _tr_str_release(_tr_cl); _tr_cres; });
+                            TrStr _strtmp_t4660 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ns_us(ns_path)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m_sym)); _tr_str_release(_tr_cl); _tr_cres; });
                             _tr_str_release(sym0);
-                            sym0 = _strtmp_t4553;
+                            sym0 = _strtmp_t4660;
                         }
                     }
 #line 3057 "src/bindgen.tr"
                     TrStr sym = _uniq_sym(sym0, sym_used);
 #line 3058 "src/bindgen.tr"
-                    ({ __auto_type _ord_t4556 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (List_TrStr_get(ri, 0LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sym)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (shimp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") { ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t4554 = (List_TrStr_get(ri, 0LL)); TrStr _at_t4555 = (List_TrStr_get(ri, 1LL)); TrStr _sbt_t4557 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4556); TrStr _tr_cr = (_shim_body(_at_t4554, _at_t4555)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4557); _tr_str_release(_at_t4554); _tr_str_release(_at_t4555); _tr_str_release(_sbt_t4557); });
+                    ({ __auto_type _ord_t4663 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (List_TrStr_get(ri, 0LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sym)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (shimp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") { ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _at_t4661 = (List_TrStr_get(ri, 0LL)); TrStr _at_t4662 = (List_TrStr_get(ri, 1LL)); TrStr _sbt_t4664 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4663); TrStr _tr_cr = (_shim_body(_at_t4661, _at_t4662)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(shim, _sbt_t4664); _tr_str_release(_at_t4661); _tr_str_release(_at_t4662); _tr_str_release(_sbt_t4664); });
 #line 3059 "src/bindgen.tr"
                     TrStr d = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    def ", 8LL)), (sym))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (trp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
 #line 3060 "src/bindgen.tr"
-                    if (({ TrStr _cmpa_t4558 = (List_TrStr_get(ri, 2LL)); TrStr _cmpb_t4559 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4560 = !_tr_str_eqv(_cmpa_t4558, _cmpb_t4559); _tr_str_release(_cmpa_t4558); _cmpr_t4560; })) {
+                    if (({ TrStr _cmpa_t4665 = (List_TrStr_get(ri, 2LL)); TrStr _cmpb_t4666 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4667 = !_tr_str_eqv(_cmpa_t4665, _cmpb_t4666); _tr_str_release(_cmpa_t4665); _cmpr_t4667; })) {
 #line 3060 "src/bindgen.tr"
-                        ({ TrStr _ap_t4561 = (_tr_str_lit_len(" -> ", 4LL)); TrStr _ap_t4562 = (List_TrStr_get(ri, 2LL)); _tr_str_append(&d, _ap_t4561); _tr_str_append(&d, _ap_t4562); _tr_str_release(_ap_t4562); });
+                        ({ TrStr _ap_t4668 = (_tr_str_lit_len(" -> ", 4LL)); TrStr _ap_t4669 = (List_TrStr_get(ri, 2LL)); _tr_str_append(&d, _ap_t4668); _tr_str_append(&d, _ap_t4669); _tr_str_release(_ap_t4669); });
                     }
 #line 3061 "src/bindgen.tr"
-                    ({ TrStr _sbt_t4563 = (_tr_strx_concatv((d), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(decls, _sbt_t4563); _tr_str_release(_sbt_t4563); });
+                    ({ TrStr _sbt_t4670 = (_tr_strx_concatv((d), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(decls, _sbt_t4670); _tr_str_release(_sbt_t4670); });
 #line 3062 "src/bindgen.tr"
                     n_fns = (n_fns + 1LL);
                     _tr_str_release(sym0);
@@ -7861,9 +7862,9 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
                 _tr_str_release(call);
             }
 #line 3064 "src/bindgen.tr"
-            TrStr _strtmp_t4564 = _tr_str_lit_len("", 0LL);
+            TrStr _strtmp_t4671 = _tr_str_lit_len("", 0LL);
             _tr_str_release(mode);
-            mode = _strtmp_t4564;
+            mode = _strtmp_t4671;
 #line 3065 "src/bindgen.tr"
             _tr_str_release(line);
             _tr_str_release(cur_class);
@@ -7881,34 +7882,34 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 3068 "src/bindgen.tr"
     TrStr base = _tr_str_retain(out);
 #line 3069 "src/bindgen.tr"
-    if (((_tr_str_lenv((base)) > 3LL) && ({ __auto_type _ord_t4565 = ((_tr_str_lenv((base)) - 3LL)); __auto_type _ord_t4566 = (_tr_str_lenv((base))); __auto_type _wr = (({ TrStr _cmpa_t4567 = (_tr_str_slicev((base), _ord_t4565, _ord_t4566)); TrStr _cmpb_t4568 = (_tr_str_lit_len(".tr", 3LL)); _Bool _cmpr_t4569 = _tr_str_eqv(_cmpa_t4567, _cmpb_t4568); _tr_str_release(_cmpa_t4567); _cmpr_t4569; })); _wr; }))) {
+    if (((_tr_str_lenv((base)) > 3LL) && ({ __auto_type _ord_t4672 = ((_tr_str_lenv((base)) - 3LL)); __auto_type _ord_t4673 = (_tr_str_lenv((base))); __auto_type _wr = (({ TrStr _cmpa_t4674 = (_tr_str_slicev((base), _ord_t4672, _ord_t4673)); TrStr _cmpb_t4675 = (_tr_str_lit_len(".tr", 3LL)); _Bool _cmpr_t4676 = _tr_str_eqv(_cmpa_t4674, _cmpb_t4675); _tr_str_release(_cmpa_t4674); _cmpr_t4676; })); _wr; }))) {
 #line 3070 "src/bindgen.tr"
-        TrStr _strtmp_t4570 = _tr_str_slicev((base), 0LL, (_tr_str_lenv((base)) - 3LL));
+        TrStr _strtmp_t4677 = _tr_str_slicev((base), 0LL, (_tr_str_lenv((base)) - 3LL));
         _tr_str_release(base);
-        base = _strtmp_t4570;
+        base = _strtmp_t4677;
     }
 #line 3071 "src/bindgen.tr"
     TrStr shim_name = _tr_strx_concatv((base), (_tr_str_lit_len("_shim.cpp", 9LL)));
 #line 3073 "src/bindgen.tr"
     StringBuilder* sb = StringBuilder_init(4096LL);
 #line 3074 "src/bindgen.tr"
-    ({ TrStr _sbt_t4571 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# Auto-generated C++ FFI bindings for ", 38LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" (tauraro-bindgen -h cpp).\n", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4571); _tr_str_release(_sbt_t4571); });
+    ({ TrStr _sbt_t4678 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# Auto-generated C++ FFI bindings for ", 38LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" (tauraro-bindgen -h cpp).\n", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4678); _tr_str_release(_sbt_t4678); });
 #line 3078 "src/bindgen.tr"
-    ({ TrStr _sbt_t4572 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_basename(shim_name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("# tauraro-cpp-shim: ", 20LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4572); _tr_str_release(_sbt_t4572); });
+    ({ TrStr _sbt_t4679 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_basename(shim_name)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("# tauraro-cpp-shim: ", 20LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4679); _tr_str_release(_sbt_t4679); });
 #line 3079 "src/bindgen.tr"
     StringBuilder_append(sb, _tr_str_lit_len("# tauraro-cpp-lib: stdc++\n", 26LL));
 #line 3080 "src/bindgen.tr"
     if ((!_tr_str_eqv((pkglibs), (_tr_str_lit_len("", 0LL))))) {
 #line 3080 "src/bindgen.tr"
-        ({ TrStr _sbt_t4573 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# tauraro-cpp-linkflags:", 24LL)), (pkglibs))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4573); _tr_str_release(_sbt_t4573); });
+        ({ TrStr _sbt_t4680 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# tauraro-cpp-linkflags:", 24LL)), (pkglibs))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4680); _tr_str_release(_sbt_t4680); });
     }
 #line 3081 "src/bindgen.tr"
     if ((!_tr_str_eqv((shim_cflags), (_tr_str_lit_len("", 0LL))))) {
 #line 3081 "src/bindgen.tr"
-        ({ TrStr _sbt_t4574 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# tauraro-cpp-cflags: ", 22LL)), (shim_cflags))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4574); _tr_str_release(_sbt_t4574); });
+        ({ TrStr _sbt_t4681 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# tauraro-cpp-cflags: ", 22LL)), (shim_cflags))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4681); _tr_str_release(_sbt_t4681); });
     }
 #line 3082 "src/bindgen.tr"
-    ({ TrStr _sbt_t4575 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# (opt out with --no-auto-cpp, then: c++ -c ", 44LL)), (shim_name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ; tauraroc app.tr --link ", 26LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (base)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_shim.o -lstdc++)\n\n", 19LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4575); _tr_str_release(_sbt_t4575); });
+    ({ TrStr _sbt_t4682 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("# (opt out with --no-auto-cpp, then: c++ -c ", 44LL)), (shim_name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ; tauraroc app.tr --link ", 26LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (base)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_shim.o -lstdc++)\n\n", 19LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t4682); _tr_str_release(_sbt_t4682); });
 #line 3083 "src/bindgen.tr"
     TrStr os_ = StringObj_as_str(StringBuilder_to_string(opaque));
 #line 3084 "src/bindgen.tr"
@@ -7948,7 +7949,7 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
         _tr_str_release(dl);
     }
 #line 3102 "src/bindgen.tr"
-    TrStr fb = ({ TrStr _at_t4576 = (_tr_strx_concatv((os_), (ds2))); __auto_type _wr = (_opaque_fallbacks(_at_t4576, defined_names)); _tr_str_release(_at_t4576); _wr; });
+    TrStr fb = ({ TrStr _at_t4683 = (_tr_strx_concatv((os_), (ds2))); __auto_type _wr = (_opaque_fallbacks(_at_t4683, defined_names)); _tr_str_release(_at_t4683); _wr; });
 #line 3103 "src/bindgen.tr"
     if ((!_tr_str_eqv((fb), (_tr_str_lit_len("", 0LL))))) {
 #line 3103 "src/bindgen.tr"
@@ -7957,12 +7958,12 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 3104 "src/bindgen.tr"
     if ((!_tr_str_eqv((os_), (_tr_str_lit_len("", 0LL))))) {
 #line 3104 "src/bindgen.tr"
-        ({ TrStr _sbt_t4577 = (_tr_strx_concatv((os_), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(sb, _sbt_t4577); _tr_str_release(_sbt_t4577); });
+        ({ TrStr _sbt_t4684 = (_tr_strx_concatv((os_), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(sb, _sbt_t4684); _tr_str_release(_sbt_t4684); });
     }
 #line 3105 "src/bindgen.tr"
     if ((!_tr_str_eqv((cs), (_tr_str_lit_len("", 0LL))))) {
 #line 3105 "src/bindgen.tr"
-        ({ TrStr _sbt_t4578 = (_tr_strx_concatv((cs), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(sb, _sbt_t4578); _tr_str_release(_sbt_t4578); });
+        ({ TrStr _sbt_t4685 = (_tr_strx_concatv((cs), (_tr_str_lit_len("\n", 1LL)))); StringBuilder_append(sb, _sbt_t4685); _tr_str_release(_sbt_t4685); });
     }
 #line 3106 "src/bindgen.tr"
     if ((!_tr_str_eqv((ds2), (_tr_str_lit_len("", 0LL))))) {
@@ -7976,15 +7977,15 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
         StringBuilder_append(sb, ds2);
     }
 #line 3114 "src/bindgen.tr"
-    ({ TrStr _at_t4579 = (StringObj_as_str(StringBuilder_to_string(sb))); write_file(out, _at_t4579); _tr_str_release(_at_t4579); });
+    ({ TrStr _at_t4686 = (StringObj_as_str(StringBuilder_to_string(sb))); write_file(out, _at_t4686); _tr_str_release(_at_t4686); });
 #line 3116 "src/bindgen.tr"
     StringBuilder* sh = StringBuilder_init(4096LL);
 #line 3117 "src/bindgen.tr"
-    ({ TrStr _sbt_t4580 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("// Auto-generated C++ -> C shim for ", 36LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" (tauraro-bindgen -h cpp).\n", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sh, _sbt_t4580); _tr_str_release(_sbt_t4580); });
+    ({ TrStr _sbt_t4687 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("// Auto-generated C++ -> C shim for ", 36LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" (tauraro-bindgen -h cpp).\n", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sh, _sbt_t4687); _tr_str_release(_sbt_t4687); });
 #line 3118 "src/bindgen.tr"
-    ({ TrStr _sbt_t4581 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("// Compile:  c++ -c ", 20LL)), (shim_name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sh, _sbt_t4581); _tr_str_release(_sbt_t4581); });
+    ({ TrStr _sbt_t4688 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("// Compile:  c++ -c ", 20LL)), (shim_name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sh, _sbt_t4688); _tr_str_release(_sbt_t4688); });
 #line 3119 "src/bindgen.tr"
-    ({ TrStr _sbt_t4582 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("#include \"", 10LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\"\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sh, _sbt_t4582); _tr_str_release(_sbt_t4582); });
+    ({ TrStr _sbt_t4689 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("#include \"", 10LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\"\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sh, _sbt_t4689); _tr_str_release(_sbt_t4689); });
 #line 3120 "src/bindgen.tr"
     StringBuilder_append(sh, _tr_str_lit_len("#include <string>\n#include <string_view>\n#include <cstring>\n#include <cstdlib>\n#include <iterator>\n", 99LL));
 #line 3121 "src/bindgen.tr"
@@ -8002,7 +8003,7 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 3127 "src/bindgen.tr"
     StringBuilder_append(sh, _tr_str_lit_len("static void _tr_cpp_set_error(const char* m){ _tr_cpp_err = m ? m : \"C++ exception\"; }\n", 87LL));
 #line 3128 "src/bindgen.tr"
-    ({ TrStr _sbt_t4583 = (StringObj_as_str(StringBuilder_to_string(usings))); StringBuilder_append(sh, _sbt_t4583); _tr_str_release(_sbt_t4583); });
+    ({ TrStr _sbt_t4690 = (StringObj_as_str(StringBuilder_to_string(usings))); StringBuilder_append(sh, _sbt_t4690); _tr_str_release(_sbt_t4690); });
 #line 3129 "src/bindgen.tr"
     StringBuilder_append(sh, _tr_str_lit_len("extern \"C\" {\n", 13LL));
 #line 3130 "src/bindgen.tr"
@@ -8010,13 +8011,13 @@ __attribute__((hot)) void _cpp_generate(TrStr ir, TrStr header, TrStr out, TrStr
 #line 3131 "src/bindgen.tr"
     StringBuilder_append(sh, _tr_str_lit_len("void tauraro_cpp_clear_error(void){ _tr_cpp_err.clear(); }\n", 59LL));
 #line 3132 "src/bindgen.tr"
-    ({ TrStr _sbt_t4584 = (StringObj_as_str(StringBuilder_to_string(shim))); StringBuilder_append(sh, _sbt_t4584); _tr_str_release(_sbt_t4584); });
+    ({ TrStr _sbt_t4691 = (StringObj_as_str(StringBuilder_to_string(shim))); StringBuilder_append(sh, _sbt_t4691); _tr_str_release(_sbt_t4691); });
 #line 3133 "src/bindgen.tr"
     StringBuilder_append(sh, _tr_str_lit_len("}\n", 2LL));
 #line 3134 "src/bindgen.tr"
-    ({ TrStr _at_t4585 = (StringObj_as_str(StringBuilder_to_string(sh))); write_file(shim_name, _at_t4585); _tr_str_release(_at_t4585); });
+    ({ TrStr _at_t4692 = (StringObj_as_str(StringBuilder_to_string(sh))); write_file(shim_name, _at_t4692); _tr_str_release(_at_t4692); });
 #line 3136 "src/bindgen.tr"
-    ({ __auto_type _ord_t4586 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("bindgen: wrote ", 15LL)), (out))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" + ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (shim_name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" — ", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(n_classes)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" classes, ", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); ({ ({ TrStr _ps = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4586); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(n_fns)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" wrappers", 9LL))); _tr_str_release(_tr_cl); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); }); });
+    ({ __auto_type _ord_t4693 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("bindgen: wrote ", 15LL)), (out))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" + ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (shim_name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" — ", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(n_classes)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" classes, ", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); ({ ({ TrStr _ps = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4693); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(n_fns)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" wrappers", 9LL))); _tr_str_release(_tr_cl); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); }); });
 #line 3137 "src/bindgen.tr"
     ({ printf("%s", _tr_strz(_tr_str_lit_len("bindgen: next:  import this module and build — tauraroc auto-compiles + links the shim (zero-cost).", 101LL))); printf("\n"); });
     _tr_str_release(ns_path);
@@ -8056,7 +8057,7 @@ __attribute__((hot)) TrStr _cpp_detect_include_dirs(TrStr cc) {
 #line 3146 "src/bindgen.tr"
     write_file(_tr_str_lit_len("_cxx_empty.cpp", 14LL), _tr_str_lit_len("\n", 1LL));
 #line 3147 "src/bindgen.tr"
-    ({ TrStr _aet_t4587 = (_tr_strx_concatv((cc), (_tr_str_lit_len(" -x c++ -E -v _cxx_empty.cpp > _cxx_pp.txt 2> _cxx_inc.txt", 58LL)))); _tr_system(_aet_t4587.data); _tr_str_release(_aet_t4587); });
+    ({ TrStr _aet_t4694 = (_tr_strx_concatv((cc), (_tr_str_lit_len(" -x c++ -E -v _cxx_empty.cpp > _cxx_pp.txt 2> _cxx_inc.txt", 58LL)))); _tr_system(_aet_t4694.data); _tr_str_release(_aet_t4694); });
 #line 3148 "src/bindgen.tr"
     TrStr out = _tr_str_lit_len("", 0LL);
 #line 3149 "src/bindgen.tr"
@@ -8072,7 +8073,7 @@ __attribute__((hot)) TrStr _cpp_detect_include_dirs(TrStr cc) {
 #line 3154 "src/bindgen.tr"
         while ((li < lines->len)) {
 #line 3155 "src/bindgen.tr"
-            TrStr ln = ({ TrStr _at_t4588 = (List_TrStr_get(lines, li)); __auto_type _wr = (_rstrip_cr(_at_t4588)); _tr_str_release(_at_t4588); _wr; });
+            TrStr ln = ({ TrStr _at_t4695 = (List_TrStr_get(lines, li)); __auto_type _wr = (_rstrip_cr(_at_t4695)); _tr_str_release(_at_t4695); _wr; });
 #line 3156 "src/bindgen.tr"
             li = (li + 1LL);
 #line 3157 "src/bindgen.tr"
@@ -8100,14 +8101,14 @@ __attribute__((hot)) TrStr _cpp_detect_include_dirs(TrStr cc) {
 #line 3167 "src/bindgen.tr"
                 if ((fpos >= 0LL)) {
 #line 3167 "src/bindgen.tr"
-                    TrStr _strtmp_t4589 = _tr_str_slicev((d), 0LL, fpos);
+                    TrStr _strtmp_t4696 = _tr_str_slicev((d), 0LL, fpos);
                     _tr_str_release(d);
-                    d = _strtmp_t4589;
+                    d = _strtmp_t4696;
                 }
 #line 3168 "src/bindgen.tr"
                 if ((!_tr_str_eqv((d), (_tr_str_lit_len("", 0LL))))) {
 #line 3169 "src/bindgen.tr"
-                    ({ TrStr _ap_t4590 = (_tr_str_lit_len(" -I\"", 4LL)); TrStr _ap_t4591 = (d); TrStr _ap_t4592 = (_tr_str_lit_len("\"", 1LL)); _tr_str_append(&out, _ap_t4590); _tr_str_append(&out, _ap_t4591); _tr_str_append(&out, _ap_t4592); });
+                    ({ TrStr _ap_t4697 = (_tr_str_lit_len(" -I\"", 4LL)); TrStr _ap_t4698 = (d); TrStr _ap_t4699 = (_tr_str_lit_len("\"", 1LL)); _tr_str_append(&out, _ap_t4697); _tr_str_append(&out, _ap_t4698); _tr_str_append(&out, _ap_t4699); });
                 }
             }
             _tr_str_release(ln);
@@ -8117,9 +8118,9 @@ __attribute__((hot)) TrStr _cpp_detect_include_dirs(TrStr cc) {
 #line 3170 "src/bindgen.tr"
     _rm_files(_tr_str_lit_len("_cxx_empty.cpp _cxx_pp.txt _cxx_inc.txt", 39LL));
 #line 3171 "src/bindgen.tr"
-    TrStr _trret720 = _tr_str_retain(out);
+    TrStr _trret729 = _tr_str_retain(out);
     _tr_str_release(out);
-    return _trret720;
+    return _trret729;
 }
 
 __attribute__((hot)) TrStr _cpp_std_flag(TrStr extra) {
@@ -8142,7 +8143,7 @@ __attribute__((hot)) long long _cpp_fatal_count(TrStr diag) {
 #line 3183 "src/bindgen.tr"
     while ((li < lines->len)) {
 #line 3184 "src/bindgen.tr"
-        TrStr ln = ({ TrStr _at_t4593 = (List_TrStr_get(lines, li)); __auto_type _wr = (_rstrip_cr(_at_t4593)); _tr_str_release(_at_t4593); _wr; });
+        TrStr ln = ({ TrStr _at_t4700 = (List_TrStr_get(lines, li)); __auto_type _wr = (_rstrip_cr(_at_t4700)); _tr_str_release(_at_t4700); _wr; });
 #line 3185 "src/bindgen.tr"
         li = (li + 1LL);
 #line 3186 "src/bindgen.tr"
@@ -8152,15 +8153,15 @@ __attribute__((hot)) long long _cpp_fatal_count(TrStr diag) {
 #line 3188 "src/bindgen.tr"
             if ((parts->len >= 3LL)) {
 #line 3188 "src/bindgen.tr"
-                f = ({ TrStr _at_t4594 = (List_TrStr_get(parts, 2LL)); __auto_type _wr = (_to_int(_at_t4594)); _tr_str_release(_at_t4594); _wr; });
+                f = ({ TrStr _at_t4701 = (List_TrStr_get(parts, 2LL)); __auto_type _wr = (_to_int(_at_t4701)); _tr_str_release(_at_t4701); _wr; });
             }
         }
         _tr_str_release(ln);
     }
 #line 3189 "src/bindgen.tr"
-    long long _trret721 = f;
+    long long _trret730 = f;
     List_TrStr_free(lines);
-    return _trret721;
+    return _trret730;
 }
 
 __attribute__((hot)) void _cpp_print_diag(TrStr diag) {
@@ -8173,7 +8174,7 @@ __attribute__((hot)) void _cpp_print_diag(TrStr diag) {
 #line 3196 "src/bindgen.tr"
     while ((li < lines->len)) {
 #line 3197 "src/bindgen.tr"
-        TrStr ln = ({ TrStr _at_t4595 = (List_TrStr_get(lines, li)); __auto_type _wr = (_rstrip_cr(_at_t4595)); _tr_str_release(_at_t4595); _wr; });
+        TrStr ln = ({ TrStr _at_t4702 = (List_TrStr_get(lines, li)); __auto_type _wr = (_rstrip_cr(_at_t4702)); _tr_str_release(_at_t4702); _wr; });
 #line 3198 "src/bindgen.tr"
         li = (li + 1LL);
 #line 3199 "src/bindgen.tr"
@@ -8196,7 +8197,7 @@ __attribute__((hot)) bool _cpp_ir_is_empty(TrStr ir) {
 #line 3207 "src/bindgen.tr"
     while ((li < lines->len)) {
 #line 3208 "src/bindgen.tr"
-        if (({ TrStr _at_t4596 = (List_TrStr_get(lines, li)); __auto_type _wr = (({ TrStr _cmpa_t4597 = (_rstrip_cr(_at_t4596)); TrStr _cmpb_t4598 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4599 = !_tr_str_eqv(_cmpa_t4597, _cmpb_t4598); _tr_str_release(_cmpa_t4597); _cmpr_t4599; })); _tr_str_release(_at_t4596); _wr; })) {
+        if (({ TrStr _at_t4703 = (List_TrStr_get(lines, li)); __auto_type _wr = (({ TrStr _cmpa_t4704 = (_rstrip_cr(_at_t4703)); TrStr _cmpb_t4705 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t4706 = !_tr_str_eqv(_cmpa_t4704, _cmpb_t4705); _tr_str_release(_cmpa_t4704); _cmpr_t4706; })); _tr_str_release(_at_t4703); _wr; })) {
 #line 3208 "src/bindgen.tr"
             List_TrStr_free(lines);
             return false;
@@ -8253,7 +8254,7 @@ __attribute__((hot)) List_TrStr* _collect_specs(TrStr ir) {
 #line 3242 "src/bindgen.tr"
     while ((i < lines->len)) {
 #line 3243 "src/bindgen.tr"
-        TrStr ln = ({ TrStr _at_t4600 = (List_TrStr_get(lines, i)); __auto_type _wr = (_rstrip_cr(_at_t4600)); _tr_str_release(_at_t4600); _wr; });
+        TrStr ln = ({ TrStr _at_t4707 = (List_TrStr_get(lines, i)); __auto_type _wr = (_rstrip_cr(_at_t4707)); _tr_str_release(_at_t4707); _wr; });
 #line 3244 "src/bindgen.tr"
         i = (i + 1LL);
 #line 3247 "src/bindgen.tr"
@@ -8289,9 +8290,9 @@ __attribute__((hot)) List_TrStr* _collect_specs(TrStr ir) {
 #line 3258 "src/bindgen.tr"
         if ((bar >= 0LL)) {
 #line 3258 "src/bindgen.tr"
-            TrStr _strtmp_t4601 = _tr_str_slicev((rest), 0LL, bar);
+            TrStr _strtmp_t4708 = _tr_str_slicev((rest), 0LL, bar);
             _tr_str_release(detail);
-            detail = _strtmp_t4601;
+            detail = _strtmp_t4708;
         }
 #line 3259 "src/bindgen.tr"
         if ((((_tr_str_index_ofv((detail), (_tr_str_lit_len("<", 1LL))) >= 0LL) && (!_is_expr_proxy_spec(detail))) && (!_tr_dict_contains(seen, _tr_strz(detail))))) {
@@ -8322,9 +8323,9 @@ __attribute__((hot)) void run_bindgen_cpp(TrStr header, TrStr out, TrStr cc, TrS
         return;
     }
 #line 3269 "src/bindgen.tr"
-    ({ TrStr _at_t4602 = (_cxxwalk_src()); write_file(_tr_str_lit_len("_cxxwalk.c", 10LL), _at_t4602); _tr_str_release(_at_t4602); });
+    ({ TrStr _at_t4709 = (_cxxwalk_src()); write_file(_tr_str_lit_len("_cxxwalk.c", 10LL), _at_t4709); _tr_str_release(_at_t4709); });
 #line 3270 "src/bindgen.tr"
-    long long rc = ({ TrStr _aet_t4603 = (_tr_strx_concatv((cc), (_tr_str_lit_len(" _cxxwalk.c -o _cxxwalk.exe -lclang 2>_cxx_err.txt", 50LL)))); __auto_type _wr = (_tr_system(_aet_t4603.data)); _tr_str_release(_aet_t4603); _wr; });
+    long long rc = ({ TrStr _aet_t4710 = (_tr_strx_concatv((cc), (_tr_str_lit_len(" _cxxwalk.c -o _cxxwalk.exe -lclang 2>_cxx_err.txt", 50LL)))); __auto_type _wr = (_tr_system(_aet_t4710.data)); _tr_str_release(_aet_t4710); _wr; });
 #line 3271 "src/bindgen.tr"
     if (((rc != 0LL) || (!file_exists(_tr_str_lit_len("_cxxwalk.exe", 12LL))))) {
 #line 3272 "src/bindgen.tr"
@@ -8334,27 +8335,27 @@ __attribute__((hot)) void run_bindgen_cpp(TrStr header, TrStr out, TrStr cc, TrS
         return;
     }
 #line 3275 "src/bindgen.tr"
-    TrStr clang_args = ({ __auto_type _ord_t4604 = (({ TrStr _tr_cr = (_cpp_std_flag(extra)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("-x c++ ", 7LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (_ord_t4604); TrStr _tr_cr = (_cpp_detect_include_dirs(cc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); _wr; });
+    TrStr clang_args = ({ __auto_type _ord_t4711 = (({ TrStr _tr_cr = (_cpp_std_flag(extra)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("-x c++ ", 7LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (_ord_t4711); TrStr _tr_cr = (_cpp_detect_include_dirs(cc)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); _wr; });
 #line 3276 "src/bindgen.tr"
     if ((!_tr_str_eqv((extra), (_tr_str_lit_len("", 0LL))))) {
 #line 3276 "src/bindgen.tr"
-        ({ TrStr _ap_t4605 = (_tr_str_lit_len(" ", 1LL)); TrStr _ap_t4606 = (extra); _tr_str_append(&clang_args, _ap_t4605); _tr_str_append(&clang_args, _ap_t4606); });
+        ({ TrStr _ap_t4712 = (_tr_str_lit_len(" ", 1LL)); TrStr _ap_t4713 = (extra); _tr_str_append(&clang_args, _ap_t4712); _tr_str_append(&clang_args, _ap_t4713); });
     }
 #line 3277 "src/bindgen.tr"
-    ({ TrStr _aet_t4607 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_local_exe(_tr_str_lit_len("_cxxwalk", 8LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" \"", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (header)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (clang_args)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" > _cxx.ir 2> _cxx_diag.txt", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4607.data); _tr_str_release(_aet_t4607); });
+    ({ TrStr _aet_t4714 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_local_exe(_tr_str_lit_len("_cxxwalk", 8LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" \"", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (header)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (clang_args)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" > _cxx.ir 2> _cxx_diag.txt", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4714.data); _tr_str_release(_aet_t4714); });
 #line 3278 "src/bindgen.tr"
     TrStr diag = _tr_str_lit_len("", 0LL);
 #line 3279 "src/bindgen.tr"
     if (file_exists(_tr_str_lit_len("_cxx_diag.txt", 13LL))) {
 #line 3279 "src/bindgen.tr"
-        TrStr _strtmp_t4608 = read_file(_tr_str_lit_len("_cxx_diag.txt", 13LL));
+        TrStr _strtmp_t4715 = read_file(_tr_str_lit_len("_cxx_diag.txt", 13LL));
         _tr_str_release(diag);
-        diag = _strtmp_t4608;
+        diag = _strtmp_t4715;
     }
 #line 3280 "src/bindgen.tr"
     long long nfatal = _cpp_fatal_count(diag);
 #line 3281 "src/bindgen.tr"
-    if (((!file_exists(_tr_str_lit_len("_cxx.ir", 7LL))) || ({ TrStr _at_t4609 = (read_file(_tr_str_lit_len("_cxx.ir", 7LL))); __auto_type _wr = (_cpp_ir_is_empty(_at_t4609)); _tr_str_release(_at_t4609); _wr; }))) {
+    if (((!file_exists(_tr_str_lit_len("_cxx.ir", 7LL))) || ({ TrStr _at_t4716 = (read_file(_tr_str_lit_len("_cxx.ir", 7LL))); __auto_type _wr = (_cpp_ir_is_empty(_at_t4716)); _tr_str_release(_at_t4716); _wr; }))) {
 #line 3282 "src/bindgen.tr"
         ({ ({ TrStr _ps = _tr_strx_concatv((_tr_str_lit_len("bindgen: no bindable declarations found in ", 43LL)), (header)); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); });
 #line 3283 "src/bindgen.tr"
@@ -8394,26 +8395,26 @@ __attribute__((hot)) void run_bindgen_cpp(TrStr header, TrStr out, TrStr cc, TrS
 #line 3301 "src/bindgen.tr"
         StringBuilder* fsb = StringBuilder_init(512LL);
 #line 3302 "src/bindgen.tr"
-        ({ TrStr _sbt_t4610 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("#include \"", 10LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\"\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(fsb, _sbt_t4610); _tr_str_release(_sbt_t4610); });
+        ({ TrStr _sbt_t4717 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("#include \"", 10LL)), (header))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\"\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(fsb, _sbt_t4717); _tr_str_release(_sbt_t4717); });
 #line 3303 "src/bindgen.tr"
         long long si = 0LL;
 #line 3304 "src/bindgen.tr"
         while ((si < specs->len)) {
 #line 3305 "src/bindgen.tr"
-            ({ TrStr _sbt_t4611 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (List_TrStr_get(specs, si)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("template class ", 15LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(fsb, _sbt_t4611); _tr_str_release(_sbt_t4611); });
+            ({ TrStr _sbt_t4718 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (List_TrStr_get(specs, si)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("template class ", 15LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(fsb, _sbt_t4718); _tr_str_release(_sbt_t4718); });
 #line 3306 "src/bindgen.tr"
             si = (si + 1LL);
         }
 #line 3307 "src/bindgen.tr"
-        ({ TrStr _at_t4612 = (StringObj_as_str(StringBuilder_to_string(fsb))); write_file(_tr_str_lit_len("_cxx_force.cpp", 14LL), _at_t4612); _tr_str_release(_at_t4612); });
+        ({ TrStr _at_t4719 = (StringObj_as_str(StringBuilder_to_string(fsb))); write_file(_tr_str_lit_len("_cxx_force.cpp", 14LL), _at_t4719); _tr_str_release(_at_t4719); });
 #line 3308 "src/bindgen.tr"
-        ({ TrStr _aet_t4613 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_local_exe(_tr_str_lit_len("_cxxwalk", 8LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" --inst _cxx_force.cpp ", 23LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (clang_args)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" > _cxx_inst.ir 2>> _cxx_diag.txt", 33LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4613.data); _tr_str_release(_aet_t4613); });
+        ({ TrStr _aet_t4720 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_local_exe(_tr_str_lit_len("_cxxwalk", 8LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" --inst _cxx_force.cpp ", 23LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (clang_args)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" > _cxx_inst.ir 2>> _cxx_diag.txt", 33LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4720.data); _tr_str_release(_aet_t4720); });
 #line 3309 "src/bindgen.tr"
-        if ((file_exists(_tr_str_lit_len("_cxx_inst.ir", 12LL)) && ({ TrStr _at_t4614 = (read_file(_tr_str_lit_len("_cxx_inst.ir", 12LL))); __auto_type _wr = ((!_cpp_ir_is_empty(_at_t4614))); _tr_str_release(_at_t4614); _wr; }))) {
+        if ((file_exists(_tr_str_lit_len("_cxx_inst.ir", 12LL)) && ({ TrStr _at_t4721 = (read_file(_tr_str_lit_len("_cxx_inst.ir", 12LL))); __auto_type _wr = ((!_cpp_ir_is_empty(_at_t4721))); _tr_str_release(_at_t4721); _wr; }))) {
 #line 3310 "src/bindgen.tr"
-            TrStr _strtmp_t4617 = ({ TrStr _tr_cl = (_tr_strx_concatv((ir), (_tr_str_lit_len("\n", 1LL)))); TrStr _tr_cr = (read_file(_tr_str_lit_len("_cxx_inst.ir", 12LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; });
+            TrStr _strtmp_t4724 = ({ TrStr _tr_cl = (_tr_strx_concatv((ir), (_tr_str_lit_len("\n", 1LL)))); TrStr _tr_cr = (read_file(_tr_str_lit_len("_cxx_inst.ir", 12LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; });
             _tr_str_release(ir);
-            ir = _strtmp_t4617;
+            ir = _strtmp_t4724;
 #line 3311 "src/bindgen.tr"
             n_specs = specs->len;
         }
@@ -8424,7 +8425,7 @@ __attribute__((hot)) void run_bindgen_cpp(TrStr header, TrStr out, TrStr cc, TrS
 #line 3316 "src/bindgen.tr"
     if ((!_tr_str_eqv((extra), (_tr_str_lit_len("", 0LL))))) {
 #line 3316 "src/bindgen.tr"
-        ({ TrStr _ap_t4618 = (_tr_str_lit_len(" ", 1LL)); TrStr _ap_t4619 = (extra); _tr_str_append(&shim_cflags, _ap_t4618); _tr_str_append(&shim_cflags, _ap_t4619); });
+        ({ TrStr _ap_t4725 = (_tr_str_lit_len(" ", 1LL)); TrStr _ap_t4726 = (extra); _tr_str_append(&shim_cflags, _ap_t4725); _tr_str_append(&shim_cflags, _ap_t4726); });
     }
 #line 3317 "src/bindgen.tr"
     _cpp_generate(ir, header, out, shim_cflags, pkglibs);

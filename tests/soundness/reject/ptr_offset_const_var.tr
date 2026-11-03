@@ -1,0 +1,8 @@
+# EXPECT: [P-3]
+# An offset held in a local that is definitely a constant here is checked like a literal.
+def main():
+    unsafe:
+        mut p: Pointer[int] = alloc[int](4)
+        mut n = 5
+        p.offset(n).write(1)
+        dealloc(p)

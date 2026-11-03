@@ -1,0 +1,8 @@
+# EXPECT: [E-1]
+# `.to_int()` on a user class without such a method is a missing method, not a numeric conversion.
+class Foo:
+    pub v: int
+def main():
+    mut f = Foo()
+    f.v = 1
+    n = f.to_int()

@@ -5,9 +5,9 @@ __attribute__((malloc,returns_nonnull,hot)) CppExporter* CppExporter_init(CGener
 #line 35 "src/codegen/cpp_export.tr"
     CppExporter* e = ((CppExporter*)_tr_obj_alloc(sizeof(CppExporter)));
 #line 36 "src/codegen/cpp_export.tr"
-    CGenerator* _cltmp_t8127 = _tr_obj_retain(gen);
+    CGenerator* _cltmp_t8263 = _tr_obj_retain(gen);
     _tr_obj_release(e->gen, _trdrop_CGenerator);
-    e->gen = _cltmp_t8127;
+    e->gen = _cltmp_t8263;
 #line 37 "src/codegen/cpp_export.tr"
     e->cls_set = _tr_dict_new(16LL);
 #line 38 "src/codegen/cpp_export.tr"
@@ -87,9 +87,9 @@ __attribute__((hot)) bool CppExporter__cpp_list_ok(CppExporter* self, AstType* t
 #line 65 "src/codegen/cpp_export.tr"
     TrStr ek = CppExporter__cpp_ty_kind(self, (*((AstType**)List_ptr_get(ty->args, 0LL))));
 #line 66 "src/codegen/cpp_export.tr"
-    bool _trret1658 = ((_tr_str_eqv((ek), (_tr_str_lit_len("scalar", 6LL))) || _tr_str_eqv((ek), (_tr_str_lit_len("str", 3LL)))) || _tr_str_eqv((ek), (_tr_str_lit_len("class", 5LL))));
+    bool _trret1688 = ((_tr_str_eqv((ek), (_tr_str_lit_len("scalar", 6LL))) || _tr_str_eqv((ek), (_tr_str_lit_len("str", 3LL)))) || _tr_str_eqv((ek), (_tr_str_lit_len("class", 5LL))));
     _tr_str_release(ek);
-    return _trret1658;
+    return _trret1688;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_list_elem_kind(CppExporter* self, AstType* ty) {
@@ -99,7 +99,7 @@ __attribute__((hot)) TrStr CppExporter__cpp_list_elem_kind(CppExporter* self, As
 
 __attribute__((hot)) TrStr CppExporter__cpp_list_sfx(CppExporter* self, AstType* ty) {
 #line 70 "src/codegen/cpp_export.tr"
-    return ({ __auto_type _ord_t8128 = ((*((AstType**)List_ptr_get(ty->args, 0LL)))->name); TrStr _ord_t8129 = (CGenerator_list_elem_suffix(self->gen, _ord_t8128)); __auto_type _wr = (CGenerator_list_sfx(self->gen, _ord_t8129)); _tr_str_release(_ord_t8129); _wr; });
+    return ({ __auto_type _ord_t8264 = ((*((AstType**)List_ptr_get(ty->args, 0LL)))->name); TrStr _ord_t8265 = (CGenerator_list_elem_suffix(self->gen, _ord_t8264)); __auto_type _wr = (CGenerator_list_sfx(self->gen, _ord_t8265)); _tr_str_release(_ord_t8265); _wr; });
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_list_elem_c(CppExporter* self, AstType* ty) {
@@ -111,8 +111,8 @@ __attribute__((hot)) TrStr CppExporter__cpp_list_elem_c(CppExporter* self, AstTy
         return _tr_str_lit_len("TrStr", 5LL);
     }
 #line 74 "src/codegen/cpp_export.tr"
-    TrStr _trret1659 = CGenerator_type_to_c(self->gen, elem);
-    return _trret1659;
+    TrStr _trret1689 = CGenerator_type_to_c(self->gen, elem);
+    return _trret1689;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_list_elem_cpp(CppExporter* self, AstType* ty) {
@@ -126,12 +126,12 @@ __attribute__((hot)) TrStr CppExporter__cpp_list_elem_cpp(CppExporter* self, Ast
 #line 78 "src/codegen/cpp_export.tr"
     if (_tr_dict_contains(self->cls_set, _tr_strz(elem->name))) {
 #line 78 "src/codegen/cpp_export.tr"
-        TrStr _trret1660 = _tr_str_retain(elem->name);
-        return _trret1660;
+        TrStr _trret1690 = _tr_str_retain(elem->name);
+        return _trret1690;
     }
 #line 79 "src/codegen/cpp_export.tr"
-    TrStr _trret1661 = CGenerator_type_to_c(self->gen, elem);
-    return _trret1661;
+    TrStr _trret1691 = CGenerator_type_to_c(self->gen, elem);
+    return _trret1691;
 }
 
 __attribute__((hot)) bool CppExporter__cpp_slot_ok(CppExporter* self, TrStr name) {
@@ -199,9 +199,9 @@ __attribute__((hot)) bool CppExporter__cpp_dict_ok(CppExporter* self, AstType* t
         return false;
     }
 #line 105 "src/codegen/cpp_export.tr"
-    bool _trret1662 = ({ TrStr _apt_t8130 = _tr_str_retain((*((AstType**)List_ptr_get(ty->args, 1LL)))->name); __auto_type _wr = (CppExporter__cpp_slot_ok(self, _apt_t8130)); _tr_str_release(_apt_t8130); _wr; });
+    bool _trret1692 = ({ TrStr _apt_t8266 = _tr_str_retain((*((AstType**)List_ptr_get(ty->args, 1LL)))->name); __auto_type _wr = (CppExporter__cpp_slot_ok(self, _apt_t8266)); _tr_str_release(_apt_t8266); _wr; });
     _tr_str_release(kn);
-    return _trret1662;
+    return _trret1692;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_dict_kkind(CppExporter* self, AstType* ty) {
@@ -216,12 +216,12 @@ __attribute__((hot)) TrStr CppExporter__cpp_dict_kkind(CppExporter* self, AstTyp
 
 __attribute__((hot)) TrStr CppExporter__cpp_dict_vkind(CppExporter* self, AstType* ty) {
 #line 110 "src/codegen/cpp_export.tr"
-    return ({ TrStr _apt_t8131 = _tr_str_retain((*((AstType**)List_ptr_get(ty->args, 1LL)))->name); __auto_type _wr = (CppExporter__cpp_slot_kind(self, _apt_t8131)); _tr_str_release(_apt_t8131); _wr; });
+    return ({ TrStr _apt_t8267 = _tr_str_retain((*((AstType**)List_ptr_get(ty->args, 1LL)))->name); __auto_type _wr = (CppExporter__cpp_slot_kind(self, _apt_t8267)); _tr_str_release(_apt_t8267); _wr; });
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_dict_variant(CppExporter* self, AstType* ty) {
 #line 112 "src/codegen/cpp_export.tr"
-    return ({ __auto_type _ord_t8132 = (({ TrStr _tr_cl = (CppExporter__cpp_dict_kkind(self, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (_ord_t8132); TrStr _tr_cr = (CppExporter__cpp_dict_vkind(self, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); _wr; });
+    return ({ __auto_type _ord_t8268 = (({ TrStr _tr_cl = (CppExporter__cpp_dict_kkind(self, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (_ord_t8268); TrStr _tr_cr = (CppExporter__cpp_dict_vkind(self, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); _wr; });
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_dict_key_cpp(CppExporter* self, AstType* ty) {
@@ -236,7 +236,7 @@ __attribute__((hot)) TrStr CppExporter__cpp_dict_key_cpp(CppExporter* self, AstT
 
 __attribute__((hot)) TrStr CppExporter__cpp_dict_v_cpp(CppExporter* self, AstType* ty) {
 #line 117 "src/codegen/cpp_export.tr"
-    return ({ TrStr _at_t8133 = (CppExporter__cpp_dict_vkind(self, ty)); __auto_type _wr = (CppExporter__cpp_slot_cpp(self, _at_t8133)); _tr_str_release(_at_t8133); _wr; });
+    return ({ TrStr _at_t8269 = (CppExporter__cpp_dict_vkind(self, ty)); __auto_type _wr = (CppExporter__cpp_slot_cpp(self, _at_t8269)); _tr_str_release(_at_t8269); _wr; });
 }
 
 __attribute__((hot)) bool CppExporter__cpp_tuple_ok(CppExporter* self, AstType* ty) {
@@ -250,7 +250,7 @@ __attribute__((hot)) bool CppExporter__cpp_tuple_ok(CppExporter* self, AstType* 
 #line 123 "src/codegen/cpp_export.tr"
     while ((i < ty->args->len)) {
 #line 124 "src/codegen/cpp_export.tr"
-        if (({ TrStr _apt_t8134 = _tr_str_retain((*((AstType**)List_ptr_get(ty->args, i)))->name); __auto_type _wr = ((!CppExporter__cpp_slot_ok(self, _apt_t8134))); _tr_str_release(_apt_t8134); _wr; })) {
+        if (({ TrStr _apt_t8270 = _tr_str_retain((*((AstType**)List_ptr_get(ty->args, i)))->name); __auto_type _wr = ((!CppExporter__cpp_slot_ok(self, _apt_t8270))); _tr_str_release(_apt_t8270); _wr; })) {
 #line 124 "src/codegen/cpp_export.tr"
             return false;
         }
@@ -263,7 +263,7 @@ __attribute__((hot)) bool CppExporter__cpp_tuple_ok(CppExporter* self, AstType* 
 
 __attribute__((hot)) TrStr CppExporter__cpp_tuple_elem_cpp(CppExporter* self, AstType* ty, long long i) {
 #line 128 "src/codegen/cpp_export.tr"
-    return ({ TrStr _apt_t8135 = _tr_str_retain((*((AstType**)List_ptr_get(ty->args, i)))->name); TrStr _at_t8136 = (CppExporter__cpp_slot_kind(self, _apt_t8135)); __auto_type _wr = (CppExporter__cpp_slot_cpp(self, _at_t8136)); _tr_str_release(_apt_t8135); _tr_str_release(_at_t8136); _wr; });
+    return ({ TrStr _apt_t8271 = _tr_str_retain((*((AstType**)List_ptr_get(ty->args, i)))->name); TrStr _at_t8272 = (CppExporter__cpp_slot_kind(self, _apt_t8271)); __auto_type _wr = (CppExporter__cpp_slot_cpp(self, _at_t8272)); _tr_str_release(_apt_t8271); _tr_str_release(_at_t8272); _wr; });
 }
 
 __attribute__((hot)) void CppExporter__note_export_ty(CppExporter* self, AstType* ty) {
@@ -284,21 +284,21 @@ __attribute__((hot)) void CppExporter__note_export_ty(CppExporter* self, AstType
 #line 138 "src/codegen/cpp_export.tr"
         if (CppExporter__cpp_list_ok(self, ty)) {
 #line 139 "src/codegen/cpp_export.tr"
-            if (({ TrStr _cmpa_t8137 = (CppExporter__cpp_list_elem_kind(self, ty)); TrStr _cmpb_t8138 = (_tr_str_lit_len("class", 5LL)); _Bool _cmpr_t8139 = _tr_str_eqv(_cmpa_t8137, _cmpb_t8138); _tr_str_release(_cmpa_t8137); _cmpr_t8139; })) {
+            if (({ TrStr _cmpa_t8273 = (CppExporter__cpp_list_elem_kind(self, ty)); TrStr _cmpb_t8274 = (_tr_str_lit_len("class", 5LL)); _Bool _cmpr_t8275 = _tr_str_eqv(_cmpa_t8273, _cmpb_t8274); _tr_str_release(_cmpa_t8273); _cmpr_t8275; })) {
 #line 140 "src/codegen/cpp_export.tr"
                 self->needs_list_ptr = true;
             } else {
 #line 142 "src/codegen/cpp_export.tr"
-                ({ TrStr _ord_t8140 = (CppExporter__cpp_list_sfx(self, ty)); TrStr _ord_t8141 = (CppExporter__cpp_list_elem_c(self, ty)); _tr_dict_set_str(self->list_elems, _tr_strz(_ord_t8140), _tr_str_box(_tr_str_retain(_ord_t8141))); _tr_str_release(_ord_t8140); _tr_str_release(_ord_t8141); });
+                ({ TrStr _ord_t8276 = (CppExporter__cpp_list_sfx(self, ty)); TrStr _ord_t8277 = (CppExporter__cpp_list_elem_c(self, ty)); _tr_dict_set_str(self->list_elems, _tr_strz(_ord_t8276), _tr_str_box(_tr_str_retain(_ord_t8277))); _tr_str_release(_ord_t8276); _tr_str_release(_ord_t8277); });
             }
         }
     }
 #line 143 "src/codegen/cpp_export.tr"
     if (((_tr_str_eqv((n), (_tr_str_lit_len("Dict", 4LL))) || _tr_str_eqv((n), (_tr_str_lit_len("Map", 3LL)))) && CppExporter__cpp_dict_ok(self, ty))) {
 #line 144 "src/codegen/cpp_export.tr"
-        ({ TrStr _ord_t8142 = (CppExporter__cpp_dict_variant(self, ty)); TrStr _at_t8143 = (CppExporter__cpp_dict_vkind(self, ty)); TrStr _ord_t8144 = (CppExporter__cpp_slot_c(self, _at_t8143)); _tr_dict_set_str(self->dict_variants, _tr_strz(_ord_t8142), _tr_str_box(_tr_str_retain(_ord_t8144))); _tr_str_release(_ord_t8142); _tr_str_release(_at_t8143); _tr_str_release(_ord_t8144); });
+        ({ TrStr _ord_t8278 = (CppExporter__cpp_dict_variant(self, ty)); TrStr _at_t8279 = (CppExporter__cpp_dict_vkind(self, ty)); TrStr _ord_t8280 = (CppExporter__cpp_slot_c(self, _at_t8279)); _tr_dict_set_str(self->dict_variants, _tr_strz(_ord_t8278), _tr_str_box(_tr_str_retain(_ord_t8280))); _tr_str_release(_ord_t8278); _tr_str_release(_at_t8279); _tr_str_release(_ord_t8280); });
 #line 145 "src/codegen/cpp_export.tr"
-        if (({ TrStr _cmpa_t8145 = (CppExporter__cpp_dict_kkind(self, ty)); TrStr _cmpb_t8146 = (_tr_str_lit_len("s", 1LL)); _Bool _cmpr_t8147 = _tr_str_eqv(_cmpa_t8145, _cmpb_t8146); _tr_str_release(_cmpa_t8145); _cmpr_t8147; })) {
+        if (({ TrStr _cmpa_t8281 = (CppExporter__cpp_dict_kkind(self, ty)); TrStr _cmpb_t8282 = (_tr_str_lit_len("s", 1LL)); _Bool _cmpr_t8283 = _tr_str_eqv(_cmpa_t8281, _cmpb_t8282); _tr_str_release(_cmpa_t8281); _cmpr_t8283; })) {
 #line 146 "src/codegen/cpp_export.tr"
             _tr_dict_set_str(self->list_elems, _tr_strz(_tr_str_lit_len("TrStr", 5LL)), _tr_str_box(_tr_str_retain(_tr_str_lit_len("TrStr", 5LL))));
         } else {
@@ -364,12 +364,12 @@ __attribute__((hot)) void CppExporter_collect_export_classes(CppExporter* self, 
 
 __attribute__((hot)) bool CppExporter__cpp_export_ty_ok(CppExporter* self, AstType* ty) {
 #line 172 "src/codegen/cpp_export.tr"
-    return ({ TrStr _cmpa_t8148 = (CppExporter__cpp_ty_kind(self, ty)); TrStr _cmpb_t8149 = (_tr_str_lit_len("no", 2LL)); _Bool _cmpr_t8150 = !_tr_str_eqv(_cmpa_t8148, _cmpb_t8149); _tr_str_release(_cmpa_t8148); _cmpr_t8150; });
+    return ({ TrStr _cmpa_t8284 = (CppExporter__cpp_ty_kind(self, ty)); TrStr _cmpb_t8285 = (_tr_str_lit_len("no", 2LL)); _Bool _cmpr_t8286 = !_tr_str_eqv(_cmpa_t8284, _cmpb_t8285); _tr_str_release(_cmpa_t8284); _cmpr_t8286; });
 }
 
 __attribute__((hot)) bool CppExporter__cpp_is_class_list(CppExporter* self, AstType* ty) {
 #line 176 "src/codegen/cpp_export.tr"
-    return (((_tr_str_eqv((ty->name), (_tr_str_lit_len("List", 4LL))) || _tr_str_eqv((ty->name), (_tr_str_lit_len("Vec", 3LL)))) && CppExporter__cpp_list_ok(self, ty)) && ({ TrStr _cmpa_t8151 = (CppExporter__cpp_list_elem_kind(self, ty)); TrStr _cmpb_t8152 = (_tr_str_lit_len("class", 5LL)); _Bool _cmpr_t8153 = _tr_str_eqv(_cmpa_t8151, _cmpb_t8152); _tr_str_release(_cmpa_t8151); _cmpr_t8153; }));
+    return (((_tr_str_eqv((ty->name), (_tr_str_lit_len("List", 4LL))) || _tr_str_eqv((ty->name), (_tr_str_lit_len("Vec", 3LL)))) && CppExporter__cpp_list_ok(self, ty)) && ({ TrStr _cmpa_t8287 = (CppExporter__cpp_list_elem_kind(self, ty)); TrStr _cmpb_t8288 = (_tr_str_lit_len("class", 5LL)); _Bool _cmpr_t8289 = _tr_str_eqv(_cmpa_t8287, _cmpb_t8288); _tr_str_release(_cmpa_t8287); _cmpr_t8289; }));
 }
 
 __attribute__((hot)) bool CppExporter__cpp_export_fn_ok(CppExporter* self, HirFunction* f) {
@@ -413,7 +413,7 @@ __attribute__((hot)) bool CppExporter__cpp_kind_bridged(CppExporter* self, TrStr
 
 __attribute__((hot)) bool CppExporter__cpp_fn_needs_bridge(CppExporter* self, HirFunction* f) {
 #line 197 "src/codegen/cpp_export.tr"
-    if (({ TrStr _at_t8154 = (CppExporter__cpp_ty_kind(self, f->ret_ty)); __auto_type _wr = (CppExporter__cpp_kind_bridged(self, _at_t8154)); _tr_str_release(_at_t8154); _wr; })) {
+    if (({ TrStr _at_t8290 = (CppExporter__cpp_ty_kind(self, f->ret_ty)); __auto_type _wr = (CppExporter__cpp_kind_bridged(self, _at_t8290)); _tr_str_release(_at_t8290); _wr; })) {
 #line 197 "src/codegen/cpp_export.tr"
         return true;
     }
@@ -422,7 +422,7 @@ __attribute__((hot)) bool CppExporter__cpp_fn_needs_bridge(CppExporter* self, Hi
 #line 199 "src/codegen/cpp_export.tr"
     while ((i < f->params->len)) {
 #line 200 "src/codegen/cpp_export.tr"
-        if (({ TrStr _at_t8155 = (CppExporter__cpp_ty_kind(self, ((HirParam*)List_ptr_get(f->params, i))->ty)); __auto_type _wr = (CppExporter__cpp_kind_bridged(self, _at_t8155)); _tr_str_release(_at_t8155); _wr; })) {
+        if (({ TrStr _at_t8291 = (CppExporter__cpp_ty_kind(self, ((HirParam*)List_ptr_get(f->params, i))->ty)); __auto_type _wr = (CppExporter__cpp_kind_bridged(self, _at_t8291)); _tr_str_release(_at_t8291); _wr; })) {
 #line 200 "src/codegen/cpp_export.tr"
             return true;
         }
@@ -476,9 +476,9 @@ __attribute__((hot)) bool CppExporter__cpp_method_ok(CppExporter* self, HirFunct
         _tr_str_release(k);
     }
 #line 220 "src/codegen/cpp_export.tr"
-    bool _trret1663 = has_self;
+    bool _trret1693 = has_self;
     _tr_str_release(rk);
-    return _trret1663;
+    return _trret1693;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_tuple_type_cpp(CppExporter* self, AstType* ty) {
@@ -491,21 +491,21 @@ __attribute__((hot)) TrStr CppExporter__cpp_tuple_type_cpp(CppExporter* self, As
 #line 227 "src/codegen/cpp_export.tr"
         if ((i > 0LL)) {
 #line 227 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8157 = _tr_strx_concatv((s), (_tr_str_lit_len(", ", 2LL)));
+            TrStr _strtmp_t8293 = _tr_strx_concatv((s), (_tr_str_lit_len(", ", 2LL)));
             _tr_str_release(s);
-            s = _strtmp_t8157;
+            s = _strtmp_t8293;
         }
 #line 228 "src/codegen/cpp_export.tr"
-        TrStr _strtmp_t8159 = ({ TrStr _tr_cr = (CppExporter__cpp_tuple_elem_cpp(self, ty, i)); TrStr _tr_cres = _tr_strx_concatv((s), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+        TrStr _strtmp_t8295 = ({ TrStr _tr_cr = (CppExporter__cpp_tuple_elem_cpp(self, ty, i)); TrStr _tr_cres = _tr_strx_concatv((s), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
         _tr_str_release(s);
-        s = _strtmp_t8159;
+        s = _strtmp_t8295;
 #line 229 "src/codegen/cpp_export.tr"
         i = (i + 1LL);
     }
 #line 230 "src/codegen/cpp_export.tr"
-    TrStr _trret1664 = _tr_strx_concatv((s), (_tr_str_lit_len(">", 1LL)));
+    TrStr _trret1694 = _tr_strx_concatv((s), (_tr_str_lit_len(">", 1LL)));
     _tr_str_release(s);
-    return _trret1664;
+    return _trret1694;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_c_ty(CppExporter* self, AstType* ty) {
@@ -536,9 +536,9 @@ __attribute__((hot)) TrStr CppExporter__cpp_c_ty(CppExporter* self, AstType* ty)
         return _tr_str_lit_len("void", 4LL);
     }
 #line 241 "src/codegen/cpp_export.tr"
-    TrStr _trret1665 = CGenerator_type_to_c(self->gen, ty);
+    TrStr _trret1695 = CGenerator_type_to_c(self->gen, ty);
     _tr_str_release(k);
-    return _trret1665;
+    return _trret1695;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_c_arg(CppExporter* self, AstType* ty, TrStr name) {
@@ -547,28 +547,28 @@ __attribute__((hot)) TrStr CppExporter__cpp_c_arg(CppExporter* self, AstType* ty
 #line 245 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("class", 5LL)))) {
 #line 245 "src/codegen/cpp_export.tr"
-        TrStr _trret1666 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("(", 1LL)), (ty->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1696 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("(", 1LL)), (ty->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1666;
+        return _trret1696;
     }
 #line 246 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("list", 4LL)))) {
 #line 246 "src/codegen/cpp_export.tr"
-        TrStr _trret1667 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_list_sfx(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("(List_", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1697 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_list_sfx(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("(List_", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1667;
+        return _trret1697;
     }
 #line 247 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("dict", 4LL)))) {
 #line 247 "src/codegen/cpp_export.tr"
-        TrStr _trret1668 = _tr_strx_concatv((_tr_str_lit_len("(TrMap*)", 8LL)), (name));
+        TrStr _trret1698 = _tr_strx_concatv((_tr_str_lit_len("(TrMap*)", 8LL)), (name));
         _tr_str_release(k);
-        return _trret1668;
+        return _trret1698;
     }
 #line 248 "src/codegen/cpp_export.tr"
-    TrStr _trret1669 = _tr_str_retain(name);
+    TrStr _trret1699 = _tr_str_retain(name);
     _tr_str_release(k);
-    return _trret1669;
+    return _trret1699;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_param_decl(CppExporter* self, AstType* ty, TrStr name) {
@@ -577,42 +577,42 @@ __attribute__((hot)) TrStr CppExporter__cpp_param_decl(CppExporter* self, AstTyp
 #line 252 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("str", 3LL)))) {
 #line 252 "src/codegen/cpp_export.tr"
-        TrStr _trret1670 = _tr_strx_concatv((_tr_str_lit_len("const std::string& ", 19LL)), (name));
+        TrStr _trret1700 = _tr_strx_concatv((_tr_str_lit_len("const std::string& ", 19LL)), (name));
         _tr_str_release(k);
-        return _trret1670;
+        return _trret1700;
     }
 #line 253 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("class", 5LL)))) {
 #line 253 "src/codegen/cpp_export.tr"
-        TrStr _trret1671 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), (ty->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1701 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), (ty->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1671;
+        return _trret1701;
     }
 #line 254 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("list", 4LL)))) {
 #line 254 "src/codegen/cpp_export.tr"
-        TrStr _trret1672 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_list_elem_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("const std::vector<", 18LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">& ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1702 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_list_elem_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("const std::vector<", 18LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">& ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1672;
+        return _trret1702;
     }
 #line 255 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("dict", 4LL)))) {
 #line 255 "src/codegen/cpp_export.tr"
-        TrStr _trret1673 = ({ __auto_type _ord_t8160 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_dict_key_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("const std::map<", 15LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8160); TrStr _tr_cr = (CppExporter__cpp_dict_v_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">& ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+        TrStr _trret1703 = ({ __auto_type _ord_t8296 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_dict_key_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("const std::map<", 15LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8296); TrStr _tr_cr = (CppExporter__cpp_dict_v_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">& ", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
         _tr_str_release(k);
-        return _trret1673;
+        return _trret1703;
     }
 #line 256 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("tuple", 5LL)))) {
 #line 256 "src/codegen/cpp_export.tr"
-        TrStr _trret1674 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_tuple_type_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1704 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_tuple_type_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("const ", 6LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1674;
+        return _trret1704;
     }
 #line 257 "src/codegen/cpp_export.tr"
-    TrStr _trret1675 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (CGenerator_type_to_c(self->gen, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
+    TrStr _trret1705 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (CGenerator_type_to_c(self->gen, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (name)); _tr_str_release(_tr_cl); _tr_cres; });
     _tr_str_release(k);
-    return _trret1675;
+    return _trret1705;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_call_arg(CppExporter* self, AstType* ty, TrStr name) {
@@ -621,21 +621,21 @@ __attribute__((hot)) TrStr CppExporter__cpp_call_arg(CppExporter* self, AstType*
 #line 261 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("str", 3LL)))) {
 #line 261 "src/codegen/cpp_export.tr"
-        TrStr _trret1676 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TrStr{ (char*)", 14LL)), (name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".c_str(), (long*)0 }", 20LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1706 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TrStr{ (char*)", 14LL)), (name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".c_str(), (long*)0 }", 20LL))); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1676;
+        return _trret1706;
     }
 #line 262 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("class", 5LL)))) {
 #line 262 "src/codegen/cpp_export.tr"
-        TrStr _trret1677 = _tr_strx_concatv((name), (_tr_str_lit_len(".raw()", 6LL)));
+        TrStr _trret1707 = _tr_strx_concatv((name), (_tr_str_lit_len(".raw()", 6LL)));
         _tr_str_release(k);
-        return _trret1677;
+        return _trret1707;
     }
 #line 263 "src/codegen/cpp_export.tr"
-    TrStr _trret1678 = _tr_str_retain(name);
+    TrStr _trret1708 = _tr_str_retain(name);
     _tr_str_release(k);
-    return _trret1678;
+    return _trret1708;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_ret_type(CppExporter* self, AstType* ty) {
@@ -650,30 +650,30 @@ __attribute__((hot)) TrStr CppExporter__cpp_ret_type(CppExporter* self, AstType*
 #line 267 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("class", 5LL)))) {
 #line 267 "src/codegen/cpp_export.tr"
-        TrStr _trret1679 = _tr_str_retain(ty->name);
+        TrStr _trret1709 = _tr_str_retain(ty->name);
         _tr_str_release(k);
-        return _trret1679;
+        return _trret1709;
     }
 #line 268 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("list", 4LL)))) {
 #line 268 "src/codegen/cpp_export.tr"
-        TrStr _trret1680 = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_list_elem_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("std::vector<", 12LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1710 = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_list_elem_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("std::vector<", 12LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1680;
+        return _trret1710;
     }
 #line 269 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("dict", 4LL)))) {
 #line 269 "src/codegen/cpp_export.tr"
-        TrStr _trret1681 = ({ __auto_type _ord_t8161 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_dict_key_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("std::map<", 9LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8161); TrStr _tr_cr = (CppExporter__cpp_dict_v_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+        TrStr _trret1711 = ({ __auto_type _ord_t8297 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_dict_key_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("std::map<", 9LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8297); TrStr _tr_cr = (CppExporter__cpp_dict_v_cpp(self, ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
         _tr_str_release(k);
-        return _trret1681;
+        return _trret1711;
     }
 #line 270 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("tuple", 5LL)))) {
 #line 270 "src/codegen/cpp_export.tr"
-        TrStr _trret1682 = CppExporter__cpp_tuple_type_cpp(self, ty);
+        TrStr _trret1712 = CppExporter__cpp_tuple_type_cpp(self, ty);
         _tr_str_release(k);
-        return _trret1682;
+        return _trret1712;
     }
 #line 271 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("void", 4LL)))) {
@@ -682,9 +682,9 @@ __attribute__((hot)) TrStr CppExporter__cpp_ret_type(CppExporter* self, AstType*
         return _tr_str_lit_len("void", 4LL);
     }
 #line 272 "src/codegen/cpp_export.tr"
-    TrStr _trret1683 = CGenerator_type_to_c(self->gen, ty);
+    TrStr _trret1713 = CGenerator_type_to_c(self->gen, ty);
     _tr_str_release(k);
-    return _trret1683;
+    return _trret1713;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_ret_stmt(CppExporter* self, AstType* ty, TrStr call) {
@@ -693,28 +693,28 @@ __attribute__((hot)) TrStr CppExporter__cpp_ret_stmt(CppExporter* self, AstType*
 #line 277 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("void", 4LL)))) {
 #line 277 "src/codegen/cpp_export.tr"
-        TrStr _trret1684 = _tr_strx_concatv((call), (_tr_str_lit_len(";", 1LL)));
+        TrStr _trret1714 = _tr_strx_concatv((call), (_tr_str_lit_len(";", 1LL)));
         _tr_str_release(k);
-        return _trret1684;
+        return _trret1714;
     }
 #line 278 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("str", 3LL)))) {
 #line 278 "src/codegen/cpp_export.tr"
-        TrStr _trret1685 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TrStr _r = ", 11LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; return std::string(_r.data ? _r.data : \"\");", 45LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1715 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TrStr _r = ", 11LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; return std::string(_r.data ? _r.data : \"\");", 45LL))); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1685;
+        return _trret1715;
     }
 #line 279 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((k), (_tr_str_lit_len("class", 5LL)))) {
 #line 279 "src/codegen/cpp_export.tr"
-        TrStr _trret1686 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (ty->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("::_wrap(", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; });
+        TrStr _trret1716 = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (ty->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("::_wrap(", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");", 2LL))); _tr_str_release(_tr_cl); _tr_cres; });
         _tr_str_release(k);
-        return _trret1686;
+        return _trret1716;
     }
 #line 280 "src/codegen/cpp_export.tr"
-    TrStr _trret1687 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+    TrStr _trret1717 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (call))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
     _tr_str_release(k);
-    return _trret1687;
+    return _trret1717;
 }
 
 __attribute__((hot)) bool CppExporter__cpp_kind_marshal(CppExporter* self, TrStr k) {
@@ -724,7 +724,7 @@ __attribute__((hot)) bool CppExporter__cpp_kind_marshal(CppExporter* self, TrStr
 
 __attribute__((hot)) bool CppExporter__cpp_fn_has_list(CppExporter* self, HirFunction* f) {
 #line 286 "src/codegen/cpp_export.tr"
-    if (({ TrStr _at_t8162 = (CppExporter__cpp_ty_kind(self, f->ret_ty)); __auto_type _wr = (CppExporter__cpp_kind_marshal(self, _at_t8162)); _tr_str_release(_at_t8162); _wr; })) {
+    if (({ TrStr _at_t8298 = (CppExporter__cpp_ty_kind(self, f->ret_ty)); __auto_type _wr = (CppExporter__cpp_kind_marshal(self, _at_t8298)); _tr_str_release(_at_t8298); _wr; })) {
 #line 286 "src/codegen/cpp_export.tr"
         return true;
     }
@@ -733,7 +733,7 @@ __attribute__((hot)) bool CppExporter__cpp_fn_has_list(CppExporter* self, HirFun
 #line 288 "src/codegen/cpp_export.tr"
     while ((i < f->params->len)) {
 #line 289 "src/codegen/cpp_export.tr"
-        if (({ TrStr _at_t8163 = (CppExporter__cpp_ty_kind(self, ((HirParam*)List_ptr_get(f->params, i))->ty)); __auto_type _wr = (CppExporter__cpp_kind_marshal(self, _at_t8163)); _tr_str_release(_at_t8163); _wr; })) {
+        if (({ TrStr _at_t8299 = (CppExporter__cpp_ty_kind(self, ((HirParam*)List_ptr_get(f->params, i))->ty)); __auto_type _wr = (CppExporter__cpp_kind_marshal(self, _at_t8299)); _tr_str_release(_at_t8299); _wr; })) {
 #line 289 "src/codegen/cpp_export.tr"
             return true;
         }
@@ -750,14 +750,14 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
 #line 298 "src/codegen/cpp_export.tr"
     if (CppExporter__cpp_fn_needs_bridge(self, f)) {
 #line 298 "src/codegen/cpp_export.tr"
-        TrStr _strtmp_t8164 = _tr_strx_concatv((_tr_str_lit_len("tr__", 4LL)), (f->name));
+        TrStr _strtmp_t8300 = _tr_strx_concatv((_tr_str_lit_len("tr__", 4LL)), (f->name));
         _tr_str_release(target);
-        target = _strtmp_t8164;
+        target = _strtmp_t8300;
     }
 #line 299 "src/codegen/cpp_export.tr"
     StringBuilder* wb = StringBuilder_init(256LL);
 #line 300 "src/codegen/cpp_export.tr"
-    ({ __auto_type _ord_t8165 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_ret_type(self, f->ret_ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("    inline ", 11LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8166 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8165); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (f->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8166); _tr_str_release(_sbt_t8166); });
+    ({ __auto_type _ord_t8301 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_ret_type(self, f->ret_ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("    inline ", 11LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8302 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8301); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (f->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8302); _tr_str_release(_sbt_t8302); });
 #line 301 "src/codegen/cpp_export.tr"
     long long i = 0LL;
 #line 302 "src/codegen/cpp_export.tr"
@@ -769,9 +769,9 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
 #line 305 "src/codegen/cpp_export.tr"
         if (_tr_str_eqv((pn), (_tr_str_lit_len("", 0LL)))) {
 #line 305 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8167 = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("a", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+            TrStr _strtmp_t8303 = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("a", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
             _tr_str_release(pn);
-            pn = _strtmp_t8167;
+            pn = _strtmp_t8303;
         }
 #line 306 "src/codegen/cpp_export.tr"
         if ((i > 0LL)) {
@@ -779,7 +779,7 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
             StringBuilder_append(wb, _tr_str_lit_len(", ", 2LL));
         }
 #line 307 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8168 = (CppExporter__cpp_param_decl(self, p->ty, pn)); StringBuilder_append(wb, _sbt_t8168); _tr_str_release(_sbt_t8168); });
+        ({ TrStr _sbt_t8304 = (CppExporter__cpp_param_decl(self, p->ty, pn)); StringBuilder_append(wb, _sbt_t8304); _tr_str_release(_sbt_t8304); });
 #line 308 "src/codegen/cpp_export.tr"
         i = (i + 1LL);
         _tr_str_release(pn);
@@ -799,28 +799,29 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
 #line 316 "src/codegen/cpp_export.tr"
             if (_tr_str_eqv((pn2), (_tr_str_lit_len("", 0LL)))) {
 #line 316 "src/codegen/cpp_export.tr"
-                TrStr _strtmp_t8169 = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("a", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+                TrStr _strtmp_t8305 = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("a", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
                 _tr_str_release(pn2);
-                pn2 = _strtmp_t8169;
+                pn2 = _strtmp_t8305;
             }
 #line 317 "src/codegen/cpp_export.tr"
             if ((i > 0LL)) {
 #line 317 "src/codegen/cpp_export.tr"
-                ({ TrStr _ap_t8170 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&call_args, _ap_t8170); });
+                ({ TrStr _ap_t8306 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&call_args, _ap_t8306); });
             }
 #line 318 "src/codegen/cpp_export.tr"
-            ({ TrStr _ap_t8171 = (CppExporter__cpp_call_arg(self, p2->ty, pn2)); _tr_str_append(&call_args, _ap_t8171); _tr_str_release(_ap_t8171); });
+            ({ TrStr _ap_t8307 = (CppExporter__cpp_call_arg(self, p2->ty, pn2)); _tr_str_append(&call_args, _ap_t8307); _tr_str_release(_ap_t8307); });
 #line 319 "src/codegen/cpp_export.tr"
             i = (i + 1LL);
             _tr_str_release(pn2);
         }
 #line 320 "src/codegen/cpp_export.tr"
-        ({ __auto_type _ord_t8173 = (f->ret_ty); TrStr _at_t8172 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((target), (_tr_str_lit_len("(", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call_args)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8174 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_ret_stmt(self, _ord_t8173, _at_t8172)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len(") { ", 4LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8174); _tr_str_release(_at_t8172); _tr_str_release(_sbt_t8174); });
+        ({ __auto_type _ord_t8309 = (f->ret_ty); TrStr _at_t8308 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((target), (_tr_str_lit_len("(", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call_args)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8310 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_ret_stmt(self, _ord_t8309, _at_t8308)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len(") { ", 4LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8310); _tr_str_release(_at_t8308); _tr_str_release(_sbt_t8310); });
 #line 321 "src/codegen/cpp_export.tr"
-        TrStr _trret1688 = StringObj_as_str(StringBuilder_to_string(wb));
+        TrStr _trret1718 = StringObj_as_str(StringBuilder_to_string(wb));
         _tr_str_release(target);
         _tr_str_release(call_args);
-        return _trret1688;
+        StringBuilder__tr_fn_free(wb);
+        return _trret1718;
     }
 #line 323 "src/codegen/cpp_export.tr"
     StringBuilder_append(wb, _tr_str_lit_len(") {\n", 4LL));
@@ -839,14 +840,14 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
 #line 330 "src/codegen/cpp_export.tr"
         if (_tr_str_eqv((pn3), (_tr_str_lit_len("", 0LL)))) {
 #line 330 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8175 = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("a", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+            TrStr _strtmp_t8311 = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("a", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
             _tr_str_release(pn3);
-            pn3 = _strtmp_t8175;
+            pn3 = _strtmp_t8311;
         }
 #line 331 "src/codegen/cpp_export.tr"
         if ((i > 0LL)) {
 #line 331 "src/codegen/cpp_export.tr"
-            ({ TrStr _ap_t8176 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&call_args, _ap_t8176); });
+            ({ TrStr _ap_t8312 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&call_args, _ap_t8312); });
         }
 #line 332 "src/codegen/cpp_export.tr"
         TrStr pk = CppExporter__cpp_ty_kind(self, p3->ty);
@@ -861,18 +862,18 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
 #line 337 "src/codegen/cpp_export.tr"
             if (_tr_str_eqv(((*((AstType**)List_ptr_get(p3->ty->args, 0LL)))->name), (_tr_str_lit_len("str", 3LL)))) {
 #line 337 "src/codegen/cpp_export.tr"
-                TrStr _strtmp_t8177 = _tr_str_lit_len("TrStr{ (char*)_e.c_str(), (long*)0 }", 36LL);
+                TrStr _strtmp_t8313 = _tr_str_lit_len("TrStr{ (char*)_e.c_str(), (long*)0 }", 36LL);
                 _tr_str_release(econv);
-                econv = _strtmp_t8177;
+                econv = _strtmp_t8313;
             }
 #line 338 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8178 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        void* ", 14LL)), (tmp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = tr__list_", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sfx)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new();\n", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8178); _tr_str_release(_sbt_t8178); });
+            ({ TrStr _sbt_t8314 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        void* ", 14LL)), (tmp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = tr__list_", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sfx)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new();\n", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8314); _tr_str_release(_sbt_t8314); });
 #line 339 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8179 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        for (const auto& _e : ", 30LL)), (pn3))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") tr__list_", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sfx)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_push(", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tmp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (econv)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8179); _tr_str_release(_sbt_t8179); });
+            ({ TrStr _sbt_t8315 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        for (const auto& _e : ", 30LL)), (pn3))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") tr__list_", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sfx)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_push(", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tmp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (econv)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8315); _tr_str_release(_sbt_t8315); });
 #line 340 "src/codegen/cpp_export.tr"
-            ({ TrStr _ap_t8180 = (tmp); _tr_str_append(&call_args, _ap_t8180); });
+            ({ TrStr _ap_t8316 = (tmp); _tr_str_append(&call_args, _ap_t8316); });
 #line 341 "src/codegen/cpp_export.tr"
-            ({ TrStr _ap_t8181 = (_tr_str_lit_len("        tr__list_", 17LL)); TrStr _ap_t8182 = (sfx); TrStr _ap_t8183 = (_tr_str_lit_len("_free(", 6LL)); TrStr _ap_t8184 = (tmp); TrStr _ap_t8185 = (_tr_str_lit_len(");\n", 3LL)); _tr_str_append(&frees, _ap_t8181); _tr_str_append(&frees, _ap_t8182); _tr_str_append(&frees, _ap_t8183); _tr_str_append(&frees, _ap_t8184); _tr_str_append(&frees, _ap_t8185); });
+            ({ TrStr _ap_t8317 = (_tr_str_lit_len("        tr__list_", 17LL)); TrStr _ap_t8318 = (sfx); TrStr _ap_t8319 = (_tr_str_lit_len("_free(", 6LL)); TrStr _ap_t8320 = (tmp); TrStr _ap_t8321 = (_tr_str_lit_len(");\n", 3LL)); _tr_str_append(&frees, _ap_t8317); _tr_str_append(&frees, _ap_t8318); _tr_str_append(&frees, _ap_t8319); _tr_str_append(&frees, _ap_t8320); _tr_str_append(&frees, _ap_t8321); });
             _tr_str_release(sfx);
             _tr_str_release(tmp);
             _tr_str_release(econv);
@@ -886,29 +887,29 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
 #line 346 "src/codegen/cpp_export.tr"
             TrStr kconv = _tr_str_lit_len("_kv.first", 9LL);
 #line 347 "src/codegen/cpp_export.tr"
-            if (({ TrStr _cmpa_t8186 = (CppExporter__cpp_dict_kkind(self, p3->ty)); TrStr _cmpb_t8187 = (_tr_str_lit_len("s", 1LL)); _Bool _cmpr_t8188 = _tr_str_eqv(_cmpa_t8186, _cmpb_t8187); _tr_str_release(_cmpa_t8186); _cmpr_t8188; })) {
+            if (({ TrStr _cmpa_t8322 = (CppExporter__cpp_dict_kkind(self, p3->ty)); TrStr _cmpb_t8323 = (_tr_str_lit_len("s", 1LL)); _Bool _cmpr_t8324 = _tr_str_eqv(_cmpa_t8322, _cmpb_t8323); _tr_str_release(_cmpa_t8322); _cmpr_t8324; })) {
 #line 347 "src/codegen/cpp_export.tr"
-                TrStr _strtmp_t8189 = _tr_str_lit_len("TrStr{ (char*)_kv.first.c_str(), (long*)0 }", 43LL);
+                TrStr _strtmp_t8325 = _tr_str_lit_len("TrStr{ (char*)_kv.first.c_str(), (long*)0 }", 43LL);
                 _tr_str_release(kconv);
-                kconv = _strtmp_t8189;
+                kconv = _strtmp_t8325;
             }
 #line 348 "src/codegen/cpp_export.tr"
             TrStr vconv = _tr_str_lit_len("_kv.second", 10LL);
 #line 349 "src/codegen/cpp_export.tr"
             if (_tr_str_eqv((vk), (_tr_str_lit_len("str", 3LL)))) {
 #line 349 "src/codegen/cpp_export.tr"
-                TrStr _strtmp_t8190 = _tr_str_lit_len("TrStr{ (char*)_kv.second.c_str(), (long*)0 }", 44LL);
+                TrStr _strtmp_t8326 = _tr_str_lit_len("TrStr{ (char*)_kv.second.c_str(), (long*)0 }", 44LL);
                 _tr_str_release(vconv);
-                vconv = _strtmp_t8190;
+                vconv = _strtmp_t8326;
             }
 #line 350 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8191 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        void* ", 14LL)), (tmp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = tr__dict_", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vt)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new();\n", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8191); _tr_str_release(_sbt_t8191); });
+            ({ TrStr _sbt_t8327 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        void* ", 14LL)), (tmp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = tr__dict_", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vt)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new();\n", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8327); _tr_str_release(_sbt_t8327); });
 #line 351 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8192 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        for (const auto& _kv : ", 31LL)), (pn3))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") tr__dict_", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vt)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_set(", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tmp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (kconv)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vconv)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8192); _tr_str_release(_sbt_t8192); });
+            ({ TrStr _sbt_t8328 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        for (const auto& _kv : ", 31LL)), (pn3))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(") tr__dict_", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vt)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_set(", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tmp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (kconv)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vconv)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8328); _tr_str_release(_sbt_t8328); });
 #line 352 "src/codegen/cpp_export.tr"
-            ({ TrStr _ap_t8193 = (tmp); _tr_str_append(&call_args, _ap_t8193); });
+            ({ TrStr _ap_t8329 = (tmp); _tr_str_append(&call_args, _ap_t8329); });
 #line 353 "src/codegen/cpp_export.tr"
-            ({ TrStr _ap_t8194 = (_tr_str_lit_len("        tr__dict_", 17LL)); TrStr _ap_t8195 = (vt); TrStr _ap_t8196 = (_tr_str_lit_len("_free(", 6LL)); TrStr _ap_t8197 = (tmp); TrStr _ap_t8198 = (_tr_str_lit_len(");\n", 3LL)); _tr_str_append(&frees, _ap_t8194); _tr_str_append(&frees, _ap_t8195); _tr_str_append(&frees, _ap_t8196); _tr_str_append(&frees, _ap_t8197); _tr_str_append(&frees, _ap_t8198); });
+            ({ TrStr _ap_t8330 = (_tr_str_lit_len("        tr__dict_", 17LL)); TrStr _ap_t8331 = (vt); TrStr _ap_t8332 = (_tr_str_lit_len("_free(", 6LL)); TrStr _ap_t8333 = (tmp); TrStr _ap_t8334 = (_tr_str_lit_len(");\n", 3LL)); _tr_str_append(&frees, _ap_t8330); _tr_str_append(&frees, _ap_t8331); _tr_str_append(&frees, _ap_t8332); _tr_str_append(&frees, _ap_t8333); _tr_str_append(&frees, _ap_t8334); });
             _tr_str_release(vk);
             _tr_str_release(vt);
             _tr_str_release(tmp);
@@ -918,25 +919,25 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
 #line 355 "src/codegen/cpp_export.tr"
             TrStr tmp = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(i)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("_t", 2LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
 #line 356 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8199 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        TrTuple ", 16LL)), (tmp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = {};\n", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8199); _tr_str_release(_sbt_t8199); });
+            ({ TrStr _sbt_t8335 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        TrTuple ", 16LL)), (tmp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = {};\n", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8335); _tr_str_release(_sbt_t8335); });
 #line 357 "src/codegen/cpp_export.tr"
             long long ti = 0LL;
 #line 358 "src/codegen/cpp_export.tr"
             while ((ti < p3->ty->args->len)) {
 #line 359 "src/codegen/cpp_export.tr"
-                TrStr sk = ({ TrStr _apt_t8200 = _tr_str_retain((*((AstType**)List_ptr_get(p3->ty->args, ti)))->name); __auto_type _wr = (CppExporter__cpp_slot_kind(self, _apt_t8200)); _tr_str_release(_apt_t8200); _wr; });
+                TrStr sk = ({ TrStr _apt_t8336 = _tr_str_retain((*((AstType**)List_ptr_get(p3->ty->args, ti)))->name); __auto_type _wr = (CppExporter__cpp_slot_kind(self, _apt_t8336)); _tr_str_release(_apt_t8336); _wr; });
 #line 360 "src/codegen/cpp_export.tr"
                 TrStr g = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ti)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("std::get<", 9LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(">(", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (pn3)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
 #line 361 "src/codegen/cpp_export.tr"
                 if (_tr_str_eqv((sk), (_tr_str_lit_len("str", 3LL)))) {
 #line 362 "src/codegen/cpp_export.tr"
-                    ({ TrStr _sbt_t8201 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (tmp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".data[", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ti)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("] = tr__box_str(TrStr{ (char*)", 30LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (g)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".c_str(), (long*)0 });\n", 23LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8201); _tr_str_release(_sbt_t8201); });
+                    ({ TrStr _sbt_t8337 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (tmp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".data[", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ti)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("] = tr__box_str(TrStr{ (char*)", 30LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (g)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".c_str(), (long*)0 });\n", 23LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8337); _tr_str_release(_sbt_t8337); });
                 } else if (_tr_str_eqv((sk), (_tr_str_lit_len("f64", 3LL)))) {
 #line 364 "src/codegen/cpp_export.tr"
-                    ({ TrStr _sbt_t8202 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (tmp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".data[", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ti)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("] = tr__box_f64(", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (g)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8202); _tr_str_release(_sbt_t8202); });
+                    ({ TrStr _sbt_t8338 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (tmp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".data[", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ti)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("] = tr__box_f64(", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (g)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8338); _tr_str_release(_sbt_t8338); });
                 } else {
 #line 366 "src/codegen/cpp_export.tr"
-                    ({ TrStr _sbt_t8203 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (tmp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".data[", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ti)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("] = (long long)", 15LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (g)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8203); _tr_str_release(_sbt_t8203); });
+                    ({ TrStr _sbt_t8339 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (tmp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".data[", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ti)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("] = (long long)", 15LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (g)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8339); _tr_str_release(_sbt_t8339); });
                 }
 #line 367 "src/codegen/cpp_export.tr"
                 ti = (ti + 1LL);
@@ -944,11 +945,11 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
                 _tr_str_release(g);
             }
 #line 368 "src/codegen/cpp_export.tr"
-            ({ TrStr _ap_t8204 = (tmp); _tr_str_append(&call_args, _ap_t8204); });
+            ({ TrStr _ap_t8340 = (tmp); _tr_str_append(&call_args, _ap_t8340); });
             _tr_str_release(tmp);
         } else {
 #line 370 "src/codegen/cpp_export.tr"
-            ({ TrStr _ap_t8205 = (CppExporter__cpp_call_arg(self, p3->ty, pn3)); _tr_str_append(&call_args, _ap_t8205); _tr_str_release(_ap_t8205); });
+            ({ TrStr _ap_t8341 = (CppExporter__cpp_call_arg(self, p3->ty, pn3)); _tr_str_append(&call_args, _ap_t8341); _tr_str_release(_ap_t8341); });
         }
 #line 371 "src/codegen/cpp_export.tr"
         i = (i + 1LL);
@@ -962,41 +963,41 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
 #line 374 "src/codegen/cpp_export.tr"
     if (_tr_str_eqv((rk), (_tr_str_lit_len("void", 4LL)))) {
 #line 375 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8206 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (call_expr))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (frees)); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8206); _tr_str_release(_sbt_t8206); });
+        ({ TrStr _sbt_t8342 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (call_expr))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (frees)); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8342); _tr_str_release(_sbt_t8342); });
     } else {
 #line 377 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8207 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_c_ty(self, f->ret_ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" _r = ", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call_expr)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (frees)); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8207); _tr_str_release(_sbt_t8207); });
+        ({ TrStr _sbt_t8343 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_c_ty(self, f->ret_ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" _r = ", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (call_expr)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (frees)); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8343); _tr_str_release(_sbt_t8343); });
 #line 378 "src/codegen/cpp_export.tr"
         if (_tr_str_eqv((rk), (_tr_str_lit_len("list", 4LL)))) {
 #line 379 "src/codegen/cpp_export.tr"
             TrStr ecpp = CppExporter__cpp_list_elem_cpp(self, f->ret_ty);
 #line 380 "src/codegen/cpp_export.tr"
-            if (({ TrStr _cmpa_t8208 = (CppExporter__cpp_list_elem_kind(self, f->ret_ty)); TrStr _cmpb_t8209 = (_tr_str_lit_len("class", 5LL)); _Bool _cmpr_t8210 = _tr_str_eqv(_cmpa_t8208, _cmpb_t8209); _tr_str_release(_cmpa_t8208); _cmpr_t8210; })) {
+            if (({ TrStr _cmpa_t8344 = (CppExporter__cpp_list_elem_kind(self, f->ret_ty)); TrStr _cmpb_t8345 = (_tr_str_lit_len("class", 5LL)); _Bool _cmpr_t8346 = _tr_str_eqv(_cmpa_t8344, _cmpb_t8345); _tr_str_release(_cmpa_t8344); _cmpr_t8346; })) {
 #line 383 "src/codegen/cpp_export.tr"
                 StringBuilder_append(wb, _tr_str_lit_len("        long long _n = tr__list_ptr_len(_r);\n", 45LL));
 #line 384 "src/codegen/cpp_export.tr"
-                ({ TrStr _sbt_t8211 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        std::vector<", 20LL)), (ecpp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("> _v; _v.reserve((size_t)_n);\n", 30LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8211); _tr_str_release(_sbt_t8211); });
+                ({ TrStr _sbt_t8347 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        std::vector<", 20LL)), (ecpp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("> _v; _v.reserve((size_t)_n);\n", 30LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8347); _tr_str_release(_sbt_t8347); });
 #line 385 "src/codegen/cpp_export.tr"
-                ({ TrStr _sbt_t8212 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        for (long long _i = 0; _i < _n; ++_i) _v.push_back(", 59LL)), (ecpp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("::_wrap((void*)tr__list_ptr_get(_r, _i)));\n", 43LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8212); _tr_str_release(_sbt_t8212); });
+                ({ TrStr _sbt_t8348 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        for (long long _i = 0; _i < _n; ++_i) _v.push_back(", 59LL)), (ecpp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("::_wrap((void*)tr__list_ptr_get(_r, _i)));\n", 43LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8348); _tr_str_release(_sbt_t8348); });
 #line 386 "src/codegen/cpp_export.tr"
                 StringBuilder_append(wb, _tr_str_lit_len("        tr__list_ptr_free_shallow(_r);\n        return _v;\n", 58LL));
             } else {
 #line 388 "src/codegen/cpp_export.tr"
                 TrStr rsfx = CppExporter__cpp_list_sfx(self, f->ret_ty);
 #line 389 "src/codegen/cpp_export.tr"
-                ({ TrStr _sbt_t8213 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        long long _n = tr__list_", 32LL)), (rsfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_len(_r);\n", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8213); _tr_str_release(_sbt_t8213); });
+                ({ TrStr _sbt_t8349 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        long long _n = tr__list_", 32LL)), (rsfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_len(_r);\n", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8349); _tr_str_release(_sbt_t8349); });
 #line 390 "src/codegen/cpp_export.tr"
-                ({ TrStr _sbt_t8214 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        std::vector<", 20LL)), (ecpp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("> _v; _v.reserve((size_t)_n);\n", 30LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8214); _tr_str_release(_sbt_t8214); });
+                ({ TrStr _sbt_t8350 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        std::vector<", 20LL)), (ecpp))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("> _v; _v.reserve((size_t)_n);\n", 30LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8350); _tr_str_release(_sbt_t8350); });
 #line 391 "src/codegen/cpp_export.tr"
                 if (_tr_str_eqv(((*((AstType**)List_ptr_get(f->ret_ty->args, 0LL)))->name), (_tr_str_lit_len("str", 3LL)))) {
 #line 392 "src/codegen/cpp_export.tr"
-                    ({ TrStr _sbt_t8215 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        for (long long _i = 0; _i < _n; ++_i) { TrStr _s = tr__list_", 68LL)), (rsfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(_r, _i); _v.push_back(std::string(_s.data ? _s.data : \"\")); }\n", 67LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8215); _tr_str_release(_sbt_t8215); });
+                    ({ TrStr _sbt_t8351 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        for (long long _i = 0; _i < _n; ++_i) { TrStr _s = tr__list_", 68LL)), (rsfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(_r, _i); _v.push_back(std::string(_s.data ? _s.data : \"\")); }\n", 67LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8351); _tr_str_release(_sbt_t8351); });
                 } else {
 #line 394 "src/codegen/cpp_export.tr"
-                    ({ TrStr _sbt_t8216 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        for (long long _i = 0; _i < _n; ++_i) _v.push_back(tr__list_", 68LL)), (rsfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(_r, _i));\n", 15LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8216); _tr_str_release(_sbt_t8216); });
+                    ({ TrStr _sbt_t8352 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        for (long long _i = 0; _i < _n; ++_i) _v.push_back(tr__list_", 68LL)), (rsfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(_r, _i));\n", 15LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8352); _tr_str_release(_sbt_t8352); });
                 }
 #line 395 "src/codegen/cpp_export.tr"
-                ({ TrStr _sbt_t8217 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        tr__list_", 17LL)), (rsfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free(_r);\n        return _v;\n", 30LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8217); _tr_str_release(_sbt_t8217); });
+                ({ TrStr _sbt_t8353 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        tr__list_", 17LL)), (rsfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free(_r);\n        return _v;\n", 30LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8353); _tr_str_release(_sbt_t8353); });
                 _tr_str_release(rsfx);
             }
         } else if (_tr_str_eqv((rk), (_tr_str_lit_len("dict", 4LL)))) {
@@ -1007,18 +1008,18 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
 #line 399 "src/codegen/cpp_export.tr"
             TrStr ksfx = _tr_str_lit_len("TrStr", 5LL);
 #line 400 "src/codegen/cpp_export.tr"
-            if (({ TrStr _cmpa_t8218 = (CppExporter__cpp_dict_kkind(self, f->ret_ty)); TrStr _cmpb_t8219 = (_tr_str_lit_len("i", 1LL)); _Bool _cmpr_t8220 = _tr_str_eqv(_cmpa_t8218, _cmpb_t8219); _tr_str_release(_cmpa_t8218); _cmpr_t8220; })) {
+            if (({ TrStr _cmpa_t8354 = (CppExporter__cpp_dict_kkind(self, f->ret_ty)); TrStr _cmpb_t8355 = (_tr_str_lit_len("i", 1LL)); _Bool _cmpr_t8356 = _tr_str_eqv(_cmpa_t8354, _cmpb_t8355); _tr_str_release(_cmpa_t8354); _cmpr_t8356; })) {
 #line 400 "src/codegen/cpp_export.tr"
-                TrStr _strtmp_t8221 = _tr_str_lit_len("i64", 3LL);
+                TrStr _strtmp_t8357 = _tr_str_lit_len("i64", 3LL);
                 _tr_str_release(ksfx);
-                ksfx = _strtmp_t8221;
+                ksfx = _strtmp_t8357;
             }
 #line 401 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8222 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        void* _ks = tr__dict_", 29LL)), (vt))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_keys(_r);\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8222); _tr_str_release(_sbt_t8222); });
+            ({ TrStr _sbt_t8358 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        void* _ks = tr__dict_", 29LL)), (vt))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_keys(_r);\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8358); _tr_str_release(_sbt_t8358); });
 #line 402 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8223 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        long long _n = tr__list_", 32LL)), (ksfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_len(_ks);\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8223); _tr_str_release(_sbt_t8223); });
+            ({ TrStr _sbt_t8359 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        long long _n = tr__list_", 32LL)), (ksfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_len(_ks);\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8359); _tr_str_release(_sbt_t8359); });
 #line 403 "src/codegen/cpp_export.tr"
-            ({ __auto_type _ord_t8224 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_dict_key_cpp(self, f->ret_ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("        std::map<", 17LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8225 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8224); TrStr _tr_cr = (CppExporter__cpp_dict_v_cpp(self, f->ret_ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("> _m;\n", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8225); _tr_str_release(_sbt_t8225); });
+            ({ __auto_type _ord_t8360 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_dict_key_cpp(self, f->ret_ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("        std::map<", 17LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8361 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8360); TrStr _tr_cr = (CppExporter__cpp_dict_v_cpp(self, f->ret_ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("> _m;\n", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8361); _tr_str_release(_sbt_t8361); });
 #line 404 "src/codegen/cpp_export.tr"
             StringBuilder_append(wb, _tr_str_lit_len("        for (long long _i = 0; _i < _n; ++_i) {\n", 48LL));
 #line 405 "src/codegen/cpp_export.tr"
@@ -1032,15 +1033,15 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
 #line 409 "src/codegen/cpp_export.tr"
             if (_tr_str_eqv((vk), (_tr_str_lit_len("str", 3LL)))) {
 #line 410 "src/codegen/cpp_export.tr"
-                ({ TrStr _sbt_t8226 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("            TrStr _vv = tr__dict_", 33LL)), (vt))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(_r, _k); _m[_kk2] = std::string(_vv.data ? _vv.data : \"\");\n", 64LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8226); _tr_str_release(_sbt_t8226); });
+                ({ TrStr _sbt_t8362 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("            TrStr _vv = tr__dict_", 33LL)), (vt))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(_r, _k); _m[_kk2] = std::string(_vv.data ? _vv.data : \"\");\n", 64LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8362); _tr_str_release(_sbt_t8362); });
             } else {
 #line 412 "src/codegen/cpp_export.tr"
-                ({ TrStr _sbt_t8227 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("            _m[_kk2] = tr__dict_", 32LL)), (vt))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(_r, _k);\n", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8227); _tr_str_release(_sbt_t8227); });
+                ({ TrStr _sbt_t8363 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("            _m[_kk2] = tr__dict_", 32LL)), (vt))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(_r, _k);\n", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8363); _tr_str_release(_sbt_t8363); });
             }
 #line 413 "src/codegen/cpp_export.tr"
             StringBuilder_append(wb, _tr_str_lit_len("        }\n", 10LL));
 #line 414 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8228 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        tr__list_", 17LL)), (ksfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free(_ks); tr__dict_", 21LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vt)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free(_r);\n        return _m;\n", 30LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8228); _tr_str_release(_sbt_t8228); });
+            ({ TrStr _sbt_t8364 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        tr__list_", 17LL)), (ksfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free(_ks); tr__dict_", 21LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vt)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free(_r);\n        return _m;\n", 30LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8364); _tr_str_release(_sbt_t8364); });
             _tr_str_release(vt);
             _tr_str_release(ksfx);
         } else if (_tr_str_eqv((rk), (_tr_str_lit_len("tuple", 5LL)))) {
@@ -1053,27 +1054,27 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
 #line 419 "src/codegen/cpp_export.tr"
                 TrStr ev = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ti)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("_te", 3LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
 #line 420 "src/codegen/cpp_export.tr"
-                TrStr sk = ({ TrStr _apt_t8229 = _tr_str_retain((*((AstType**)List_ptr_get(f->ret_ty->args, ti)))->name); __auto_type _wr = (CppExporter__cpp_slot_kind(self, _apt_t8229)); _tr_str_release(_apt_t8229); _wr; });
+                TrStr sk = ({ TrStr _apt_t8365 = _tr_str_retain((*((AstType**)List_ptr_get(f->ret_ty->args, ti)))->name); __auto_type _wr = (CppExporter__cpp_slot_kind(self, _apt_t8365)); _tr_str_release(_apt_t8365); _wr; });
 #line 421 "src/codegen/cpp_export.tr"
                 TrStr slot = ({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ti)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("_r.data[", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
 #line 422 "src/codegen/cpp_export.tr"
                 if (_tr_str_eqv((sk), (_tr_str_lit_len("str", 3LL)))) {
 #line 423 "src/codegen/cpp_export.tr"
-                    ({ __auto_type _ord_t8230 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ti)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("        TrStr _ts", 17LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = tr__unbox_str(", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (slot)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); std::string ", 15LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ev)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(_ts", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t8231 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8230); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ti)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".data ? _ts", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8232 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8231); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ti)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".data : \"\");\n", 13LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8232); _tr_str_release(_sbt_t8232); });
+                    ({ __auto_type _ord_t8366 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ti)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("        TrStr _ts", 17LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = tr__unbox_str(", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (slot)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); std::string ", 15LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ev)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(_ts", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t8367 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8366); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ti)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".data ? _ts", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8368 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8367); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ti)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".data : \"\");\n", 13LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8368); _tr_str_release(_sbt_t8368); });
                 } else if (_tr_str_eqv((sk), (_tr_str_lit_len("f64", 3LL)))) {
 #line 425 "src/codegen/cpp_export.tr"
-                    ({ TrStr _sbt_t8233 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        double ", 15LL)), (ev))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = tr__unbox_f64(", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (slot)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8233); _tr_str_release(_sbt_t8233); });
+                    ({ TrStr _sbt_t8369 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        double ", 15LL)), (ev))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = tr__unbox_f64(", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (slot)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8369); _tr_str_release(_sbt_t8369); });
                 } else {
 #line 427 "src/codegen/cpp_export.tr"
-                    ({ TrStr _sbt_t8234 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        long long ", 18LL)), (ev))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = (long long)", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (slot)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8234); _tr_str_release(_sbt_t8234); });
+                    ({ TrStr _sbt_t8370 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        long long ", 18LL)), (ev))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" = (long long)", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (slot)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(";\n", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8370); _tr_str_release(_sbt_t8370); });
                 }
 #line 428 "src/codegen/cpp_export.tr"
                 if ((ti > 0LL)) {
 #line 428 "src/codegen/cpp_export.tr"
-                    ({ TrStr _ap_t8235 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&parts, _ap_t8235); });
+                    ({ TrStr _ap_t8371 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&parts, _ap_t8371); });
                 }
 #line 429 "src/codegen/cpp_export.tr"
-                ({ TrStr _ap_t8236 = (ev); _tr_str_append(&parts, _ap_t8236); });
+                ({ TrStr _ap_t8372 = (ev); _tr_str_append(&parts, _ap_t8372); });
 #line 430 "src/codegen/cpp_export.tr"
                 ti = (ti + 1LL);
                 _tr_str_release(sk);
@@ -1081,14 +1082,14 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
                 _tr_str_release(slot);
             }
 #line 431 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8237 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        return std::make_tuple(", 31LL)), (parts))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8237); _tr_str_release(_sbt_t8237); });
+            ({ TrStr _sbt_t8373 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        return std::make_tuple(", 31LL)), (parts))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(");\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8373); _tr_str_release(_sbt_t8373); });
             _tr_str_release(parts);
         } else if (_tr_str_eqv((rk), (_tr_str_lit_len("str", 3LL)))) {
 #line 433 "src/codegen/cpp_export.tr"
             StringBuilder_append(wb, _tr_str_lit_len("        return std::string(_r.data ? _r.data : \"\");\n", 52LL));
         } else if (_tr_str_eqv((rk), (_tr_str_lit_len("class", 5LL)))) {
 #line 435 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8238 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        return ", 15LL)), (f->ret_ty->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("::_wrap(_r);\n", 13LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8238); _tr_str_release(_sbt_t8238); });
+            ({ TrStr _sbt_t8374 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        return ", 15LL)), (f->ret_ty->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("::_wrap(_r);\n", 13LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8374); _tr_str_release(_sbt_t8374); });
         } else {
 #line 437 "src/codegen/cpp_export.tr"
             StringBuilder_append(wb, _tr_str_lit_len("        return _r;\n", 19LL));
@@ -1097,14 +1098,14 @@ __attribute__((hot)) TrStr CppExporter__cpp_wrap_fn(CppExporter* self, HirFuncti
 #line 438 "src/codegen/cpp_export.tr"
     StringBuilder_append(wb, _tr_str_lit_len("    }\n", 6LL));
 #line 439 "src/codegen/cpp_export.tr"
-    TrStr _trret1689 = StringObj_as_str(StringBuilder_to_string(wb));
+    TrStr _trret1719 = StringObj_as_str(StringBuilder_to_string(wb));
     _tr_str_release(target);
     _tr_str_release(call_args);
     _tr_str_release(frees);
     _tr_str_release(call_expr);
     _tr_str_release(rk);
     StringBuilder__tr_fn_free(wb);
-    return _trret1689;
+    return _trret1719;
 }
 
 __attribute__((hot)) bool CppExporter__cpp_init_ok(CppExporter* self, HirFunction* m) {
@@ -1114,7 +1115,7 @@ __attribute__((hot)) bool CppExporter__cpp_init_ok(CppExporter* self, HirFunctio
         return false;
     }
 #line 446 "src/codegen/cpp_export.tr"
-    if (({ TrStr _cmpa_t8239 = (CppExporter__cpp_ty_kind(self, m->ret_ty)); TrStr _cmpb_t8240 = (_tr_str_lit_len("class", 5LL)); _Bool _cmpr_t8241 = !_tr_str_eqv(_cmpa_t8239, _cmpb_t8240); _tr_str_release(_cmpa_t8239); _cmpr_t8241; })) {
+    if (({ TrStr _cmpa_t8375 = (CppExporter__cpp_ty_kind(self, m->ret_ty)); TrStr _cmpb_t8376 = (_tr_str_lit_len("class", 5LL)); _Bool _cmpr_t8377 = !_tr_str_eqv(_cmpa_t8375, _cmpb_t8376); _tr_str_release(_cmpa_t8375); _cmpr_t8377; })) {
 #line 446 "src/codegen/cpp_export.tr"
         return false;
     }
@@ -1155,8 +1156,8 @@ __attribute__((hot)) long long CppExporter__cpp_init_idx(CppExporter* self, HirC
 #line 461 "src/codegen/cpp_export.tr"
         if ((((!_is_invalid_ptr(((unsigned long long)(m)))) && _tr_str_eqv((m->name), (_tr_str_lit_len("init", 4LL)))) && CppExporter__cpp_init_ok(self, m))) {
 #line 462 "src/codegen/cpp_export.tr"
-            long long _trret1690 = i;
-            return _trret1690;
+            long long _trret1720 = i;
+            return _trret1720;
         }
 #line 463 "src/codegen/cpp_export.tr"
         i = (i + 1LL);
@@ -1171,25 +1172,25 @@ __attribute__((hot)) TrStr CppExporter__cpp_class_decl(CppExporter* self, HirCla
 #line 471 "src/codegen/cpp_export.tr"
     StringBuilder* wb = StringBuilder_init(512LL);
 #line 472 "src/codegen/cpp_export.tr"
-    ({ TrStr _sbt_t8242 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    class ", 10LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" {\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8242); _tr_str_release(_sbt_t8242); });
+    ({ TrStr _sbt_t8378 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("    class ", 10LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" {\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8378); _tr_str_release(_sbt_t8378); });
 #line 473 "src/codegen/cpp_export.tr"
     StringBuilder_append(wb, _tr_str_lit_len("        void* h_;\n", 18LL));
 #line 474 "src/codegen/cpp_export.tr"
-    ({ TrStr _sbt_t8243 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        explicit ", 17LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(void* _p): h_(_p) {}\n", 22LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8243); _tr_str_release(_sbt_t8243); });
+    ({ TrStr _sbt_t8379 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        explicit ", 17LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(void* _p): h_(_p) {}\n", 22LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8379); _tr_str_release(_sbt_t8379); });
 #line 475 "src/codegen/cpp_export.tr"
     StringBuilder_append(wb, _tr_str_lit_len("    public:\n", 12LL));
 #line 476 "src/codegen/cpp_export.tr"
-    ({ TrStr _sbt_t8244 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        static ", 15LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" _wrap(void* _p) { return ", 26LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(_p); }\n", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8244); _tr_str_release(_sbt_t8244); });
+    ({ TrStr _sbt_t8380 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        static ", 15LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" _wrap(void* _p) { return ", 26LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(_p); }\n", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8380); _tr_str_release(_sbt_t8380); });
 #line 477 "src/codegen/cpp_export.tr"
-    ({ TrStr _sbt_t8245 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(const ", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& o): h_(o.h_ ? tr__", 20LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_retain(o.h_) : nullptr) {}\n", 28LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8245); _tr_str_release(_sbt_t8245); });
+    ({ TrStr _sbt_t8381 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(const ", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& o): h_(o.h_ ? tr__", 20LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_retain(o.h_) : nullptr) {}\n", 28LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8381); _tr_str_release(_sbt_t8381); });
 #line 478 "src/codegen/cpp_export.tr"
-    ({ TrStr _sbt_t8246 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("&& o) noexcept : h_(o.h_) { o.h_ = nullptr; }\n", 46LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8246); _tr_str_release(_sbt_t8246); });
+    ({ TrStr _sbt_t8382 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("&& o) noexcept : h_(o.h_) { o.h_ = nullptr; }\n", 46LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8382); _tr_str_release(_sbt_t8382); });
 #line 479 "src/codegen/cpp_export.tr"
-    ({ TrStr _sbt_t8247 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& operator=(const ", 18LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& o) { if (this != &o) { if (h_) tr__", 37LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_release(h_); h_ = o.h_ ? tr__", 30LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_retain(o.h_) : nullptr; } return *this; }\n", 43LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8247); _tr_str_release(_sbt_t8247); });
+    ({ TrStr _sbt_t8383 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& operator=(const ", 18LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& o) { if (this != &o) { if (h_) tr__", 37LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_release(h_); h_ = o.h_ ? tr__", 30LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_retain(o.h_) : nullptr; } return *this; }\n", 43LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8383); _tr_str_release(_sbt_t8383); });
 #line 480 "src/codegen/cpp_export.tr"
-    ({ TrStr _sbt_t8248 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& operator=(", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("&& o) noexcept { if (this != &o) { if (h_) tr__", 47LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_release(h_); h_ = o.h_; o.h_ = nullptr; } return *this; }\n", 59LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8248); _tr_str_release(_sbt_t8248); });
+    ({ TrStr _sbt_t8384 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("& operator=(", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("&& o) noexcept { if (this != &o) { if (h_) tr__", 47LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_release(h_); h_ = o.h_; o.h_ = nullptr; } return *this; }\n", 59LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8384); _tr_str_release(_sbt_t8384); });
 #line 481 "src/codegen/cpp_export.tr"
-    ({ TrStr _sbt_t8249 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ~", 9LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("() { if (h_) tr__", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_release(h_); }\n", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8249); _tr_str_release(_sbt_t8249); });
+    ({ TrStr _sbt_t8385 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        ~", 9LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("() { if (h_) tr__", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_release(h_); }\n", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8385); _tr_str_release(_sbt_t8385); });
 #line 482 "src/codegen/cpp_export.tr"
     StringBuilder_append(wb, _tr_str_lit_len("        void* raw() const { return h_; }\n", 41LL));
 #line 484 "src/codegen/cpp_export.tr"
@@ -1199,7 +1200,7 @@ __attribute__((hot)) TrStr CppExporter__cpp_class_decl(CppExporter* self, HirCla
 #line 486 "src/codegen/cpp_export.tr"
         HirFunction* im = ((HirFunction*)List_ptr_get(c->methods, iidx));
 #line 487 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8250 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        explicit ", 17LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8250); _tr_str_release(_sbt_t8250); });
+        ({ TrStr _sbt_t8386 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("        explicit ", 17LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8386); _tr_str_release(_sbt_t8386); });
 #line 488 "src/codegen/cpp_export.tr"
         TrStr cargs = _tr_str_lit_len("", 0LL);
 #line 489 "src/codegen/cpp_export.tr"
@@ -1222,17 +1223,17 @@ __attribute__((hot)) TrStr CppExporter__cpp_class_decl(CppExporter* self, HirCla
 #line 496 "src/codegen/cpp_export.tr"
                 StringBuilder_append(wb, _tr_str_lit_len(", ", 2LL));
 #line 497 "src/codegen/cpp_export.tr"
-                ({ TrStr _ap_t8251 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&cargs, _ap_t8251); });
+                ({ TrStr _ap_t8387 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&cargs, _ap_t8387); });
             }
 #line 498 "src/codegen/cpp_export.tr"
-            ({ __auto_type _ord_t8253 = (p->ty); TrStr _apt_t8252 = _tr_str_retain(p->name); TrStr _sbt_t8254 = (CppExporter__cpp_param_decl(self, _ord_t8253, _apt_t8252)); StringBuilder_append(wb, _sbt_t8254); _tr_str_release(_apt_t8252); _tr_str_release(_sbt_t8254); });
+            ({ __auto_type _ord_t8389 = (p->ty); TrStr _apt_t8388 = _tr_str_retain(p->name); TrStr _sbt_t8390 = (CppExporter__cpp_param_decl(self, _ord_t8389, _apt_t8388)); StringBuilder_append(wb, _sbt_t8390); _tr_str_release(_apt_t8388); _tr_str_release(_sbt_t8390); });
 #line 499 "src/codegen/cpp_export.tr"
-            ({ __auto_type _ord_t8257 = (p->ty); TrStr _apt_t8256 = _tr_str_retain(p->name); ({ TrStr _ap_t8255 = (CppExporter__cpp_call_arg(self, _ord_t8257, _apt_t8256)); _tr_str_append(&cargs, _ap_t8255); _tr_str_release(_ap_t8255); }); _tr_str_release(_apt_t8256); });
+            ({ __auto_type _ord_t8393 = (p->ty); TrStr _apt_t8392 = _tr_str_retain(p->name); ({ TrStr _ap_t8391 = (CppExporter__cpp_call_arg(self, _ord_t8393, _apt_t8392)); _tr_str_append(&cargs, _ap_t8391); _tr_str_release(_ap_t8391); }); _tr_str_release(_apt_t8392); });
 #line 500 "src/codegen/cpp_export.tr"
             emitted = (emitted + 1LL);
         }
 #line 501 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8258 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("): h_(tr__", 10LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")) {}\n", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8258); _tr_str_release(_sbt_t8258); });
+        ({ TrStr _sbt_t8394 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("): h_(tr__", 10LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")) {}\n", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8394); _tr_str_release(_sbt_t8394); });
         _tr_str_release(cargs);
     }
 #line 503 "src/codegen/cpp_export.tr"
@@ -1259,7 +1260,7 @@ __attribute__((hot)) TrStr CppExporter__cpp_class_decl(CppExporter* self, HirCla
             continue;
         }
 #line 510 "src/codegen/cpp_export.tr"
-        ({ __auto_type _ord_t8259 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_ret_type(self, m->ret_ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8260 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8259); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8260); _tr_str_release(_sbt_t8260); });
+        ({ __auto_type _ord_t8395 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_ret_type(self, m->ret_ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("        ", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8396 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8395); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8396); _tr_str_release(_sbt_t8396); });
 #line 511 "src/codegen/cpp_export.tr"
         TrStr margs = _tr_str_lit_len("h_", 2LL);
 #line 512 "src/codegen/cpp_export.tr"
@@ -1283,23 +1284,23 @@ __attribute__((hot)) TrStr CppExporter__cpp_class_decl(CppExporter* self, HirCla
                 StringBuilder_append(wb, _tr_str_lit_len(", ", 2LL));
             }
 #line 519 "src/codegen/cpp_export.tr"
-            ({ __auto_type _ord_t8262 = (mp->ty); TrStr _apt_t8261 = _tr_str_retain(mp->name); TrStr _sbt_t8263 = (CppExporter__cpp_param_decl(self, _ord_t8262, _apt_t8261)); StringBuilder_append(wb, _sbt_t8263); _tr_str_release(_apt_t8261); _tr_str_release(_sbt_t8263); });
+            ({ __auto_type _ord_t8398 = (mp->ty); TrStr _apt_t8397 = _tr_str_retain(mp->name); TrStr _sbt_t8399 = (CppExporter__cpp_param_decl(self, _ord_t8398, _apt_t8397)); StringBuilder_append(wb, _sbt_t8399); _tr_str_release(_apt_t8397); _tr_str_release(_sbt_t8399); });
 #line 520 "src/codegen/cpp_export.tr"
-            ({ __auto_type _ord_t8267 = (mp->ty); TrStr _apt_t8266 = _tr_str_retain(mp->name); ({ TrStr _ap_t8264 = (_tr_str_lit_len(", ", 2LL)); TrStr _ap_t8265 = (CppExporter__cpp_call_arg(self, _ord_t8267, _apt_t8266)); _tr_str_append(&margs, _ap_t8264); _tr_str_append(&margs, _ap_t8265); _tr_str_release(_ap_t8265); }); _tr_str_release(_apt_t8266); });
+            ({ __auto_type _ord_t8403 = (mp->ty); TrStr _apt_t8402 = _tr_str_retain(mp->name); ({ TrStr _ap_t8400 = (_tr_str_lit_len(", ", 2LL)); TrStr _ap_t8401 = (CppExporter__cpp_call_arg(self, _ord_t8403, _apt_t8402)); _tr_str_append(&margs, _ap_t8400); _tr_str_append(&margs, _ap_t8401); _tr_str_release(_ap_t8401); }); _tr_str_release(_apt_t8402); });
 #line 521 "src/codegen/cpp_export.tr"
             me = (me + 1LL);
         }
 #line 522 "src/codegen/cpp_export.tr"
-        ({ __auto_type _ord_t8269 = (m->ret_ty); TrStr _at_t8268 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("tr__", 4LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (margs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8270 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_ret_stmt(self, _ord_t8269, _at_t8268)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len(") { ", 4LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8270); _tr_str_release(_at_t8268); _tr_str_release(_sbt_t8270); });
+        ({ __auto_type _ord_t8405 = (m->ret_ty); TrStr _at_t8404 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("tr__", 4LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (margs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8406 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_ret_stmt(self, _ord_t8405, _at_t8404)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len(") { ", 4LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" }\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(wb, _sbt_t8406); _tr_str_release(_at_t8404); _tr_str_release(_sbt_t8406); });
         _tr_str_release(margs);
     }
 #line 523 "src/codegen/cpp_export.tr"
     StringBuilder_append(wb, _tr_str_lit_len("    };\n", 7LL));
 #line 524 "src/codegen/cpp_export.tr"
-    TrStr _trret1691 = StringObj_as_str(StringBuilder_to_string(wb));
+    TrStr _trret1721 = StringObj_as_str(StringBuilder_to_string(wb));
     _tr_str_release(C);
     StringBuilder__tr_fn_free(wb);
-    return _trret1691;
+    return _trret1721;
 }
 
 __attribute__((hot)) TrStr CppExporter_generate_cpp_class_bridges(CppExporter* self, HirProgram* prog) {
@@ -1334,9 +1335,9 @@ __attribute__((hot)) TrStr CppExporter_generate_cpp_class_bridges(CppExporter* s
 #line 541 "src/codegen/cpp_export.tr"
             TrStr C = _tr_str_retain(c->name);
 #line 542 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8271 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void* tr__", 20LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_retain(void* p){ return _tr_obj_retain(p); }\n", 46LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8271); _tr_str_release(_sbt_t8271); });
+            ({ TrStr _sbt_t8407 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void* tr__", 20LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_retain(void* p){ return _tr_obj_retain(p); }\n", 46LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8407); _tr_str_release(_sbt_t8407); });
 #line 543 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8272 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void tr__", 19LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_release(void* p){ _tr_obj_release(p, _trdrop_", 46LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8272); _tr_str_release(_sbt_t8272); });
+            ({ TrStr _sbt_t8408 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void tr__", 19LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_release(void* p){ _tr_obj_release(p, _trdrop_", 46LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8408); _tr_str_release(_sbt_t8408); });
 #line 544 "src/codegen/cpp_export.tr"
             long long iidx = CppExporter__cpp_init_idx(self, c);
 #line 545 "src/codegen/cpp_export.tr"
@@ -1344,7 +1345,7 @@ __attribute__((hot)) TrStr CppExporter_generate_cpp_class_bridges(CppExporter* s
 #line 546 "src/codegen/cpp_export.tr"
                 HirFunction* im = ((HirFunction*)List_ptr_get(c->methods, iidx));
 #line 547 "src/codegen/cpp_export.tr"
-                ({ TrStr _sbt_t8273 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void* tr__", 20LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8273); _tr_str_release(_sbt_t8273); });
+                ({ TrStr _sbt_t8409 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void* tr__", 20LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8409); _tr_str_release(_sbt_t8409); });
 #line 548 "src/codegen/cpp_export.tr"
                 long long ip = 0LL;
 #line 549 "src/codegen/cpp_export.tr"
@@ -1367,17 +1368,17 @@ __attribute__((hot)) TrStr CppExporter_generate_cpp_class_bridges(CppExporter* s
 #line 556 "src/codegen/cpp_export.tr"
                         StringBuilder_append(b, _tr_str_lit_len(", ", 2LL));
 #line 557 "src/codegen/cpp_export.tr"
-                        ({ TrStr _ap_t8274 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&iargs, _ap_t8274); });
+                        ({ TrStr _ap_t8410 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&iargs, _ap_t8410); });
                     }
 #line 558 "src/codegen/cpp_export.tr"
-                    ({ __auto_type _ord_t8275 = (({ TrStr _tr_cl = (CppExporter__cpp_c_ty(self, p->ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8276 = (({ TrStr _tr_cl = (_ord_t8275); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (p->name)); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8276); _tr_str_release(_sbt_t8276); });
+                    ({ __auto_type _ord_t8411 = (({ TrStr _tr_cl = (CppExporter__cpp_c_ty(self, p->ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8412 = (({ TrStr _tr_cl = (_ord_t8411); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (p->name)); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8412); _tr_str_release(_sbt_t8412); });
 #line 559 "src/codegen/cpp_export.tr"
-                    ({ TrStr _ap_t8277 = (p->name); _tr_str_append(&iargs, _ap_t8277); });
+                    ({ TrStr _ap_t8413 = (p->name); _tr_str_append(&iargs, _ap_t8413); });
 #line 560 "src/codegen/cpp_export.tr"
                     ie = (ie + 1LL);
                 }
 #line 561 "src/codegen/cpp_export.tr"
-                ({ TrStr _sbt_t8278 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("){ return (void*)", 17LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_init(", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (iargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8278); _tr_str_release(_sbt_t8278); });
+                ({ TrStr _sbt_t8414 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("){ return (void*)", 17LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_init(", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (iargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8414); _tr_str_release(_sbt_t8414); });
                 _tr_str_release(iargs);
             }
 #line 562 "src/codegen/cpp_export.tr"
@@ -1404,7 +1405,7 @@ __attribute__((hot)) TrStr CppExporter_generate_cpp_class_bridges(CppExporter* s
                     continue;
                 }
 #line 569 "src/codegen/cpp_export.tr"
-                ({ __auto_type _ord_t8279 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_c_ty(self, m->ret_ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("TR_EXPORT ", 10LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8280 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8279); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(void* s", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8280); _tr_str_release(_sbt_t8280); });
+                ({ __auto_type _ord_t8415 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_c_ty(self, m->ret_ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("TR_EXPORT ", 10LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8416 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8415); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(void* s", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8416); _tr_str_release(_sbt_t8416); });
 #line 570 "src/codegen/cpp_export.tr"
                 TrStr margs = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("(", 1LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)s", 3LL))); _tr_str_release(_tr_cl); _tr_cres; });
 #line 571 "src/codegen/cpp_export.tr"
@@ -1421,19 +1422,19 @@ __attribute__((hot)) TrStr CppExporter_generate_cpp_class_bridges(CppExporter* s
                         continue;
                     }
 #line 576 "src/codegen/cpp_export.tr"
-                    ({ __auto_type _ord_t8281 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_c_ty(self, mp->ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len(", ", 2LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8282 = (({ TrStr _tr_cl = (_ord_t8281); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (mp->name)); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8282); _tr_str_release(_sbt_t8282); });
+                    ({ __auto_type _ord_t8417 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_c_ty(self, mp->ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len(", ", 2LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8418 = (({ TrStr _tr_cl = (_ord_t8417); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (mp->name)); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8418); _tr_str_release(_sbt_t8418); });
 #line 577 "src/codegen/cpp_export.tr"
-                    ({ __auto_type _ord_t8286 = (mp->ty); TrStr _apt_t8285 = _tr_str_retain(mp->name); ({ TrStr _ap_t8283 = (_tr_str_lit_len(", ", 2LL)); TrStr _ap_t8284 = (CppExporter__cpp_c_arg(self, _ord_t8286, _apt_t8285)); _tr_str_append(&margs, _ap_t8283); _tr_str_append(&margs, _ap_t8284); _tr_str_release(_ap_t8284); }); _tr_str_release(_apt_t8285); });
+                    ({ __auto_type _ord_t8422 = (mp->ty); TrStr _apt_t8421 = _tr_str_retain(mp->name); ({ TrStr _ap_t8419 = (_tr_str_lit_len(", ", 2LL)); TrStr _ap_t8420 = (CppExporter__cpp_c_arg(self, _ord_t8422, _apt_t8421)); _tr_str_append(&margs, _ap_t8419); _tr_str_append(&margs, _ap_t8420); _tr_str_release(_ap_t8420); }); _tr_str_release(_apt_t8421); });
                 }
 #line 578 "src/codegen/cpp_export.tr"
                 StringBuilder_append(b, _tr_str_lit_len("){ ", 3LL));
 #line 579 "src/codegen/cpp_export.tr"
-                if (({ TrStr _cmpa_t8287 = (CppExporter__cpp_ty_kind(self, m->ret_ty)); TrStr _cmpb_t8288 = (_tr_str_lit_len("void", 4LL)); _Bool _cmpr_t8289 = _tr_str_eqv(_cmpa_t8287, _cmpb_t8288); _tr_str_release(_cmpa_t8287); _cmpr_t8289; })) {
+                if (({ TrStr _cmpa_t8423 = (CppExporter__cpp_ty_kind(self, m->ret_ty)); TrStr _cmpb_t8424 = (_tr_str_lit_len("void", 4LL)); _Bool _cmpr_t8425 = _tr_str_eqv(_cmpa_t8423, _cmpb_t8424); _tr_str_release(_cmpa_t8423); _cmpr_t8425; })) {
 #line 580 "src/codegen/cpp_export.tr"
-                    ({ TrStr _sbt_t8290 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((C), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (margs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8290); _tr_str_release(_sbt_t8290); });
+                    ({ TrStr _sbt_t8426 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((C), (_tr_str_lit_len("_", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (margs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8426); _tr_str_release(_sbt_t8426); });
                 } else {
 #line 582 "src/codegen/cpp_export.tr"
-                    ({ TrStr _sbt_t8291 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (margs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8291); _tr_str_release(_sbt_t8291); });
+                    ({ TrStr _sbt_t8427 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (margs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8427); _tr_str_release(_sbt_t8427); });
                 }
                 _tr_str_release(margs);
             }
@@ -1466,7 +1467,7 @@ __attribute__((hot)) TrStr CppExporter_generate_cpp_class_bridges(CppExporter* s
                 continue;
             }
 #line 592 "src/codegen/cpp_export.tr"
-            ({ __auto_type _ord_t8292 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_c_ty(self, f->ret_ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("TR_EXPORT ", 10LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8293 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8292); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (f->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8293); _tr_str_release(_sbt_t8293); });
+            ({ __auto_type _ord_t8428 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (CppExporter__cpp_c_ty(self, f->ret_ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("TR_EXPORT ", 10LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8429 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8428); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (f->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8429); _tr_str_release(_sbt_t8429); });
 #line 593 "src/codegen/cpp_export.tr"
             TrStr fargs = _tr_str_lit_len("", 0LL);
 #line 594 "src/codegen/cpp_export.tr"
@@ -1480,21 +1481,21 @@ __attribute__((hot)) TrStr CppExporter_generate_cpp_class_bridges(CppExporter* s
 #line 598 "src/codegen/cpp_export.tr"
                 if (_tr_str_eqv((pn), (_tr_str_lit_len("", 0LL)))) {
 #line 598 "src/codegen/cpp_export.tr"
-                    TrStr _strtmp_t8294 = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(pi2)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("a", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
+                    TrStr _strtmp_t8430 = ({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(pi2)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("a", 1LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; });
                     _tr_str_release(pn);
-                    pn = _strtmp_t8294;
+                    pn = _strtmp_t8430;
                 }
 #line 599 "src/codegen/cpp_export.tr"
                 if ((pi2 > 0LL)) {
 #line 600 "src/codegen/cpp_export.tr"
                     StringBuilder_append(b, _tr_str_lit_len(", ", 2LL));
 #line 601 "src/codegen/cpp_export.tr"
-                    ({ TrStr _ap_t8295 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&fargs, _ap_t8295); });
+                    ({ TrStr _ap_t8431 = (_tr_str_lit_len(", ", 2LL)); _tr_str_append(&fargs, _ap_t8431); });
                 }
 #line 602 "src/codegen/cpp_export.tr"
-                ({ TrStr _sbt_t8296 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (CppExporter__cpp_c_ty(self, p->ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (pn)); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8296); _tr_str_release(_sbt_t8296); });
+                ({ TrStr _sbt_t8432 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (CppExporter__cpp_c_ty(self, p->ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (pn)); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8432); _tr_str_release(_sbt_t8432); });
 #line 603 "src/codegen/cpp_export.tr"
-                ({ TrStr _ap_t8297 = (CppExporter__cpp_c_arg(self, p->ty, pn)); _tr_str_append(&fargs, _ap_t8297); _tr_str_release(_ap_t8297); });
+                ({ TrStr _ap_t8433 = (CppExporter__cpp_c_arg(self, p->ty, pn)); _tr_str_append(&fargs, _ap_t8433); _tr_str_release(_ap_t8433); });
 #line 604 "src/codegen/cpp_export.tr"
                 pi2 = (pi2 + 1LL);
                 _tr_str_release(pn);
@@ -1506,20 +1507,20 @@ __attribute__((hot)) TrStr CppExporter_generate_cpp_class_bridges(CppExporter* s
 #line 607 "src/codegen/cpp_export.tr"
             if (_tr_str_eqv((frk), (_tr_str_lit_len("void", 4LL)))) {
 #line 608 "src/codegen/cpp_export.tr"
-                ({ TrStr _sbt_t8298 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((f->name), (_tr_str_lit_len("(", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8298); _tr_str_release(_sbt_t8298); });
+                ({ TrStr _sbt_t8434 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((f->name), (_tr_str_lit_len("(", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8434); _tr_str_release(_sbt_t8434); });
             } else if (((_tr_str_eqv((frk), (_tr_str_lit_len("class", 5LL))) || _tr_str_eqv((frk), (_tr_str_lit_len("list", 4LL)))) || _tr_str_eqv((frk), (_tr_str_lit_len("dict", 4LL))))) {
 #line 610 "src/codegen/cpp_export.tr"
-                ({ TrStr _sbt_t8299 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return (void*)", 14LL)), (f->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8299); _tr_str_release(_sbt_t8299); });
+                ({ TrStr _sbt_t8435 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return (void*)", 14LL)), (f->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8435); _tr_str_release(_sbt_t8435); });
             } else {
 #line 612 "src/codegen/cpp_export.tr"
-                ({ TrStr _sbt_t8300 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (f->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8300); _tr_str_release(_sbt_t8300); });
+                ({ TrStr _sbt_t8436 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("return ", 7LL)), (f->name))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (fargs)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); }\n", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8436); _tr_str_release(_sbt_t8436); });
             }
             _tr_str_release(fargs);
             _tr_str_release(frk);
         }
     }
 #line 613 "src/codegen/cpp_export.tr"
-    ({ TrStr _sbt_t8301 = (CppExporter__cpp_list_bridges(self)); StringBuilder_append(b, _sbt_t8301); _tr_str_release(_sbt_t8301); });
+    ({ TrStr _sbt_t8437 = (CppExporter__cpp_list_bridges(self)); StringBuilder_append(b, _sbt_t8437); _tr_str_release(_sbt_t8437); });
 #line 614 "src/codegen/cpp_export.tr"
     StringBuilder_append(b, _tr_str_lit_len("#ifdef __cplusplus\n}\n#endif\n", 28LL));
 #line 615 "src/codegen/cpp_export.tr"
@@ -1544,15 +1545,15 @@ __attribute__((hot)) TrStr CppExporter__cpp_list_bridges(CppExporter* self) {
 #line 627 "src/codegen/cpp_export.tr"
         TrStr L = _tr_strx_concatv((_tr_str_lit_len("List_", 5LL)), (sfx));
 #line 628 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8302 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT long long tr__list_", 29LL)), (sfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_len(void* l){ return (long long)((", 35LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)l)->len; }\n", 13LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8302); _tr_str_release(_sbt_t8302); });
+        ({ TrStr _sbt_t8438 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT long long tr__list_", 29LL)), (sfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_len(void* l){ return (long long)((", 35LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)l)->len; }\n", 13LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8438); _tr_str_release(_sbt_t8438); });
 #line 629 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8303 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT ", 10LL)), (ec))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__list_", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sfx)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(void* l, long long i){ return ", 35LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get((", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)l, i); }\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8303); _tr_str_release(_sbt_t8303); });
+        ({ TrStr _sbt_t8439 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT ", 10LL)), (ec))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__list_", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sfx)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(void* l, long long i){ return ", 35LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get((", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)l, i); }\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8439); _tr_str_release(_sbt_t8439); });
 #line 630 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8304 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void* tr__list_", 25LL)), (sfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(void){ return (void*)", 26LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(); }\n", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8304); _tr_str_release(_sbt_t8304); });
+        ({ TrStr _sbt_t8440 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void* tr__list_", 25LL)), (sfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(void){ return (void*)", 26LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(); }\n", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8440); _tr_str_release(_sbt_t8440); });
 #line 631 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8305 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void tr__list_", 24LL)), (sfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_push(void* l, ", 15LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ec)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" v){ ", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_append((", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)l, v); }\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8305); _tr_str_release(_sbt_t8305); });
+        ({ TrStr _sbt_t8441 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void tr__list_", 24LL)), (sfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_push(void* l, ", 15LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ec)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" v){ ", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_append((", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)l, v); }\n", 11LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8441); _tr_str_release(_sbt_t8441); });
 #line 632 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8306 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void tr__list_", 24LL)), (sfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free(void* l){ ", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free((", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)l); }\n", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8306); _tr_str_release(_sbt_t8306); });
+        ({ TrStr _sbt_t8442 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void tr__list_", 24LL)), (sfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free(void* l){ ", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free((", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (L)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("*)l); }\n", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8442); _tr_str_release(_sbt_t8442); });
         _tr_str_release(sfx);
         _tr_str_release(ec);
         _tr_str_release(L);
@@ -1584,30 +1585,30 @@ __attribute__((hot)) TrStr CppExporter__cpp_list_bridges(CppExporter* self) {
 #line 647 "src/codegen/cpp_export.tr"
         if (_tr_str_eqv((kk), (_tr_str_lit_len("s", 1LL)))) {
 #line 648 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8307 = _tr_str_lit_len("TrStr", 5LL);
+            TrStr _strtmp_t8443 = _tr_str_lit_len("TrStr", 5LL);
             _tr_str_release(kc);
-            kc = _strtmp_t8307;
+            kc = _strtmp_t8443;
 #line 649 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8308 = _tr_str_lit_len("_tr_dict_new(8)", 15LL);
+            TrStr _strtmp_t8444 = _tr_str_lit_len("_tr_dict_new(8)", 15LL);
             _tr_str_release(newfn);
-            newfn = _strtmp_t8308;
+            newfn = _strtmp_t8444;
 #line 650 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8309 = _tr_str_lit_len("_tr_dict_keys((TrMap*)d)", 24LL);
+            TrStr _strtmp_t8445 = _tr_str_lit_len("_tr_dict_keys((TrMap*)d)", 24LL);
             _tr_str_release(keysfn);
-            keysfn = _strtmp_t8309;
+            keysfn = _strtmp_t8445;
 #line 651 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8310 = _tr_str_lit_len("_tr_dict_get((TrMap*)d, _tr_strz(k))", 36LL);
+            TrStr _strtmp_t8446 = _tr_str_lit_len("_tr_dict_get((TrMap*)d, _tr_strz(k))", 36LL);
             _tr_str_release(getraw);
-            getraw = _strtmp_t8310;
+            getraw = _strtmp_t8446;
 #line 652 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8311 = _tr_str_lit_len("_tr_dict_set((TrMap*)d, _tr_strz(k), ", 37LL);
+            TrStr _strtmp_t8447 = _tr_str_lit_len("_tr_dict_set((TrMap*)d, _tr_strz(k), ", 37LL);
             _tr_str_release(setpre);
-            setpre = _strtmp_t8311;
+            setpre = _strtmp_t8447;
         }
 #line 653 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8312 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void* tr__dict_", 25LL)), (V))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(void){ return (void*)", 26LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (newfn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; }\n", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8312); _tr_str_release(_sbt_t8312); });
+        ({ TrStr _sbt_t8448 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void* tr__dict_", 25LL)), (V))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(void){ return (void*)", 26LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (newfn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; }\n", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8448); _tr_str_release(_sbt_t8448); });
 #line 654 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8313 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void* tr__dict_", 25LL)), (V))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_keys(void* d){ return (void*)", 30LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (keysfn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; }\n", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8313); _tr_str_release(_sbt_t8313); });
+        ({ TrStr _sbt_t8449 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void* tr__dict_", 25LL)), (V))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_keys(void* d){ return (void*)", 30LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (keysfn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; }\n", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8449); _tr_str_release(_sbt_t8449); });
 #line 655 "src/codegen/cpp_export.tr"
         TrStr vc = _tr_str_lit_len("long long", 9LL);
 #line 656 "src/codegen/cpp_export.tr"
@@ -1617,56 +1618,56 @@ __attribute__((hot)) TrStr CppExporter__cpp_list_bridges(CppExporter* self) {
 #line 658 "src/codegen/cpp_export.tr"
         if (_tr_str_eqv((vk), (_tr_str_lit_len("f64", 3LL)))) {
 #line 659 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8314 = _tr_str_lit_len("double", 6LL);
+            TrStr _strtmp_t8450 = _tr_str_lit_len("double", 6LL);
             _tr_str_release(vc);
-            vc = _strtmp_t8314;
+            vc = _strtmp_t8450;
 #line 660 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8315 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("_tr_ptr_to_f64(", 15LL)), (getraw))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+            TrStr _strtmp_t8451 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("_tr_ptr_to_f64(", 15LL)), (getraw))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
             _tr_str_release(getval);
-            getval = _strtmp_t8315;
+            getval = _strtmp_t8451;
 #line 661 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8316 = _tr_strx_concatv((setpre), (_tr_str_lit_len("_tr_f64_to_ptr(v))", 18LL)));
+            TrStr _strtmp_t8452 = _tr_strx_concatv((setpre), (_tr_str_lit_len("_tr_f64_to_ptr(v))", 18LL)));
             _tr_str_release(setval);
-            setval = _strtmp_t8316;
+            setval = _strtmp_t8452;
         } else if (_tr_str_eqv((vk), (_tr_str_lit_len("str", 3LL)))) {
 #line 663 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8317 = _tr_str_lit_len("TrStr", 5LL);
+            TrStr _strtmp_t8453 = _tr_str_lit_len("TrStr", 5LL);
             _tr_str_release(vc);
-            vc = _strtmp_t8317;
+            vc = _strtmp_t8453;
 #line 664 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8318 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("_tr_str_unbox(", 14LL)), (getraw))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
+            TrStr _strtmp_t8454 = ({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("_tr_str_unbox(", 14LL)), (getraw))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(")", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
             _tr_str_release(getval);
-            getval = _strtmp_t8318;
+            getval = _strtmp_t8454;
 #line 665 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8319 = _tr_strx_concatv((setpre), (_tr_str_lit_len("_tr_str_box(v))", 15LL)));
+            TrStr _strtmp_t8455 = _tr_strx_concatv((setpre), (_tr_str_lit_len("_tr_str_box(v))", 15LL)));
             _tr_str_release(setval);
-            setval = _strtmp_t8319;
+            setval = _strtmp_t8455;
         }
 #line 666 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8320 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT ", 10LL)), (vc))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__dict_", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (V)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(void* d, ", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (kc)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" k){ return ", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (getval)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; }\n", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8320); _tr_str_release(_sbt_t8320); });
+        ({ TrStr _sbt_t8456 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT ", 10LL)), (vc))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__dict_", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (V)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(void* d, ", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (kc)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" k){ return ", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (getval)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; }\n", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8456); _tr_str_release(_sbt_t8456); });
 #line 667 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8321 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void tr__dict_", 24LL)), (V))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_set(void* d, ", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (kc)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" k, ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vc)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" v){ ", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (setval)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; }\n", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8321); _tr_str_release(_sbt_t8321); });
+        ({ TrStr _sbt_t8457 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void tr__dict_", 24LL)), (V))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_set(void* d, ", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (kc)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" k, ", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vc)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" v){ ", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (setval)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; }\n", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8457); _tr_str_release(_sbt_t8457); });
 #line 668 "src/codegen/cpp_export.tr"
         TrStr freefn = _tr_str_lit_len("Dict_free((Dict*)d)", 19LL);
 #line 669 "src/codegen/cpp_export.tr"
         if ((_tr_str_eqv((kk), (_tr_str_lit_len("s", 1LL))) && _tr_str_eqv((vk), (_tr_str_lit_len("str", 3LL))))) {
 #line 669 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8322 = _tr_str_lit_len("Dict_free_strval((Dict*)d)", 26LL);
+            TrStr _strtmp_t8458 = _tr_str_lit_len("Dict_free_strval((Dict*)d)", 26LL);
             _tr_str_release(freefn);
-            freefn = _strtmp_t8322;
+            freefn = _strtmp_t8458;
         } else if ((_tr_str_eqv((kk), (_tr_str_lit_len("i", 1LL))) && _tr_str_eqv((vk), (_tr_str_lit_len("str", 3LL))))) {
 #line 670 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8323 = _tr_str_lit_len("_tr_idict_free_strval((TrIDict*)d)", 34LL);
+            TrStr _strtmp_t8459 = _tr_str_lit_len("_tr_idict_free_strval((TrIDict*)d)", 34LL);
             _tr_str_release(freefn);
-            freefn = _strtmp_t8323;
+            freefn = _strtmp_t8459;
         } else if (_tr_str_eqv((kk), (_tr_str_lit_len("i", 1LL)))) {
 #line 671 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8324 = _tr_str_lit_len("_tr_idict_free((TrIDict*)d)", 27LL);
+            TrStr _strtmp_t8460 = _tr_str_lit_len("_tr_idict_free((TrIDict*)d)", 27LL);
             _tr_str_release(freefn);
-            freefn = _strtmp_t8324;
+            freefn = _strtmp_t8460;
         }
 #line 672 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8325 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void tr__dict_", 24LL)), (V))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free(void* d){ ", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (freefn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; }\n", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8325); _tr_str_release(_sbt_t8325); });
+        ({ TrStr _sbt_t8461 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("TR_EXPORT void tr__dict_", 24LL)), (V))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free(void* d){ ", 16LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (freefn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("; }\n", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8461); _tr_str_release(_sbt_t8461); });
         _tr_str_release(V);
         _tr_str_release(kk);
         _tr_str_release(vk);
@@ -1701,11 +1702,11 @@ __attribute__((hot)) TrStr CppExporter__cpp_list_bridges(CppExporter* self) {
         StringBuilder_append(b, _tr_str_lit_len("TR_EXPORT double tr__unbox_f64(long long p){ return _tr_ptr_to_f64((void*)(uintptr_t)p); }\n", 91LL));
     }
 #line 686 "src/codegen/cpp_export.tr"
-    TrStr _trret1692 = StringObj_as_str(StringBuilder_to_string(b));
+    TrStr _trret1722 = StringObj_as_str(StringBuilder_to_string(b));
     List_TrStr_free(keys);
     List_TrStr_free(dk);
     StringBuilder__tr_fn_free(b);
-    return _trret1692;
+    return _trret1722;
 }
 
 __attribute__((hot)) TrStr CppExporter_generate_export_cpp_header(CppExporter* self, HirProgram* prog, TrStr ns) {
@@ -1716,7 +1717,7 @@ __attribute__((hot)) TrStr CppExporter_generate_export_cpp_header(CppExporter* s
 #line 696 "src/codegen/cpp_export.tr"
     StringBuilder_append(sb, _tr_str_lit_len("/* Generated by `tauraroc --export-cpp`. Call Tauraro from C++: include this,\n", 78LL));
 #line 697 "src/codegen/cpp_export.tr"
-    ({ TrStr _sbt_t8326 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("   link the Tauraro library, and use the `", 42LL)), (ns))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("::` wrappers. */\n", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t8326); _tr_str_release(_sbt_t8326); });
+    ({ TrStr _sbt_t8462 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("   link the Tauraro library, and use the `", 42LL)), (ns))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("::` wrappers. */\n", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t8462); _tr_str_release(_sbt_t8462); });
 #line 698 "src/codegen/cpp_export.tr"
     StringBuilder_append(sb, _tr_str_lit_len("#ifndef TAURARO_CPP_EXPORTS_H\n#define TAURARO_CPP_EXPORTS_H\n\n", 61LL));
 #line 699 "src/codegen/cpp_export.tr"
@@ -1760,7 +1761,7 @@ __attribute__((hot)) TrStr CppExporter_generate_export_cpp_header(CppExporter* s
 #line 715 "src/codegen/cpp_export.tr"
         TrStr ec = _tr_str_retain(_tr_str_unbox(_tr_dict_get(self->list_elems, _tr_strz(sfx))));
 #line 716 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8327 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("long long tr__list_", 19LL)), (sfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_len(void*); ", 13LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ec)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__list_", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sfx)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(void*, long long); void* tr__list_", 39LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sfx)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(void); void tr__list_", 26LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sfx)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_push(void*, ", 13LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ec)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); void tr__list_", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sfx)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free(void*);\n", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t8327); _tr_str_release(_sbt_t8327); });
+        ({ TrStr _sbt_t8463 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("long long tr__list_", 19LL)), (sfx))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_len(void*); ", 13LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ec)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__list_", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sfx)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(void*, long long); void* tr__list_", 39LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sfx)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(void); void tr__list_", 26LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sfx)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_push(void*, ", 13LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ec)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); void tr__list_", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (sfx)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free(void*);\n", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t8463); _tr_str_release(_sbt_t8463); });
         _tr_str_release(sfx);
         _tr_str_release(ec);
     }
@@ -1779,14 +1780,14 @@ __attribute__((hot)) TrStr CppExporter_generate_export_cpp_header(CppExporter* s
 #line 724 "src/codegen/cpp_export.tr"
         TrStr kc = _tr_str_lit_len("long long", 9LL);
 #line 725 "src/codegen/cpp_export.tr"
-        if (({ TrStr _cmpa_t8328 = (_tr_str_slicev((V), 0LL, 1LL)); TrStr _cmpb_t8329 = (_tr_str_lit_len("s", 1LL)); _Bool _cmpr_t8330 = _tr_str_eqv(_cmpa_t8328, _cmpb_t8329); _tr_str_release(_cmpa_t8328); _cmpr_t8330; })) {
+        if (({ TrStr _cmpa_t8464 = (_tr_str_slicev((V), 0LL, 1LL)); TrStr _cmpb_t8465 = (_tr_str_lit_len("s", 1LL)); _Bool _cmpr_t8466 = _tr_str_eqv(_cmpa_t8464, _cmpb_t8465); _tr_str_release(_cmpa_t8464); _cmpr_t8466; })) {
 #line 725 "src/codegen/cpp_export.tr"
-            TrStr _strtmp_t8331 = _tr_str_lit_len("TrStr", 5LL);
+            TrStr _strtmp_t8467 = _tr_str_lit_len("TrStr", 5LL);
             _tr_str_release(kc);
-            kc = _strtmp_t8331;
+            kc = _strtmp_t8467;
         }
 #line 726 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8332 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("void* tr__dict_", 15LL)), (V))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(void); void* tr__dict_", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (V)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_keys(void*); ", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vc)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__dict_", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (V)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(void*, ", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (kc)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); void tr__dict_", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (V)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_set(void*, ", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (kc)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vc)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); void tr__dict_", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (V)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free(void*);\n", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t8332); _tr_str_release(_sbt_t8332); });
+        ({ TrStr _sbt_t8468 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("void* tr__dict_", 15LL)), (V))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(void); void* tr__dict_", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (V)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_keys(void*); ", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vc)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__dict_", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (V)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_get(void*, ", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (kc)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); void tr__dict_", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (V)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_set(void*, ", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (kc)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(", ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (vc)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); void tr__dict_", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (V)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_free(void*);\n", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t8468); _tr_str_release(_sbt_t8468); });
         _tr_str_release(V);
         _tr_str_release(vc);
         _tr_str_release(kc);
@@ -1822,7 +1823,7 @@ __attribute__((hot)) TrStr CppExporter_generate_export_cpp_header(CppExporter* s
                 continue;
             }
 #line 741 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8333 = (CppExporter__cpp_class_bridge_protos(self, c)); StringBuilder_append(sb, _sbt_t8333); _tr_str_release(_sbt_t8333); });
+            ({ TrStr _sbt_t8469 = (CppExporter__cpp_class_bridge_protos(self, c)); StringBuilder_append(sb, _sbt_t8469); _tr_str_release(_sbt_t8469); });
         }
     }
 #line 743 "src/codegen/cpp_export.tr"
@@ -1840,19 +1841,19 @@ __attribute__((hot)) TrStr CppExporter_generate_export_cpp_header(CppExporter* s
 #line 749 "src/codegen/cpp_export.tr"
                     if (CppExporter__cpp_fn_needs_bridge(self, f)) {
 #line 750 "src/codegen/cpp_export.tr"
-                        ({ TrStr _sbt_t8334 = (CppExporter__cpp_free_fn_bridge_proto(self, f)); StringBuilder_append(sb, _sbt_t8334); _tr_str_release(_sbt_t8334); });
+                        ({ TrStr _sbt_t8470 = (CppExporter__cpp_free_fn_bridge_proto(self, f)); StringBuilder_append(sb, _sbt_t8470); _tr_str_release(_sbt_t8470); });
                     } else {
 #line 752 "src/codegen/cpp_export.tr"
                         TrStr sig = CGenerator_gen_func_sig(self->gen, f, _tr_str_lit_len("", 0LL));
 #line 753 "src/codegen/cpp_export.tr"
                         if (_tr_str_starts_withv((sig), (_tr_str_lit_len("TR_EXPORT ", 10LL)))) {
 #line 753 "src/codegen/cpp_export.tr"
-                            TrStr _strtmp_t8335 = _tr_str_slicev((sig), 10LL, _tr_str_lenv((sig)));
+                            TrStr _strtmp_t8471 = _tr_str_slicev((sig), 10LL, _tr_str_lenv((sig)));
                             _tr_str_release(sig);
-                            sig = _strtmp_t8335;
+                            sig = _strtmp_t8471;
                         }
 #line 754 "src/codegen/cpp_export.tr"
-                        ({ TrStr _sbt_t8336 = (_tr_strx_concatv((sig), (_tr_str_lit_len(";\n", 2LL)))); StringBuilder_append(sb, _sbt_t8336); _tr_str_release(_sbt_t8336); });
+                        ({ TrStr _sbt_t8472 = (_tr_strx_concatv((sig), (_tr_str_lit_len(";\n", 2LL)))); StringBuilder_append(sb, _sbt_t8472); _tr_str_release(_sbt_t8472); });
                         _tr_str_release(sig);
                     }
                 }
@@ -1864,7 +1865,7 @@ __attribute__((hot)) TrStr CppExporter_generate_export_cpp_header(CppExporter* s
 #line 756 "src/codegen/cpp_export.tr"
     StringBuilder_append(sb, _tr_str_lit_len("}\n\n", 3LL));
 #line 758 "src/codegen/cpp_export.tr"
-    ({ TrStr _sbt_t8337 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("namespace ", 10LL)), (ns))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" {\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t8337); _tr_str_release(_sbt_t8337); });
+    ({ TrStr _sbt_t8473 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("namespace ", 10LL)), (ns))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" {\n", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t8473); _tr_str_release(_sbt_t8473); });
 #line 759 "src/codegen/cpp_export.tr"
     ci = 0LL;
 #line 760 "src/codegen/cpp_export.tr"
@@ -1886,7 +1887,7 @@ __attribute__((hot)) TrStr CppExporter_generate_export_cpp_header(CppExporter* s
                 continue;
             }
 #line 766 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8338 = (CppExporter__cpp_class_decl(self, c)); StringBuilder_append(sb, _sbt_t8338); _tr_str_release(_sbt_t8338); });
+            ({ TrStr _sbt_t8474 = (CppExporter__cpp_class_decl(self, c)); StringBuilder_append(sb, _sbt_t8474); _tr_str_release(_sbt_t8474); });
         }
     }
 #line 767 "src/codegen/cpp_export.tr"
@@ -1902,7 +1903,7 @@ __attribute__((hot)) TrStr CppExporter_generate_export_cpp_header(CppExporter* s
 #line 772 "src/codegen/cpp_export.tr"
                 if (((f->is_export && (!f->is_extern)) && CppExporter__cpp_export_fn_ok(self, f))) {
 #line 773 "src/codegen/cpp_export.tr"
-                    ({ TrStr _sbt_t8339 = (CppExporter__cpp_wrap_fn(self, f)); StringBuilder_append(sb, _sbt_t8339); _tr_str_release(_sbt_t8339); });
+                    ({ TrStr _sbt_t8475 = (CppExporter__cpp_wrap_fn(self, f)); StringBuilder_append(sb, _sbt_t8475); _tr_str_release(_sbt_t8475); });
                 }
             }
 #line 774 "src/codegen/cpp_export.tr"
@@ -1910,13 +1911,13 @@ __attribute__((hot)) TrStr CppExporter_generate_export_cpp_header(CppExporter* s
         }
     }
 #line 775 "src/codegen/cpp_export.tr"
-    ({ TrStr _sbt_t8340 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("}  // namespace ", 16LL)), (ns))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n\n#endif\n", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t8340); _tr_str_release(_sbt_t8340); });
+    ({ TrStr _sbt_t8476 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("}  // namespace ", 16LL)), (ns))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n\n#endif\n", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(sb, _sbt_t8476); _tr_str_release(_sbt_t8476); });
 #line 776 "src/codegen/cpp_export.tr"
-    TrStr _trret1693 = StringObj_as_str(StringBuilder_to_string(sb));
+    TrStr _trret1723 = StringObj_as_str(StringBuilder_to_string(sb));
     List_TrStr_free(lk);
     List_TrStr_free(dkk);
     StringBuilder__tr_fn_free(sb);
-    return _trret1693;
+    return _trret1723;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_class_bridge_protos(CppExporter* self, HirClass* c) {
@@ -1925,7 +1926,7 @@ __attribute__((hot)) TrStr CppExporter__cpp_class_bridge_protos(CppExporter* sel
 #line 781 "src/codegen/cpp_export.tr"
     StringBuilder* b = StringBuilder_init(256LL);
 #line 782 "src/codegen/cpp_export.tr"
-    ({ TrStr _sbt_t8341 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("void* tr__", 10LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_retain(void*); void tr__", 25LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_release(void*);\n", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8341); _tr_str_release(_sbt_t8341); });
+    ({ TrStr _sbt_t8477 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("void* tr__", 10LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_retain(void*); void tr__", 25LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_release(void*);\n", 17LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8477); _tr_str_release(_sbt_t8477); });
 #line 783 "src/codegen/cpp_export.tr"
     long long iidx = CppExporter__cpp_init_idx(self, c);
 #line 784 "src/codegen/cpp_export.tr"
@@ -1933,7 +1934,7 @@ __attribute__((hot)) TrStr CppExporter__cpp_class_bridge_protos(CppExporter* sel
 #line 785 "src/codegen/cpp_export.tr"
         HirFunction* im = ((HirFunction*)List_ptr_get(c->methods, iidx));
 #line 786 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8342 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("void* tr__", 10LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8342); _tr_str_release(_sbt_t8342); });
+        ({ TrStr _sbt_t8478 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("void* tr__", 10LL)), (C))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_new(", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8478); _tr_str_release(_sbt_t8478); });
 #line 787 "src/codegen/cpp_export.tr"
         long long ip = 0LL;
 #line 788 "src/codegen/cpp_export.tr"
@@ -1955,7 +1956,7 @@ __attribute__((hot)) TrStr CppExporter__cpp_class_bridge_protos(CppExporter* sel
                 StringBuilder_append(b, _tr_str_lit_len(", ", 2LL));
             }
 #line 794 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8343 = (CppExporter__cpp_c_ty(self, p->ty)); StringBuilder_append(b, _sbt_t8343); _tr_str_release(_sbt_t8343); });
+            ({ TrStr _sbt_t8479 = (CppExporter__cpp_c_ty(self, p->ty)); StringBuilder_append(b, _sbt_t8479); _tr_str_release(_sbt_t8479); });
 #line 795 "src/codegen/cpp_export.tr"
             ie = (ie + 1LL);
         }
@@ -1991,7 +1992,7 @@ __attribute__((hot)) TrStr CppExporter__cpp_class_bridge_protos(CppExporter* sel
             continue;
         }
 #line 805 "src/codegen/cpp_export.tr"
-        ({ __auto_type _ord_t8344 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (CppExporter__cpp_c_ty(self, m->ret_ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8345 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8344); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(void*", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8345); _tr_str_release(_sbt_t8345); });
+        ({ __auto_type _ord_t8480 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (CppExporter__cpp_c_ty(self, m->ret_ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (C)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("_", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8481 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8480); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (m->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(void*", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8481); _tr_str_release(_sbt_t8481); });
 #line 806 "src/codegen/cpp_export.tr"
         long long pj = 0LL;
 #line 807 "src/codegen/cpp_export.tr"
@@ -2006,23 +2007,23 @@ __attribute__((hot)) TrStr CppExporter__cpp_class_bridge_protos(CppExporter* sel
                 continue;
             }
 #line 811 "src/codegen/cpp_export.tr"
-            ({ TrStr _sbt_t8346 = (({ TrStr _tr_cr = (CppExporter__cpp_c_ty(self, mp->ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len(", ", 2LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); StringBuilder_append(b, _sbt_t8346); _tr_str_release(_sbt_t8346); });
+            ({ TrStr _sbt_t8482 = (({ TrStr _tr_cr = (CppExporter__cpp_c_ty(self, mp->ty)); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len(", ", 2LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); StringBuilder_append(b, _sbt_t8482); _tr_str_release(_sbt_t8482); });
         }
 #line 812 "src/codegen/cpp_export.tr"
         StringBuilder_append(b, _tr_str_lit_len(");\n", 3LL));
     }
 #line 813 "src/codegen/cpp_export.tr"
-    TrStr _trret1694 = StringObj_as_str(StringBuilder_to_string(b));
+    TrStr _trret1724 = StringObj_as_str(StringBuilder_to_string(b));
     _tr_str_release(C);
     StringBuilder__tr_fn_free(b);
-    return _trret1694;
+    return _trret1724;
 }
 
 __attribute__((hot)) TrStr CppExporter__cpp_free_fn_bridge_proto(CppExporter* self, HirFunction* f) {
 #line 816 "src/codegen/cpp_export.tr"
     StringBuilder* b = StringBuilder_init(128LL);
 #line 817 "src/codegen/cpp_export.tr"
-    ({ __auto_type _ord_t8347 = (({ TrStr _tr_cl = (CppExporter__cpp_c_ty(self, f->ret_ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8348 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8347); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (f->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8348); _tr_str_release(_sbt_t8348); });
+    ({ __auto_type _ord_t8483 = (({ TrStr _tr_cl = (CppExporter__cpp_c_ty(self, f->ret_ty)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" tr__", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t8484 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t8483); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (f->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("(", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(b, _sbt_t8484); _tr_str_release(_sbt_t8484); });
 #line 818 "src/codegen/cpp_export.tr"
     long long pi = 0LL;
 #line 819 "src/codegen/cpp_export.tr"
@@ -2035,7 +2036,7 @@ __attribute__((hot)) TrStr CppExporter__cpp_free_fn_bridge_proto(CppExporter* se
             StringBuilder_append(b, _tr_str_lit_len(", ", 2LL));
         }
 #line 822 "src/codegen/cpp_export.tr"
-        ({ TrStr _sbt_t8349 = (CppExporter__cpp_c_ty(self, ((HirParam*)List_ptr_get(f->params, pi))->ty)); StringBuilder_append(b, _sbt_t8349); _tr_str_release(_sbt_t8349); });
+        ({ TrStr _sbt_t8485 = (CppExporter__cpp_c_ty(self, ((HirParam*)List_ptr_get(f->params, pi))->ty)); StringBuilder_append(b, _sbt_t8485); _tr_str_release(_sbt_t8485); });
 #line 823 "src/codegen/cpp_export.tr"
         e = (e + 1LL);
 #line 824 "src/codegen/cpp_export.tr"

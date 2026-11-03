@@ -1,0 +1,10 @@
+# EXPECT: [T-9]
+# The payload type is inferred from `Mutex.init(A())` (no annotation): a guard from get() used after
+# unlock() is still a race, and a bare `g = m.get()` binding counts as a guard.
+class A:
+    pub v: int
+def main():
+    m = Mutex.init(A())
+    g = m.get()
+    m.unlock()
+    g.v = 5

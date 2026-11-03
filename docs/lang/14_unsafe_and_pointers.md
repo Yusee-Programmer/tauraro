@@ -635,7 +635,8 @@ Inside `unsafe:` you take over the guarantees the compiler gives everywhere else
   functions that `dealloc` a parameter.
 - `[L-1]` returning, or storing into a parameter / field / global / container, the address of a local.
 - `[P-3]` a pointer that is certainly null being dereferenced; a constant `offset`/index outside a literal
-  `alloc[T](n)` block; `dealloc` of a stack address or null; a negative literal `alloc` count.
+  `alloc[T](n)` block (the constant may be a literal or a local that is definitely a known constant here,
+  e.g. `n = 5; p.offset(n)`; an interior pointer `q = p.offset(2)` is tracked with the elements left); `dealloc` of a stack address or null; a negative literal `alloc` count.
 - `[P-4]` (warning) an `alloc` block that leaks on some path.
 - `[P-2]` `*p`, `p[i]`, `p + n`, `.read()`, `.offset()` and `p.field` outside `unsafe:`.
 
@@ -644,7 +645,8 @@ Inside `unsafe:` you take over the guarantees the compiler gives everywhere else
   An out-of-range or freed access is undefined behaviour; a crash prints
   `tauraro: fatal: invalid memory access ...` (or `stack overflow` for runaway recursion).
 - `--debug` builds (AddressSanitizer + UBSan): every `p[i]` and `p.offset(k)` is checked against the heap
-  block `p` points into (`raw pointer ... out of bounds`), and ASan additionally traps use-after-free,
+  block `p` points into (interior pointers such as `p.offset(2)` are resolved to their block on every
+  platform, not only where ASan can locate it) (`raw pointer ... out of bounds`), and ASan additionally traps use-after-free,
   double free and heap-buffer-overflow on every read/write. Leaks are reported at exit.
 
 **Never checked (your responsibility)**

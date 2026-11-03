@@ -1,0 +1,8 @@
+# EXPECT: [E-5]
+# A module-level `mut g = None` that is only ever updated arithmetically is rejected up front
+# (it used to reach the C compiler as a late [C-1]).
+mut counter = None
+def bump():
+    counter = counter + 1
+def main():
+    bump()

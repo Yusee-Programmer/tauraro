@@ -198,6 +198,22 @@ def mv_tracked(cx: MvCtx, nm: str) -> bool:
 
 def mv_use(cx: MvCtx, nm: str, st: MvState):
     if st.dead: return
+    # A closure local reads every variable it captured: if one of them was moved since the closure was
+    # built, calling / passing the closure now uses a moved value.
+    if cx.clcaps.contains(nm):
+        mut cc = cx.clcaps.get(nm)
+        mut ci = 0
+        while ci < cc.len:
+            mut cn = cc.get(ci)
+            if mv_has(st.any, cn):
+                mut cat = ""
+                if cx.mline.contains(cn): cat = " (moved at line " + str(cx.mline.get(cn)) + ")"
+                if mv_has(st.all, cn):
+                    cx.err("[M-1] closure '" + nm + "' captured '" + cn + "', which was moved" + cat + " before this use of the closure (--strict: passing a value by value consumes it).\n      FIX: move a `clone()` of '" + cn + "' instead, or stop using '" + nm + "' after the move.")
+                else:
+                    cx.err("[M-5] closure '" + nm + "' captured '" + cn + "', which may have been moved" + cat + " on some code paths before this use of the closure.\n      FIX: do not move '" + cn + "' on any branch before using '" + nm + "' (move a `clone()`).")
+                mv_reinit_name_quiet(st, cn)
+            ci = ci + 1
     if not mv_has(st.any, nm): return
     mut at = ""
     if cx.mline.contains(nm):
@@ -210,6 +226,12 @@ def mv_use(cx: MvCtx, nm: str, st: MvState):
         cx.err("[M-1] '" + nm + "' is moved inside a loop" + at + " and used again by the next iteration: it was already moved in the previous one.\n      FIX: move a `clone()` of it, give '" + nm + "' a new value before the end of the loop body, or `break` right after the move.")
     else:
         cx.err("[M-5] '" + nm + "' may have been moved" + at + " on some code paths, making this use unsafe (--strict).\n      FIX: do not move '" + nm + "' on any branch before this point (move a `clone()`), or restructure so the use is inside the branch where it is still valid.")
+
+# forget the moved flag of `nm` after reporting it once (avoids a cascade of identical errors)
+def mv_reinit_name_quiet(st: MvState, nm: str):
+    st.any = mv_without(st.any, nm)
+    st.all = mv_without(st.all, nm)
+    st.lp = mv_without(st.lp, nm)
 
 def mv_mark(cx: MvCtx, nm: str, st: MvState):
     if st.dead or cx.unsafe_depth > 0 or cx.in_defer: return

@@ -361,9 +361,36 @@ def pf_kill(st: PfState, path: str):
     while i < st.sz.len:
         mut e = st.sz.get(i)
         mut eq = e.index_of("=")
-        if not pf_under(e.slice(0, eq), path): nz.push(e)
+        mut ek = e.slice(0, eq)
+        if not pf_under(ek, path) and ek != "#" + path: nz.push(e)
         i = i + 1
     st.sz = nz
+
+# Drop every integer-constant fact ("#n=3" entries of `sz`): entering a branch or loop makes them unsafe
+# to rely on (the code may be guarded by a test on the variable, or the variable may change per iteration).
+def pf_kill_consts(st: PfState):
+    mut nz = Vec[str].init(1)
+    mut i = 0
+    while i < st.sz.len:
+        if not st.sz.get(i).starts_with("#"): nz.push(st.sz.get(i))
+        i = i + 1
+    st.sz = nz
+
+# integer value of `e`: a literal, or a local that is DEFINITELY a known constant here (sentinel otherwise)
+def pf_val(st: PfState, e: Pointer[HirExpr]) -> int:
+    mut v = pf_lit(e)
+    if v != -4611686018427387904: return v
+    if pf_null(e): return v
+    match e.read():
+        case HirExpr.EIdent(nm, _, _):
+            mut i = 0
+            while i < st.sz.len:
+                mut en = st.sz.get(i)
+                mut eq = en.index_of("=")
+                if en.slice(0, eq) == "#" + nm: return en.slice(eq + 1, en.len()).to_int()
+                i = i + 1
+        case _: pass
+    return v
 
 def pf_drop_under(v: Vec[str], path: str) -> Vec[str]:
     mut o = Vec[str].init(1)
@@ -477,8 +504,8 @@ def pf_ptr_checks(cx: PfCtx, st: PfState, o: Pointer[HirExpr], m: str, args: Vec
             cx.err("[P-3] '." + m + "()' on '" + np + "', which was allocated with 0 elements (out of bounds).\n      FIX: allocate at least one element, or do not dereference an empty block.")
     if m == "offset" and np != "" and args.len == 1:
         mut sz = pf_size_of(st, np)
-        mut k = pf_lit(args.get(0))
-        if sz >= 0 and pf_is_lit(args.get(0)) and (k < 0 or k > sz):
+        mut k = pf_val(st, args.get(0))
+        if sz >= 0 and k != -4611686018427387904 and (k < 0 or k > sz):
             cx.err("[P-3] '" + np + ".offset(" + str(k) + ")' moves outside the " + str(sz) + "-element block '" + np + "' was allocated with (undefined behaviour even before it is dereferenced).\n      FIX: keep the offset in 0 .. n (one-past-the-end) of the alloc[T](n) block.")
     if (m == "read" or m == "write") and not pf_null(o):
         match o.read():
@@ -487,8 +514,8 @@ def pf_ptr_checks(cx: PfCtx, st: PfState, o: Pointer[HirExpr], m: str, args: Vec
                     mut bp = pf_path(bo)
                     mut bsz = -1
                     if bp != "": bsz = pf_size_of(st, bp)
-                    mut bk = pf_lit(bargs.get(0))
-                    if bsz >= 0 and pf_is_lit(bargs.get(0)) and (bk < 0 or bk >= bsz):
+                    mut bk = pf_val(st, bargs.get(0))
+                    if bsz >= 0 and bk != -4611686018427387904 and (bk < 0 or bk >= bsz):
                         cx.err("[P-3] '" + bp + ".offset(" + str(bk) + ")." + m + "()' is outside the " + str(bsz) + "-element block '" + bp + "' was allocated with (out-of-bounds access).\n      FIX: keep the offset in 0 .. n-1 of the alloc[T](n) block, or use a List[T] (bounds-checked).")
             case _: pass
 
@@ -600,8 +627,8 @@ def pf_expr(cx: PfCtx, e: Pointer[HirExpr], st: PfState):
                     cx.err("[P-3] indexing '" + ip + "', which is a null pointer here.\n      FIX: allocate it (alloc[T](n)) or check it for null before use.")
                 else:
                     mut isz = pf_size_of(st, ip)
-                    mut ik = pf_lit(i)
-                    if isz >= 0 and pf_is_lit(i) and (ik < 0 or ik >= isz):
+                    mut ik = pf_val(st, i)
+                    if isz >= 0 and ik != -4611686018427387904 and (ik < 0 or ik >= isz):
                         cx.err("[P-3] index " + str(ik) + " is outside the " + str(isz) + "-element block '" + ip + "' was allocated with.\n      FIX: keep indexes in 0 .. n-1 of the alloc[T](n) block, or use a List[T] (bounds-checked).")
             cx.noesc = true
             pf_expr(cx, o, st)
@@ -652,6 +679,8 @@ def pf_expr(cx: PfCtx, e: Pointer[HirExpr], st: PfState):
             pf_expr(cx, c, st)
             mut s1 = st.copy()
             mut s2 = st.copy()
+            pf_kill_consts(s1)
+            pf_kill_consts(s2)
             pf_expr(cx, t, s1)
             pf_expr(cx, f, s2)
             s1.dead = false
@@ -670,6 +699,7 @@ def pf_expr(cx: PfCtx, e: Pointer[HirExpr], st: PfState):
             while ai < arms.len:
                 mut a = arms.get(ai)
                 mut c = st.copy()
+                pf_kill_consts(c)
                 pf_expr(cx, a.guard, c)
                 pf_block(cx, a.body, c)
                 pf_merge(st, c)
@@ -714,9 +744,28 @@ def pf_bind(cx: PfCtx, st: PfState, path: str, val: Pointer[HirExpr], simple: bo
                 st.sz.push(path + "=" + str(n))
     elif pf_is_null_lit(val):
         pf_add(st.nul, path)
+    elif pf_is_lit(val) and path.index_of(".") < 0:
+        st.sz.push("#" + path + "=" + str(pf_lit(val)))
+    elif pf_interior_size(st, val) >= 0:
+        st.sz.push(path + "=" + str(pf_interior_size(st, val)))
     else:
         mut r = pf_root(val)
         if r != "" and pf_has(st.nul, r) and r != path: pf_add(st.nul, path)
+
+# `base.offset(k)` with a literal k inside a literal-sized block: the elements left in the block from that
+# interior pointer (else -1).
+def pf_interior_size(st: PfState, val: Pointer[HirExpr]) -> int:
+    if pf_null(val): return -1
+    match val.read():
+        case HirExpr.EMethodCall(bo, bm, bargs, _):
+            if bm == "offset" and bargs.len == 1 and pf_is_lit(bargs.get(0)):
+                mut bp = pf_path(bo)
+                if bp != "":
+                    mut bsz = pf_size_of(st, bp)
+                    mut k = pf_lit(bargs.get(0))
+                    if bsz >= 0 and k >= 0 and k <= bsz: return bsz - k
+        case _: pass
+    return -1
 
 def pf_declare(cx: PfCtx, st: PfState, name: str, val: Pointer[HirExpr]):
     if pf_has(st.own, name): pf_leak_warn(cx, name, "overwritten by a new declaration before it is dealloc'd")
@@ -782,6 +831,7 @@ def pf_exit_loop_ctx(cx: PfCtx, brk_out: PfState, cnt_out: PfState):
 
 # Loop: condition `cond` (may be null), per-iteration `pre` var to kill (may be ""), body.
 def pf_loop(cx: PfCtx, st: PfState, cond: Pointer[HirExpr], lv: str, body: HirBlock, always: bool):
+    pf_kill_consts(st)
     mut entry = st.copy()
     mut head = entry.copy()
     mut pass_i = 0
@@ -866,6 +916,8 @@ def pf_stmt(cx: PfCtx, sp: Pointer[HirStmt], st: PfState):
             mut ntest = pf_nulltest(cond)
             pf_refine(s1, ntest, true)
             pf_refine(s2, ntest, false)
+            pf_kill_consts(s1)
+            pf_kill_consts(s2)
             pf_block(cx, tb, s1)
             pf_block(cx, eb, s2)
             pf_assign_from(st, s1)
@@ -896,6 +948,7 @@ def pf_stmt(cx: PfCtx, sp: Pointer[HirStmt], st: PfState):
             while ai < arms.len:
                 mut a = arms.get(ai)
                 mut c = st.copy()
+                pf_kill_consts(c)
                 pf_expr(cx, a.guard, c)
                 pf_block(cx, a.body, c)
                 pf_merge(acc, c)

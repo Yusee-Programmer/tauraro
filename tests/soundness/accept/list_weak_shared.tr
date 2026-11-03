@@ -1,0 +1,48 @@
+# EXPECT: pass
+# List[Weak[T]] and List[Shared[T]]: every slot owns ONE handle; a `for w in ws` loop variable and
+# `x = ws[i]` / `ws.get(i)` aliases borrow the slot (they must not drop it too).
+class Node:
+    pub v: int
+
+class Hub:
+    pub subs: List[Weak[Node]]
+    pub keep: List[Shared[Node]]
+
+def alive(ws: List[Weak[Node]]) -> int:
+    mut c = 0
+    for w in ws:
+        if w.is_alive(): c = c + 1
+    return c
+
+def main():
+    mut hub = Hub()
+    hub.subs = []
+    hub.keep = []
+    a = Shared[Node].init(Node())
+    b = Shared[Node].init(Node())
+    hub.subs.append(a.downgrade())
+    hub.subs.append(b.downgrade())
+    hub.keep.append(a.clone())
+    hub.keep.append(Shared[Node].init(Node()))
+    assert_eq(alive(hub.subs), 2)
+    assert_eq(len(hub.keep), 2)
+    mut local: List[Shared[Node]] = []
+    local.append(a.clone())
+    local.append(b.clone())
+    local.append(local[0].clone())
+    local[1] = a.clone()
+    x = local[0]
+    w0 = hub.subs[0]
+    assert_eq(w0.is_alive(), true)
+    local.remove(0)
+    mut n = 0
+    for h in local:
+        n = n + 1
+    assert_eq(n, 2)
+    mut cp = local.copy()
+    cp.extend(local)
+    assert_eq(len(cp), 4)
+    cp.clear()
+    local.clear()
+    assert_eq(alive(hub.subs), 2)
+    print("ok")

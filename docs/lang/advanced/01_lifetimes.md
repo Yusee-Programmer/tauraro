@@ -189,6 +189,7 @@ NLL-precise (liveness-driven, path-aware), cross-block and cross-function:
 | **`[B-2]`** | A borrowed place can't be reassigned/moved/**mutated** while a borrow is live (includes mutating-method calls and reads of an exclusively-borrowed place). Works across blocks and across function calls. |
 | **`[B-3]`** | A shared `ref T` parameter is read-only — mutating it requires `mut ref T`. |
 | **`[L-2]`** | A region named in `from` / `where` / a payload must be a real parameter or region parameter. |
+| **`[L-6]`** | An outer `ref` local that was assigned a local of an inner block / loop iteration is read after that local went out of scope. |
 | **`[L-4]`** | A returned borrow's region must be the declared one (or proven longer-lived via `where … outlives …`). |
 
 Method-mutability is **inferred**: a method counts as mutating only if it stores

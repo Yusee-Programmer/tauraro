@@ -1,0 +1,10 @@
+# EXPECT: [L-6]
+# An outer `ref` local assigned a loop-body local keeps pointing at it after the iteration ended.
+def main():
+    mut keep: ref str = "init"
+    mut i = 0
+    while i < 3:
+        mut s = "x" + i.to_str()
+        keep = s
+        i = i + 1
+    print(keep)

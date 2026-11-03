@@ -1,0 +1,53 @@
+# Leak gate: an enum local that owns a str payload is released on the early-exit paths
+# (return / break / continue) too, not only at the end of its block.
+extern "C":
+    def _tr_mem_live() -> int
+
+enum Msg:
+    Text(body: str)
+    Quit
+
+def mk(s: str) -> Msg:
+    return Msg.Text(s + "!")
+
+def early(n: int) -> int:
+    m = mk("a")
+    if n > 0:
+        return 1
+    return 2
+
+def lp() -> int:
+    mut t = 0
+    mut i = 0
+    while i < 5:
+        m = mk("b")
+        i = i + 1
+        if i == 2: continue
+        if i == 4: break
+        t = t + 1
+    return t
+
+def ret_in_loop() -> int:
+    for i in range(3):
+        m = mk("c")
+        if i == 1: return i
+    return 9
+
+def workload():
+    early(1)
+    early(0)
+    lp()
+    ret_in_loop()
+
+def main():
+    workload()
+    mut before = _tr_mem_live()
+    mut r = 0
+    while r < 100:
+        workload()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    if leaked <= 0:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str())

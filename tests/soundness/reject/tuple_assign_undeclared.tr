@@ -1,0 +1,8 @@
+# EXPECT: [N-3]
+# `(a, b) = f()` assigns into existing names; an undeclared target is rejected up front.
+def two() -> (int, int):
+    return (1, 2)
+def main():
+    mut a = 0
+    (a, b_missing) = two()
+    print(a)

@@ -77,6 +77,7 @@ pub class Symbol:
     pub lam_ptr: Pointer[HirExpr] # placeholder HIR node of the deferred lambda's initializer, overwritten when it is lowered
     pub open_key: str         # identity of the open declaration (name#ordinal within its function), for the retry pass
     pub open_coll: bool       # declared from an empty `[]` / `{}` / `set()` whose element types are not known yet: the first typed use (append, index-assign, typed argument ...) fills them in
+    pub dangling_src: str     # [L-6] (--strict): this `ref` local was assigned a borrow of the inner-scope local named here, which has since gone out of scope
     pub borrows_region: str   # [L-3/L-4] region derivation of this str local's CURRENT value: "" = unknown (never flagged), "@owned" = freshly built (concat — owned, not a borrow), "<name>" = shares parameter/local <name>'s region (transitive). Tracks the LAST assignment.
 
 extend Symbol:
@@ -105,6 +106,7 @@ extend Symbol:
         s.defer_used = false
         s.shared_handle = false
         s.borrows_region = ""
+        s.dangling_src = ""
         s.open_coll = false
         s.open_key = ""
         s.lam_expr = Pointer[Expr](0)
@@ -411,6 +413,8 @@ def _ast_place_root(e: Pointer[Expr]) -> str:
 pub class Sema:
     pub sendable_tparams:   Vec[str]        # type parameters of the generic class whose Sendable fields are being checked (treated as Sendable)
     pub unset_fields:       Map[str, bool]  # "local.field" of a bare `C()` local whose collection field is still unset (null)
+    pub esc_keep:           Vec[str]        # [L-6] pending "outer `ref` local = inner local" assignments: the outer ref local ...
+    pub esc_src:            Vec[str]        # ... and the inner local it now borrows
     pub unset_skip:         str             # the local whose next EIdent lowering is the base of a `local.field` access
     pub in_defer:           bool            # lowering the statement of a `defer`
     pub defer_names:        Map[str, bool]  # names read by a `defer` statement of the function being lowered
@@ -434,6 +438,9 @@ pub class Sema:
     pub assigned_names: Map[str, bool]   # every name that is the target of a plain `name = value` assignment anywhere
     pub none_read_names: Vec[str]      # deferred: member read of a None-initialised global (name)
     pub none_read_msgs: Vec[str]       # deferred: the diagnostic for each
+    pub real_assigned:  Map[str, bool]   # names assigned something other than None / a self-referential arithmetic update
+    pub none_arith_names: Vec[str]     # deferred: arithmetic on a None-initialised global (name)
+    pub none_arith_msgs: Vec[str]
     pub global_firm: Map[str, str]   # module-level variables whose kind is certain (annotation / literal initialiser)
     pub extern_defs: Map[str, FunctionDef]   # extern "C" declarations (name -> signature) for call checks
     pub ambiguous_classes: Map[str, bool]   # class names declared more than once (different modules); member checks skip them
@@ -636,6 +643,8 @@ extend Sema:
         s.in_defer = false
         s.unset_fields = Map[str, bool].init(4)
         s.unset_skip = ""
+        s.esc_keep = Vec[str].init(2)
+        s.esc_src = Vec[str].init(2)
         s.defer_names = Map[str, bool].init(4)
         s.sendable_tparams = Vec[str].init(0)
         s.capturing_moves   = false
@@ -661,6 +670,9 @@ extend Sema:
         s.assigned_names = Map[str, bool].init(64)
         s.none_read_names = Vec[str].init(1)
         s.none_read_msgs = Vec[str].init(1)
+        s.real_assigned = Map[str, bool].init(32)
+        s.none_arith_names = Vec[str].init(1)
+        s.none_arith_msgs = Vec[str].init(1)
         s.current_func_ret_regions = Vec[str].init(0)
         s.current_func_outlives_a = Vec[str].init(0)
         s.current_func_outlives_b = Vec[str].init(0)
@@ -1821,6 +1833,9 @@ extend Sema:
             if method == "append" or method == "push" or method == "contains" or method == "has" or method == "add" or method == "index_of" or method == "extend" or method == "get" or method == "remove" or method == "reserve" or method == "sort_by" or method == "union" or method == "intersection" or method == "difference" or method == "is_subset" or method == "all" or method == "any": return 101
             if method == "insert" or method == "set" or method == "swap" or method == "slice": return 202
             if method == "pop" or method == "sort" or method == "join" or method == "count": return 1
+        elif fam == "Set":
+            if method == "len" or method == "length" or method == "clear" or method == "free" or method == "is_empty" or method == "to_list" or method == "copy" or method == "clone": return 0
+            if method == "add" or method == "remove" or method == "contains" or method == "has" or method == "union" or method == "intersection" or method == "difference" or method == "is_subset": return 101
         elif fam == "Dict":
             if method == "keys" or method == "values" or method == "items" or method == "len" or method == "length" or method == "clear" or method == "free" or method == "is_empty": return 0
             if method == "has" or method == "contains" or method == "remove" or method == "get_index" or method == "update": return 101
@@ -1829,7 +1844,7 @@ extend Sema:
         return 0 - 1
 
     pub def check_builtin_method_arity(self, fam: str, method: str, nargs: int):
-        if fam != "str" and fam != "List" and fam != "Dict": return
+        if fam != "str" and fam != "List" and fam != "Dict" and fam != "Set": return
         mut r = self.builtin_method_range(fam, method)
         if r < 0: return
         mut lo = r / 100
@@ -1845,6 +1860,10 @@ extend Sema:
 
     # True when class `cls_name` (or a base class) declares a field named `name`.
     pub def class_has_field(self, cls_name: str, name: str) -> bool:
+        return self.class_has_field_d(cls_name, name, 0)
+
+    pub def class_has_field_d(self, cls_name: str, name: str, depth: int) -> bool:
+        if depth > 40: return false
         if not self.classes.contains(cls_name): return false
         mut cls = self.classes.get(cls_name)
         mut fi = 0
@@ -1853,7 +1872,7 @@ extend Sema:
             fi = fi + 1
         mut bi = 0
         while bi < cls.base_classes.len:
-            if self.class_has_field(cls.base_classes.get(bi), name): return true
+            if self.class_has_field_d(cls.base_classes.get(bi), name, depth + 1): return true
             bi = bi + 1
         return false
 
@@ -1937,7 +1956,12 @@ extend Sema:
             if spf == "int" or spf == "float" or spf == "bool" or spf == "str" or spf == "List" or spf == "Dict" or spf == "Tuple" or spf == "class" or spf == "None":
                 self.error("[E-5] Type mismatch: the first argument of Thread.spawn() must be a function, but is given " + self.family_word(spf) + ".\n      FIX: Thread.spawn(worker_fn, arg1, ...) - pass the function, then its arguments.")
             match hl.get(0).read():
-                case HirExpr.EIdent(sfn, _, _):
+                case HirExpr.EIdent(sfn, sfty, _):
+                    mut _sfsym = self.resolve(sfn)
+                    if _sfsym.kind == SymbolKind.SVariable and _sfsym.ty as usize != 0 as usize:
+                        mut _sfk = _sfsym.ty.read().name
+                        if _sfk != "def" and _sfk != "lambda" and _sfk != "void" and _sfk != "" and _sfk != "Pointer" and sfty.name != "def" and sfty.name != "lambda":
+                            self.error("[E-5] Type mismatch: the first argument of Thread.spawn() must be a function, but '" + sfn + "' is a variable of type '" + _sfk + "'.\n      FIX: Thread.spawn(worker_fn, arg1, ...) - pass the function, then its arguments.")
                     if self.fn_defs.contains(sfn) and self.resolve(sfn).kind == SymbolKind.SFunction:
                         mut sfd = self.fn_defs.get(sfn)
                         mut sk = 0
@@ -2029,6 +2053,16 @@ extend Sema:
                 if one.params.get(ti).ty as usize != 0 as usize:
                     self.check_expr_assignable(one.params.get(ti).ty.read(), hl.get(ti), "argument " + (ti + 1).to_str() + " of '" + type_name + "." + variant + "()'")
                 ti = ti + 1
+
+        elif named == 1 and cdef.generics.len > 0 and one.generics.len == 0 and one.params.len == hl.len and (hl.len == 0 or one.params.get(0).name != "self"):
+            # generic class: parameters declared with a CONCRETE scalar type (`n: int`) are still checkable
+            mut gti = 0
+            while gti < hl.len:
+                if one.params.get(gti).ty as usize != 0 as usize:
+                    mut gpn = one.params.get(gti).ty.read().name
+                    if gpn == "int" or gpn == "float" or gpn == "str" or gpn == "bool":
+                        self.check_expr_assignable(one.params.get(gti).ty.read(), hl.get(gti), "argument " + (gti + 1).to_str() + " of '" + type_name + "." + variant + "()'")
+                gti = gti + 1
 
     # The subscript of `xs[k] = v` is read, not assigned: an undefined `k` there must still be reported.
     pub def lower_index_operand(self, idx: Pointer[Expr], base: Pointer[HirExpr]) -> Pointer[HirExpr]:
@@ -2234,6 +2268,11 @@ extend Sema:
 
     # Recursively checks cls_name and its base classes for a method named `method`.
     pub def class_method_exists(self, cls_name: str, method: str) -> bool:
+        return self.class_method_exists_d(cls_name, method, 0)
+
+    # (depth-limited: a cyclic base-class list, which [N-6] reports, must not recurse forever)
+    pub def class_method_exists_d(self, cls_name: str, method: str, depth: int) -> bool:
+        if depth > 40: return false
         if not self.classes.contains(cls_name): return false
         mut cls = self.classes.get(cls_name)
         mut mi = 0
@@ -2242,9 +2281,17 @@ extend Sema:
             mi = mi + 1
         mut bi = 0
         while bi < cls.base_classes.len:
-            if self.class_method_exists(cls.base_classes.get(bi), method): return true
+            if self.class_method_exists_d(cls.base_classes.get(bi), method, depth + 1): return true
             bi = bi + 1
         return false
+
+    # True when `cn` is a user-defined class that has no method `method` (so a `.to_int()`-style conversion
+    # call on it is a missing method, not a numeric conversion).
+    pub def _user_class_lacks(self, cn: str, method: str) -> bool:
+        if not self.classes.contains(cn): return false
+        if self.is_rt_builtin_class(cn): return false
+        if not self.classes.get(cn).is_class: return false
+        return not self.class_method_exists(cn, method)
 
     # Universal methods dispatched generically by codegen for any type
     # (conversions, dunders, container protocol) - never reported as missing.
@@ -2496,13 +2543,107 @@ extend Sema:
             self.unset_fields.remove(uc_keys.get(uc_i))
             uc_i = uc_i + 1
 
+    # A factory `def make(..) -> C:` whose body is exactly `[mut] x = C()`, then only scalar-field stores
+    # `x.f = <literal>` and `return x` hands back a C whose collection fields are still null: the class
+    # name, else "". (The multi-function form of the unset-collection-field [I-2] check.)
+    pub def unset_factory_class(self, g: str) -> str:
+        if not self.fn_defs.contains(g): return ""
+        mut fd = self.fn_defs.get(g)
+        if fd.ret_ty as usize == 0 as usize or fd.generics.len > 0 or fd.is_async: return ""
+        mut cn = fd.ret_ty.read().name
+        if not self.classes.contains(cn): return ""
+        mut cls = self.classes.get(cn)
+        if cls.generics.len > 0: return ""
+        mut core = Vec[Pointer[Stmt]].init(4)
+        mut cb = 0
+        while cb < fd.body.stmts.len:
+            mut is_line = false
+            match fd.body.stmts.get(cb).read():
+                case Stmt.SLine(_): is_line = true
+                case _: pass
+            if not is_line: core.push(fd.body.stmts.get(cb))
+            cb = cb + 1
+        mut n = core.len
+        if n < 2: return ""
+        mut var = ""
+        match core.get(0).read():
+            case Stmt.SLet(lv, _, _, _, _, _, lval):
+                if lval as usize == 0 as usize: return ""
+                match lval.read():
+                    case Expr.ECall(lc, largs):
+                        if largs.len != 0 or lc as usize == 0 as usize: return ""
+                        match lc.read():
+                            case Expr.EIdent(lcn):
+                                if lcn != cn: return ""
+                                var = lv
+                            case _: return ""
+                    case _: return ""
+            case _: return ""
+        mut k = 1
+        while k < n - 1:
+            match core.get(k).read():
+                case Stmt.SAssign(at, av):
+                    if at as usize == 0 as usize or av as usize == 0 as usize: return ""
+                    mut fld_ok = false
+                    match at.read():
+                        case Expr.EPropAccess(ao, af):
+                            match ao.read():
+                                case Expr.EIdent(an):
+                                    if an == var:
+                                        mut ci = 0
+                                        fld_ok = true
+                                        while ci < cls.fields.len:
+                                            if cls.fields.get(ci).name == af and cls.fields.get(ci).ty as usize != 0 as usize:
+                                                mut ftn = cls.fields.get(ci).ty.read().name
+                                                if ftn == "List" or ftn == "Vec" or ftn == "Dict" or ftn == "Map" or ftn == "Set": fld_ok = false
+                                            ci = ci + 1
+                                case _: pass
+                        case _: pass
+                    if not fld_ok: return ""
+                    mut lit_ok = false
+                    match av.read():
+                        case Expr.ELitInt(_): lit_ok = true
+                        case Expr.ELitStr(_, _): lit_ok = true
+                        case Expr.ELitFloat(_): lit_ok = true
+                        case Expr.ELitBool(_): lit_ok = true
+                        case _: pass
+                    if not lit_ok: return ""
+                case _: return ""
+            k = k + 1
+        match core.get(n - 1).read():
+            case Stmt.SReturn(rv):
+                if rv as usize == 0 as usize: return ""
+                match rv.read():
+                    case Expr.EIdent(rn):
+                        if rn == var: return cn
+                    case _: pass
+            case _: pass
+        return ""
+
     # `mut name = Class()` with no arguments: remember which collection fields stay null.
     pub def unset_track(self, name: str, val: Pointer[Expr]):
         self.unset_clear(name)
         if val as usize == 0 as usize: return
         match val.read():
             case Expr.ECall(ut_callee, ut_args):
-                if ut_args.len != 0 or ut_callee as usize == 0 as usize: return
+                if ut_callee as usize == 0 as usize: return
+                match ut_callee.read():
+                    case Expr.EIdent(ut_fn):
+                        # `x = make(..)` where `make` is such a factory: x starts with the same null fields
+                        mut ut_fc = self.unset_factory_class(ut_fn)
+                        if ut_fc != "":
+                            mut ut_fcls = self.classes.get(ut_fc)
+                            mut ut_fi = 0
+                            while ut_fi < ut_fcls.fields.len:
+                                mut ut_ff = ut_fcls.fields.get(ut_fi)
+                                if ut_ff.ty as usize != 0 as usize:
+                                    mut ut_ftn = ut_ff.ty.read().name
+                                    if ut_ftn == "List" or ut_ftn == "Vec" or ut_ftn == "Dict" or ut_ftn == "Map" or ut_ftn == "Set":
+                                        self.unset_fields.insert(name + "." + ut_ff.name, true)
+                                ut_fi = ut_fi + 1
+                            return
+                    case _: pass
+                if ut_args.len != 0: return
                 match ut_callee.read():
                     case Expr.EIdent(ut_cn):
                         if not self.classes.contains(ut_cn): return
@@ -2797,6 +2938,7 @@ extend Sema:
         self.block_stack_base.push(self.block_stack.len)
 
     pub def exit_scope(self):
+        if self.esc_src.len > 0: self._esc_end(0, true)
         # A closure-valued local that escaped (flag set by mark_coll_arg) gets an
         # "@heap" pseudo-capture on its closure expression: codegen then builds a heap
         # env instead of a stack env that would dangle once this frame is gone.
@@ -2850,6 +2992,7 @@ extend Sema:
         if n == "i8" or n == "i16" or n == "i32" or n == "i64": return true
         if n == "u8" or n == "u16" or n == "u32" or n == "u64" or n == "usize": return true
         if n == "f32" or n == "f64": return true
+        if n == "Shared": return true   # List[Shared[T]]: freed with List_ptr_free_shared (each slot owns a strong handle)
         if n == "Weak": return true   # List[Weak[T]]: freed with List_ptr_free_weak (each slot owns a handle)
         # A refcounted heap-class element: the collection co-owns each element
         # (insert retains), and its typed free releases them (codegen gates the
@@ -3127,6 +3270,10 @@ extend Sema:
         if sym.kind != SymbolKind.SVariable: return false
         if sym.is_param: return false
         if sym.ty as usize == 0 as usize: return false
+        # A value BORROWED from a collection (`for w in ws`, `x = coll.get(i)`) aliases the element the
+        # collection owns: it is never dropped here (a Weak/Shared loop variable used to be dropped once
+        # per iteration AND by the list -> use-after-free).
+        if sym.borrows_region == "@borrowed": return false
         # A `shared` (Shared[T]/Rc) local owns one strong reference to a control
         # block; auto-drop it (`_tr_shared_drop`) at scope exit so the refcount is
         # released and the payload reclaimed at count 0 (codegen routes SAutoDrop for
@@ -3258,6 +3405,7 @@ extend Sema:
     pub def close_block(self):
         mut closing = 0
         if self.block_stack.len > 0: closing = self.block_stack.get(self.block_stack.len - 1)
+        if self.esc_src.len > 0: self._esc_end(closing, false)
         # put back every outer local that a declaration inside this block shadowed
         while self.shadow_blocks.len > 0 and self.shadow_blocks.get(self.shadow_blocks.len - 1) == closing:
             mut li = self.shadow_blocks.len - 1
@@ -3573,6 +3721,92 @@ extend Sema:
 
     # [L-3/L-4] region derivation: record which region `name`'s CURRENT value derives
     # from. Updated on each assignment so it always reflects the latest binding.
+    # `h = hub.subs[0]` / `h = xs.get(i)` / `.first()` / `.last()` where the element is a Shared/Weak
+    # handle: the local aliases the collection's own slot and must never be dropped through the alias.
+    pub def _mark_handle_borrow(self, name: str, val: Pointer[Expr], hv: Pointer[HirExpr]):
+        if val as usize == 0 as usize or hv as usize == 0 as usize: return
+        mut ht = hir_expr_type(hv).name
+        mut is_elem_read = false
+        # `g = m.get()` on a Mutex / RwLock: the guard borrows the payload the lock owns
+        match val.read():
+            case Expr.EMethodCall(lo, lm, _):
+                if lm == "get" or lm == "lock" or lm == "read" or lm == "write":
+                    match lo.read():
+                        case Expr.EIdent(ln):
+                            mut lsym = self.resolve(ln)
+                            if lsym.name != "" and lsym.ty as usize != 0 as usize:
+                                mut ltn = lsym.ty.read().name
+                                if ltn == "Mutex" or ltn == "RwLock":
+                                    self.set_borrows_region(name, "@borrowed")
+                                    return
+                        case _: pass
+            case _: pass
+        if ht != "Weak" and ht != "Shared": return
+        match val.read():
+            case Expr.EIndex(_, _): is_elem_read = true
+            case Expr.EMethodCall(_, m, _):
+                if m == "get" or m == "first" or m == "last": is_elem_read = true
+            case _: pass
+        if is_elem_read: self.set_borrows_region(name, "@borrowed")
+
+    pub def set_dangling(self, name: str, src: str):
+        mut i = self.scopes.len - 1
+        while i >= 0:
+            if self.scopes.get(i).variables.contains(name):
+                mut sym = self.scopes.get(i).variables.get(name)
+                sym.dangling_src = src
+                self.scopes.get(i).variables.insert(name, sym)
+                return
+            i = i - 1
+
+    # [L-6] `keep = inner` where `keep` is an outer `ref` local and `inner` a local of a deeper scope / block:
+    # remember the pair; it becomes a dangling borrow when `inner` goes out of scope (see _esc_end).
+    pub def _esc_assign(self, target: Pointer[Expr], val: Pointer[Expr]):
+        if target as usize == 0 as usize or val as usize == 0 as usize: return
+        match target.read():
+            case Expr.EIdent(kn):
+                mut ks = self.resolve(kn)
+                if ks.name == "" or ks.kind != SymbolKind.SVariable: return
+                self.set_dangling(kn, "")
+                mut j = 0
+                while j < self.esc_keep.len:
+                    if self.esc_keep.get(j) == kn:
+                        self.esc_keep.remove(j)
+                        self.esc_src.remove(j)
+                    else:
+                        j = j + 1
+                if not self.strict_mode or ks.ty as usize == 0 as usize: return
+                if not ks.ty.read().is_borrow: return
+                match val.read():
+                    case Expr.EIdent(vn):
+                        mut vs = self.resolve(vn)
+                        if vs.name == "" or vs.kind != SymbolKind.SVariable or vs.is_param or vs.ty as usize == 0 as usize: return
+                        if vs.ty.read().is_borrow: return
+                        mut inner = vs.scope_depth > ks.scope_depth
+                        if vs.scope_depth == ks.scope_depth and ks.decl_block_id == 0 and vs.decl_block_id != 0: inner = true
+                        if inner:
+                            self.esc_keep.push(kn)
+                            self.esc_src.push(vn)
+                    case _: pass
+            case _: pass
+
+    # The scope (whole_scope) / C block (block_id) being closed ends the life of the locals declared in it:
+    # outer `ref` locals that borrowed one of them now dangle.
+    pub def _esc_end(self, block_id: int, whole_scope: bool):
+        mut j = 0
+        while j < self.esc_src.len:
+            mut ss = self.resolve(self.esc_src.get(j))
+            mut dies = false
+            if ss.name != "" and ss.scope_depth == self.current_scope_depth:
+                if whole_scope: dies = true
+                elif ss.decl_block_id == block_id: dies = true
+            if dies:
+                self.set_dangling(self.esc_keep.get(j), self.esc_src.get(j))
+                self.esc_keep.remove(j)
+                self.esc_src.remove(j)
+            else:
+                j = j + 1
+
     pub def set_borrows_region(self, name: str, region: str):
         mut i = self.scopes.len - 1
         while i >= 0:
@@ -4935,7 +5169,96 @@ extend Sema:
         mut ai = 0
         while ai < add_names.len:
             self._insert_drop_before_terminator(b, add_names.get(ai), add_cls.get(ai))
+            # Early exits (`return` anywhere below, `break`/`continue` leaving this block's loop) skip the
+            # block-end drop: release the local on those paths too.
+            mut aj = 0
+            while aj < b.stmts.len:
+                if self._stmt_assigns_name(b.stmts.get(aj), add_names.get(ai)):
+                    self._insert_early_exit_drops(b, aj + 1, add_names.get(ai), add_cls.get(ai), 0)
+                    break
+                aj = aj + 1
             ai = ai + 1
+
+    # True if `st` is the (first) `nm = ...` / `mut nm = ...` binding statement.
+    pub def _stmt_assigns_name(self, st: Pointer[HirStmt], nm: str) -> bool:
+        match st.read():
+            case HirStmt.SLet(ln, _, _, _, _, _, _): return ln == nm
+            case HirStmt.SAssign(t, _):
+                match t.read():
+                    case HirExpr.EIdent(tn, _, _): return tn == nm
+                    case _: return false
+            case _: return false
+
+    # Insert `SAutoDrop(nm, cn)` before every `return` reachable below statement index `from_i` of `b`
+    # (skipped when the returned expression still reads `nm`) and before every `break` / `continue`
+    # that leaves the loop `b` is the body of (`loop_depth` == 0). The block-final terminator is left to
+    # `_insert_drop_before_terminator`.
+    pub def _insert_early_exit_drops(self, b: HirBlock, from_i: int, nm: str, cn: str, loop_depth: int):
+        if b as usize == 0 as usize: return
+        mut k = from_i
+        while k < b.stmts.len:
+            mut st = b.stmts.get(k)
+            mut want_drop = false
+            match st.read():
+                case HirStmt.SReturn(rv):
+                    want_drop = self._term_expr_ok(rv, nm)
+                case HirStmt.SBreak(bv):
+                    if loop_depth == 0: want_drop = self._term_expr_ok(bv, nm)
+                case HirStmt.SContinue:
+                    if loop_depth == 0: want_drop = true
+                case HirStmt.SIf(_, tb, eb):
+                    self._insert_early_exit_drops(tb, 0, nm, cn, loop_depth)
+                    self._insert_early_exit_drops(eb, 0, nm, cn, loop_depth)
+                case HirStmt.SWhile(_, wb): self._insert_early_exit_drops(wb, 0, nm, cn, loop_depth + 1)
+                case HirStmt.SFor(_, _, fb): self._insert_early_exit_drops(fb, 0, nm, cn, loop_depth + 1)
+                case HirStmt.SForUnpack(_, _, fub): self._insert_early_exit_drops(fub, 0, nm, cn, loop_depth + 1)
+                case HirStmt.SMatch(_, arms):
+                    mut mi = 0
+                    while mi < arms.len:
+                        self._insert_early_exit_drops(arms.get(mi).body, 0, nm, cn, loop_depth)
+                        mi = mi + 1
+                case HirStmt.SUnsafe(ub): self._insert_early_exit_drops(ub, 0, nm, cn, loop_depth)
+                case HirStmt.SWith(_, _, wb2): self._insert_early_exit_drops(wb2, 0, nm, cn, loop_depth)
+                case _: pass
+            if want_drop:
+                # not already released right here
+                mut dup = false
+                mut dk = k - 1
+                while dk >= 0:
+                    mut is_drop = false
+                    match b.stmts.get(dk).read():
+                        case HirStmt.SAutoDrop(dn, _):
+                            is_drop = true
+                            if dn == nm: dup = true
+                        case HirStmt.SFree(fn2):
+                            is_drop = true
+                            if fn2 == nm: dup = true
+                        case _: pass
+                    if not is_drop: break
+                    dk = dk - 1
+                if not dup:
+                    mut tail = Vec[Pointer[HirStmt]].init(2)
+                    while b.stmts.len > k:
+                        tail.push(b.stmts.get(k))
+                        b.stmts.remove(k)
+                    b.stmts.push(box_hirstmt(HirStmt.SAutoDrop(nm, cn)))
+                    mut ti = 0
+                    while ti < tail.len:
+                        b.stmts.push(tail.get(ti))
+                        ti = ti + 1
+                    k = k + 1
+            k = k + 1
+
+    # A `return` / `break` value expression that does not read `nm` (dropping first would read freed memory).
+    pub def _term_expr_ok(self, ev: Pointer[HirExpr], nm: str) -> bool:
+        if ev as usize == 0 as usize: return true
+        mut refs = Vec[str].init(2)
+        self.collect_idents(ev, refs)
+        mut ri = 0
+        while ri < refs.len:
+            if refs.get(ri) == nm: return false
+            ri = ri + 1
+        return true
 
     # True if statement k..: `nm` is assigned/declared by an EARLIER statement of this block.
     pub def _block_assigns_before(self, b: HirBlock, upto: int, nm: str) -> bool:
@@ -7326,6 +7649,10 @@ extend Sema:
                     # be auto-dropped either -- Dict/List/Map/Set elements are NOT returned
                     # retained, so releasing the alias frees the container's own element
                     # (use-after-free on the next access; std/i18n Translator._tables).
+                    # A Shared/Weak handle read out of a collection (`h = hub.subs[0]`, `xs.get(i)`) is the
+                    # collection's own slot: never dropped through the alias.
+                    if (pc_meth == "get" or pc_meth == "first" or pc_meth == "last") and (ty.name == "Weak" or ty.name == "Shared" or hir_expr_type(hval).name == "Weak" or hir_expr_type(hval).name == "Shared"):
+                        self.set_borrows_region(name, "@borrowed")
                     if pc_cont_nm == "" and (pc_meth == "get" or pc_meth == "first" or pc_meth == "last"):
                         match hval.read():
                             case HirExpr.EMethodCall(pc_ho, _, _, _):
@@ -7394,6 +7721,20 @@ extend Sema:
                 return box_hirstmt(HirStmt.SLet(name, ownership, is_mut, is_const, is_shared, ty, hval))
             case Stmt.SAssign(target, val):
                 self.check_not_type_value(val)
+                # `(a, b) = f()` assigns into EXISTING names: an undeclared target would reach the C compiler
+                if target as usize != 0 as usize:
+                    match target.read():
+                        case Expr.ETuple(_tt_items):
+                            mut _tt_i = 0
+                            while _tt_i < _tt_items.len:
+                                match _tt_items.get(_tt_i).read():
+                                    case Expr.EIdent(_tt_n):
+                                        mut _tt_sym = self.resolve(_tt_n)
+                                        if _tt_n != "_" and (_tt_sym.name == "" or self.sym_out_of_scope(_tt_sym)):
+                                            self.error("[N-3] name '" + _tt_n + "' is not defined.\n      FIX: declare the targets first (`mut " + _tt_n + " = ...`), or declare them together with `mut (a, b) = f()`.")
+                                    case _: pass
+                                _tt_i = _tt_i + 1
+                        case _: pass
                 if target as usize != 0 as usize and self.unset_fields.len > 0:
                     match target.read():
                         case Expr.EPropAccess(_us_to, _us_tp):
@@ -7469,6 +7810,7 @@ extend Sema:
                 mut hv = self.lower_expr(val)
                 self.closure_hint = Pointer[AstType](0)
                 hv = self._patch_empty_dict_hint(hv, hir_expr_type(htgt))
+                self._esc_assign(target, val)
                 self.check_not_void_call(hv, "the value assigned here")
                 self._open_assign(htgt, hv)
                 if target as usize != 0 as usize:
@@ -7504,6 +7846,21 @@ extend Sema:
                     match target.read():
                         case Expr.EIdent(_as_n):
                             self.assigned_names.insert(_as_n, true)
+                            mut _ra_real = true
+                            if val as usize != 0 as usize:
+                                match val.read():
+                                    case Expr.ELitNone: _ra_real = false
+                                    case Expr.EBinOp(_ra_op, _ra_l, _ra_r):
+                                        match _ra_l.read():
+                                            case Expr.EIdent(_ra_ln):
+                                                if _ra_ln == _as_n: _ra_real = false
+                                            case _: pass
+                                        match _ra_r.read():
+                                            case Expr.EIdent(_ra_rn):
+                                                if _ra_rn == _as_n: _ra_real = false
+                                            case _: pass
+                                    case _: pass
+                            if _ra_real: self.real_assigned.insert(_as_n, true)
                             mut _as_sym = self.resolve(_as_n)
                             if _as_sym.name != "" and _as_sym.kind == SymbolKind.SVariable and _as_sym.firm != "":
                                 mut _as_af = self.firm_family(hv)
@@ -7535,6 +7892,7 @@ extend Sema:
                                 # declares an IMMUTABLE binding (Rust-like default).
                                 self.declare(sa_decl_name, SymbolKind.SVariable, box_asttype(hir_expr_type(hv)), false)
                                 self._mark_open_if_empty(sa_decl_name, hv)
+                                self._mark_handle_borrow(sa_decl_name, val, hv)
                                 # Like `mut x = expr`: remember what the new binding is CERTAIN to hold.
                                 mut _ib_firm = self.firm_family(hv)
                                 mut _ib_ty = self.firm_type(hv)
@@ -7835,7 +8193,7 @@ extend Sema:
                 # borrowed so the scope-exit drop skips it.
                 if iter_hn == "List" or iter_hn == "Vec" or iter_hn == "Set":
                     mut lv_n = var_ty_for.name
-                    if lv_n == "List" or lv_n == "Vec" or lv_n == "Dict" or lv_n == "Map" or lv_n == "Set":
+                    if lv_n == "List" or lv_n == "Vec" or lv_n == "Dict" or lv_n == "Map" or lv_n == "Set" or lv_n == "Weak" or lv_n == "Shared":
                         self.set_borrows_region(var, "@borrowed")
                 # Gap 2: `for ref x in items` — x borrows each element, so the body borrows
                 # the collection. Record the edge so the borrow checker (B-2) rejects
@@ -9162,6 +9520,9 @@ extend Sema:
                 # value carries its def(...)->R signature (not its return type).
                 if self.fn_sigs.contains(name) and sym.kind == SymbolKind.SFunction:
                     return box_hirexpr(HirExpr.EIdent(name, self.fn_sigs.get(name), false))
+                if sym.dangling_src != "" and not self.in_assign_target_plain:
+                    self.error("[L-6] '" + name + "' borrows '" + sym.dangling_src + "', which has already gone out of scope (its block or loop iteration ended), so this use reads a dead value.\n      FIX: keep '" + sym.dangling_src + "' alive as long as '" + name + "' is used (declare it in the outer scope), or copy the value instead of borrowing it.")
+                    self.set_dangling(name, "")
                 if self.in_defer and sym.name != "": self.defer_names.insert(name, true)
                 if self.unset_fields.len > 0:
                     if self.unset_skip == name: self.unset_skip = ""
@@ -9225,6 +9586,22 @@ extend Sema:
                         self.error("[E-5] Type mismatch: cannot apply '+' to " + self.family_word(_bo_lf) + " and " + self.family_word(_bo_rf) + ".\n      FIX: convert one side first (str(x) / a list index) so both operands have the same type.")
                     if (op == "<" or op == ">" or op == "<=" or op == ">=") and ((_bo_lf == "int" or _bo_lf == "float" or _bo_lf == "bool" or _bo_lf == "str") and (_bo_rf == "List" or _bo_rf == "Dict" or _bo_rf == "Tuple") or (_bo_rf == "int" or _bo_rf == "float" or _bo_rf == "bool" or _bo_rf == "str") and (_bo_lf == "List" or _bo_lf == "Dict" or _bo_lf == "Tuple")):
                         self.error("[E-5] Type mismatch: cannot order-compare (" + op + ") " + self.family_word(_bo_lf) + " with " + self.family_word(_bo_rf) + ".\n      FIX: compare values of the same kind, e.g. a number with a number (use len(x) or an element for a collection).")
+                    # arithmetic on a module-level `mut g = None` read inside a function: reported at the end
+                    # unless some assignment gives the global a real value
+                    if self.current_func_name != "" and (op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**" or op == "<" or op == ">" or op == "<=" or op == ">="):
+                        mut _na_n = ""
+                        match hleft.read():
+                            case HirExpr.EIdent(_na_l, _, _): _na_n = _na_l
+                            case _: pass
+                        if _na_n == "":
+                            match hright.read():
+                                case HirExpr.EIdent(_na_r, _, _): _na_n = _na_r
+                                case _: pass
+                        if _na_n != "" and self.none_globals.contains(_na_n) and self.is_global_symbol(_na_n) and self.resolve(_na_n).kind == SymbolKind.SVariable:
+                            mut _na_loc = ""
+                            if self.current_file.len() > 0: _na_loc = self.current_file + ":"
+                            self.none_arith_names.push(_na_n)
+                            self.none_arith_msgs.push(_na_loc + self.current_line.to_str() + ": [E-5] Type mismatch: '" + op + "' cannot be applied to '" + _na_n + "', a module-level variable initialised to None that is never given a real value.\n      FIX: initialise '" + _na_n + "' with a number (e.g. `mut " + _na_n + " = 0`).")
                     if (_bo_lf == "None" or _bo_rf == "None") and (op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**" or op == "<" or op == ">" or op == "<=" or op == ">="):
                         self.error("[E-5] Type mismatch: '" + op + "' cannot be applied to None.\n      FIX: the value here is None; give the variable a real value before using it in arithmetic or comparisons.")
                     if (_bo_lf == "Option" or _bo_rf == "Option") and (op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**" or op == "<" or op == ">" or op == "<=" or op == ">="):
@@ -9580,6 +9957,8 @@ extend Sema:
                                     self.error("[E-5] Type mismatch: a " + pr_t.name + " of function values cannot be printed.\n      FIX: print the results of calling the functions instead.")
                                 if pr_var and self.classes.contains(pr_t.name) and not self.ambiguous_classes.contains(pr_t.name) and not self.classes.get(pr_t.name).is_class and not self.is_builtin_dispatch_class(pr_t.name):
                                     self.error("[E-5] Type mismatch: a '@value_type' value of '" + pr_t.name + "' cannot be printed directly.\n      FIX: print its fields (e.g. `print(v.field)`) or a str built by a method (e.g. `print(v.to_string())`).")
+                                if pr_var and self.enums.contains(pr_t.name) and not self.classes.contains(pr_t.name) and pr_t.name != "Option" and pr_t.name != "Result" and not self.class_method_exists(pr_t.name, "__str__") and not self.class_method_exists(pr_t.name, "to_str"):
+                                    self.error("[E-5] Type mismatch: an enum value of '" + pr_t.name + "' cannot be printed directly.\n      FIX: print a str built by a method (`def name(self) -> str` with a `match`), or compare variants with `match`.")
                                 if pr_var and (pr_t.name == "def" or pr_t.name == "lambda"):
                                     self.error("[E-5] Type mismatch: a function value cannot be printed.\n      FIX: call the function and print its result, e.g. `print(f(1))`.")
                                 if pr_var and (pr_t.name == "List" or pr_t.name == "Vec" or pr_t.name == "Dict" or pr_t.name == "Map" or pr_t.name == "Set") and pr_t.args.len > 0:
@@ -9753,7 +10132,8 @@ extend Sema:
                                         case _: pass
                                 elif self.enums.contains(gn):
                                     ret_ty = AstType.init(gn)
-                                else:
+                                elif self.resolve(gn).kind != SymbolKind.SVariable:
+                                    # (a local / parameter `fs[i](h)` is an INDEXED function value, not a generic call)
                                     # Generic function call: fname[T](args) - mangle the callee
                                     # name and resolve the RESULT type. The result is the
                                     # function's declared return type with its type param
@@ -9848,6 +10228,14 @@ extend Sema:
                                             ret_ty = fret2
                                             hcallee = box_hirexpr(HirExpr.EIdent(_mf_mangled, fret2, false))
                                         case _: pass
+                                else:
+                                    # `fs[i](x)` with `fs: List[def(..) -> R]`: the call yields R.
+                                    mut _ix_sym = self.resolve(gn)
+                                    if _ix_sym.ty as usize != 0 as usize:
+                                        mut _ix_t = _ix_sym.ty.read()
+                                        if (_ix_t.name == "List" or _ix_t.name == "Vec") and _ix_t.args.len > 0:
+                                            mut _ix_e = _ix_t.args.get(0).read()
+                                            if _ix_e.name == "def" and _ix_e.args.len > 0: ret_ty = _ix_e.args.get(_ix_e.args.len - 1).read()
                             case _: pass
                     case Expr.EPropAccess(obj, variant):
                         match obj.read():
@@ -10064,6 +10452,7 @@ extend Sema:
                         if not self.classes.contains(_ba_n) or _ba_n == "Map" or _ba_n == "Vec":
                             if _ba_n == "List" or _ba_n == "Vec": _ba_fam = "List"
                             elif _ba_n == "Dict" or _ba_n == "Map": _ba_fam = "Dict"
+                            elif _ba_n == "Set": _ba_fam = "Set"
                             elif _ba_n == "str": _ba_fam = "str"
                     self.check_builtin_method_arity(_ba_fam, method, hl.len)
                     self.check_scalar_method(self.firm_family(hobj), method, hir_expr_type(hobj).name)
@@ -10263,6 +10652,16 @@ extend Sema:
                         case _: pass
                     if (_nw_n == "Chan" or _nw_n == "Channel" or _nw_n == "Mutex" or _nw_n == "RwLock" or _nw_n == "Shared" or _nw_n == "Weak") and self.resolve(_nw_n).kind != SymbolKind.SVariable and not self.class_method_exists(_nw_n, "new"):
                         self.error("[E-1] No method 'new' found on type '" + _nw_n + "'.\n      FIX: construct it with `" + _nw_n + "[T].init(...)`.")
+                # `Shared[T].foo(..)` / `Weak[T].foo(..)`: only `init` / `new` exist as static members.
+                if obj as usize != 0 as usize and method != "init" and method != "new":
+                    match obj.read():
+                        case Expr.EIndex(_sg_b, _):
+                            match _sg_b.read():
+                                case Expr.EIdent(_sg_n):
+                                    if (_sg_n == "Shared" or _sg_n == "Weak") and self.resolve(_sg_n).kind != SymbolKind.SVariable and not self.classes.contains(_sg_n):
+                                        self.error("[E-1] No static method '" + method + "' found on type '" + _sg_n + "'.\n      FIX: `Shared[T].init(value)` creates a handle; use `.clone()`, `.downgrade()` or the inner type's methods on an existing handle.")
+                                case _: pass
+                        case _: pass
                 if method == "init" or method == "new" or (method == "auto" and _auto_is_self_factory):
                     match obj.read():
                         case Expr.EIdent(_ic_n):
@@ -10290,7 +10689,12 @@ extend Sema:
                         # Built-in types used as static receivers (e.g. Atomic.new, Thread.new)
                         # resolve to void; recover type from the receiver identifier name.
                         match hobj.read():
-                            case HirExpr.EIdent(recv_nm, _, _): ret_ty = AstType.init(recv_nm)
+                            case HirExpr.EIdent(recv_nm, _, _):
+                                ret_ty = AstType.init(recv_nm)
+                                # `Mutex.init(A())`: the payload type is the initial value's type
+                                if (recv_nm == "Mutex" or recv_nm == "RwLock") and method == "init" and hl.len == 1:
+                                    mut _mx_pt = hir_expr_type(hl.get(0))
+                                    if _mx_pt.name != "" and _mx_pt.name != "void" and _mx_pt.name != "None" and _mx_pt.name != "str" and _mx_pt.name != "float": ret_ty.args.push(box_asttype(_mx_pt))
                             # Vec[T].init(n) / List[T].init(n) - EIndex object, recover with generic arg
                             case HirExpr.EIndex(idx_base, idx_arg, _):
                                 match idx_base.read():
@@ -10303,6 +10707,16 @@ extend Sema:
                             case _: ret_ty = hobj_ty
                     else:
                         ret_ty = hobj_ty
+                    # `Mutex.init(A())`: the payload type is the initial value's type
+                    if (ret_ty.name == "Mutex" or ret_ty.name == "RwLock") and ret_ty.args.len == 0 and method == "init" and hl.len == 1:
+                        match hobj.read():
+                            case HirExpr.EIdent(_mxn, _, _):
+                                mut _mx_pt2 = hir_expr_type(hl.get(0))
+                                if _mx_pt2.name != "" and _mx_pt2.name != "void" and _mx_pt2.name != "None" and _mx_pt2.name != "str" and _mx_pt2.name != "float":
+                                    mut _mx_rt = AstType.init(ret_ty.name)
+                                    _mx_rt.args.push(box_asttype(_mx_pt2))
+                                    ret_ty = _mx_rt
+                            case _: pass
                 elif method == "offset":
                     # [P-2] (default-on): raw pointer ARITHMETIC can fabricate an
                     # out-of-bounds pointer — only allowed inside `unsafe:`. Trusted
@@ -10372,8 +10786,8 @@ extend Sema:
                 elif hobj_ty.name == "int" or hobj_ty.name == "i64" or hobj_ty.name == "i32" or hobj_ty.name == "i16" or hobj_ty.name == "i8" or hobj_ty.name == "u64" or hobj_ty.name == "u32" or hobj_ty.name == "u16" or hobj_ty.name == "u8" or hobj_ty.name == "usize" or hobj_ty.name == "char":
                     if method == "to_hex" or method == "to_HEX" or method == "to_hex_upper" or method == "to_octal" or method == "to_oct" or method == "to_binary" or method == "to_bin":
                         ret_ty = AstType.init("str")
-                elif method == "to_float" or method == "to_f64": ret_ty = AstType.init("float")
-                elif method == "to_int" or method == "to_i64": ret_ty = AstType.init("int")
+                elif (method == "to_float" or method == "to_f64") and not self._user_class_lacks(hobj_ty.name, method): ret_ty = AstType.init("float")
+                elif (method == "to_int" or method == "to_i64") and not self._user_class_lacks(hobj_ty.name, method): ret_ty = AstType.init("int")
                 # StringBuilder.to_string() returns a StringObj, not a raw str - let it
                 # fall through to the StringBuilder branch below so .as_str() dispatches
                 # to StringObj_as_str() instead of an invalid (char*) struct cast.

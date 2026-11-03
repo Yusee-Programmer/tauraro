@@ -101,6 +101,7 @@ def _rc_new_fn(name: str, file: str, line: int, is_lib: bool) -> RcFn:
     return f
 
 pub class RcCk:
+    pub held_for: Map[str, Vec[str]]   # block identity -> Mutexes held when control enters it (lock-order through nesting)
     pub fns:      Vec[RcFn]
     pub classes:  Vec[ClassDef]
     pub class_lib: Vec[bool]
@@ -167,7 +168,7 @@ def _rc_ctor_name(v: Pointer[Expr]) -> str:
 def _rc_ctor_arg(v: Pointer[Expr]) -> str:
     if _rc_nul(v): return ""
     match v.read():
-        case Expr.EMethodCall(o, _, _):
+        case Expr.EMethodCall(o, _, margs):
             if not _rc_nul(o):
                 match o.read():
                     case Expr.EIndex(_, ix):
@@ -175,6 +176,19 @@ def _rc_ctor_arg(v: Pointer[Expr]) -> str:
                             match ix.read():
                                 case Expr.EIdent(an): return an
                                 case _: return ""
+                    case Expr.EIdent(on):
+                        # `Mutex.init(A())` / `Mutex.init([..])`: the payload comes from the first argument
+                        if on == "Mutex" or on == "RwLock":
+                            if margs.len > 0 and not _rc_nul(margs.get(0)):
+                                match margs.get(0).read():
+                                    case Expr.ECall(pc, _):
+                                        if not _rc_nul(pc):
+                                            match pc.read():
+                                                case Expr.EIdent(pcn): return pcn
+                                                case _: return ""
+                                    case Expr.EList(_): return "List"
+                                    case Expr.EDict(_, _): return "Dict"
+                                    case _: return ""
                     case _: return ""
         case _: return ""
     return ""
@@ -211,8 +225,8 @@ extend RcCk:
         mut i = 0
         while i < ty.args.len:
             mut a = ty.args.get(i)
-            if coll and a as usize != 0 as usize and (a.read().name == "Shared" or a.read().name == "Weak"):
-                self.msgs.push(file + ":" + line.to_str() + ": [T-11] '" + ty.name + "' cannot hold '" + a.read().name + "[..]' elements: reference-counted shared handles are not supported as collection elements.\n      FIX: wrap the handle in a small class (`class Handle: pub inner: Shared[T]`) and store that, or keep the handles in separate variables.")
+            if coll and ty.name != "List" and ty.name != "Vec" and a as usize != 0 as usize and (a.read().name == "Shared" or a.read().name == "Weak"):
+                self.msgs.push(file + ":" + line.to_str() + ": [T-11] '" + ty.name + "' cannot hold '" + a.read().name + "[..]' elements: reference-counted shared handles are supported as `List`/`Vec` elements only.\n      FIX: use a `List[" + a.read().name + "[..]]`, or wrap the handle in a small class (`class Handle: pub inner: Shared[T]`) and store that.")
                 return
             self.ty_check(a, file, line)
             i = i + 1
@@ -301,10 +315,46 @@ extend RcCk:
         self.cur.locals.push(name)
 
     # ---- straight-line lock-misuse scan over one block's own statements ----
+    # Re-scan the blocks nested in the compound statement `sp` with `held` Mutexes already locked, keeping
+    # only the lock-ORDER pairs that results (its other findings were already reported by the normal scan).
+    pub def inherit_held(self, sp: Pointer[Stmt], held: Vec[str]):
+        match sp.read():
+            case Stmt.SIf(_, tb, elifs, eb):
+                self.rescan_held(tb, held)
+                self.rescan_held(eb, held)
+                mut ei = 0
+                while ei < elifs.len:
+                    if elifs.get(ei).body as usize != 0 as usize: self.rescan_held(elifs.get(ei).body.read(), held)
+                    ei = ei + 1
+            case Stmt.SWhile(_, wb, _): self.rescan_held(wb, held)
+            case Stmt.SFor(_, _, fb, _, _): self.rescan_held(fb, held)
+            case Stmt.SForUnpack(_, _, fub): self.rescan_held(fub, held)
+            case Stmt.SUnsafe(ub): self.rescan_held(ub, held)
+            case Stmt.SWith(_, _, wb2): self.rescan_held(wb2, held)
+            case Stmt.STry(tb2, _, _): self.rescan_held(tb2, held)
+            case _: pass
+
+    pub def rescan_held(self, nb: Block, held: Vec[str]):
+        mut key = (nb as usize).to_str()
+        self.held_for.insert(key, held)
+        mut n0 = self.cur.msgs.len
+        self.lock_scan(nb)
+        while self.cur.msgs.len > n0: self.cur.msgs.pop()
+        self.held_for.remove(key)
+
     pub def lock_scan(self, b: Block):
         mut names = Vec[str].init(2)
         mut state = Vec[int].init(2)     # Mutex: 1 locked; RwLock: 1 read-held, 2 write-held; Thread: 1 joined
         mut kinds = Vec[str].init(2)
+        mut bkey = (b as usize).to_str()
+        if self.held_for.contains(bkey):
+            mut hv = self.held_for.get(bkey)
+            mut hk = 0
+            while hk < hv.len:
+                names.push(hv.get(hk))
+                state.push(1)
+                kinds.push("Mutex")
+                hk = hk + 1
         mut guards = Vec[str].init(1)    # names bound from Mutex.get() on a heap payload
         mut gmx = Vec[str].init(1)
         mut grel = Vec[bool].init(1)
@@ -325,7 +375,14 @@ extend RcCk:
                 case Stmt.SLet(lnm, _, _, _, _, _, v):
                     call = v
                     letname = lnm
-                case Stmt.SAssign(_, v2): call = v2
+                case Stmt.SAssign(tg2, v2):
+                    call = v2
+                    # `g = m.get()` (a bare first binding) names a guard just like `mut g = m.get()`
+                    if not _rc_nul(tg2):
+                        match tg2.read():
+                            case Expr.EIdent(tgn):
+                                if not _rc_has(self.cur.params, tgn): letname = tgn
+                            case _: pass
                 case _: simple = false
             if is_line: continue
             mut gk = 0
@@ -335,6 +392,14 @@ extend RcCk:
                     guards.set(gk, "")
                 gk = gk + 1
             if not simple:
+                # Mutexes this block holds at a compound statement stay held inside its nested blocks:
+                # hand them to the nested scans so lock ORDER is followed through if / loops / try ...
+                mut heldv = Vec[str].init(1)
+                mut hj = 0
+                while hj < names.len:
+                    if kinds.get(hj) == "Mutex" and state.get(hj) == 1: heldv.push(names.get(hj))
+                    hj = hj + 1
+                if heldv.len > 0: self.inherit_held(sp, heldv)
                 names = Vec[str].init(2)
                 state = Vec[int].init(2)
                 kinds = Vec[str].init(2)
@@ -373,8 +438,14 @@ extend RcCk:
                             while gj2 < names.len:
                                 if kinds.get(gj2) == "Mutex" and state.get(gj2) == 1 and names.get(gj2) != r:
                                     if not (_rc_has(self.cur.locals, r) or _rc_has(self.cur.params, r) or _rc_has(self.cur.locals, names.get(gj2)) or _rc_has(self.cur.params, names.get(gj2))):
-                                        self.cur.pairs_a.push(names.get(gj2))
-                                        self.cur.pairs_b.push(r)
+                                        mut pdup = false
+                                        mut pdk = 0
+                                        while pdk < self.cur.pairs_a.len:
+                                            if self.cur.pairs_a.get(pdk) == names.get(gj2) and self.cur.pairs_b.get(pdk) == r: pdup = true
+                                            pdk = pdk + 1
+                                        if not pdup:
+                                            self.cur.pairs_a.push(names.get(gj2))
+                                            self.cur.pairs_b.push(r)
                                 gj2 = gj2 + 1
                             mut pa = self.ltarg_of(self.cur, r)
                             mut ci0 = self.find_class(pa)
@@ -441,6 +512,16 @@ extend RcCk:
                 self.expr(v)
                 self.expr(t)
                 self.wpath(t)
+                # a bare `m = Mutex.init(..)` first binding records the local's type / payload
+                if not _rc_nul(t):
+                    match t.read():
+                        case Expr.EIdent(bn):
+                            if self.ltype(self.cur, bn) == "" and not _rc_has(self.cur.params, bn):
+                                self.cur.ltn.push(bn)
+                                self.cur.ltt.push(_rc_ctor_name(v))
+                                self.cur.ltarg.push(_rc_ctor_arg(v))
+                                self.cur.ldepth.push(self.loop_depth)
+                        case _: pass
             case Stmt.SReturn(v): self.expr(v)
             case Stmt.SBreak(v): self.expr(v)
             case Stmt.SRaise(v): self.expr(v)
@@ -1069,6 +1150,7 @@ def _rc_ifaces_sendable(c: ClassDef) -> bool:
 
 pub def check_data_races(prog: Program, decl_files: Vec[str], input_path: str) -> Vec[str]:
     mut ck = RcCk()
+    ck.held_for = Map[str, Vec[str]].init(8)
     ck.fns = Vec[RcFn].init(16)
     ck.classes = Vec[ClassDef].init(8)
     ck.class_lib = Vec[bool].init(8)

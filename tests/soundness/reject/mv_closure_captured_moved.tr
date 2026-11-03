@@ -1,0 +1,9 @@
+# EXPECT: [M-1]
+# A local closure captured `xs`; `xs` is then moved into a call, and the closure is used afterwards.
+def take(xs: List[int]) -> int:
+    return len(xs)
+def main():
+    mut xs: List[int] = [1, 2]
+    f = lambda: len(xs)
+    n = take(xs)
+    print(f() + n)

@@ -14,6 +14,9 @@ def call(f: def() -> ref str) -> int:
 class H:
     pub cb: def() -> ref str
 
+def pick(fs: List[def() -> ref str], i: int) -> int:
+    return len(fs[i]())
+
 def main():
     mut t = TestRunner.init("fn_value_list_ref_str")
     mut fs: List[def() -> ref str] = []
@@ -26,4 +29,5 @@ def main():
     h.cb = name_of
     t.assert_eq_str(h.cb(), "x", "field call")
     t.assert_eq_int(call(name_of), 1, "param call")
+    t.assert_eq_int(pick(fs, 0), 1, "variable index call")
     t.summary()

@@ -1,0 +1,7 @@
+# EXPECT: [E-5]
+# The first argument of Thread.spawn must be a function.
+class W:
+    pub n: int
+def main():
+    shared sw = W()
+    h = Thread.spawn(sw)

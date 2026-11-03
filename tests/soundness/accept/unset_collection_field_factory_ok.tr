@@ -1,0 +1,15 @@
+# EXPECT: pass
+# Assigning the collection field after the factory call makes the later use valid.
+class C:
+    pub n: int
+    pub l: List[int]
+def make() -> C:
+    mut c = C()
+    c.n = 3
+    return c
+def main():
+    mut c = make()
+    c.l = []
+    c.l.append(1)
+    assert_eq(c.l.len(), 1)
+    print("ok")

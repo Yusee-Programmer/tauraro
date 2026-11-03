@@ -1,0 +1,12 @@
+# EXPECT: [E-5]
+# A concretely-typed parameter of a generic class constructor is type-checked.
+class Box[T]:
+    pub n: int
+    pub v: T
+    def init(v: T, n: int) -> Box[T]:
+        mut b = Box[T]()
+        b.v = v
+        b.n = n
+        return b
+def main():
+    b = Box[int].init(1, "str")

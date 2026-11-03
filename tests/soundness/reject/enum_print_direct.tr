@@ -1,0 +1,8 @@
+# EXPECT: [E-5]
+# Printing an enum value directly is a diagnostic (it used to be a late [C-1]).
+enum Color:
+    Red
+    Green
+def main():
+    c = Color.Red
+    print(c)

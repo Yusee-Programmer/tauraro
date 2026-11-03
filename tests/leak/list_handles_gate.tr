@@ -1,0 +1,61 @@
+# Leak gate: List[Shared[T]] / List[Weak[T]] (locals and class fields) release every slot's handle;
+# a `for w in ws` loop variable and `x = ws[i]` aliases do not drop the slot a second time.
+extern "C":
+    def _tr_mem_live() -> int
+
+class Node:
+    pub v: int
+
+class Hub:
+    pub subs: List[Weak[Node]]
+    pub keep: List[Shared[Node]]
+
+def first_alive(ws: List[Weak[Node]]) -> int:
+    for w in ws:
+        if w.is_alive(): return 1
+    return 0
+
+def work() -> int:
+    mut total = 0
+    mut hub = Hub()
+    hub.subs = []
+    hub.keep = []
+    shared a = Node()
+    a.v = 1
+    shared b = Node()
+    b.v = 2
+    hub.subs.append(a.downgrade())
+    hub.subs.append(b.downgrade())
+    hub.keep.append(a)
+    hub.keep.append(Shared[Node].init(Node()))
+    total = total + first_alive(hub.subs) + len(hub.keep)
+    mut local: List[Shared[Node]] = []
+    local.append(a)
+    local.append(b)
+    local.append(local[0])
+    local[1] = a
+    x = local[0]
+    total = total + 1
+    local.remove(0)
+    for h in local:
+        total = total + 1
+    for w in hub.subs:
+        o = w.upgrade()
+        if o.is_some(): total = total + 1
+    w0 = hub.subs[0]
+    total = total + 1
+    local.clear()
+    return total
+
+def main():
+    workload_check = work()
+    mut before = _tr_mem_live()
+    mut r = 0
+    while r < 100:
+        work()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    if leaked <= 0 and workload_check == 9:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str())

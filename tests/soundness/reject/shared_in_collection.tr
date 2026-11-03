@@ -1,6 +1,6 @@
 # EXPECT: [T-11]
-# Shared[T] elements in a collection are not supported by the code generator; reported up front.
+# Shared[T] values in a Dict/Set are not supported by the code generator (List[Shared[T]] is); reported up front.
 class C implements Sendable:
     pub n: Atomic[int]
 def main():
-    mut hs: List[Shared[C]] = []
+    mut hs: Dict[str, Shared[C]] = {}
