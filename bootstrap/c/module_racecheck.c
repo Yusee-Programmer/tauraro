@@ -34,7 +34,7 @@ __attribute__((hot)) void RcCk_ty_check(RcCk* self, AstType** t, TrStr file, lon
 #line 214 "src/racecheck.tr"
         if (((coll && (((unsigned long long)(a)) != ((unsigned long long)(0LL)))) && (_tr_str_eqv(((*a)->name), (_tr_str_lit_len("Shared", 6LL))) || _tr_str_eqv(((*a)->name), (_tr_str_lit_len("Weak", 4LL)))))) {
 #line 215 "src/racecheck.tr"
-            ({ __auto_type _ord_t3256 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((file), (_tr_str_lit_len(":", 1LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(line)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": [T-11] '", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3257 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3256); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ty->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' cannot hold '", 15LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3258 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3257); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, ((*a)->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[..]' elements: reference-counted shared handles are not supported as collection elements.\n      FIX: wrap the handle in a small class (`class Handle: pub inner: Shared[T]`) and store that, or keep the handles in separate variables.", 232LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->msgs, _ord_t3258); _tr_str_release(_ord_t3258); });
+            ({ __auto_type _ord_t3269 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((file), (_tr_str_lit_len(":", 1LL)))); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(line)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": [T-11] '", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3270 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3269); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ty->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' cannot hold '", 15LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3271 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3270); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, ((*a)->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[..]' elements: reference-counted shared handles are not supported as collection elements.\n      FIX: wrap the handle in a small class (`class Handle: pub inner: Shared[T]`) and store that, or keep the handles in separate variables.", 232LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->msgs, _ord_t3271); _tr_str_release(_ord_t3271); });
 #line 216 "src/racecheck.tr"
             return;
         }
@@ -54,7 +54,7 @@ __attribute__((hot)) TrStr RcCk_where(RcCk* self, long long line) {
         l = self->cur->line;
     }
 #line 223 "src/racecheck.tr"
-    return ({ __auto_type _ord_t3259 = (_tr_strx_concatv((self->cur->file), (_tr_str_lit_len(":", 1LL)))); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3259); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(l)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+    return ({ __auto_type _ord_t3272 = (_tr_strx_concatv((self->cur->file), (_tr_str_lit_len(":", 1LL)))); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3272); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(l)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
 }
 
 __attribute__((hot)) TrStr RcCk_ltype(RcCk* self, RcFn* f, TrStr name) {
@@ -63,7 +63,7 @@ __attribute__((hot)) TrStr RcCk_ltype(RcCk* self, RcFn* f, TrStr name) {
 #line 227 "src/racecheck.tr"
     while ((i >= 0LL)) {
 #line 228 "src/racecheck.tr"
-        if (({ TrStr _cmpa_t3260 = (List_TrStr_get(f->params, i)); TrStr _cmpb_t3261 = (name); _Bool _cmpr_t3262 = _tr_str_eqv(_cmpa_t3260, _cmpb_t3261); _tr_str_release(_cmpa_t3260); _cmpr_t3262; })) {
+        if (({ TrStr _cmpa_t3273 = (List_TrStr_get(f->params, i)); TrStr _cmpb_t3274 = (name); _Bool _cmpr_t3275 = _tr_str_eqv(_cmpa_t3273, _cmpb_t3274); _tr_str_release(_cmpa_t3273); _cmpr_t3275; })) {
 #line 228 "src/racecheck.tr"
             return List_TrStr_get(f->ptypes, i);
         }
@@ -75,7 +75,7 @@ __attribute__((hot)) TrStr RcCk_ltype(RcCk* self, RcFn* f, TrStr name) {
 #line 231 "src/racecheck.tr"
     while ((i >= 0LL)) {
 #line 232 "src/racecheck.tr"
-        if (({ TrStr _cmpa_t3263 = (List_TrStr_get(f->ltn, i)); TrStr _cmpb_t3264 = (name); _Bool _cmpr_t3265 = _tr_str_eqv(_cmpa_t3263, _cmpb_t3264); _tr_str_release(_cmpa_t3263); _cmpr_t3265; })) {
+        if (({ TrStr _cmpa_t3276 = (List_TrStr_get(f->ltn, i)); TrStr _cmpb_t3277 = (name); _Bool _cmpr_t3278 = _tr_str_eqv(_cmpa_t3276, _cmpb_t3277); _tr_str_release(_cmpa_t3276); _cmpr_t3278; })) {
 #line 232 "src/racecheck.tr"
             return List_TrStr_get(f->ltt, i);
         }
@@ -92,7 +92,7 @@ __attribute__((hot)) TrStr RcCk_ltarg_of(RcCk* self, RcFn* f, TrStr name) {
 #line 238 "src/racecheck.tr"
     while ((i >= 0LL)) {
 #line 239 "src/racecheck.tr"
-        if (({ TrStr _cmpa_t3266 = (List_TrStr_get(f->params, i)); TrStr _cmpb_t3267 = (name); _Bool _cmpr_t3268 = _tr_str_eqv(_cmpa_t3266, _cmpb_t3267); _tr_str_release(_cmpa_t3266); _cmpr_t3268; })) {
+        if (({ TrStr _cmpa_t3279 = (List_TrStr_get(f->params, i)); TrStr _cmpb_t3280 = (name); _Bool _cmpr_t3281 = _tr_str_eqv(_cmpa_t3279, _cmpb_t3280); _tr_str_release(_cmpa_t3279); _cmpr_t3281; })) {
 #line 239 "src/racecheck.tr"
             return List_TrStr_get(f->pinner, i);
         }
@@ -104,7 +104,7 @@ __attribute__((hot)) TrStr RcCk_ltarg_of(RcCk* self, RcFn* f, TrStr name) {
 #line 242 "src/racecheck.tr"
     while ((i >= 0LL)) {
 #line 243 "src/racecheck.tr"
-        if (({ TrStr _cmpa_t3269 = (List_TrStr_get(f->ltn, i)); TrStr _cmpb_t3270 = (name); _Bool _cmpr_t3271 = _tr_str_eqv(_cmpa_t3269, _cmpb_t3270); _tr_str_release(_cmpa_t3269); _cmpr_t3271; })) {
+        if (({ TrStr _cmpa_t3282 = (List_TrStr_get(f->ltn, i)); TrStr _cmpb_t3283 = (name); _Bool _cmpr_t3284 = _tr_str_eqv(_cmpa_t3282, _cmpb_t3283); _tr_str_release(_cmpa_t3282); _cmpr_t3284; })) {
 #line 243 "src/racecheck.tr"
             return List_TrStr_get(f->ltarg, i);
         }
@@ -121,14 +121,14 @@ __attribute__((hot)) TrStr RcCk_lclass(RcCk* self, RcFn* f, TrStr name) {
 #line 250 "src/racecheck.tr"
     if (_tr_str_eqv((t), (_tr_str_lit_len("Shared", 6LL)))) {
 #line 250 "src/racecheck.tr"
-        TrStr _trret573 = RcCk_ltarg_of(self, f, name);
+        TrStr _trret577 = RcCk_ltarg_of(self, f, name);
         _tr_str_release(t);
-        return _trret573;
+        return _trret577;
     }
 #line 251 "src/racecheck.tr"
-    TrStr _trret574 = _tr_str_retain(t);
+    TrStr _trret578 = _tr_str_retain(t);
     _tr_str_release(t);
-    return _trret574;
+    return _trret578;
 }
 
 __attribute__((hot)) long long RcCk_ldepth_of(RcCk* self, RcFn* f, TrStr name) {
@@ -142,7 +142,7 @@ __attribute__((hot)) long long RcCk_ldepth_of(RcCk* self, RcFn* f, TrStr name) {
 #line 256 "src/racecheck.tr"
     while ((i >= 0LL)) {
 #line 257 "src/racecheck.tr"
-        if (({ TrStr _cmpa_t3272 = (List_TrStr_get(f->ltn, i)); TrStr _cmpb_t3273 = (name); _Bool _cmpr_t3274 = _tr_str_eqv(_cmpa_t3272, _cmpb_t3273); _tr_str_release(_cmpa_t3272); _cmpr_t3274; })) {
+        if (({ TrStr _cmpa_t3285 = (List_TrStr_get(f->ltn, i)); TrStr _cmpb_t3286 = (name); _Bool _cmpr_t3287 = _tr_str_eqv(_cmpa_t3285, _cmpb_t3286); _tr_str_release(_cmpa_t3285); _cmpr_t3287; })) {
 #line 257 "src/racecheck.tr"
             return List_i64_get(f->ldepth, i);
         }
@@ -155,7 +155,7 @@ __attribute__((hot)) long long RcCk_ldepth_of(RcCk* self, RcFn* f, TrStr name) {
 
 __attribute__((hot)) bool RcCk_mentions(RcCk* self, Stmt* sp, TrStr name) {
 #line 263 "src/racecheck.tr"
-    RcFn* tmp = ({ TrStr _apt_t3275 = _tr_str_retain(self->cur->file); __auto_type _wr = (_rc_new_fn(_tr_str_lit_len("", 0LL), _apt_t3275, self->cur->line, true)); _tr_str_release(_apt_t3275); _wr; });
+    RcFn* tmp = ({ TrStr _apt_t3288 = _tr_str_retain(self->cur->file); __auto_type _wr = (_rc_new_fn(_tr_str_lit_len("", 0LL), _apt_t3288, self->cur->line, true)); _tr_str_release(_apt_t3288); _wr; });
 #line 264 "src/racecheck.tr"
     RcFn* saved = _tr_obj_retain(self->cur);
 #line 265 "src/racecheck.tr"
@@ -163,24 +163,24 @@ __attribute__((hot)) bool RcCk_mentions(RcCk* self, Stmt* sp, TrStr name) {
 #line 266 "src/racecheck.tr"
     bool ss = self->seen_spawn;
 #line 267 "src/racecheck.tr"
-    RcFn* _cltmp_t3276 = _tr_obj_retain(tmp);
+    RcFn* _cltmp_t3289 = _tr_obj_retain(tmp);
     _tr_obj_release(self->cur, _trdrop_RcFn);
-    self->cur = _cltmp_t3276;
+    self->cur = _cltmp_t3289;
 #line 268 "src/racecheck.tr"
     RcCk_stmt(self, sp);
 #line 269 "src/racecheck.tr"
-    RcFn* _cltmp_t3277 = _tr_obj_retain(saved);
+    RcFn* _cltmp_t3290 = _tr_obj_retain(saved);
     _tr_obj_release(self->cur, _trdrop_RcFn);
-    self->cur = _cltmp_t3277;
+    self->cur = _cltmp_t3290;
 #line 270 "src/racecheck.tr"
     self->cur_line = sl;
 #line 271 "src/racecheck.tr"
     self->seen_spawn = ss;
 #line 272 "src/racecheck.tr"
-    bool _trret575 = _rc_has(tmp->idents, name);
+    bool _trret579 = _rc_has(tmp->idents, name);
     _tr_obj_release(tmp, _trdrop_RcFn);
     _tr_obj_release(saved, _trdrop_RcFn);
-    return _trret575;
+    return _trret579;
 }
 
 __attribute__((hot)) void RcCk_note(RcCk* self, TrStr name, bool w) {
@@ -211,7 +211,7 @@ __attribute__((hot)) void RcCk_wpath(RcCk* self, Expr* target) {
 #line 284 "src/racecheck.tr"
     List_TrStr_append(self->cur->wroot, r);
 #line 285 "src/racecheck.tr"
-    ({ TrStr _ord_t3278 = (_rc_first_prop(target)); List_TrStr_append(self->cur->wprop, _ord_t3278); _tr_str_release(_ord_t3278); });
+    ({ TrStr _ord_t3291 = (_rc_first_prop(target)); List_TrStr_append(self->cur->wprop, _ord_t3291); _tr_str_release(_ord_t3291); });
 #line 286 "src/racecheck.tr"
     List_bool_append(self->cur->wafter, self->seen_spawn);
 #line 287 "src/racecheck.tr"
@@ -280,30 +280,30 @@ __attribute__((hot)) void RcCk_lock_scan(RcCk* self, Block* b) {
 #line 319 "src/racecheck.tr"
         TrStr letname = _tr_str_lit_len("", 0LL);
 #line 320 "src/racecheck.tr"
-        __auto_type _t3279 = (*sp);
-        if (_t3279.tag == Stmt_SLine) {
-            __auto_type n = _t3279.data.SLine.n;
+        __auto_type _t3292 = (*sp);
+        if (_t3292.tag == Stmt_SLine) {
+            __auto_type n = _t3292.data.SLine.n;
 #line 322 "src/racecheck.tr"
             line = n;
 #line 323 "src/racecheck.tr"
             is_line = true;
-        } else if (_t3279.tag == Stmt_SExpr) {
-            __auto_type e = _t3279.data.SExpr.expr;
+        } else if (_t3292.tag == Stmt_SExpr) {
+            __auto_type e = _t3292.data.SExpr.expr;
             call = e;
-        } else if (_t3279.tag == Stmt_SLet) {
-            __auto_type lnm = _t3279.data.SLet.name;
-__auto_type v = _t3279.data.SLet.val;
+        } else if (_t3292.tag == Stmt_SLet) {
+            __auto_type lnm = _t3292.data.SLet.name;
+__auto_type v = _t3292.data.SLet.val;
 #line 326 "src/racecheck.tr"
             call = v;
 #line 327 "src/racecheck.tr"
-            TrStr _strtmp_t3280 = _tr_str_retain(lnm);
+            TrStr _strtmp_t3293 = _tr_str_retain(lnm);
             _tr_str_release(letname);
-            letname = _strtmp_t3280;
-        } else if (_t3279.tag == Stmt_SAssign) {
-            __auto_type v2 = _t3279.data.SAssign.val;
+            letname = _strtmp_t3293;
+        } else if (_t3292.tag == Stmt_SAssign) {
+            __auto_type v2 = _t3292.data.SAssign.val;
             call = v2;
         } else if (1) {
-            __auto_type _ = _t3279;
+            __auto_type _ = _t3292;
             simple = false;
         }
 #line 330 "src/racecheck.tr"
@@ -317,9 +317,9 @@ __auto_type v = _t3279.data.SLet.val;
 #line 332 "src/racecheck.tr"
         while ((gk < guards->len)) {
 #line 333 "src/racecheck.tr"
-            if (((List_bool_get(grel, gk) && ({ TrStr _cmpa_t3281 = (List_TrStr_get(guards, gk)); TrStr _cmpb_t3282 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t3283 = !_tr_str_eqv(_cmpa_t3281, _cmpb_t3282); _tr_str_release(_cmpa_t3281); _cmpr_t3283; })) && ({ TrStr _at_t3284 = (List_TrStr_get(guards, gk)); __auto_type _wr = (RcCk_mentions(self, sp, _at_t3284)); _tr_str_release(_at_t3284); _wr; }))) {
+            if (((List_bool_get(grel, gk) && ({ TrStr _cmpa_t3294 = (List_TrStr_get(guards, gk)); TrStr _cmpb_t3295 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t3296 = !_tr_str_eqv(_cmpa_t3294, _cmpb_t3295); _tr_str_release(_cmpa_t3294); _cmpr_t3296; })) && ({ TrStr _at_t3297 = (List_TrStr_get(guards, gk)); __auto_type _wr = (RcCk_mentions(self, sp, _at_t3297)); _tr_str_release(_at_t3297); _wr; }))) {
 #line 334 "src/racecheck.tr"
-                ({ __auto_type _ord_t3285 = (({ TrStr _tr_cl = (RcCk_where(self, line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-9] '", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3286 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3285); TrStr _tr_cr = (List_TrStr_get(guards, gk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' was obtained from `", 21LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3287 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3286); TrStr _tr_cr = (List_TrStr_get(gmx, gk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".get()` and is used after the lock was released: the guarded object is then reachable by other threads while this one still reads/writes it (a data race).\n      FIX: keep every use of '", 185LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3288 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3287); TrStr _tr_cr = (List_TrStr_get(guards, gk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' before `", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3289 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3288); TrStr _tr_cr = (List_TrStr_get(gmx, gk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".unlock()` / `", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3290 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3289); TrStr _tr_cr = (List_TrStr_get(gmx, gk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".set(..)`, or copy the data out while the lock is held.", 55LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->cur->msgs, _ord_t3290); _tr_str_release(_ord_t3290); });
+                ({ __auto_type _ord_t3298 = (({ TrStr _tr_cl = (RcCk_where(self, line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-9] '", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3299 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3298); TrStr _tr_cr = (List_TrStr_get(guards, gk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' was obtained from `", 21LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3300 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3299); TrStr _tr_cr = (List_TrStr_get(gmx, gk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".get()` and is used after the lock was released: the guarded object is then reachable by other threads while this one still reads/writes it (a data race).\n      FIX: keep every use of '", 185LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3301 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3300); TrStr _tr_cr = (List_TrStr_get(guards, gk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' before `", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3302 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3301); TrStr _tr_cr = (List_TrStr_get(gmx, gk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".unlock()` / `", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3303 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3302); TrStr _tr_cr = (List_TrStr_get(gmx, gk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".set(..)`, or copy the data out while the lock is held.", 55LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->cur->msgs, _ord_t3303); _tr_str_release(_ord_t3303); });
 #line 335 "src/racecheck.tr"
                 List_TrStr_set(guards, gk, _tr_str_lit_len("", 0LL));
             }
@@ -345,24 +345,24 @@ __auto_type v = _t3279.data.SLet.val;
             continue;
         }
 #line 343 "src/racecheck.tr"
-        __auto_type _t3291 = (*call);
-        if (_t3291.tag == Expr_EMethodCall) {
-            __auto_type o = _t3291.data.EMethodCall.obj;
-__auto_type m = _t3291.data.EMethodCall.method;
-__auto_type margs = _t3291.data.EMethodCall.args;
+        __auto_type _t3304 = (*call);
+        if (_t3304.tag == Expr_EMethodCall) {
+            __auto_type o = _t3304.data.EMethodCall.obj;
+__auto_type m = _t3304.data.EMethodCall.method;
+__auto_type margs = _t3304.data.EMethodCall.args;
 #line 345 "src/racecheck.tr"
             TrStr r = _tr_str_lit_len("", 0LL);
 #line 346 "src/racecheck.tr"
             if ((!_rc_nul(o))) {
 #line 347 "src/racecheck.tr"
-                __auto_type _t3292 = (*o);
-                if (_t3292.tag == Expr_EIdent) {
-                    __auto_type rn = _t3292.data.EIdent.name;
-                    TrStr _strtmp_t3293 = _tr_str_retain(rn);
+                __auto_type _t3305 = (*o);
+                if (_t3305.tag == Expr_EIdent) {
+                    __auto_type rn = _t3305.data.EIdent.name;
+                    TrStr _strtmp_t3306 = _tr_str_retain(rn);
                     _tr_str_release(r);
-                    r = _strtmp_t3293;
+                    r = _strtmp_t3306;
                 } else if (1) {
-                    __auto_type _ = _t3292;
+                    __auto_type _ = _t3305;
                     /* pass */
                 }
             }
@@ -382,11 +382,11 @@ __auto_type margs = _t3291.data.EMethodCall.args;
 #line 354 "src/racecheck.tr"
                 while ((gq < self->gnames->len)) {
 #line 355 "src/racecheck.tr"
-                    if (({ TrStr _cmpa_t3294 = (List_TrStr_get(self->gnames, gq)); TrStr _cmpb_t3295 = (r); _Bool _cmpr_t3296 = _tr_str_eqv(_cmpa_t3294, _cmpb_t3295); _tr_str_release(_cmpa_t3294); _cmpr_t3296; })) {
+                    if (({ TrStr _cmpa_t3307 = (List_TrStr_get(self->gnames, gq)); TrStr _cmpb_t3308 = (r); _Bool _cmpr_t3309 = _tr_str_eqv(_cmpa_t3307, _cmpb_t3308); _tr_str_release(_cmpa_t3307); _cmpr_t3309; })) {
 #line 355 "src/racecheck.tr"
-                        TrStr _strtmp_t3297 = List_TrStr_get(self->gtn, gq);
+                        TrStr _strtmp_t3310 = List_TrStr_get(self->gtn, gq);
                         _tr_str_release(k);
-                        k = _strtmp_t3297;
+                        k = _strtmp_t3310;
                     }
 #line 356 "src/racecheck.tr"
                     gq = (gq + 1LL);
@@ -415,7 +415,7 @@ __auto_type margs = _t3291.data.EMethodCall.args;
 #line 361 "src/racecheck.tr"
             while ((j < names->len)) {
 #line 362 "src/racecheck.tr"
-                if (({ TrStr _cmpa_t3298 = (List_TrStr_get(names, j)); TrStr _cmpb_t3299 = (r); _Bool _cmpr_t3300 = _tr_str_eqv(_cmpa_t3298, _cmpb_t3299); _tr_str_release(_cmpa_t3298); _cmpr_t3300; })) {
+                if (({ TrStr _cmpa_t3311 = (List_TrStr_get(names, j)); TrStr _cmpb_t3312 = (r); _Bool _cmpr_t3313 = _tr_str_eqv(_cmpa_t3311, _cmpb_t3312); _tr_str_release(_cmpa_t3311); _cmpr_t3313; })) {
 #line 362 "src/racecheck.tr"
                     idx = j;
                 }
@@ -444,11 +444,11 @@ __auto_type margs = _t3291.data.EMethodCall.args;
 #line 373 "src/racecheck.tr"
                     while ((gj2 < names->len)) {
 #line 374 "src/racecheck.tr"
-                        if (((({ TrStr _cmpa_t3301 = (List_TrStr_get(kinds, gj2)); TrStr _cmpb_t3302 = (_tr_str_lit_len("Mutex", 5LL)); _Bool _cmpr_t3303 = _tr_str_eqv(_cmpa_t3301, _cmpb_t3302); _tr_str_release(_cmpa_t3301); _cmpr_t3303; }) && (List_i64_get(state, gj2) == 1LL)) && ({ TrStr _cmpa_t3304 = (List_TrStr_get(names, gj2)); TrStr _cmpb_t3305 = (r); _Bool _cmpr_t3306 = !_tr_str_eqv(_cmpa_t3304, _cmpb_t3305); _tr_str_release(_cmpa_t3304); _cmpr_t3306; }))) {
+                        if (((({ TrStr _cmpa_t3314 = (List_TrStr_get(kinds, gj2)); TrStr _cmpb_t3315 = (_tr_str_lit_len("Mutex", 5LL)); _Bool _cmpr_t3316 = _tr_str_eqv(_cmpa_t3314, _cmpb_t3315); _tr_str_release(_cmpa_t3314); _cmpr_t3316; }) && (List_i64_get(state, gj2) == 1LL)) && ({ TrStr _cmpa_t3317 = (List_TrStr_get(names, gj2)); TrStr _cmpb_t3318 = (r); _Bool _cmpr_t3319 = !_tr_str_eqv(_cmpa_t3317, _cmpb_t3318); _tr_str_release(_cmpa_t3317); _cmpr_t3319; }))) {
 #line 375 "src/racecheck.tr"
-                            if ((!(((_rc_has(self->cur->locals, r) || _rc_has(self->cur->params, r)) || ({ __auto_type _ord_t3308 = (self->cur->locals); TrStr _at_t3307 = (List_TrStr_get(names, gj2)); __auto_type _wr = (_rc_has(_ord_t3308, _at_t3307)); _tr_str_release(_at_t3307); _wr; })) || ({ __auto_type _ord_t3310 = (self->cur->params); TrStr _at_t3309 = (List_TrStr_get(names, gj2)); __auto_type _wr = (_rc_has(_ord_t3310, _at_t3309)); _tr_str_release(_at_t3309); _wr; })))) {
+                            if ((!(((_rc_has(self->cur->locals, r) || _rc_has(self->cur->params, r)) || ({ __auto_type _ord_t3321 = (self->cur->locals); TrStr _at_t3320 = (List_TrStr_get(names, gj2)); __auto_type _wr = (_rc_has(_ord_t3321, _at_t3320)); _tr_str_release(_at_t3320); _wr; })) || ({ __auto_type _ord_t3323 = (self->cur->params); TrStr _at_t3322 = (List_TrStr_get(names, gj2)); __auto_type _wr = (_rc_has(_ord_t3323, _at_t3322)); _tr_str_release(_at_t3322); _wr; })))) {
 #line 376 "src/racecheck.tr"
-                                ({ TrStr _ord_t3311 = (List_TrStr_get(names, gj2)); List_TrStr_append(self->cur->pairs_a, _ord_t3311); _tr_str_release(_ord_t3311); });
+                                ({ TrStr _ord_t3324 = (List_TrStr_get(names, gj2)); List_TrStr_append(self->cur->pairs_a, _ord_t3324); _tr_str_release(_ord_t3324); });
 #line 377 "src/racecheck.tr"
                                 List_TrStr_append(self->cur->pairs_b, r);
                             }
@@ -472,7 +472,7 @@ __auto_type margs = _t3291.data.EMethodCall.args;
 #line 385 "src/racecheck.tr"
                     if ((st == 1LL)) {
 #line 385 "src/racecheck.tr"
-                        ({ TrStr _ord_t3312 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (RcCk_where(self, line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-9] '", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".get()' acquires the lock again while this thread already holds it (no `set()`/`unlock()` since the previous `get()`): the second call blocks forever.\n      FIX: finish with `", 175LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".set(v)` or `", 13LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".unlock()` before locking again, or reuse the first value.", 58LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->cur->msgs, _ord_t3312); _tr_str_release(_ord_t3312); });
+                        ({ TrStr _ord_t3325 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (RcCk_where(self, line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-9] '", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".get()' acquires the lock again while this thread already holds it (no `set()`/`unlock()` since the previous `get()`): the second call blocks forever.\n      FIX: finish with `", 175LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".set(v)` or `", 13LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".unlock()` before locking again, or reuse the first value.", 58LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->cur->msgs, _ord_t3325); _tr_str_release(_ord_t3325); });
                     }
 #line 386 "src/racecheck.tr"
                     List_i64_set(state, idx, 1LL);
@@ -484,7 +484,7 @@ __auto_type margs = _t3291.data.EMethodCall.args;
 #line 390 "src/racecheck.tr"
                     while ((gr < guards->len)) {
 #line 391 "src/racecheck.tr"
-                        if (({ TrStr _cmpa_t3313 = (List_TrStr_get(gmx, gr)); TrStr _cmpb_t3314 = (r); _Bool _cmpr_t3315 = _tr_str_eqv(_cmpa_t3313, _cmpb_t3314); _tr_str_release(_cmpa_t3313); _cmpr_t3315; })) {
+                        if (({ TrStr _cmpa_t3326 = (List_TrStr_get(gmx, gr)); TrStr _cmpb_t3327 = (r); _Bool _cmpr_t3328 = _tr_str_eqv(_cmpa_t3326, _cmpb_t3327); _tr_str_release(_cmpa_t3326); _cmpr_t3328; })) {
 #line 391 "src/racecheck.tr"
                             List_bool_set(grel, gr, true);
                         }
@@ -504,7 +504,7 @@ __auto_type margs = _t3291.data.EMethodCall.args;
 #line 397 "src/racecheck.tr"
                     if ((st == 1LL)) {
 #line 397 "src/racecheck.tr"
-                        ({ TrStr _ord_t3316 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (RcCk_where(self, line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-9] '", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".write()' takes the write lock while this thread still holds the read lock from `", 81LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".read()`: the write waits for readers (itself included) to leave, which never happens (deadlock).\n      FIX: call `", 115LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".read_unlock()` before `", 24LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".write()`.", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->cur->msgs, _ord_t3316); _tr_str_release(_ord_t3316); });
+                        ({ TrStr _ord_t3329 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (RcCk_where(self, line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-9] '", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".write()' takes the write lock while this thread still holds the read lock from `", 81LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".read()`: the write waits for readers (itself included) to leave, which never happens (deadlock).\n      FIX: call `", 115LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".read_unlock()` before `", 24LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".write()`.", 10LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->cur->msgs, _ord_t3329); _tr_str_release(_ord_t3329); });
                     }
 #line 398 "src/racecheck.tr"
                     List_i64_set(state, idx, 2LL);
@@ -515,7 +515,7 @@ __auto_type margs = _t3291.data.EMethodCall.args;
 #line 401 "src/racecheck.tr"
                     if ((st == 1LL)) {
 #line 401 "src/racecheck.tr"
-                        ({ TrStr _ord_t3317 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (RcCk_where(self, line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-9] thread '", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is joined twice: joining an already-joined thread handle is undefined behaviour.\n      FIX: join each thread exactly once.", 124LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->cur->msgs, _ord_t3317); _tr_str_release(_ord_t3317); });
+                        ({ TrStr _ord_t3330 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (RcCk_where(self, line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-9] thread '", 14LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (r)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is joined twice: joining an already-joined thread handle is undefined behaviour.\n      FIX: join each thread exactly once.", 124LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->cur->msgs, _ord_t3330); _tr_str_release(_ord_t3330); });
                     }
 #line 402 "src/racecheck.tr"
                     List_i64_set(state, idx, 1LL);
@@ -524,7 +524,7 @@ __auto_type margs = _t3291.data.EMethodCall.args;
             _tr_str_release(r);
             _tr_str_release(k);
         } else if (1) {
-            __auto_type _ = _t3291;
+            __auto_type _ = _t3304;
             /* pass */
         }
         _tr_str_release(letname);
@@ -544,20 +544,20 @@ __attribute__((hot)) void RcCk_stmt(RcCk* self, Stmt* sp) {
         return;
     }
 #line 407 "src/racecheck.tr"
-    __auto_type _t3318 = (*sp);
-    if (_t3318.tag == Stmt_SLine) {
-        __auto_type n = _t3318.data.SLine.n;
+    __auto_type _t3331 = (*sp);
+    if (_t3331.tag == Stmt_SLine) {
+        __auto_type n = _t3331.data.SLine.n;
         self->cur_line = n;
-    } else if (_t3318.tag == Stmt_SExpr) {
-        __auto_type e = _t3318.data.SExpr.expr;
+    } else if (_t3331.tag == Stmt_SExpr) {
+        __auto_type e = _t3331.data.SExpr.expr;
         RcCk_expr(self, e);
-    } else if (_t3318.tag == Stmt_SLet) {
-        __auto_type name = _t3318.data.SLet.name;
-__auto_type is_sh = _t3318.data.SLet.is_shared;
-__auto_type ty = _t3318.data.SLet.ty;
-__auto_type v = _t3318.data.SLet.val;
+    } else if (_t3331.tag == Stmt_SLet) {
+        __auto_type name = _t3331.data.SLet.name;
+__auto_type is_sh = _t3331.data.SLet.is_shared;
+__auto_type ty = _t3331.data.SLet.ty;
+__auto_type v = _t3331.data.SLet.val;
 #line 411 "src/racecheck.tr"
-        ({ TrStr _apt_t3319 = _tr_str_retain(self->cur->file); RcCk_ty_check(self, ty, _apt_t3319, self->cur_line); _tr_str_release(_apt_t3319); });
+        ({ TrStr _apt_t3332 = _tr_str_retain(self->cur->file); RcCk_ty_check(self, ty, _apt_t3332, self->cur_line); _tr_str_release(_apt_t3332); });
 #line 412 "src/racecheck.tr"
         RcCk_expr(self, v);
 #line 413 "src/racecheck.tr"
@@ -567,42 +567,42 @@ __auto_type v = _t3318.data.SLet.val;
 #line 415 "src/racecheck.tr"
         if ((((unsigned long long)(ty)) != ((unsigned long long)(0LL)))) {
 #line 415 "src/racecheck.tr"
-            TrStr _strtmp_t3320 = _tr_str_retain((*ty)->name);
+            TrStr _strtmp_t3333 = _tr_str_retain((*ty)->name);
             _tr_str_release(tn);
-            tn = _strtmp_t3320;
+            tn = _strtmp_t3333;
         }
 #line 416 "src/racecheck.tr"
         if (_tr_str_eqv((tn), (_tr_str_lit_len("", 0LL)))) {
 #line 416 "src/racecheck.tr"
-            TrStr _strtmp_t3321 = _rc_ctor_name(v);
+            TrStr _strtmp_t3334 = _rc_ctor_name(v);
             _tr_str_release(tn);
-            tn = _strtmp_t3321;
+            tn = _strtmp_t3334;
         }
 #line 417 "src/racecheck.tr"
         TrStr targ = _rc_ctor_arg(v);
 #line 418 "src/racecheck.tr"
         if (((((unsigned long long)(ty)) != ((unsigned long long)(0LL))) && ((*ty)->args->len > 0LL))) {
 #line 418 "src/racecheck.tr"
-            TrStr _strtmp_t3322 = _tr_str_retain((*((AstType**)List_ptr_get((*ty)->args, 0LL)))->name);
+            TrStr _strtmp_t3335 = _tr_str_retain((*((AstType**)List_ptr_get((*ty)->args, 0LL)))->name);
             _tr_str_release(targ);
-            targ = _strtmp_t3322;
+            targ = _strtmp_t3335;
         }
 #line 419 "src/racecheck.tr"
         if ((is_sh && (!_rc_nul(v)))) {
 #line 420 "src/racecheck.tr"
-            __auto_type _t3323 = (*v);
-            if (_t3323.tag == Expr_EIdent) {
-                __auto_type src = _t3323.data.EIdent.name;
+            __auto_type _t3336 = (*v);
+            if (_t3336.tag == Expr_EIdent) {
+                __auto_type src = _t3336.data.EIdent.name;
 #line 422 "src/racecheck.tr"
-                TrStr _strtmp_t3324 = RcCk_ltype(self, self->cur, src);
+                TrStr _strtmp_t3337 = RcCk_ltype(self, self->cur, src);
                 _tr_str_release(tn);
-                tn = _strtmp_t3324;
+                tn = _strtmp_t3337;
 #line 423 "src/racecheck.tr"
-                TrStr _strtmp_t3325 = RcCk_ltarg_of(self, self->cur, src);
+                TrStr _strtmp_t3338 = RcCk_ltarg_of(self, self->cur, src);
                 _tr_str_release(targ);
-                targ = _strtmp_t3325;
+                targ = _strtmp_t3338;
             } else if (1) {
-                __auto_type _ = _t3323;
+                __auto_type _ = _t3336;
                 /* pass */
             }
         }
@@ -633,9 +633,9 @@ __auto_type v = _t3318.data.SLet.val;
         }
         _tr_str_release(tn);
         _tr_str_release(targ);
-    } else if (_t3318.tag == Stmt_SMultiLet) {
-        __auto_type names = _t3318.data.SMultiLet.names;
-__auto_type v = _t3318.data.SMultiLet.val;
+    } else if (_t3331.tag == Stmt_SMultiLet) {
+        __auto_type names = _t3331.data.SMultiLet.names;
+__auto_type v = _t3331.data.SMultiLet.val;
 #line 435 "src/racecheck.tr"
         RcCk_expr(self, v);
 #line 436 "src/racecheck.tr"
@@ -643,36 +643,36 @@ __auto_type v = _t3318.data.SMultiLet.val;
 #line 437 "src/racecheck.tr"
         while ((mi < names->len)) {
 #line 438 "src/racecheck.tr"
-            ({ TrStr _at_t3326 = (List_TrStr_get(names, mi)); RcCk_declare(self, _at_t3326); _tr_str_release(_at_t3326); });
+            ({ TrStr _at_t3339 = (List_TrStr_get(names, mi)); RcCk_declare(self, _at_t3339); _tr_str_release(_at_t3339); });
 #line 439 "src/racecheck.tr"
             mi = (mi + 1LL);
         }
-    } else if (_t3318.tag == Stmt_SAssign) {
-        __auto_type t = _t3318.data.SAssign.target;
-__auto_type v = _t3318.data.SAssign.val;
+    } else if (_t3331.tag == Stmt_SAssign) {
+        __auto_type t = _t3331.data.SAssign.target;
+__auto_type v = _t3331.data.SAssign.val;
 #line 441 "src/racecheck.tr"
         RcCk_expr(self, v);
 #line 442 "src/racecheck.tr"
         RcCk_expr(self, t);
 #line 443 "src/racecheck.tr"
         RcCk_wpath(self, t);
-    } else if (_t3318.tag == Stmt_SReturn) {
-        __auto_type v = _t3318.data.SReturn.val;
+    } else if (_t3331.tag == Stmt_SReturn) {
+        __auto_type v = _t3331.data.SReturn.val;
         RcCk_expr(self, v);
-    } else if (_t3318.tag == Stmt_SBreak) {
-        __auto_type v = _t3318.data.SBreak.val;
+    } else if (_t3331.tag == Stmt_SBreak) {
+        __auto_type v = _t3331.data.SBreak.val;
         RcCk_expr(self, v);
-    } else if (_t3318.tag == Stmt_SRaise) {
-        __auto_type v = _t3318.data.SRaise.val;
+    } else if (_t3331.tag == Stmt_SRaise) {
+        __auto_type v = _t3331.data.SRaise.val;
         RcCk_expr(self, v);
-    } else if (_t3318.tag == Stmt_SUnsafe) {
-        __auto_type b = _t3318.data.SUnsafe.body;
+    } else if (_t3331.tag == Stmt_SUnsafe) {
+        __auto_type b = _t3331.data.SUnsafe.body;
         RcCk_block(self, b);
-    } else if (_t3318.tag == Stmt_SIf) {
-        __auto_type c = _t3318.data.SIf.cond;
-__auto_type tb = _t3318.data.SIf.then_b;
-__auto_type elifs = _t3318.data.SIf.elifs;
-__auto_type eb = _t3318.data.SIf.else_b;
+    } else if (_t3331.tag == Stmt_SIf) {
+        __auto_type c = _t3331.data.SIf.cond;
+__auto_type tb = _t3331.data.SIf.then_b;
+__auto_type elifs = _t3331.data.SIf.elifs;
+__auto_type eb = _t3331.data.SIf.else_b;
 #line 449 "src/racecheck.tr"
         RcCk_expr(self, c);
 #line 450 "src/racecheck.tr"
@@ -690,9 +690,9 @@ __auto_type eb = _t3318.data.SIf.else_b;
         }
 #line 456 "src/racecheck.tr"
         RcCk_block(self, eb);
-    } else if (_t3318.tag == Stmt_SWhile) {
-        __auto_type c = _t3318.data.SWhile.cond;
-__auto_type b = _t3318.data.SWhile.body;
+    } else if (_t3331.tag == Stmt_SWhile) {
+        __auto_type c = _t3331.data.SWhile.cond;
+__auto_type b = _t3331.data.SWhile.body;
 #line 458 "src/racecheck.tr"
         RcCk_expr(self, c);
 #line 459 "src/racecheck.tr"
@@ -701,10 +701,10 @@ __auto_type b = _t3318.data.SWhile.body;
         RcCk_block(self, b);
 #line 461 "src/racecheck.tr"
         self->loop_depth = (self->loop_depth - 1LL);
-    } else if (_t3318.tag == Stmt_SFor) {
-        __auto_type v = _t3318.data.SFor.var;
-__auto_type it = _t3318.data.SFor.iter;
-__auto_type b = _t3318.data.SFor.body;
+    } else if (_t3331.tag == Stmt_SFor) {
+        __auto_type v = _t3331.data.SFor.var;
+__auto_type it = _t3331.data.SFor.iter;
+__auto_type b = _t3331.data.SFor.body;
 #line 463 "src/racecheck.tr"
         RcCk_expr(self, it);
 #line 464 "src/racecheck.tr"
@@ -715,10 +715,10 @@ __auto_type b = _t3318.data.SFor.body;
         RcCk_block(self, b);
 #line 467 "src/racecheck.tr"
         self->loop_depth = (self->loop_depth - 1LL);
-    } else if (_t3318.tag == Stmt_SForUnpack) {
-        __auto_type vs = _t3318.data.SForUnpack.vars;
-__auto_type it = _t3318.data.SForUnpack.iter;
-__auto_type b = _t3318.data.SForUnpack.body;
+    } else if (_t3331.tag == Stmt_SForUnpack) {
+        __auto_type vs = _t3331.data.SForUnpack.vars;
+__auto_type it = _t3331.data.SForUnpack.iter;
+__auto_type b = _t3331.data.SForUnpack.body;
 #line 469 "src/racecheck.tr"
         RcCk_expr(self, it);
 #line 470 "src/racecheck.tr"
@@ -726,7 +726,7 @@ __auto_type b = _t3318.data.SForUnpack.body;
 #line 471 "src/racecheck.tr"
         while ((fi < vs->len)) {
 #line 472 "src/racecheck.tr"
-            ({ TrStr _at_t3327 = (List_TrStr_get(vs, fi)); RcCk_declare(self, _at_t3327); _tr_str_release(_at_t3327); });
+            ({ TrStr _at_t3340 = (List_TrStr_get(vs, fi)); RcCk_declare(self, _at_t3340); _tr_str_release(_at_t3340); });
 #line 473 "src/racecheck.tr"
             fi = (fi + 1LL);
         }
@@ -736,9 +736,9 @@ __auto_type b = _t3318.data.SForUnpack.body;
         RcCk_block(self, b);
 #line 476 "src/racecheck.tr"
         self->loop_depth = (self->loop_depth - 1LL);
-    } else if (_t3318.tag == Stmt_SMatch) {
-        __auto_type e = _t3318.data.SMatch.expr;
-__auto_type arms = _t3318.data.SMatch.arms;
+    } else if (_t3331.tag == Stmt_SMatch) {
+        __auto_type e = _t3331.data.SMatch.expr;
+__auto_type arms = _t3331.data.SMatch.arms;
 #line 478 "src/racecheck.tr"
         RcCk_expr(self, e);
 #line 479 "src/racecheck.tr"
@@ -752,10 +752,10 @@ __auto_type arms = _t3318.data.SMatch.arms;
 #line 483 "src/racecheck.tr"
             ai = (ai + 1LL);
         }
-    } else if (_t3318.tag == Stmt_STry) {
-        __auto_type tb = _t3318.data.STry.try_body;
-__auto_type catches = _t3318.data.STry.catches;
-__auto_type fb = _t3318.data.STry.finally_b;
+    } else if (_t3331.tag == Stmt_STry) {
+        __auto_type tb = _t3331.data.STry.try_body;
+__auto_type catches = _t3331.data.STry.catches;
+__auto_type fb = _t3331.data.STry.finally_b;
 #line 485 "src/racecheck.tr"
         RcCk_block(self, tb);
 #line 486 "src/racecheck.tr"
@@ -763,7 +763,7 @@ __auto_type fb = _t3318.data.STry.finally_b;
 #line 487 "src/racecheck.tr"
         while ((ci < catches->len)) {
 #line 488 "src/racecheck.tr"
-            ({ TrStr _apt_t3328 = _tr_str_retain((*((CatchClause**)List_ptr_get(catches, ci)))->err_name); RcCk_declare(self, _apt_t3328); _tr_str_release(_apt_t3328); });
+            ({ TrStr _apt_t3341 = _tr_str_retain((*((CatchClause**)List_ptr_get(catches, ci)))->err_name); RcCk_declare(self, _apt_t3341); _tr_str_release(_apt_t3341); });
 #line 489 "src/racecheck.tr"
             RcCk_pblock(self, (*((CatchClause**)List_ptr_get(catches, ci)))->body);
 #line 490 "src/racecheck.tr"
@@ -771,17 +771,17 @@ __auto_type fb = _t3318.data.STry.finally_b;
         }
 #line 491 "src/racecheck.tr"
         RcCk_block(self, fb);
-    } else if (_t3318.tag == Stmt_SAssert) {
-        __auto_type c = _t3318.data.SAssert.cond;
-__auto_type m = _t3318.data.SAssert.msg;
+    } else if (_t3331.tag == Stmt_SAssert) {
+        __auto_type c = _t3331.data.SAssert.cond;
+__auto_type m = _t3331.data.SAssert.msg;
 #line 493 "src/racecheck.tr"
         RcCk_expr(self, c);
 #line 494 "src/racecheck.tr"
         RcCk_expr(self, m);
-    } else if (_t3318.tag == Stmt_SWith) {
-        __auto_type items = _t3318.data.SWith.items;
-__auto_type aliases = _t3318.data.SWith.aliases;
-__auto_type b = _t3318.data.SWith.body;
+    } else if (_t3331.tag == Stmt_SWith) {
+        __auto_type items = _t3331.data.SWith.items;
+__auto_type aliases = _t3331.data.SWith.aliases;
+__auto_type b = _t3331.data.SWith.body;
 #line 496 "src/racecheck.tr"
         long long wi = 0LL;
 #line 497 "src/racecheck.tr"
@@ -796,38 +796,38 @@ __auto_type b = _t3318.data.SWith.body;
 #line 501 "src/racecheck.tr"
         while ((wi < aliases->len)) {
 #line 502 "src/racecheck.tr"
-            ({ TrStr _at_t3329 = (List_TrStr_get(aliases, wi)); RcCk_declare(self, _at_t3329); _tr_str_release(_at_t3329); });
+            ({ TrStr _at_t3342 = (List_TrStr_get(aliases, wi)); RcCk_declare(self, _at_t3342); _tr_str_release(_at_t3342); });
 #line 503 "src/racecheck.tr"
             wi = (wi + 1LL);
         }
 #line 504 "src/racecheck.tr"
         RcCk_block(self, b);
-    } else if (_t3318.tag == Stmt_SSpawn) {
-        __auto_type e = _t3318.data.SSpawn.expr;
+    } else if (_t3331.tag == Stmt_SSpawn) {
+        __auto_type e = _t3331.data.SSpawn.expr;
 #line 506 "src/racecheck.tr"
         RcCk_spawn_expr(self, e);
-    } else if (_t3318.tag == Stmt_STaskGroup) {
-        __auto_type b = _t3318.data.STaskGroup.body;
+    } else if (_t3331.tag == Stmt_STaskGroup) {
+        __auto_type b = _t3331.data.STaskGroup.body;
 #line 508 "src/racecheck.tr"
         RcCk_block(self, b);
 #line 509 "src/racecheck.tr"
         self->seen_spawn = false;
-    } else if (_t3318.tag == Stmt_SGpuBlock) {
-        __auto_type b = _t3318.data.SGpuBlock.body;
+    } else if (_t3331.tag == Stmt_SGpuBlock) {
+        __auto_type b = _t3331.data.SGpuBlock.body;
         RcCk_block(self, b);
-    } else if (_t3318.tag == Stmt_SDefer) {
-        __auto_type s = _t3318.data.SDefer.stmt;
+    } else if (_t3331.tag == Stmt_SDefer) {
+        __auto_type s = _t3331.data.SDefer.stmt;
         RcCk_stmt(self, s);
-    } else if (_t3318.tag == Stmt_SLocalDecl) {
-        __auto_type d = _t3318.data.SLocalDecl.decl;
+    } else if (_t3331.tag == Stmt_SLocalDecl) {
+        __auto_type d = _t3331.data.SLocalDecl.decl;
 #line 513 "src/racecheck.tr"
-        __auto_type _t3330 = (*d);
-        if (_t3330.tag == Decl_DFunction) {
-            __auto_type f = _t3330.data.DFunction.func;
+        __auto_type _t3343 = (*d);
+        if (_t3343.tag == Decl_DFunction) {
+            __auto_type f = _t3343.data.DFunction.func;
 #line 515 "src/racecheck.tr"
             long long nidx = self->fns->len;
 #line 516 "src/racecheck.tr"
-            ({ TrStr _apt_t3331 = _tr_str_retain(self->cur->file); RcCk_add_fn(self, f, _apt_t3331, self->cur->is_lib); _tr_str_release(_apt_t3331); });
+            ({ TrStr _apt_t3344 = _tr_str_retain(self->cur->file); RcCk_add_fn(self, f, _apt_t3344, self->cur->is_lib); _tr_str_release(_apt_t3344); });
 #line 517 "src/racecheck.tr"
             if (((nidx < self->fns->len) && (!self->cur->is_lib))) {
 #line 518 "src/racecheck.tr"
@@ -841,7 +841,7 @@ __auto_type b = _t3318.data.SWith.body;
 #line 522 "src/racecheck.tr"
                     if ((_rc_has(self->cur->locals, nn) || _rc_has(self->cur->params, nn))) {
 #line 523 "src/racecheck.tr"
-                        ({ __auto_type _ord_t3332 = (({ TrStr _tr_cl = (RcCk_where(self, self->cur_line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[N-3] the nested function '", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3333 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3332); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (f->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' uses '", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (nn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' from the enclosing function '", 31LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3334 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3333); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (self->cur->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', but a nested `def` does not capture the enclosing function's locals (it is an ordinary function).\n      FIX: pass '", 118LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (nn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' as a parameter, or use a `lambda` (which does capture), or move the value to module level.", 92LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->cur->msgs, _ord_t3334); _tr_str_release(_ord_t3334); });
+                        ({ __auto_type _ord_t3345 = (({ TrStr _tr_cl = (RcCk_where(self, self->cur_line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[N-3] the nested function '", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3346 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3345); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (f->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' uses '", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (nn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' from the enclosing function '", 31LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3347 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3346); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (self->cur->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', but a nested `def` does not capture the enclosing function's locals (it is an ordinary function).\n      FIX: pass '", 118LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (nn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' as a parameter, or use a `lambda` (which does capture), or move the value to module level.", 92LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->cur->msgs, _ord_t3347); _tr_str_release(_ord_t3347); });
 #line 524 "src/racecheck.tr"
                         _tr_str_release(nn);
                         break;
@@ -852,11 +852,11 @@ __auto_type b = _t3318.data.SWith.body;
                 }
             }
         } else if (1) {
-            __auto_type _ = _t3330;
+            __auto_type _ = _t3343;
             /* pass */
         }
     } else if (1) {
-        __auto_type _ = _t3318;
+        __auto_type _ = _t3331;
         /* pass */
     }
 }
@@ -868,23 +868,23 @@ __attribute__((hot)) void RcCk_spawn_expr(RcCk* self, Expr* e) {
         return;
     }
 #line 532 "src/racecheck.tr"
-    __auto_type _t3335 = (*e);
-    if (_t3335.tag == Expr_ECall) {
-        __auto_type c = _t3335.data.ECall.callee;
-__auto_type args = _t3335.data.ECall.args;
+    __auto_type _t3348 = (*e);
+    if (_t3348.tag == Expr_ECall) {
+        __auto_type c = _t3348.data.ECall.callee;
+__auto_type args = _t3348.data.ECall.args;
 #line 534 "src/racecheck.tr"
         TrStr tn = _tr_str_lit_len("", 0LL);
 #line 535 "src/racecheck.tr"
         if ((!_rc_nul(c))) {
 #line 536 "src/racecheck.tr"
-            __auto_type _t3336 = (*c);
-            if (_t3336.tag == Expr_EIdent) {
-                __auto_type n = _t3336.data.EIdent.name;
-                TrStr _strtmp_t3337 = _tr_str_retain(n);
+            __auto_type _t3349 = (*c);
+            if (_t3349.tag == Expr_EIdent) {
+                __auto_type n = _t3349.data.EIdent.name;
+                TrStr _strtmp_t3350 = _tr_str_retain(n);
                 _tr_str_release(tn);
-                tn = _strtmp_t3337;
+                tn = _strtmp_t3350;
             } else if (1) {
-                __auto_type _ = _t3336;
+                __auto_type _ = _t3349;
                 /* pass */
             }
         }
@@ -893,23 +893,23 @@ __auto_type args = _t3335.data.ECall.args;
 #line 540 "src/racecheck.tr"
         RcCk_expr(self, e);
         _tr_str_release(tn);
-    } else if (_t3335.tag == Expr_EMethodCall) {
-        __auto_type o = _t3335.data.EMethodCall.obj;
-__auto_type m = _t3335.data.EMethodCall.method;
-__auto_type margs = _t3335.data.EMethodCall.args;
+    } else if (_t3348.tag == Expr_EMethodCall) {
+        __auto_type o = _t3348.data.EMethodCall.obj;
+__auto_type m = _t3348.data.EMethodCall.method;
+__auto_type margs = _t3348.data.EMethodCall.args;
 #line 542 "src/racecheck.tr"
         TrStr r = _tr_str_lit_len("", 0LL);
 #line 543 "src/racecheck.tr"
         if ((!_rc_nul(o))) {
 #line 544 "src/racecheck.tr"
-            __auto_type _t3338 = (*o);
-            if (_t3338.tag == Expr_EIdent) {
-                __auto_type rn = _t3338.data.EIdent.name;
-                TrStr _strtmp_t3339 = _tr_str_retain(rn);
+            __auto_type _t3351 = (*o);
+            if (_t3351.tag == Expr_EIdent) {
+                __auto_type rn = _t3351.data.EIdent.name;
+                TrStr _strtmp_t3352 = _tr_str_retain(rn);
                 _tr_str_release(r);
-                r = _strtmp_t3339;
+                r = _strtmp_t3352;
             } else if (1) {
-                __auto_type _ = _t3338;
+                __auto_type _ = _t3351;
                 /* pass */
             }
         }
@@ -926,7 +926,7 @@ __auto_type margs = _t3335.data.EMethodCall.args;
         RcCk_expr(self, e);
         _tr_str_release(r);
     } else if (1) {
-        __auto_type _ = _t3335;
+        __auto_type _ = _t3348;
         RcCk_expr(self, e);
     }
 }
@@ -935,9 +935,9 @@ __attribute__((hot)) void RcCk_record_site(RcCk* self, TrStr target, List_ptr* a
 #line 555 "src/racecheck.tr"
     RcSite* s = ((RcSite*)_tr_obj_alloc(sizeof(RcSite)));
 #line 556 "src/racecheck.tr"
-    TrStr _sfo_t3340 = s->target;
+    TrStr _sfo_t3353 = s->target;
     s->target = _tr_str_retain(target);
-    _tr_str_release(_sfo_t3340);
+    _tr_str_release(_sfo_t3353);
 #line 557 "src/racecheck.tr"
     s->args = (void*)List_ptr_new();
 #line 558 "src/racecheck.tr"
@@ -945,7 +945,7 @@ __attribute__((hot)) void RcCk_record_site(RcCk* self, TrStr target, List_ptr* a
 #line 559 "src/racecheck.tr"
     while ((i < args->len)) {
 #line 560 "src/racecheck.tr"
-        ({ __auto_type _ord_t3341 = (((Expr*)List_ptr_get(args, i))); List_ptr_append(s->args, _ord_t3341); });
+        ({ __auto_type _ord_t3354 = (((Expr*)List_ptr_get(args, i))); List_ptr_append(s->args, _ord_t3354); });
 #line 561 "src/racecheck.tr"
         i = (i + 1LL);
     }
@@ -956,13 +956,13 @@ __attribute__((hot)) void RcCk_record_site(RcCk* self, TrStr target, List_ptr* a
 #line 564 "src/racecheck.tr"
     s->depth = self->loop_depth;
 #line 565 "src/racecheck.tr"
-    TrStr _sfo_t3342 = s->recv;
+    TrStr _sfo_t3355 = s->recv;
     s->recv = _tr_str_lit_len("", 0LL);
-    _tr_str_release(_sfo_t3342);
+    _tr_str_release(_sfo_t3355);
 #line 566 "src/racecheck.tr"
-    TrStr _sfo_t3343 = s->meth;
+    TrStr _sfo_t3356 = s->meth;
     s->meth = _tr_str_lit_len("", 0LL);
-    _tr_str_release(_sfo_t3343);
+    _tr_str_release(_sfo_t3356);
 #line 567 "src/racecheck.tr"
     List_ptr_append(self->cur->sites, _tr_obj_retain(s));
 #line 568 "src/racecheck.tr"
@@ -988,7 +988,7 @@ __attribute__((hot)) void RcCk_comps(RcCk* self, Expr* element, List_ptr* gens) 
 #line 578 "src/racecheck.tr"
     while ((i < gens->len)) {
 #line 579 "src/racecheck.tr"
-        ({ TrStr _apt_t3344 = _tr_str_retain((*((Comprehension**)List_ptr_get(gens, i)))->target); RcCk_declare(self, _apt_t3344); _tr_str_release(_apt_t3344); });
+        ({ TrStr _apt_t3357 = _tr_str_retain((*((Comprehension**)List_ptr_get(gens, i)))->target); RcCk_declare(self, _apt_t3357); _tr_str_release(_apt_t3357); });
 #line 580 "src/racecheck.tr"
         RcCk_expr(self, (*((Comprehension**)List_ptr_get(gens, i)))->iter);
 #line 581 "src/racecheck.tr"
@@ -1007,32 +1007,32 @@ __attribute__((hot)) void RcCk_expr(RcCk* self, Expr* e) {
         return;
     }
 #line 587 "src/racecheck.tr"
-    __auto_type _t3345 = (*e);
-    if (_t3345.tag == Expr_EIdent) {
-        __auto_type n = _t3345.data.EIdent.name;
+    __auto_type _t3358 = (*e);
+    if (_t3358.tag == Expr_EIdent) {
+        __auto_type n = _t3358.data.EIdent.name;
 #line 589 "src/racecheck.tr"
         List_TrStr_append(self->cur->idents, n);
 #line 590 "src/racecheck.tr"
         RcCk_note(self, n, false);
-    } else if (_t3345.tag == Expr_EBinOp) {
-        __auto_type l = _t3345.data.EBinOp.left;
-__auto_type r = _t3345.data.EBinOp.right;
+    } else if (_t3358.tag == Expr_EBinOp) {
+        __auto_type l = _t3358.data.EBinOp.left;
+__auto_type r = _t3358.data.EBinOp.right;
 #line 592 "src/racecheck.tr"
         RcCk_expr(self, l);
 #line 593 "src/racecheck.tr"
         RcCk_expr(self, r);
-    } else if (_t3345.tag == Expr_EUnaryOp) {
-        __auto_type x = _t3345.data.EUnaryOp.expr;
+    } else if (_t3358.tag == Expr_EUnaryOp) {
+        __auto_type x = _t3358.data.EUnaryOp.expr;
         RcCk_expr(self, x);
-    } else if (_t3345.tag == Expr_ECall) {
-        __auto_type c = _t3345.data.ECall.callee;
-__auto_type args = _t3345.data.ECall.args;
+    } else if (_t3358.tag == Expr_ECall) {
+        __auto_type c = _t3358.data.ECall.callee;
+__auto_type args = _t3358.data.ECall.args;
 #line 596 "src/racecheck.tr"
         if ((!_rc_nul(c))) {
 #line 597 "src/racecheck.tr"
-            __auto_type _t3346 = (*c);
-            if (_t3346.tag == Expr_EIdent) {
-                __auto_type fnm = _t3346.data.EIdent.name;
+            __auto_type _t3359 = (*c);
+            if (_t3359.tag == Expr_EIdent) {
+                __auto_type fnm = _t3359.data.EIdent.name;
 #line 599 "src/racecheck.tr"
                 List_TrStr_append(self->cur->calls, fnm);
 #line 600 "src/racecheck.tr"
@@ -1040,9 +1040,9 @@ __auto_type args = _t3345.data.ECall.args;
 #line 601 "src/racecheck.tr"
                 while ((cai < args->len)) {
 #line 602 "src/racecheck.tr"
-                    __auto_type _t3347 = (*((Expr*)List_ptr_get(args, cai)));
-                    if (_t3347.tag == Expr_EIdent) {
-                        __auto_type can = _t3347.data.EIdent.name;
+                    __auto_type _t3360 = (*((Expr*)List_ptr_get(args, cai)));
+                    if (_t3360.tag == Expr_EIdent) {
+                        __auto_type can = _t3360.data.EIdent.name;
 #line 604 "src/racecheck.tr"
                         List_TrStr_append(self->cur->ca_fn, fnm);
 #line 605 "src/racecheck.tr"
@@ -1050,7 +1050,7 @@ __auto_type args = _t3345.data.ECall.args;
 #line 606 "src/racecheck.tr"
                         List_TrStr_append(self->cur->ca_name, can);
                     } else if (1) {
-                        __auto_type _ = _t3347;
+                        __auto_type _ = _t3360;
                         /* pass */
                     }
 #line 608 "src/racecheck.tr"
@@ -1063,23 +1063,23 @@ __auto_type args = _t3345.data.ECall.args;
 #line 611 "src/racecheck.tr"
                     while ((ai < args->len)) {
 #line 612 "src/racecheck.tr"
-                        __auto_type _t3348 = (*((Expr*)List_ptr_get(args, ai)));
-                        if (_t3348.tag == Expr_ECall) {
-                            __auto_type c2 = _t3348.data.ECall.callee;
-__auto_type a2 = _t3348.data.ECall.args;
+                        __auto_type _t3361 = (*((Expr*)List_ptr_get(args, ai)));
+                        if (_t3361.tag == Expr_ECall) {
+                            __auto_type c2 = _t3361.data.ECall.callee;
+__auto_type a2 = _t3361.data.ECall.args;
 #line 614 "src/racecheck.tr"
                             TrStr t2 = _tr_str_lit_len("", 0LL);
 #line 615 "src/racecheck.tr"
                             if ((!_rc_nul(c2))) {
 #line 616 "src/racecheck.tr"
-                                __auto_type _t3349 = (*c2);
-                                if (_t3349.tag == Expr_EIdent) {
-                                    __auto_type n2 = _t3349.data.EIdent.name;
-                                    TrStr _strtmp_t3350 = _tr_str_retain(n2);
+                                __auto_type _t3362 = (*c2);
+                                if (_t3362.tag == Expr_EIdent) {
+                                    __auto_type n2 = _t3362.data.EIdent.name;
+                                    TrStr _strtmp_t3363 = _tr_str_retain(n2);
                                     _tr_str_release(t2);
-                                    t2 = _strtmp_t3350;
+                                    t2 = _strtmp_t3363;
                                 } else if (1) {
-                                    __auto_type _ = _t3349;
+                                    __auto_type _ = _t3362;
                                     /* pass */
                                 }
                             }
@@ -1087,7 +1087,7 @@ __auto_type a2 = _t3348.data.ECall.args;
                             RcCk_record_site(self, t2, a2, 0LL);
                             _tr_str_release(t2);
                         } else if (1) {
-                            __auto_type _ = _t3348;
+                            __auto_type _ = _t3361;
                             /* pass */
                         }
 #line 621 "src/racecheck.tr"
@@ -1095,16 +1095,16 @@ __auto_type a2 = _t3348.data.ECall.args;
                     }
                 }
             } else if (1) {
-                __auto_type _ = _t3346;
+                __auto_type _ = _t3359;
                 RcCk_expr(self, c);
             }
         }
 #line 623 "src/racecheck.tr"
         RcCk_exprs(self, args);
-    } else if (_t3345.tag == Expr_EMethodCall) {
-        __auto_type o = _t3345.data.EMethodCall.obj;
-__auto_type m = _t3345.data.EMethodCall.method;
-__auto_type args = _t3345.data.EMethodCall.args;
+    } else if (_t3358.tag == Expr_EMethodCall) {
+        __auto_type o = _t3358.data.EMethodCall.obj;
+__auto_type m = _t3358.data.EMethodCall.method;
+__auto_type args = _t3358.data.EMethodCall.args;
 #line 625 "src/racecheck.tr"
         RcCk_expr(self, o);
 #line 626 "src/racecheck.tr"
@@ -1116,14 +1116,14 @@ __auto_type args = _t3345.data.EMethodCall.args;
 #line 629 "src/racecheck.tr"
         if ((!_rc_nul(o))) {
 #line 630 "src/racecheck.tr"
-            __auto_type _t3351 = (*o);
-            if (_t3351.tag == Expr_EIdent) {
-                __auto_type dn = _t3351.data.EIdent.name;
-                TrStr _strtmp_t3352 = _tr_str_retain(dn);
+            __auto_type _t3364 = (*o);
+            if (_t3364.tag == Expr_EIdent) {
+                __auto_type dn = _t3364.data.EIdent.name;
+                TrStr _strtmp_t3365 = _tr_str_retain(dn);
                 _tr_str_release(direct);
-                direct = _strtmp_t3352;
+                direct = _strtmp_t3365;
             } else if (1) {
-                __auto_type _ = _t3351;
+                __auto_type _ = _t3364;
                 /* pass */
             }
         }
@@ -1144,46 +1144,46 @@ __auto_type args = _t3345.data.EMethodCall.args;
 #line 638 "src/racecheck.tr"
             TrStr t = _tr_str_lit_len("", 0LL);
 #line 639 "src/racecheck.tr"
-            __auto_type _t3353 = (*((Expr*)List_ptr_get(args, 0LL)));
-            if (_t3353.tag == Expr_EIdent) {
-                __auto_type tn2 = _t3353.data.EIdent.name;
-                TrStr _strtmp_t3354 = _tr_str_retain(tn2);
+            __auto_type _t3366 = (*((Expr*)List_ptr_get(args, 0LL)));
+            if (_t3366.tag == Expr_EIdent) {
+                __auto_type tn2 = _t3366.data.EIdent.name;
+                TrStr _strtmp_t3367 = _tr_str_retain(tn2);
                 _tr_str_release(t);
-                t = _strtmp_t3354;
-            } else if (_t3353.tag == Expr_EClosure) {
-                __auto_type cps = _t3353.data.EClosure.params;
-__auto_type cbody = _t3353.data.EClosure.body;
+                t = _strtmp_t3367;
+            } else if (_t3366.tag == Expr_EClosure) {
+                __auto_type cps = _t3366.data.EClosure.params;
+__auto_type cbody = _t3366.data.EClosure.body;
 #line 643 "src/racecheck.tr"
-                RcFn* tmp = ({ TrStr _apt_t3355 = _tr_str_retain(self->cur->file); __auto_type _wr = (_rc_new_fn(_tr_str_lit_len("", 0LL), _apt_t3355, self->cur->line, true)); _tr_str_release(_apt_t3355); _wr; });
+                RcFn* tmp = ({ TrStr _apt_t3368 = _tr_str_retain(self->cur->file); __auto_type _wr = (_rc_new_fn(_tr_str_lit_len("", 0LL), _apt_t3368, self->cur->line, true)); _tr_str_release(_apt_t3368); _wr; });
 #line 644 "src/racecheck.tr"
                 long long ci = 0LL;
 #line 645 "src/racecheck.tr"
                 while ((ci < cps->len)) {
 #line 646 "src/racecheck.tr"
-                    ({ __auto_type _ord_t3356 = (((Param*)List_ptr_get(cps, ci))->name); List_TrStr_append(tmp->params, _ord_t3356); });
+                    ({ __auto_type _ord_t3369 = (((Param*)List_ptr_get(cps, ci))->name); List_TrStr_append(tmp->params, _ord_t3369); });
 #line 647 "src/racecheck.tr"
                     ci = (ci + 1LL);
                 }
 #line 648 "src/racecheck.tr"
                 RcFn* saved = _tr_obj_retain(self->cur);
 #line 649 "src/racecheck.tr"
-                RcFn* _cltmp_t3357 = _tr_obj_retain(tmp);
+                RcFn* _cltmp_t3370 = _tr_obj_retain(tmp);
                 _tr_obj_release(self->cur, _trdrop_RcFn);
-                self->cur = _cltmp_t3357;
+                self->cur = _cltmp_t3370;
 #line 650 "src/racecheck.tr"
                 RcCk_block(self, cbody);
 #line 651 "src/racecheck.tr"
-                RcFn* _cltmp_t3358 = _tr_obj_retain(saved);
+                RcFn* _cltmp_t3371 = _tr_obj_retain(saved);
                 _tr_obj_release(self->cur, _trdrop_RcFn);
-                self->cur = _cltmp_t3358;
+                self->cur = _cltmp_t3371;
 #line 652 "src/racecheck.tr"
                 long long ck = 0LL;
 #line 653 "src/racecheck.tr"
                 while ((ck < tmp->touched->len)) {
 #line 654 "src/racecheck.tr"
-                    if ((({ __auto_type _ord_t3360 = (self->cur->locals); TrStr _at_t3359 = (List_TrStr_get(tmp->touched, ck)); __auto_type _wr = (_rc_has(_ord_t3360, _at_t3359)); _tr_str_release(_at_t3359); _wr; }) || ({ __auto_type _ord_t3362 = (self->cur->params); TrStr _at_t3361 = (List_TrStr_get(tmp->touched, ck)); __auto_type _wr = (_rc_has(_ord_t3362, _at_t3361)); _tr_str_release(_at_t3361); _wr; }))) {
+                    if ((({ __auto_type _ord_t3373 = (self->cur->locals); TrStr _at_t3372 = (List_TrStr_get(tmp->touched, ck)); __auto_type _wr = (_rc_has(_ord_t3373, _at_t3372)); _tr_str_release(_at_t3372); _wr; }) || ({ __auto_type _ord_t3375 = (self->cur->params); TrStr _at_t3374 = (List_TrStr_get(tmp->touched, ck)); __auto_type _wr = (_rc_has(_ord_t3375, _at_t3374)); _tr_str_release(_at_t3374); _wr; }))) {
 #line 655 "src/racecheck.tr"
-                        ({ __auto_type _ord_t3363 = (({ TrStr _tr_cl = (RcCk_where(self, self->cur_line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-6] the closure passed to `spawn` captures '", 46LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3364 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3363); TrStr _tr_cr = (List_TrStr_get(tmp->touched, ck)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' from the spawning function by reference: the new thread would race on it and outlive it.\n      FIX: spawn a named `def` and pass '", 132LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3365 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3364); TrStr _tr_cr = (List_TrStr_get(tmp->touched, ck)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' as an argument (an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle).", 85LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->cur->msgs, _ord_t3365); _tr_str_release(_ord_t3365); });
+                        ({ __auto_type _ord_t3376 = (({ TrStr _tr_cl = (RcCk_where(self, self->cur_line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-6] the closure passed to `spawn` captures '", 46LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3377 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3376); TrStr _tr_cr = (List_TrStr_get(tmp->touched, ck)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' from the spawning function by reference: the new thread would race on it and outlive it.\n      FIX: spawn a named `def` and pass '", 132LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3378 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3377); TrStr _tr_cr = (List_TrStr_get(tmp->touched, ck)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' as an argument (an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle).", 85LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->cur->msgs, _ord_t3378); _tr_str_release(_ord_t3378); });
 #line 656 "src/racecheck.tr"
                         break;
                     }
@@ -1193,7 +1193,7 @@ __auto_type cbody = _t3353.data.EClosure.body;
                 _tr_obj_release(tmp, _trdrop_RcFn);
                 _tr_obj_release(saved, _trdrop_RcFn);
             } else if (1) {
-                __auto_type _ = _t3353;
+                __auto_type _ = _t3366;
                 /* pass */
             }
 #line 659 "src/racecheck.tr"
@@ -1207,7 +1207,7 @@ __auto_type cbody = _t3353.data.EClosure.body;
 #line 661 "src/racecheck.tr"
             List_TrStr_append(self->cur->wroot, _tr_v_recv);
 #line 662 "src/racecheck.tr"
-            ({ TrStr _ord_t3366 = (_rc_first_prop(o)); List_TrStr_append(self->cur->wprop, _ord_t3366); _tr_str_release(_ord_t3366); });
+            ({ TrStr _ord_t3379 = (_rc_first_prop(o)); List_TrStr_append(self->cur->wprop, _ord_t3379); _tr_str_release(_ord_t3379); });
 #line 663 "src/racecheck.tr"
             List_bool_append(self->cur->wafter, self->seen_spawn);
 #line 664 "src/racecheck.tr"
@@ -1215,21 +1215,21 @@ __auto_type cbody = _t3353.data.EClosure.body;
         }
         _tr_str_release(_tr_v_recv);
         _tr_str_release(direct);
-    } else if (_t3345.tag == Expr_EPropAccess) {
-        __auto_type o = _t3345.data.EPropAccess.obj;
+    } else if (_t3358.tag == Expr_EPropAccess) {
+        __auto_type o = _t3358.data.EPropAccess.obj;
         RcCk_expr(self, o);
-    } else if (_t3345.tag == Expr_EIndex) {
-        __auto_type o = _t3345.data.EIndex.obj;
-__auto_type i = _t3345.data.EIndex._tr_v_index;
+    } else if (_t3358.tag == Expr_EIndex) {
+        __auto_type o = _t3358.data.EIndex.obj;
+__auto_type i = _t3358.data.EIndex._tr_v_index;
 #line 667 "src/racecheck.tr"
         RcCk_expr(self, o);
 #line 668 "src/racecheck.tr"
         RcCk_expr(self, i);
-    } else if (_t3345.tag == Expr_ECast) {
-        __auto_type x = _t3345.data.ECast.expr;
+    } else if (_t3358.tag == Expr_ECast) {
+        __auto_type x = _t3358.data.ECast.expr;
         RcCk_expr(self, x);
-    } else if (_t3345.tag == Expr_EFString) {
-        __auto_type parts = _t3345.data.EFString.parts;
+    } else if (_t3358.tag == Expr_EFString) {
+        __auto_type parts = _t3358.data.EFString.parts;
 #line 671 "src/racecheck.tr"
         long long pi = 0LL;
 #line 672 "src/racecheck.tr"
@@ -1242,70 +1242,70 @@ __auto_type i = _t3345.data.EIndex._tr_v_index;
 #line 674 "src/racecheck.tr"
             pi = (pi + 1LL);
         }
-    } else if (_t3345.tag == Expr_ETryExpr) {
-        __auto_type x = _t3345.data.ETryExpr.expr;
+    } else if (_t3358.tag == Expr_ETryExpr) {
+        __auto_type x = _t3358.data.ETryExpr.expr;
         RcCk_expr(self, x);
-    } else if (_t3345.tag == Expr_EClosure) {
-        __auto_type params = _t3345.data.EClosure.params;
-__auto_type body = _t3345.data.EClosure.body;
+    } else if (_t3358.tag == Expr_EClosure) {
+        __auto_type params = _t3358.data.EClosure.params;
+__auto_type body = _t3358.data.EClosure.body;
 #line 677 "src/racecheck.tr"
         long long ci = 0LL;
 #line 678 "src/racecheck.tr"
         while ((ci < params->len)) {
 #line 679 "src/racecheck.tr"
-            ({ TrStr _apt_t3367 = _tr_str_retain(((Param*)List_ptr_get(params, ci))->name); RcCk_declare(self, _apt_t3367); _tr_str_release(_apt_t3367); });
+            ({ TrStr _apt_t3380 = _tr_str_retain(((Param*)List_ptr_get(params, ci))->name); RcCk_declare(self, _apt_t3380); _tr_str_release(_apt_t3380); });
 #line 680 "src/racecheck.tr"
             ci = (ci + 1LL);
         }
 #line 681 "src/racecheck.tr"
         RcCk_block(self, body);
-    } else if (_t3345.tag == Expr_ESuperMethodCall) {
-        __auto_type args = _t3345.data.ESuperMethodCall.args;
+    } else if (_t3358.tag == Expr_ESuperMethodCall) {
+        __auto_type args = _t3358.data.ESuperMethodCall.args;
         RcCk_exprs(self, args);
-    } else if (_t3345.tag == Expr_EList) {
-        __auto_type items = _t3345.data.EList.items;
+    } else if (_t3358.tag == Expr_EList) {
+        __auto_type items = _t3358.data.EList.items;
         RcCk_exprs(self, items);
-    } else if (_t3345.tag == Expr_ESet) {
-        __auto_type items = _t3345.data.ESet.items;
+    } else if (_t3358.tag == Expr_ESet) {
+        __auto_type items = _t3358.data.ESet.items;
         RcCk_exprs(self, items);
-    } else if (_t3345.tag == Expr_ETuple) {
-        __auto_type items = _t3345.data.ETuple.items;
+    } else if (_t3358.tag == Expr_ETuple) {
+        __auto_type items = _t3358.data.ETuple.items;
         RcCk_exprs(self, items);
-    } else if (_t3345.tag == Expr_EDict) {
-        __auto_type ks = _t3345.data.EDict.keys;
-__auto_type vs = _t3345.data.EDict.vals;
+    } else if (_t3358.tag == Expr_EDict) {
+        __auto_type ks = _t3358.data.EDict.keys;
+__auto_type vs = _t3358.data.EDict.vals;
 #line 687 "src/racecheck.tr"
         RcCk_exprs(self, ks);
 #line 688 "src/racecheck.tr"
         RcCk_exprs(self, vs);
-    } else if (_t3345.tag == Expr_EListComp) {
-        __auto_type el = _t3345.data.EListComp.element;
-__auto_type gens = _t3345.data.EListComp.generators;
+    } else if (_t3358.tag == Expr_EListComp) {
+        __auto_type el = _t3358.data.EListComp.element;
+__auto_type gens = _t3358.data.EListComp.generators;
         RcCk_comps(self, el, gens);
-    } else if (_t3345.tag == Expr_EGeneratorExpr) {
-        __auto_type el = _t3345.data.EGeneratorExpr.element;
-__auto_type gens = _t3345.data.EGeneratorExpr.generators;
+    } else if (_t3358.tag == Expr_EGeneratorExpr) {
+        __auto_type el = _t3358.data.EGeneratorExpr.element;
+__auto_type gens = _t3358.data.EGeneratorExpr.generators;
         RcCk_comps(self, el, gens);
-    } else if (_t3345.tag == Expr_ESlice) {
-        __auto_type a = _t3345.data.ESlice.start;
-__auto_type b = _t3345.data.ESlice.stop;
-__auto_type c = _t3345.data.ESlice.step;
+    } else if (_t3358.tag == Expr_ESlice) {
+        __auto_type a = _t3358.data.ESlice.start;
+__auto_type b = _t3358.data.ESlice.stop;
+__auto_type c = _t3358.data.ESlice.step;
 #line 692 "src/racecheck.tr"
         RcCk_expr(self, a);
 #line 693 "src/racecheck.tr"
         RcCk_expr(self, b);
 #line 694 "src/racecheck.tr"
         RcCk_expr(self, c);
-    } else if (_t3345.tag == Expr_EAwait) {
-        __auto_type x = _t3345.data.EAwait.expr;
+    } else if (_t3358.tag == Expr_EAwait) {
+        __auto_type x = _t3358.data.EAwait.expr;
         RcCk_expr(self, x);
-    } else if (_t3345.tag == Expr_EYield) {
-        __auto_type x = _t3345.data.EYield.expr;
+    } else if (_t3358.tag == Expr_EYield) {
+        __auto_type x = _t3358.data.EYield.expr;
         RcCk_expr(self, x);
-    } else if (_t3345.tag == Expr_ETry) {
-        __auto_type tb = _t3345.data.ETry.try_body;
-__auto_type catches = _t3345.data.ETry.catches;
-__auto_type fb = _t3345.data.ETry.finally_b;
+    } else if (_t3358.tag == Expr_ETry) {
+        __auto_type tb = _t3358.data.ETry.try_body;
+__auto_type catches = _t3358.data.ETry.catches;
+__auto_type fb = _t3358.data.ETry.finally_b;
 #line 698 "src/racecheck.tr"
         RcCk_block(self, tb);
 #line 699 "src/racecheck.tr"
@@ -1319,29 +1319,29 @@ __auto_type fb = _t3345.data.ETry.finally_b;
         }
 #line 703 "src/racecheck.tr"
         RcCk_block(self, fb);
-    } else if (_t3345.tag == Expr_ERange) {
-        __auto_type a = _t3345.data.ERange.start;
-__auto_type b = _t3345.data.ERange.end;
+    } else if (_t3358.tag == Expr_ERange) {
+        __auto_type a = _t3358.data.ERange.start;
+__auto_type b = _t3358.data.ERange.end;
 #line 705 "src/racecheck.tr"
         RcCk_expr(self, a);
 #line 706 "src/racecheck.tr"
         RcCk_expr(self, b);
-    } else if (_t3345.tag == Expr_EIfElse) {
-        __auto_type c = _t3345.data.EIfElse.cond;
-__auto_type a = _t3345.data.EIfElse.then_expr;
-__auto_type b = _t3345.data.EIfElse.else_expr;
+    } else if (_t3358.tag == Expr_EIfElse) {
+        __auto_type c = _t3358.data.EIfElse.cond;
+__auto_type a = _t3358.data.EIfElse.then_expr;
+__auto_type b = _t3358.data.EIfElse.else_expr;
 #line 708 "src/racecheck.tr"
         RcCk_expr(self, c);
 #line 709 "src/racecheck.tr"
         RcCk_expr(self, a);
 #line 710 "src/racecheck.tr"
         RcCk_expr(self, b);
-    } else if (_t3345.tag == Expr_EDo) {
-        __auto_type b = _t3345.data.EDo.body;
+    } else if (_t3358.tag == Expr_EDo) {
+        __auto_type b = _t3358.data.EDo.body;
         RcCk_block(self, b);
-    } else if (_t3345.tag == Expr_EMatch) {
-        __auto_type s = _t3345.data.EMatch.subj;
-__auto_type arms = _t3345.data.EMatch.arms;
+    } else if (_t3358.tag == Expr_EMatch) {
+        __auto_type s = _t3358.data.EMatch.subj;
+__auto_type arms = _t3358.data.EMatch.arms;
 #line 713 "src/racecheck.tr"
         RcCk_expr(self, s);
 #line 714 "src/racecheck.tr"
@@ -1355,16 +1355,16 @@ __auto_type arms = _t3345.data.EMatch.arms;
 #line 718 "src/racecheck.tr"
             mi = (mi + 1LL);
         }
-    } else if (_t3345.tag == Expr_EMacroCall) {
-        __auto_type args = _t3345.data.EMacroCall.args;
+    } else if (_t3358.tag == Expr_EMacroCall) {
+        __auto_type args = _t3358.data.EMacroCall.args;
         RcCk_exprs(self, args);
-    } else if (_t3345.tag == Expr_ELoop) {
-        __auto_type b = _t3345.data.ELoop.body;
+    } else if (_t3358.tag == Expr_ELoop) {
+        __auto_type b = _t3358.data.ELoop.body;
         RcCk_block(self, b);
-    } else if (_t3345.tag == Expr_EWhileExpr) {
-        __auto_type c = _t3345.data.EWhileExpr.cond;
-__auto_type b = _t3345.data.EWhileExpr.body;
-__auto_type eb = _t3345.data.EWhileExpr.else_body;
+    } else if (_t3358.tag == Expr_EWhileExpr) {
+        __auto_type c = _t3358.data.EWhileExpr.cond;
+__auto_type b = _t3358.data.EWhileExpr.body;
+__auto_type eb = _t3358.data.EWhileExpr.else_body;
 #line 722 "src/racecheck.tr"
         RcCk_expr(self, c);
 #line 723 "src/racecheck.tr"
@@ -1372,19 +1372,19 @@ __auto_type eb = _t3345.data.EWhileExpr.else_body;
 #line 724 "src/racecheck.tr"
         RcCk_block(self, eb);
     } else if (1) {
-        __auto_type _ = _t3345;
+        __auto_type _ = _t3358;
         /* pass */
     }
 }
 
 __attribute__((hot)) void RcCk_add_method(RcCk* self, FunctionDef* f, TrStr cls, TrStr file, bool lib) {
 #line 728 "src/racecheck.tr"
-    ({ TrStr _at_t3368 = (({ TrStr _tr_cl = (_tr_strx_concatv((cls), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (f->name)); _tr_str_release(_tr_cl); _tr_cres; })); RcCk_add_fn_named(self, f, _at_t3368, file, lib); _tr_str_release(_at_t3368); });
+    ({ TrStr _at_t3381 = (({ TrStr _tr_cl = (_tr_strx_concatv((cls), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (f->name)); _tr_str_release(_tr_cl); _tr_cres; })); RcCk_add_fn_named(self, f, _at_t3381, file, lib); _tr_str_release(_at_t3381); });
 }
 
 __attribute__((hot)) void RcCk_add_fn(RcCk* self, FunctionDef* f, TrStr file, bool lib) {
 #line 731 "src/racecheck.tr"
-    ({ TrStr _apt_t3369 = _tr_str_retain(f->name); RcCk_add_fn_named(self, f, _apt_t3369, file, lib); _tr_str_release(_apt_t3369); });
+    ({ TrStr _apt_t3382 = _tr_str_retain(f->name); RcCk_add_fn_named(self, f, _apt_t3382, file, lib); _tr_str_release(_apt_t3382); });
 }
 
 __attribute__((hot)) void RcCk_add_fn_named(RcCk* self, FunctionDef* f, TrStr nm, TrStr file, bool lib) {
@@ -1395,22 +1395,22 @@ __attribute__((hot)) void RcCk_add_fn_named(RcCk* self, FunctionDef* f, TrStr nm
 #line 736 "src/racecheck.tr"
     while ((pi < f->params->len)) {
 #line 737 "src/racecheck.tr"
-        ({ __auto_type _ord_t3370 = (((Param*)List_ptr_get(f->params, pi))->name); List_TrStr_append(rf->params, _ord_t3370); });
+        ({ __auto_type _ord_t3383 = (((Param*)List_ptr_get(f->params, pi))->name); List_TrStr_append(rf->params, _ord_t3383); });
 #line 738 "src/racecheck.tr"
         if ((!rf->is_lib)) {
 #line 738 "src/racecheck.tr"
-            ({ __auto_type _ord_t3371 = (((Param*)List_ptr_get(f->params, pi))->ty); __auto_type _ord_t3372 = (f->line); RcCk_ty_check(self, _ord_t3371, file, _ord_t3372); });
+            ({ __auto_type _ord_t3384 = (((Param*)List_ptr_get(f->params, pi))->ty); __auto_type _ord_t3385 = (f->line); RcCk_ty_check(self, _ord_t3384, file, _ord_t3385); });
         }
 #line 739 "src/racecheck.tr"
         AstType** pt = ((Param*)List_ptr_get(f->params, pi))->ty;
 #line 740 "src/racecheck.tr"
         if ((((unsigned long long)(pt)) != ((unsigned long long)(0LL)))) {
 #line 741 "src/racecheck.tr"
-            ({ __auto_type _ord_t3373 = ((*pt)->name); List_TrStr_append(rf->ptypes, _ord_t3373); });
+            ({ __auto_type _ord_t3386 = ((*pt)->name); List_TrStr_append(rf->ptypes, _ord_t3386); });
 #line 742 "src/racecheck.tr"
             if (((*pt)->args->len > 0LL)) {
 #line 742 "src/racecheck.tr"
-                ({ __auto_type _ord_t3374 = ((*((AstType**)List_ptr_get((*pt)->args, 0LL)))->name); List_TrStr_append(rf->pinner, _ord_t3374); });
+                ({ __auto_type _ord_t3387 = ((*((AstType**)List_ptr_get((*pt)->args, 0LL)))->name); List_TrStr_append(rf->pinner, _ord_t3387); });
             } else {
 #line 743 "src/racecheck.tr"
                 List_TrStr_append(rf->pinner, _tr_str_lit_len("", 0LL));
@@ -1441,9 +1441,9 @@ __attribute__((hot)) void RcCk_add_fn_named(RcCk* self, FunctionDef* f, TrStr nm
 #line 753 "src/racecheck.tr"
     bool saved_sp = self->seen_spawn;
 #line 754 "src/racecheck.tr"
-    RcFn* _cltmp_t3375 = _tr_obj_retain(rf);
+    RcFn* _cltmp_t3388 = _tr_obj_retain(rf);
     _tr_obj_release(self->cur, _trdrop_RcFn);
-    self->cur = _cltmp_t3375;
+    self->cur = _cltmp_t3388;
 #line 755 "src/racecheck.tr"
     self->cur_line = f->line;
 #line 756 "src/racecheck.tr"
@@ -1457,17 +1457,17 @@ __attribute__((hot)) void RcCk_add_fn_named(RcCk* self, FunctionDef* f, TrStr nm
 #line 760 "src/racecheck.tr"
     while ((tw < rf->thr_made->len)) {
 #line 761 "src/racecheck.tr"
-        if (({ __auto_type _ord_t3377 = (rf->idents); TrStr _at_t3376 = (List_TrStr_get(rf->thr_made, tw)); __auto_type _wr = ((!_rc_has(_ord_t3377, _at_t3376))); _tr_str_release(_at_t3376); _wr; })) {
+        if (({ __auto_type _ord_t3390 = (rf->idents); TrStr _at_t3389 = (List_TrStr_get(rf->thr_made, tw)); __auto_type _wr = ((!_rc_has(_ord_t3390, _at_t3389))); _tr_str_release(_at_t3389); _wr; })) {
 #line 762 "src/racecheck.tr"
-            ({ __auto_type _ord_t3378 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("W|", 2LL)), (file))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(List_i64_get(rf->thr_line, tw))))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": [T-9] the Thread handle '", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3379 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3378); TrStr _tr_cr = (List_TrStr_get(rf->thr_made, tw)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is never joined, detached or used: the thread runs unsupervised and the program may exit while it is still working.\n      FIX: call `", 135LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3380 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3379); TrStr _tr_cr = (List_TrStr_get(rf->thr_made, tw)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".join()` (wait for it) or `", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3381 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3380); TrStr _tr_cr = (List_TrStr_get(rf->thr_made, tw)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".detach()` (run independently).", 31LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(rf->msgs, _ord_t3381); _tr_str_release(_ord_t3381); });
+            ({ __auto_type _ord_t3391 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("W|", 2LL)), (file))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(List_i64_get(rf->thr_line, tw))))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": [T-9] the Thread handle '", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3392 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3391); TrStr _tr_cr = (List_TrStr_get(rf->thr_made, tw)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is never joined, detached or used: the thread runs unsupervised and the program may exit while it is still working.\n      FIX: call `", 135LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3393 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3392); TrStr _tr_cr = (List_TrStr_get(rf->thr_made, tw)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".join()` (wait for it) or `", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3394 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3393); TrStr _tr_cr = (List_TrStr_get(rf->thr_made, tw)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".detach()` (run independently).", 31LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(rf->msgs, _ord_t3394); _tr_str_release(_ord_t3394); });
         }
 #line 763 "src/racecheck.tr"
         tw = (tw + 1LL);
     }
 #line 764 "src/racecheck.tr"
-    RcFn* _cltmp_t3382 = _tr_obj_retain(saved);
+    RcFn* _cltmp_t3395 = _tr_obj_retain(saved);
     _tr_obj_release(self->cur, _trdrop_RcFn);
-    self->cur = _cltmp_t3382;
+    self->cur = _cltmp_t3395;
 #line 765 "src/racecheck.tr"
     self->cur_line = saved_line;
 #line 766 "src/racecheck.tr"
@@ -1488,16 +1488,16 @@ __attribute__((hot)) void RcCk_add_global(RcCk* self, TrStr name, bool is_mut, b
 #line 773 "src/racecheck.tr"
     if ((((unsigned long long)(ty)) != ((unsigned long long)(0LL)))) {
 #line 773 "src/racecheck.tr"
-        TrStr _strtmp_t3383 = _tr_str_retain((*ty)->name);
+        TrStr _strtmp_t3396 = _tr_str_retain((*ty)->name);
         _tr_str_release(tn);
-        tn = _strtmp_t3383;
+        tn = _strtmp_t3396;
     }
 #line 774 "src/racecheck.tr"
     if (_tr_str_eqv((tn), (_tr_str_lit_len("", 0LL)))) {
 #line 774 "src/racecheck.tr"
-        TrStr _strtmp_t3384 = _rc_ctor_name(v);
+        TrStr _strtmp_t3397 = _rc_ctor_name(v);
         _tr_str_release(tn);
-        tn = _strtmp_t3384;
+        tn = _strtmp_t3397;
     }
 #line 775 "src/racecheck.tr"
     bool sync = _rc_sync_ty(tn);
@@ -1514,25 +1514,25 @@ __attribute__((hot)) void RcCk_add_global(RcCk* self, TrStr name, bool is_mut, b
 #line 779 "src/racecheck.tr"
     if ((_tr_str_eqv((tn), (_tr_str_lit_len("", 0LL))) && (!_rc_nul(v)))) {
 #line 780 "src/racecheck.tr"
-        __auto_type _t3385 = (*v);
-        if (_t3385.tag == Expr_ELitInt) {
-            __auto_type _ = _t3385.data.ELitInt.val;
+        __auto_type _t3398 = (*v);
+        if (_t3398.tag == Expr_ELitInt) {
+            __auto_type _ = _t3398.data.ELitInt.val;
             /* pass */
-        } else if (_t3385.tag == Expr_ELitFloat) {
-            __auto_type _ = _t3385.data.ELitFloat.val;
+        } else if (_t3398.tag == Expr_ELitFloat) {
+            __auto_type _ = _t3398.data.ELitFloat.val;
             /* pass */
-        } else if (_t3385.tag == Expr_ELitStr) {
+        } else if (_t3398.tag == Expr_ELitStr) {
             /* pass */
-        } else if (_t3385.tag == Expr_ELitBool) {
-            __auto_type _ = _t3385.data.ELitBool.val;
+        } else if (_t3398.tag == Expr_ELitBool) {
+            __auto_type _ = _t3398.data.ELitBool.val;
             /* pass */
-        } else if (_t3385.tag == Expr_EList) {
-            __auto_type _ = _t3385.data.EList.items;
+        } else if (_t3398.tag == Expr_EList) {
+            __auto_type _ = _t3398.data.EList.items;
             /* pass */
-        } else if (_t3385.tag == Expr_EDict) {
+        } else if (_t3398.tag == Expr_EDict) {
             /* pass */
         } else if (1) {
-            __auto_type _ = _t3385;
+            __auto_type _ = _t3398;
             sync = true;
         }
     }
@@ -1543,17 +1543,17 @@ __attribute__((hot)) void RcCk_add_global(RcCk* self, TrStr name, bool is_mut, b
 #line 791 "src/racecheck.tr"
         if ((_tr_str_eqv((tn), (_tr_str_lit_len("", 0LL))) && (!_rc_nul(v)))) {
 #line 792 "src/racecheck.tr"
-            __auto_type _t3386 = (*v);
-            if (_t3386.tag == Expr_EList) {
-                __auto_type _ = _t3386.data.EList.items;
+            __auto_type _t3399 = (*v);
+            if (_t3399.tag == Expr_EList) {
+                __auto_type _ = _t3399.data.EList.items;
                 content_mut = true;
-            } else if (_t3386.tag == Expr_EDict) {
+            } else if (_t3399.tag == Expr_EDict) {
                 content_mut = true;
-            } else if (_t3386.tag == Expr_ESet) {
-                __auto_type _ = _t3386.data.ESet.items;
+            } else if (_t3399.tag == Expr_ESet) {
+                __auto_type _ = _t3399.data.ESet.items;
                 content_mut = true;
             } else if (1) {
-                __auto_type _ = _t3386;
+                __auto_type _ = _t3399;
                 /* pass */
             }
         }
@@ -1664,13 +1664,13 @@ __attribute__((hot)) List_i64* RcCk_reach(RcCk* self, long long ti) {
 #line 838 "src/racecheck.tr"
     while ((k < seen->len)) {
 #line 839 "src/racecheck.tr"
-        RcFn* f = ({ __auto_type _ord_t3387 = (List_i64_get(seen, k)); __auto_type _wr = (((RcFn*)List_ptr_get(self->fns, _ord_t3387))); _wr; });
+        RcFn* f = ({ __auto_type _ord_t3400 = (List_i64_get(seen, k)); __auto_type _wr = (((RcFn*)List_ptr_get(self->fns, _ord_t3400))); _wr; });
 #line 840 "src/racecheck.tr"
         long long ci = 0LL;
 #line 841 "src/racecheck.tr"
         while ((ci < f->calls->len)) {
 #line 842 "src/racecheck.tr"
-            long long ni = ({ TrStr _at_t3388 = (List_TrStr_get(f->calls, ci)); __auto_type _wr = (RcCk_find_fn(self, _at_t3388)); _tr_str_release(_at_t3388); _wr; });
+            long long ni = ({ TrStr _at_t3401 = (List_TrStr_get(f->calls, ci)); __auto_type _wr = (RcCk_find_fn(self, _at_t3401)); _tr_str_release(_at_t3401); _wr; });
 #line 843 "src/racecheck.tr"
             if ((ni >= 0LL)) {
 #line 844 "src/racecheck.tr"
@@ -1707,19 +1707,19 @@ __attribute__((hot)) List_i64* RcCk_reach(RcCk* self, long long ti) {
 #line 855 "src/racecheck.tr"
             if (_tr_str_eqv((rcv), (_tr_str_lit_len("self", 4LL)))) {
 #line 856 "src/racecheck.tr"
-                long long dot = ({ TrStr _apt_t3389 = _tr_str_retain(f->name); __auto_type _wr = (_rc_dot(_apt_t3389)); _tr_str_release(_apt_t3389); _wr; });
+                long long dot = ({ TrStr _apt_t3402 = _tr_str_retain(f->name); __auto_type _wr = (_rc_dot(_apt_t3402)); _tr_str_release(_apt_t3402); _wr; });
 #line 857 "src/racecheck.tr"
                 if ((dot > 0LL)) {
 #line 857 "src/racecheck.tr"
-                    TrStr _strtmp_t3390 = _tr_str_slicev((f->name), 0LL, dot);
+                    TrStr _strtmp_t3403 = _tr_str_slicev((f->name), 0LL, dot);
                     _tr_str_release(rcn);
-                    rcn = _strtmp_t3390;
+                    rcn = _strtmp_t3403;
                 }
             } else {
 #line 859 "src/racecheck.tr"
-                TrStr _strtmp_t3391 = RcCk_lclass(self, f, rcv);
+                TrStr _strtmp_t3404 = RcCk_lclass(self, f, rcv);
                 _tr_str_release(rcn);
-                rcn = _strtmp_t3391;
+                rcn = _strtmp_t3404;
 #line 860 "src/racecheck.tr"
                 if (_tr_str_eqv((rcn), (_tr_str_lit_len("", 0LL)))) {
 #line 861 "src/racecheck.tr"
@@ -1727,11 +1727,11 @@ __attribute__((hot)) List_i64* RcCk_reach(RcCk* self, long long ti) {
 #line 862 "src/racecheck.tr"
                     while ((gj < self->gnames->len)) {
 #line 863 "src/racecheck.tr"
-                        if (({ TrStr _cmpa_t3392 = (List_TrStr_get(self->gnames, gj)); TrStr _cmpb_t3393 = (rcv); _Bool _cmpr_t3394 = _tr_str_eqv(_cmpa_t3392, _cmpb_t3393); _tr_str_release(_cmpa_t3392); _cmpr_t3394; })) {
+                        if (({ TrStr _cmpa_t3405 = (List_TrStr_get(self->gnames, gj)); TrStr _cmpb_t3406 = (rcv); _Bool _cmpr_t3407 = _tr_str_eqv(_cmpa_t3405, _cmpb_t3406); _tr_str_release(_cmpa_t3405); _cmpr_t3407; })) {
 #line 863 "src/racecheck.tr"
-                            TrStr _strtmp_t3395 = List_TrStr_get(self->gtn, gj);
+                            TrStr _strtmp_t3408 = List_TrStr_get(self->gtn, gj);
                             _tr_str_release(rcn);
-                            rcn = _strtmp_t3395;
+                            rcn = _strtmp_t3408;
                         }
 #line 864 "src/racecheck.tr"
                         gj = (gj + 1LL);
@@ -1741,7 +1741,7 @@ __attribute__((hot)) List_i64* RcCk_reach(RcCk* self, long long ti) {
 #line 865 "src/racecheck.tr"
             if ((!_tr_str_eqv((rcn), (_tr_str_lit_len("", 0LL))))) {
 #line 866 "src/racecheck.tr"
-                long long mni = ({ TrStr _at_t3396 = (({ TrStr _tr_cl = (_tr_strx_concatv((rcn), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cr = (List_TrStr_get(f->mcname, mci)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); __auto_type _wr = (RcCk_find_fn(self, _at_t3396)); _tr_str_release(_at_t3396); _wr; });
+                long long mni = ({ TrStr _at_t3409 = (({ TrStr _tr_cl = (_tr_strx_concatv((rcn), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cr = (List_TrStr_get(f->mcname, mci)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); __auto_type _wr = (RcCk_find_fn(self, _at_t3409)); _tr_str_release(_at_t3409); _wr; });
 #line 867 "src/racecheck.tr"
                 if ((mni >= 0LL)) {
 #line 868 "src/racecheck.tr"
@@ -1779,9 +1779,9 @@ __attribute__((hot)) List_i64* RcCk_reach(RcCk* self, long long ti) {
 
 __attribute__((hot)) void RcCk_analyze_site(RcCk* self, RcFn* f, RcSite* s) {
 #line 880 "src/racecheck.tr"
-    if (((!_tr_str_eqv((s->target), (_tr_str_lit_len("", 0LL)))) && ({ __auto_type _ord_t3398 = (f->closures); TrStr _apt_t3397 = _tr_str_retain(s->target); __auto_type _wr = (_rc_has(_ord_t3398, _apt_t3397)); _tr_str_release(_apt_t3397); _wr; }))) {
+    if (((!_tr_str_eqv((s->target), (_tr_str_lit_len("", 0LL)))) && ({ __auto_type _ord_t3411 = (f->closures); TrStr _apt_t3410 = _tr_str_retain(s->target); __auto_type _wr = (_rc_has(_ord_t3411, _apt_t3410)); _tr_str_release(_apt_t3410); _wr; }))) {
 #line 881 "src/racecheck.tr"
-        ({ __auto_type _ord_t3399 = (({ TrStr _tr_cl = (RcCk_where2(self, f, s->line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-6] '", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3400 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3399); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (s->target)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is a closure value: it captures its surrounding locals by reference into this stack frame, so a spawned thread would race on them and outlive them.\n      FIX: spawn a named `def` and pass the data it needs as arguments (an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle).", 289LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->msgs, _ord_t3400); _tr_str_release(_ord_t3400); });
+        ({ __auto_type _ord_t3412 = (({ TrStr _tr_cl = (RcCk_where2(self, f, s->line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-6] '", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3413 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3412); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (s->target)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is a closure value: it captures its surrounding locals by reference into this stack frame, so a spawned thread would race on them and outlive them.\n      FIX: spawn a named `def` and pass the data it needs as arguments (an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle).", 289LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->msgs, _ord_t3413); _tr_str_release(_ord_t3413); });
 #line 882 "src/racecheck.tr"
         return;
     }
@@ -1793,14 +1793,14 @@ __attribute__((hot)) void RcCk_analyze_site(RcCk* self, RcFn* f, RcSite* s) {
         return;
     }
 #line 886 "src/racecheck.tr"
-    long long ti = ({ TrStr _apt_t3401 = _tr_str_retain(s->target); __auto_type _wr = (RcCk_find_fn(self, _apt_t3401)); _tr_str_release(_apt_t3401); _wr; });
+    long long ti = ({ TrStr _apt_t3414 = _tr_str_retain(s->target); __auto_type _wr = (RcCk_find_fn(self, _apt_t3414)); _tr_str_release(_apt_t3414); _wr; });
 #line 887 "src/racecheck.tr"
     if ((ti < 0LL)) {
 #line 887 "src/racecheck.tr"
         return;
     }
 #line 888 "src/racecheck.tr"
-    ({ TrStr _apt_t3402 = _tr_str_retain(s->target); RcCk_check_globals(self, f, s, ti, _apt_t3402); _tr_str_release(_apt_t3402); });
+    ({ TrStr _apt_t3415 = _tr_str_retain(s->target); RcCk_check_globals(self, f, s, ti, _apt_t3415); _tr_str_release(_apt_t3415); });
 #line 890 "src/racecheck.tr"
     RcFn* tf = ((RcFn*)List_ptr_get(self->fns, ti));
 #line 891 "src/racecheck.tr"
@@ -1810,14 +1810,14 @@ __attribute__((hot)) void RcCk_analyze_site(RcCk* self, RcFn* f, RcSite* s) {
 #line 893 "src/racecheck.tr"
         TrStr an = _tr_str_lit_len("", 0LL);
 #line 894 "src/racecheck.tr"
-        __auto_type _t3403 = (*((Expr*)List_ptr_get(s->args, ai)));
-        if (_t3403.tag == Expr_EIdent) {
-            __auto_type nn = _t3403.data.EIdent.name;
-            TrStr _strtmp_t3404 = _tr_str_retain(nn);
+        __auto_type _t3416 = (*((Expr*)List_ptr_get(s->args, ai)));
+        if (_t3416.tag == Expr_EIdent) {
+            __auto_type nn = _t3416.data.EIdent.name;
+            TrStr _strtmp_t3417 = _tr_str_retain(nn);
             _tr_str_release(an);
-            an = _strtmp_t3404;
+            an = _strtmp_t3417;
         } else if (1) {
-            __auto_type _ = _t3403;
+            __auto_type _ = _t3416;
             /* pass */
         }
 #line 897 "src/racecheck.tr"
@@ -1835,16 +1835,16 @@ __attribute__((hot)) void RcCk_analyze_site(RcCk* self, RcFn* f, RcSite* s) {
 #line 903 "src/racecheck.tr"
                 while ((oa < ((RcSite*)List_ptr_get(f->sites, si))->args->len)) {
 #line 904 "src/racecheck.tr"
-                    __auto_type _t3405 = (*((Expr*)List_ptr_get(((RcSite*)List_ptr_get(f->sites, si))->args, oa)));
-                    if (_t3405.tag == Expr_EIdent) {
-                        __auto_type on = _t3405.data.EIdent.name;
+                    __auto_type _t3418 = (*((Expr*)List_ptr_get(((RcSite*)List_ptr_get(f->sites, si))->args, oa)));
+                    if (_t3418.tag == Expr_EIdent) {
+                        __auto_type on = _t3418.data.EIdent.name;
 #line 906 "src/racecheck.tr"
                         if (_tr_str_eqv((on), (an))) {
 #line 906 "src/racecheck.tr"
                             cnt = (cnt + 1LL);
                         }
                     } else if (1) {
-                        __auto_type _ = _t3405;
+                        __auto_type _ = _t3418;
                         /* pass */
                     }
 #line 908 "src/racecheck.tr"
@@ -1854,11 +1854,11 @@ __attribute__((hot)) void RcCk_analyze_site(RcCk* self, RcFn* f, RcSite* s) {
                 si = (si + 1LL);
             }
 #line 910 "src/racecheck.tr"
-            bool is_sh = (_rc_has(f->shvars, an) || ({ TrStr _cmpa_t3406 = (RcCk_ltype(self, f, an)); TrStr _cmpb_t3407 = (_tr_str_lit_len("Shared", 6LL)); _Bool _cmpr_t3408 = _tr_str_eqv(_cmpa_t3406, _cmpb_t3407); _tr_str_release(_cmpa_t3406); _cmpr_t3408; }));
+            bool is_sh = (_rc_has(f->shvars, an) || ({ TrStr _cmpa_t3419 = (RcCk_ltype(self, f, an)); TrStr _cmpb_t3420 = (_tr_str_lit_len("Shared", 6LL)); _Bool _cmpr_t3421 = _tr_str_eqv(_cmpa_t3419, _cmpb_t3420); _tr_str_release(_cmpa_t3419); _cmpr_t3421; }));
 #line 911 "src/racecheck.tr"
             if (((is_sh && (!_tr_str_eqv((ptn), (_tr_str_lit_len("Shared", 6LL))))) && (!_tr_str_eqv((ptn), (_tr_str_lit_len("", 0LL)))))) {
 #line 912 "src/racecheck.tr"
-                ({ __auto_type _ord_t3409 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (RcCk_where2(self, f, s->line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-10] '", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (an)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is a `Shared` handle but '", 28LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3410 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3409); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (s->target)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' declares parameter '", 22LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3411 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3410); TrStr _tr_cr = (List_TrStr_get(tf->params, ai)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ptn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': the thread would be handed the shared control block where it expects the object itself (a type confusion).\n      FIX: declare the worker's parameter as `", 156LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3412 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3411); TrStr _tr_cr = (List_TrStr_get(tf->params, ai)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": Shared[", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ptn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]`.", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->msgs, _ord_t3412); _tr_str_release(_ord_t3412); });
+                ({ __auto_type _ord_t3422 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (RcCk_where2(self, f, s->line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-10] '", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (an)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' is a `Shared` handle but '", 28LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3423 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3422); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (s->target)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' declares parameter '", 22LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3424 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3423); TrStr _tr_cr = (List_TrStr_get(tf->params, ai)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ptn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("': the thread would be handed the shared control block where it expects the object itself (a type confusion).\n      FIX: declare the worker's parameter as `", 156LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3425 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3424); TrStr _tr_cr = (List_TrStr_get(tf->params, ai)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": Shared[", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (ptn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]`.", 3LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->msgs, _ord_t3425); _tr_str_release(_ord_t3425); });
 #line 913 "src/racecheck.tr"
                 ai = (ai + 1LL);
 #line 914 "src/racecheck.tr"
@@ -1893,7 +1893,7 @@ __attribute__((hot)) void RcCk_analyze_site(RcCk* self, RcFn* f, RcSite* s) {
 
 __attribute__((hot)) void RcCk_analyze_method_site(RcCk* self, RcFn* f, RcSite* s) {
 #line 927 "src/racecheck.tr"
-    TrStr cn = ({ TrStr _apt_t3413 = _tr_str_retain(s->recv); __auto_type _wr = (RcCk_lclass(self, f, _apt_t3413)); _tr_str_release(_apt_t3413); _wr; });
+    TrStr cn = ({ TrStr _apt_t3426 = _tr_str_retain(s->recv); __auto_type _wr = (RcCk_lclass(self, f, _apt_t3426)); _tr_str_release(_apt_t3426); _wr; });
 #line 928 "src/racecheck.tr"
     if (_tr_str_eqv((cn), (_tr_str_lit_len("", 0LL)))) {
 #line 928 "src/racecheck.tr"
@@ -1901,7 +1901,7 @@ __attribute__((hot)) void RcCk_analyze_method_site(RcCk* self, RcFn* f, RcSite* 
         return;
     }
 #line 929 "src/racecheck.tr"
-    long long mi = ({ TrStr _at_t3414 = (({ TrStr _tr_cl = (_tr_strx_concatv((cn), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (s->meth)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (RcCk_find_fn(self, _at_t3414)); _tr_str_release(_at_t3414); _wr; });
+    long long mi = ({ TrStr _at_t3427 = (({ TrStr _tr_cl = (_tr_strx_concatv((cn), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (s->meth)); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (RcCk_find_fn(self, _at_t3427)); _tr_str_release(_at_t3427); _wr; });
 #line 930 "src/racecheck.tr"
     if ((mi < 0LL)) {
 #line 930 "src/racecheck.tr"
@@ -1909,7 +1909,7 @@ __attribute__((hot)) void RcCk_analyze_method_site(RcCk* self, RcFn* f, RcSite* 
         return;
     }
 #line 931 "src/racecheck.tr"
-    ({ TrStr _at_t3415 = (({ TrStr _tr_cl = (_tr_strx_concatv((cn), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (s->meth)); _tr_str_release(_tr_cl); _tr_cres; })); RcCk_check_globals(self, f, s, mi, _at_t3415); _tr_str_release(_at_t3415); });
+    ({ TrStr _at_t3428 = (({ TrStr _tr_cl = (_tr_strx_concatv((cn), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (s->meth)); _tr_str_release(_tr_cl); _tr_cres; })); RcCk_check_globals(self, f, s, mi, _at_t3428); _tr_str_release(_at_t3428); });
 #line 932 "src/racecheck.tr"
     long long cnt = 0LL;
 #line 933 "src/racecheck.tr"
@@ -1917,7 +1917,7 @@ __attribute__((hot)) void RcCk_analyze_method_site(RcCk* self, RcFn* f, RcSite* 
 #line 934 "src/racecheck.tr"
     while ((si < f->sites->len)) {
 #line 935 "src/racecheck.tr"
-        if (({ __auto_type _ord_t3416 = (((RcSite*)List_ptr_get(f->sites, si))->recv); __auto_type _wr = (_tr_str_eqv((_ord_t3416), (s->recv))); _wr; })) {
+        if (({ __auto_type _ord_t3429 = (((RcSite*)List_ptr_get(f->sites, si))->recv); __auto_type _wr = (_tr_str_eqv((_ord_t3429), (s->recv))); _wr; })) {
 #line 935 "src/racecheck.tr"
             cnt = (cnt + 1LL);
         }
@@ -1925,9 +1925,9 @@ __attribute__((hot)) void RcCk_analyze_method_site(RcCk* self, RcFn* f, RcSite* 
         si = (si + 1LL);
     }
 #line 937 "src/racecheck.tr"
-    bool is_sh = (({ __auto_type _ord_t3418 = (f->shvars); TrStr _apt_t3417 = _tr_str_retain(s->recv); __auto_type _wr = (_rc_has(_ord_t3418, _apt_t3417)); _tr_str_release(_apt_t3417); _wr; }) || ({ TrStr _apt_t3419 = _tr_str_retain(s->recv); __auto_type _wr = (({ TrStr _cmpa_t3420 = (RcCk_ltype(self, f, _apt_t3419)); TrStr _cmpb_t3421 = (_tr_str_lit_len("Shared", 6LL)); _Bool _cmpr_t3422 = _tr_str_eqv(_cmpa_t3420, _cmpb_t3421); _tr_str_release(_cmpa_t3420); _cmpr_t3422; })); _tr_str_release(_apt_t3419); _wr; }));
+    bool is_sh = (({ __auto_type _ord_t3431 = (f->shvars); TrStr _apt_t3430 = _tr_str_retain(s->recv); __auto_type _wr = (_rc_has(_ord_t3431, _apt_t3430)); _tr_str_release(_apt_t3430); _wr; }) || ({ TrStr _apt_t3432 = _tr_str_retain(s->recv); __auto_type _wr = (({ TrStr _cmpa_t3433 = (RcCk_ltype(self, f, _apt_t3432)); TrStr _cmpb_t3434 = (_tr_str_lit_len("Shared", 6LL)); _Bool _cmpr_t3435 = _tr_str_eqv(_cmpa_t3433, _cmpb_t3434); _tr_str_release(_cmpa_t3433); _cmpr_t3435; })); _tr_str_release(_apt_t3432); _wr; }));
 #line 938 "src/racecheck.tr"
-    long long dd = ({ TrStr _apt_t3423 = _tr_str_retain(s->recv); __auto_type _wr = (RcCk_ldepth_of(self, f, _apt_t3423)); _tr_str_release(_apt_t3423); _wr; });
+    long long dd = ({ TrStr _apt_t3436 = _tr_str_retain(s->recv); __auto_type _wr = (RcCk_ldepth_of(self, f, _apt_t3436)); _tr_str_release(_apt_t3436); _wr; });
 #line 939 "src/racecheck.tr"
     if ((!(((cnt >= 2LL) || is_sh) || ((dd >= 0LL) && (s->depth > dd))))) {
 #line 939 "src/racecheck.tr"
@@ -1941,9 +1941,9 @@ __attribute__((hot)) void RcCk_analyze_method_site(RcCk* self, RcFn* f, RcSite* 
 #line 942 "src/racecheck.tr"
     while ((k < mf->wroot->len)) {
 #line 943 "src/racecheck.tr"
-        if (((({ TrStr _cmpa_t3424 = (List_TrStr_get(mf->wroot, k)); TrStr _cmpb_t3425 = (_tr_str_lit_len("self", 4LL)); _Bool _cmpr_t3426 = _tr_str_eqv(_cmpa_t3424, _cmpb_t3425); _tr_str_release(_cmpa_t3424); _cmpr_t3426; }) && ({ TrStr _cmpa_t3427 = (List_TrStr_get(mf->wprop, k)); TrStr _cmpb_t3428 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t3429 = !_tr_str_eqv(_cmpa_t3427, _cmpb_t3428); _tr_str_release(_cmpa_t3427); _cmpr_t3429; })) && ({ TrStr _at_t3430 = (List_TrStr_get(mf->wprop, k)); __auto_type _wr = (RcCk_field_plain(self, cn, _at_t3430)); _tr_str_release(_at_t3430); _wr; }))) {
+        if (((({ TrStr _cmpa_t3437 = (List_TrStr_get(mf->wroot, k)); TrStr _cmpb_t3438 = (_tr_str_lit_len("self", 4LL)); _Bool _cmpr_t3439 = _tr_str_eqv(_cmpa_t3437, _cmpb_t3438); _tr_str_release(_cmpa_t3437); _cmpr_t3439; }) && ({ TrStr _cmpa_t3440 = (List_TrStr_get(mf->wprop, k)); TrStr _cmpb_t3441 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t3442 = !_tr_str_eqv(_cmpa_t3440, _cmpb_t3441); _tr_str_release(_cmpa_t3440); _cmpr_t3442; })) && ({ TrStr _at_t3443 = (List_TrStr_get(mf->wprop, k)); __auto_type _wr = (RcCk_field_plain(self, cn, _at_t3443)); _tr_str_release(_at_t3443); _wr; }))) {
 #line 944 "src/racecheck.tr"
-            ({ TrStr _ord_t3431 = (List_TrStr_get(mf->wprop, k)); __auto_type _ord_t3432 = (s->recv); RcCk_shared_msg(self, f, s, mf, cn, _ord_t3431, _ord_t3432); _tr_str_release(_ord_t3431); });
+            ({ TrStr _ord_t3444 = (List_TrStr_get(mf->wprop, k)); __auto_type _ord_t3445 = (s->recv); RcCk_shared_msg(self, f, s, mf, cn, _ord_t3444, _ord_t3445); _tr_str_release(_ord_t3444); });
 #line 945 "src/racecheck.tr"
             _tr_str_release(cn);
             return;
@@ -1954,7 +1954,7 @@ __attribute__((hot)) void RcCk_analyze_method_site(RcCk* self, RcFn* f, RcSite* 
 #line 947 "src/racecheck.tr"
     if (is_sh) {
 #line 947 "src/racecheck.tr"
-        ({ TrStr _apt_t3433 = _tr_str_retain(s->recv); RcCk_check_parent_writes(self, f, s, _apt_t3433); _tr_str_release(_apt_t3433); });
+        ({ TrStr _apt_t3446 = _tr_str_retain(s->recv); RcCk_check_parent_writes(self, f, s, _apt_t3446); _tr_str_release(_apt_t3446); });
     }
     _tr_str_release(cn);
 }
@@ -1973,9 +1973,9 @@ __attribute__((hot)) void RcCk_check_parent_writes(RcCk* self, RcFn* f, RcSite* 
 #line 954 "src/racecheck.tr"
     while ((k < f->wroot->len)) {
 #line 955 "src/racecheck.tr"
-        if ((((({ TrStr _cmpa_t3434 = (List_TrStr_get(f->wroot, k)); TrStr _cmpb_t3435 = (an); _Bool _cmpr_t3436 = _tr_str_eqv(_cmpa_t3434, _cmpb_t3435); _tr_str_release(_cmpa_t3434); _cmpr_t3436; }) && List_bool_get(f->wafter, k)) && ({ TrStr _cmpa_t3437 = (List_TrStr_get(f->wprop, k)); TrStr _cmpb_t3438 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t3439 = !_tr_str_eqv(_cmpa_t3437, _cmpb_t3438); _tr_str_release(_cmpa_t3437); _cmpr_t3439; })) && ({ TrStr _at_t3440 = (List_TrStr_get(f->wprop, k)); __auto_type _wr = (RcCk_field_plain(self, cn, _at_t3440)); _tr_str_release(_at_t3440); _wr; }))) {
+        if ((((({ TrStr _cmpa_t3447 = (List_TrStr_get(f->wroot, k)); TrStr _cmpb_t3448 = (an); _Bool _cmpr_t3449 = _tr_str_eqv(_cmpa_t3447, _cmpb_t3448); _tr_str_release(_cmpa_t3447); _cmpr_t3449; }) && List_bool_get(f->wafter, k)) && ({ TrStr _cmpa_t3450 = (List_TrStr_get(f->wprop, k)); TrStr _cmpb_t3451 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t3452 = !_tr_str_eqv(_cmpa_t3450, _cmpb_t3451); _tr_str_release(_cmpa_t3450); _cmpr_t3452; })) && ({ TrStr _at_t3453 = (List_TrStr_get(f->wprop, k)); __auto_type _wr = (RcCk_field_plain(self, cn, _at_t3453)); _tr_str_release(_at_t3453); _wr; }))) {
 #line 956 "src/racecheck.tr"
-            ({ __auto_type _ord_t3441 = (({ TrStr _tr_cl = (RcCk_where2(self, f, s->line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-8] '", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3442 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3441); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (f->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' writes the plain field '", 26LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3443 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3442); TrStr _tr_cr = (List_TrStr_get(f->wprop, k)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' of '", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (an)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' while a spawned thread holds the same shared object: the two threads race on that field.\n      FIX: make '", 108LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3444 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3443); TrStr _tr_cr = (List_TrStr_get(f->wprop, k)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' an `Atomic[T]` or guard the object with a `Mutex[T]`, or finish the writes before spawning / after the threads are joined.", 124LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->msgs, _ord_t3444); _tr_str_release(_ord_t3444); });
+            ({ __auto_type _ord_t3454 = (({ TrStr _tr_cl = (RcCk_where2(self, f, s->line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-8] '", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3455 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3454); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (f->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' writes the plain field '", 26LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3456 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3455); TrStr _tr_cr = (List_TrStr_get(f->wprop, k)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' of '", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (an)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' while a spawned thread holds the same shared object: the two threads race on that field.\n      FIX: make '", 108LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3457 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3456); TrStr _tr_cr = (List_TrStr_get(f->wprop, k)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' an `Atomic[T]` or guard the object with a `Mutex[T]`, or finish the writes before spawning / after the threads are joined.", 124LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->msgs, _ord_t3457); _tr_str_release(_ord_t3457); });
 #line 957 "src/racecheck.tr"
             _tr_str_release(cn);
             return;
@@ -2010,13 +2010,13 @@ __attribute__((hot)) void RcCk_check_globals(RcCk* self, RcFn* f, RcSite* s, lon
 #line 972 "src/racecheck.tr"
             while ((ri < reach->len)) {
 #line 973 "src/racecheck.tr"
-                RcFn* rf = ({ __auto_type _ord_t3445 = (List_i64_get(reach, ri)); __auto_type _wr = (((RcFn*)List_ptr_get(self->fns, _ord_t3445))); _wr; });
+                RcFn* rf = ({ __auto_type _ord_t3458 = (List_i64_get(reach, ri)); __auto_type _wr = (((RcFn*)List_ptr_get(self->fns, _ord_t3458))); _wr; });
 #line 974 "src/racecheck.tr"
                 long long ti2 = 0LL;
 #line 975 "src/racecheck.tr"
                 while ((ti2 < rf->touched->len)) {
 #line 976 "src/racecheck.tr"
-                    if (({ TrStr _cmpa_t3446 = (List_TrStr_get(rf->touched, ti2)); TrStr _cmpb_t3447 = (g); _Bool _cmpr_t3448 = _tr_str_eqv(_cmpa_t3446, _cmpb_t3447); _tr_str_release(_cmpa_t3446); _cmpr_t3448; })) {
+                    if (({ TrStr _cmpa_t3459 = (List_TrStr_get(rf->touched, ti2)); TrStr _cmpb_t3460 = (g); _Bool _cmpr_t3461 = _tr_str_eqv(_cmpa_t3459, _cmpb_t3460); _tr_str_release(_cmpa_t3459); _cmpr_t3461; })) {
 #line 977 "src/racecheck.tr"
                         if (List_bool_get(rf->touched_w, ti2)) {
 #line 977 "src/racecheck.tr"
@@ -2030,13 +2030,13 @@ __attribute__((hot)) void RcCk_check_globals(RcCk* self, RcFn* f, RcSite* s, lon
                     ti2 = (ti2 + 1LL);
                 }
 #line 980 "src/racecheck.tr"
-                if (({ TrStr _at_t3449 = (List_TrStr_get(self->gtn, gi)); __auto_type _wr = ((RcCk_find_class(self, _at_t3449) >= 0LL)); _tr_str_release(_at_t3449); _wr; })) {
+                if (({ TrStr _at_t3462 = (List_TrStr_get(self->gtn, gi)); __auto_type _wr = ((RcCk_find_class(self, _at_t3462) >= 0LL)); _tr_str_release(_at_t3462); _wr; })) {
 #line 982 "src/racecheck.tr"
                     long long mq = 0LL;
 #line 983 "src/racecheck.tr"
                     while ((mq < rf->mcrecv->len)) {
 #line 984 "src/racecheck.tr"
-                        if (((({ TrStr _cmpa_t3450 = (List_TrStr_get(rf->mcrecv, mq)); TrStr _cmpb_t3451 = (g); _Bool _cmpr_t3452 = _tr_str_eqv(_cmpa_t3450, _cmpb_t3451); _tr_str_release(_cmpa_t3450); _cmpr_t3452; }) && (!_rc_has(rf->locals, g))) && (!_rc_has(rf->params, g)))) {
+                        if (((({ TrStr _cmpa_t3463 = (List_TrStr_get(rf->mcrecv, mq)); TrStr _cmpb_t3464 = (g); _Bool _cmpr_t3465 = _tr_str_eqv(_cmpa_t3463, _cmpb_t3464); _tr_str_release(_cmpa_t3463); _cmpr_t3465; }) && (!_rc_has(rf->locals, g))) && (!_rc_has(rf->params, g)))) {
 #line 984 "src/racecheck.tr"
                             called = true;
                         }
@@ -2046,13 +2046,13 @@ __attribute__((hot)) void RcCk_check_globals(RcCk* self, RcFn* f, RcSite* s, lon
 #line 986 "src/racecheck.tr"
                     TrStr pre = ({ TrStr _tr_cl = (List_TrStr_get(self->gtn, gi)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_tr_cl); _tr_cres; });
 #line 987 "src/racecheck.tr"
-                    if ((({ __auto_type _ord_t3453 = (_tr_str_lenv((rf->name))); __auto_type _wr = ((_ord_t3453 > _tr_str_lenv((pre)))); _wr; }) && ({ __auto_type _ord_t3454 = (_tr_str_lenv((pre))); __auto_type _wr = (({ TrStr _cmpa_t3455 = (_tr_str_slicev((rf->name), 0LL, _ord_t3454)); TrStr _cmpb_t3456 = (pre); _Bool _cmpr_t3457 = _tr_str_eqv(_cmpa_t3455, _cmpb_t3456); _tr_str_release(_cmpa_t3455); _cmpr_t3457; })); _wr; }))) {
+                    if ((({ __auto_type _ord_t3466 = (_tr_str_lenv((rf->name))); __auto_type _wr = ((_ord_t3466 > _tr_str_lenv((pre)))); _wr; }) && ({ __auto_type _ord_t3467 = (_tr_str_lenv((pre))); __auto_type _wr = (({ TrStr _cmpa_t3468 = (_tr_str_slicev((rf->name), 0LL, _ord_t3467)); TrStr _cmpb_t3469 = (pre); _Bool _cmpr_t3470 = _tr_str_eqv(_cmpa_t3468, _cmpb_t3469); _tr_str_release(_cmpa_t3468); _cmpr_t3470; })); _wr; }))) {
 #line 988 "src/racecheck.tr"
                         long long mk = 0LL;
 #line 989 "src/racecheck.tr"
                         while ((mk < rf->wroot->len)) {
 #line 990 "src/racecheck.tr"
-                            if (((({ TrStr _cmpa_t3458 = (List_TrStr_get(rf->wroot, mk)); TrStr _cmpb_t3459 = (_tr_str_lit_len("self", 4LL)); _Bool _cmpr_t3460 = _tr_str_eqv(_cmpa_t3458, _cmpb_t3459); _tr_str_release(_cmpa_t3458); _cmpr_t3460; }) && ({ TrStr _cmpa_t3461 = (List_TrStr_get(rf->wprop, mk)); TrStr _cmpb_t3462 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t3463 = !_tr_str_eqv(_cmpa_t3461, _cmpb_t3462); _tr_str_release(_cmpa_t3461); _cmpr_t3463; })) && ({ TrStr _ord_t3464 = (List_TrStr_get(self->gtn, gi)); TrStr _ord_t3465 = (List_TrStr_get(rf->wprop, mk)); __auto_type _wr = (RcCk_field_plain(self, _ord_t3464, _ord_t3465)); _tr_str_release(_ord_t3464); _tr_str_release(_ord_t3465); _wr; }))) {
+                            if (((({ TrStr _cmpa_t3471 = (List_TrStr_get(rf->wroot, mk)); TrStr _cmpb_t3472 = (_tr_str_lit_len("self", 4LL)); _Bool _cmpr_t3473 = _tr_str_eqv(_cmpa_t3471, _cmpb_t3472); _tr_str_release(_cmpa_t3471); _cmpr_t3473; }) && ({ TrStr _cmpa_t3474 = (List_TrStr_get(rf->wprop, mk)); TrStr _cmpb_t3475 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t3476 = !_tr_str_eqv(_cmpa_t3474, _cmpb_t3475); _tr_str_release(_cmpa_t3474); _cmpr_t3476; })) && ({ TrStr _ord_t3477 = (List_TrStr_get(self->gtn, gi)); TrStr _ord_t3478 = (List_TrStr_get(rf->wprop, mk)); __auto_type _wr = (RcCk_field_plain(self, _ord_t3477, _ord_t3478)); _tr_str_release(_ord_t3477); _tr_str_release(_ord_t3478); _wr; }))) {
 #line 990 "src/racecheck.tr"
                                 mwrites = true;
                             }
@@ -2084,7 +2084,7 @@ __attribute__((hot)) void RcCk_check_globals(RcCk* self, RcFn* f, RcSite* s, lon
 #line 1000 "src/racecheck.tr"
                         while ((oi < of->touched->len)) {
 #line 1001 "src/racecheck.tr"
-                            if (((({ TrStr _cmpa_t3466 = (List_TrStr_get(of->touched, oi)); TrStr _cmpb_t3467 = (g); _Bool _cmpr_t3468 = _tr_str_eqv(_cmpa_t3466, _cmpb_t3467); _tr_str_release(_cmpa_t3466); _cmpr_t3468; }) && List_bool_get(of->touched_w, oi)) && List_bool_get(of->touched_after, oi))) {
+                            if (((({ TrStr _cmpa_t3479 = (List_TrStr_get(of->touched, oi)); TrStr _cmpb_t3480 = (g); _Bool _cmpr_t3481 = _tr_str_eqv(_cmpa_t3479, _cmpb_t3480); _tr_str_release(_cmpa_t3479); _cmpr_t3481; }) && List_bool_get(of->touched_w, oi)) && List_bool_get(of->touched_after, oi))) {
 #line 1001 "src/racecheck.tr"
                                 wr = true;
                             }
@@ -2099,7 +2099,7 @@ __attribute__((hot)) void RcCk_check_globals(RcCk* self, RcFn* f, RcSite* s, lon
 #line 1004 "src/racecheck.tr"
             if (wr) {
 #line 1005 "src/racecheck.tr"
-                ({ TrStr _ord_t3469 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (RcCk_where2(self, f, s->line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-8] the spawned function '", 28LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (label)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' uses the module-level mutable '", 33LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (g)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', which is plain data shared by every thread: concurrent access is a data race.\n      FIX: make '", 98LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (g)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' an `Atomic[T]` (counters/flags), a `Mutex[T]`/`RwLock[T]` (compound state), or pass the state to the thread explicitly.", 121LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->msgs, _ord_t3469); _tr_str_release(_ord_t3469); });
+                ({ TrStr _ord_t3482 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (RcCk_where2(self, f, s->line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-8] the spawned function '", 28LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (label)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' uses the module-level mutable '", 33LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (g)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', which is plain data shared by every thread: concurrent access is a data race.\n      FIX: make '", 98LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (g)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' an `Atomic[T]` (counters/flags), a `Mutex[T]`/`RwLock[T]` (compound state), or pass the state to the thread explicitly.", 121LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->msgs, _ord_t3482); _tr_str_release(_ord_t3482); });
             } else if (rd) {
 #line 1007 "src/racecheck.tr"
                 /* pass */
@@ -2118,10 +2118,10 @@ __attribute__((hot)) TrStr RcCk_param_write_prop(RcCk* self, long long fi, TrStr
 #line 1015 "src/racecheck.tr"
     while ((wi < tf->wroot->len)) {
 #line 1016 "src/racecheck.tr"
-        if (((({ TrStr _cmpa_t3470 = (List_TrStr_get(tf->wroot, wi)); TrStr _cmpb_t3471 = (pname); _Bool _cmpr_t3472 = _tr_str_eqv(_cmpa_t3470, _cmpb_t3471); _tr_str_release(_cmpa_t3470); _cmpr_t3472; }) && ({ TrStr _cmpa_t3473 = (List_TrStr_get(tf->wprop, wi)); TrStr _cmpb_t3474 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t3475 = !_tr_str_eqv(_cmpa_t3473, _cmpb_t3474); _tr_str_release(_cmpa_t3473); _cmpr_t3475; })) && ({ TrStr _at_t3476 = (List_TrStr_get(tf->wprop, wi)); __auto_type _wr = (RcCk_field_plain(self, cn, _at_t3476)); _tr_str_release(_at_t3476); _wr; }))) {
+        if (((({ TrStr _cmpa_t3483 = (List_TrStr_get(tf->wroot, wi)); TrStr _cmpb_t3484 = (pname); _Bool _cmpr_t3485 = _tr_str_eqv(_cmpa_t3483, _cmpb_t3484); _tr_str_release(_cmpa_t3483); _cmpr_t3485; }) && ({ TrStr _cmpa_t3486 = (List_TrStr_get(tf->wprop, wi)); TrStr _cmpb_t3487 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t3488 = !_tr_str_eqv(_cmpa_t3486, _cmpb_t3487); _tr_str_release(_cmpa_t3486); _cmpr_t3488; })) && ({ TrStr _at_t3489 = (List_TrStr_get(tf->wprop, wi)); __auto_type _wr = (RcCk_field_plain(self, cn, _at_t3489)); _tr_str_release(_at_t3489); _wr; }))) {
 #line 1016 "src/racecheck.tr"
-            TrStr _trret576 = List_TrStr_get(tf->wprop, wi);
-            return _trret576;
+            TrStr _trret580 = List_TrStr_get(tf->wprop, wi);
+            return _trret580;
         }
 #line 1017 "src/racecheck.tr"
         wi = (wi + 1LL);
@@ -2131,9 +2131,9 @@ __attribute__((hot)) TrStr RcCk_param_write_prop(RcCk* self, long long fi, TrStr
 #line 1019 "src/racecheck.tr"
     while ((mi < tf->mcrecv->len)) {
 #line 1020 "src/racecheck.tr"
-        if (({ TrStr _cmpa_t3477 = (List_TrStr_get(tf->mcrecv, mi)); TrStr _cmpb_t3478 = (pname); _Bool _cmpr_t3479 = _tr_str_eqv(_cmpa_t3477, _cmpb_t3478); _tr_str_release(_cmpa_t3477); _cmpr_t3479; })) {
+        if (({ TrStr _cmpa_t3490 = (List_TrStr_get(tf->mcrecv, mi)); TrStr _cmpb_t3491 = (pname); _Bool _cmpr_t3492 = _tr_str_eqv(_cmpa_t3490, _cmpb_t3491); _tr_str_release(_cmpa_t3490); _cmpr_t3492; })) {
 #line 1021 "src/racecheck.tr"
-            long long mf = ({ TrStr _at_t3480 = (({ TrStr _tr_cl = (_tr_strx_concatv((cn), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cr = (List_TrStr_get(tf->mcname, mi)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); __auto_type _wr = (RcCk_find_fn(self, _at_t3480)); _tr_str_release(_at_t3480); _wr; });
+            long long mf = ({ TrStr _at_t3493 = (({ TrStr _tr_cl = (_tr_strx_concatv((cn), (_tr_str_lit_len(".", 1LL)))); TrStr _tr_cr = (List_TrStr_get(tf->mcname, mi)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); __auto_type _wr = (RcCk_find_fn(self, _at_t3493)); _tr_str_release(_at_t3493); _wr; });
 #line 1022 "src/racecheck.tr"
             if ((mf >= 0LL)) {
 #line 1023 "src/racecheck.tr"
@@ -2143,10 +2143,10 @@ __attribute__((hot)) TrStr RcCk_param_write_prop(RcCk* self, long long fi, TrStr
 #line 1025 "src/racecheck.tr"
                 while ((k < mfn->wroot->len)) {
 #line 1026 "src/racecheck.tr"
-                    if (((({ TrStr _cmpa_t3481 = (List_TrStr_get(mfn->wroot, k)); TrStr _cmpb_t3482 = (_tr_str_lit_len("self", 4LL)); _Bool _cmpr_t3483 = _tr_str_eqv(_cmpa_t3481, _cmpb_t3482); _tr_str_release(_cmpa_t3481); _cmpr_t3483; }) && ({ TrStr _cmpa_t3484 = (List_TrStr_get(mfn->wprop, k)); TrStr _cmpb_t3485 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t3486 = !_tr_str_eqv(_cmpa_t3484, _cmpb_t3485); _tr_str_release(_cmpa_t3484); _cmpr_t3486; })) && ({ TrStr _at_t3487 = (List_TrStr_get(mfn->wprop, k)); __auto_type _wr = (RcCk_field_plain(self, cn, _at_t3487)); _tr_str_release(_at_t3487); _wr; }))) {
+                    if (((({ TrStr _cmpa_t3494 = (List_TrStr_get(mfn->wroot, k)); TrStr _cmpb_t3495 = (_tr_str_lit_len("self", 4LL)); _Bool _cmpr_t3496 = _tr_str_eqv(_cmpa_t3494, _cmpb_t3495); _tr_str_release(_cmpa_t3494); _cmpr_t3496; }) && ({ TrStr _cmpa_t3497 = (List_TrStr_get(mfn->wprop, k)); TrStr _cmpb_t3498 = (_tr_str_lit_len("", 0LL)); _Bool _cmpr_t3499 = !_tr_str_eqv(_cmpa_t3497, _cmpb_t3498); _tr_str_release(_cmpa_t3497); _cmpr_t3499; })) && ({ TrStr _at_t3500 = (List_TrStr_get(mfn->wprop, k)); __auto_type _wr = (RcCk_field_plain(self, cn, _at_t3500)); _tr_str_release(_at_t3500); _wr; }))) {
 #line 1026 "src/racecheck.tr"
-                        TrStr _trret577 = List_TrStr_get(mfn->wprop, k);
-                        return _trret577;
+                        TrStr _trret581 = List_TrStr_get(mfn->wprop, k);
+                        return _trret581;
                     }
 #line 1027 "src/racecheck.tr"
                     k = (k + 1LL);
@@ -2163,19 +2163,19 @@ __attribute__((hot)) TrStr RcCk_param_write_prop(RcCk* self, long long fi, TrStr
 #line 1031 "src/racecheck.tr"
         while ((ci < tf->ca_fn->len)) {
 #line 1032 "src/racecheck.tr"
-            if (({ TrStr _cmpa_t3488 = (List_TrStr_get(tf->ca_name, ci)); TrStr _cmpb_t3489 = (pname); _Bool _cmpr_t3490 = _tr_str_eqv(_cmpa_t3488, _cmpb_t3489); _tr_str_release(_cmpa_t3488); _cmpr_t3490; })) {
+            if (({ TrStr _cmpa_t3501 = (List_TrStr_get(tf->ca_name, ci)); TrStr _cmpb_t3502 = (pname); _Bool _cmpr_t3503 = _tr_str_eqv(_cmpa_t3501, _cmpb_t3502); _tr_str_release(_cmpa_t3501); _cmpr_t3503; })) {
 #line 1033 "src/racecheck.tr"
-                long long ni = ({ TrStr _at_t3491 = (List_TrStr_get(tf->ca_fn, ci)); __auto_type _wr = (RcCk_find_fn(self, _at_t3491)); _tr_str_release(_at_t3491); _wr; });
+                long long ni = ({ TrStr _at_t3504 = (List_TrStr_get(tf->ca_fn, ci)); __auto_type _wr = (RcCk_find_fn(self, _at_t3504)); _tr_str_release(_at_t3504); _wr; });
 #line 1034 "src/racecheck.tr"
-                if (((ni >= 0LL) && ({ __auto_type _ord_t3492 = (List_i64_get(tf->ca_idx, ci)); __auto_type _wr = ((_ord_t3492 < ((RcFn*)List_ptr_get(self->fns, ni))->params->len)); _wr; }))) {
+                if (((ni >= 0LL) && ({ __auto_type _ord_t3505 = (List_i64_get(tf->ca_idx, ci)); __auto_type _wr = ((_ord_t3505 < ((RcFn*)List_ptr_get(self->fns, ni))->params->len)); _wr; }))) {
 #line 1035 "src/racecheck.tr"
-                    TrStr r = ({ __auto_type _ord_t3493 = (List_i64_get(tf->ca_idx, ci)); TrStr _at_t3494 = (List_TrStr_get(((RcFn*)List_ptr_get(self->fns, ni))->params, _ord_t3493)); __auto_type _wr = (RcCk_param_write_prop(self, ni, _at_t3494, cn, (depth + 1LL))); _tr_str_release(_at_t3494); _wr; });
+                    TrStr r = ({ __auto_type _ord_t3506 = (List_i64_get(tf->ca_idx, ci)); TrStr _at_t3507 = (List_TrStr_get(((RcFn*)List_ptr_get(self->fns, ni))->params, _ord_t3506)); __auto_type _wr = (RcCk_param_write_prop(self, ni, _at_t3507, cn, (depth + 1LL))); _tr_str_release(_at_t3507); _wr; });
 #line 1036 "src/racecheck.tr"
                     if ((!_tr_str_eqv((r), (_tr_str_lit_len("", 0LL))))) {
 #line 1036 "src/racecheck.tr"
-                        TrStr _trret578 = _tr_str_retain(r);
+                        TrStr _trret582 = _tr_str_retain(r);
                         _tr_str_release(r);
-                        return _trret578;
+                        return _trret582;
                     }
                 }
             }
@@ -2195,9 +2195,9 @@ __attribute__((hot)) void RcCk_check_shared_writes(RcCk* self, RcFn* f, RcSite* 
 #line 1043 "src/racecheck.tr"
     if (_tr_str_eqv((cn), (_tr_str_lit_len("Shared", 6LL)))) {
 #line 1043 "src/racecheck.tr"
-        TrStr _strtmp_t3495 = List_TrStr_get(tf->pinner, ai);
+        TrStr _strtmp_t3508 = List_TrStr_get(tf->pinner, ai);
         _tr_str_release(cn);
-        cn = _strtmp_t3495;
+        cn = _strtmp_t3508;
     }
 #line 1044 "src/racecheck.tr"
     if (_tr_str_eqv((cn), (_tr_str_lit_len("", 0LL)))) {
@@ -2207,7 +2207,7 @@ __attribute__((hot)) void RcCk_check_shared_writes(RcCk* self, RcFn* f, RcSite* 
         return;
     }
 #line 1046 "src/racecheck.tr"
-    long long ti = ({ TrStr _apt_t3496 = _tr_str_retain(s->target); __auto_type _wr = (RcCk_find_fn(self, _apt_t3496)); _tr_str_release(_apt_t3496); _wr; });
+    long long ti = ({ TrStr _apt_t3509 = _tr_str_retain(s->target); __auto_type _wr = (RcCk_find_fn(self, _apt_t3509)); _tr_str_release(_apt_t3509); _wr; });
 #line 1047 "src/racecheck.tr"
     if ((ti < 0LL)) {
 #line 1047 "src/racecheck.tr"
@@ -2229,7 +2229,7 @@ __attribute__((hot)) void RcCk_check_shared_writes(RcCk* self, RcFn* f, RcSite* 
 
 __attribute__((hot)) void RcCk_shared_msg(RcCk* self, RcFn* f, RcSite* s, RcFn* tf, TrStr cn, TrStr prop, TrStr an) {
 #line 1052 "src/racecheck.tr"
-    ({ __auto_type _ord_t3497 = (({ TrStr _tr_cl = (RcCk_where2(self, f, s->line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-8] '", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3498 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3497); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (s->target)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' mutates the plain field '", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (prop)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' of '", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (an)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', which is shared by several threads: `Shared[T]` only makes the reference COUNT atomic, not the fields, so the concurrent writes race.\n      FIX: make '", 154LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (prop)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' an `Atomic[T]` (or guard the whole object with `Mutex[", 56LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]`), or give each thread its own value.", 39LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->msgs, _ord_t3498); _tr_str_release(_ord_t3498); });
+    ({ __auto_type _ord_t3510 = (({ TrStr _tr_cl = (RcCk_where2(self, f, s->line)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("[T-8] '", 7LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3511 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3510); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (s->target)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' mutates the plain field '", 27LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (prop)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' of '", 6LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (an)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', which is shared by several threads: `Shared[T]` only makes the reference COUNT atomic, not the fields, so the concurrent writes race.\n      FIX: make '", 154LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (prop)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' an `Atomic[T]` (or guard the whole object with `Mutex[", 56LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cn)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("]`), or give each thread its own value.", 39LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(self->msgs, _ord_t3511); _tr_str_release(_ord_t3511); });
 }
 
 __attribute__((hot)) TrStr RcCk_where2(RcCk* self, RcFn* f, long long line) {
@@ -2241,20 +2241,20 @@ __attribute__((hot)) TrStr RcCk_where2(RcCk* self, RcFn* f, long long line) {
         l = f->line;
     }
 #line 1057 "src/racecheck.tr"
-    return ({ __auto_type _ord_t3499 = (_tr_strx_concatv((f->file), (_tr_str_lit_len(":", 1LL)))); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3499); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(l)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+    return ({ __auto_type _ord_t3512 = (_tr_strx_concatv((f->file), (_tr_str_lit_len(":", 1LL)))); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3512); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(l)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
 }
 
 __attribute__((hot)) RcFn* _rc_new_fn(TrStr name, TrStr file, long long line, bool is_lib) {
 #line 66 "src/racecheck.tr"
     RcFn* f = ((RcFn*)_tr_obj_alloc(sizeof(RcFn)));
 #line 67 "src/racecheck.tr"
-    TrStr _sfo_t3500 = f->name;
+    TrStr _sfo_t3513 = f->name;
     f->name = _tr_str_retain(name);
-    _tr_str_release(_sfo_t3500);
+    _tr_str_release(_sfo_t3513);
 #line 68 "src/racecheck.tr"
-    TrStr _sfo_t3501 = f->file;
+    TrStr _sfo_t3514 = f->file;
     f->file = _tr_str_retain(file);
-    _tr_str_release(_sfo_t3501);
+    _tr_str_release(_sfo_t3514);
 #line 69 "src/racecheck.tr"
     f->line = line;
 #line 70 "src/racecheck.tr"
@@ -2339,7 +2339,7 @@ __attribute__((hot)) bool _rc_has(List_TrStr* v, TrStr s) {
 #line 125 "src/racecheck.tr"
     while ((i < v->len)) {
 #line 126 "src/racecheck.tr"
-        if (({ TrStr _cmpa_t3502 = (List_TrStr_get(v, i)); TrStr _cmpb_t3503 = (s); _Bool _cmpr_t3504 = _tr_str_eqv(_cmpa_t3502, _cmpb_t3503); _tr_str_release(_cmpa_t3502); _cmpr_t3504; })) {
+        if (({ TrStr _cmpa_t3515 = (List_TrStr_get(v, i)); TrStr _cmpb_t3516 = (s); _Bool _cmpr_t3517 = _tr_str_eqv(_cmpa_t3515, _cmpb_t3516); _tr_str_release(_cmpa_t3515); _cmpr_t3517; })) {
 #line 126 "src/racecheck.tr"
             return true;
         }
@@ -2362,19 +2362,19 @@ __attribute__((hot)) TrStr _rc_root(Expr* e) {
         return _tr_str_lit_len("", 0LL);
     }
 #line 136 "src/racecheck.tr"
-    __auto_type _t3505 = (*e);
-    if (_t3505.tag == Expr_EIdent) {
-        __auto_type n = _t3505.data.EIdent.name;
-        TrStr _trret579 = _tr_str_retain(n);
-        return _trret579;
-    } else if (_t3505.tag == Expr_EPropAccess) {
-        __auto_type o = _t3505.data.EPropAccess.obj;
+    __auto_type _t3518 = (*e);
+    if (_t3518.tag == Expr_EIdent) {
+        __auto_type n = _t3518.data.EIdent.name;
+        TrStr _trret583 = _tr_str_retain(n);
+        return _trret583;
+    } else if (_t3518.tag == Expr_EPropAccess) {
+        __auto_type o = _t3518.data.EPropAccess.obj;
         return _rc_root(o);
-    } else if (_t3505.tag == Expr_EIndex) {
-        __auto_type o = _t3505.data.EIndex.obj;
+    } else if (_t3518.tag == Expr_EIndex) {
+        __auto_type o = _t3518.data.EIndex.obj;
         return _rc_root(o);
     } else if (1) {
-        __auto_type _ = _t3505;
+        __auto_type _ = _t3518;
         return _tr_str_lit_len("", 0LL);
     }
 #line 141 "src/racecheck.tr"
@@ -2388,31 +2388,31 @@ __attribute__((hot)) TrStr _rc_first_prop(Expr* e) {
         return _tr_str_lit_len("", 0LL);
     }
 #line 146 "src/racecheck.tr"
-    __auto_type _t3506 = (*e);
-    if (_t3506.tag == Expr_EPropAccess) {
-        __auto_type o = _t3506.data.EPropAccess.obj;
-__auto_type p = _t3506.data.EPropAccess.prop;
+    __auto_type _t3519 = (*e);
+    if (_t3519.tag == Expr_EPropAccess) {
+        __auto_type o = _t3519.data.EPropAccess.obj;
+__auto_type p = _t3519.data.EPropAccess.prop;
 #line 148 "src/racecheck.tr"
         if ((!_rc_nul(o))) {
 #line 149 "src/racecheck.tr"
-            __auto_type _t3507 = (*o);
-            if (_t3507.tag == Expr_EIdent) {
-                __auto_type _ = _t3507.data.EIdent.name;
-                TrStr _trret580 = _tr_str_retain(p);
-                return _trret580;
+            __auto_type _t3520 = (*o);
+            if (_t3520.tag == Expr_EIdent) {
+                __auto_type _ = _t3520.data.EIdent.name;
+                TrStr _trret584 = _tr_str_retain(p);
+                return _trret584;
             } else if (1) {
-                __auto_type _ = _t3507;
+                __auto_type _ = _t3520;
                 /* pass */
             }
         }
 #line 152 "src/racecheck.tr"
-        TrStr _trret581 = _rc_first_prop(o);
-        return _trret581;
-    } else if (_t3506.tag == Expr_EIndex) {
-        __auto_type o = _t3506.data.EIndex.obj;
+        TrStr _trret585 = _rc_first_prop(o);
+        return _trret585;
+    } else if (_t3519.tag == Expr_EIndex) {
+        __auto_type o = _t3519.data.EIndex.obj;
         return _rc_first_prop(o);
     } else if (1) {
-        __auto_type _ = _t3506;
+        __auto_type _ = _t3519;
         return _tr_str_lit_len("", 0LL);
     }
 #line 155 "src/racecheck.tr"
@@ -2426,15 +2426,15 @@ __attribute__((hot)) TrStr _rc_ctor_name(Expr* v) {
         return _tr_str_lit_len("", 0LL);
     }
 #line 160 "src/racecheck.tr"
-    __auto_type _t3508 = (*v);
-    if (_t3508.tag == Expr_EMethodCall) {
-        __auto_type o = _t3508.data.EMethodCall.obj;
+    __auto_type _t3521 = (*v);
+    if (_t3521.tag == Expr_EMethodCall) {
+        __auto_type o = _t3521.data.EMethodCall.obj;
         return _rc_root(o);
-    } else if (_t3508.tag == Expr_ECall) {
-        __auto_type c = _t3508.data.ECall.callee;
+    } else if (_t3521.tag == Expr_ECall) {
+        __auto_type c = _t3521.data.ECall.callee;
         return _rc_root(c);
     } else if (1) {
-        __auto_type _ = _t3508;
+        __auto_type _ = _t3521;
         return _tr_str_lit_len("", 0LL);
     }
 #line 164 "src/racecheck.tr"
@@ -2448,35 +2448,35 @@ __attribute__((hot)) TrStr _rc_ctor_arg(Expr* v) {
         return _tr_str_lit_len("", 0LL);
     }
 #line 169 "src/racecheck.tr"
-    __auto_type _t3509 = (*v);
-    if (_t3509.tag == Expr_EMethodCall) {
-        __auto_type o = _t3509.data.EMethodCall.obj;
+    __auto_type _t3522 = (*v);
+    if (_t3522.tag == Expr_EMethodCall) {
+        __auto_type o = _t3522.data.EMethodCall.obj;
 #line 171 "src/racecheck.tr"
         if ((!_rc_nul(o))) {
 #line 172 "src/racecheck.tr"
-            __auto_type _t3510 = (*o);
-            if (_t3510.tag == Expr_EIndex) {
-                __auto_type ix = _t3510.data.EIndex._tr_v_index;
+            __auto_type _t3523 = (*o);
+            if (_t3523.tag == Expr_EIndex) {
+                __auto_type ix = _t3523.data.EIndex._tr_v_index;
 #line 174 "src/racecheck.tr"
                 if ((!_rc_nul(ix))) {
 #line 175 "src/racecheck.tr"
-                    __auto_type _t3511 = (*ix);
-                    if (_t3511.tag == Expr_EIdent) {
-                        __auto_type an = _t3511.data.EIdent.name;
-                        TrStr _trret582 = _tr_str_retain(an);
-                        return _trret582;
+                    __auto_type _t3524 = (*ix);
+                    if (_t3524.tag == Expr_EIdent) {
+                        __auto_type an = _t3524.data.EIdent.name;
+                        TrStr _trret586 = _tr_str_retain(an);
+                        return _trret586;
                     } else if (1) {
-                        __auto_type _ = _t3511;
+                        __auto_type _ = _t3524;
                         return _tr_str_lit_len("", 0LL);
                     }
                 }
             } else if (1) {
-                __auto_type _ = _t3510;
+                __auto_type _ = _t3523;
                 return _tr_str_lit_len("", 0LL);
             }
         }
     } else if (1) {
-        __auto_type _ = _t3509;
+        __auto_type _ = _t3522;
         return _tr_str_lit_len("", 0LL);
     }
 #line 180 "src/racecheck.tr"
@@ -2489,7 +2489,7 @@ __attribute__((hot)) long long _rc_dot(TrStr n) {
 #line 184 "src/racecheck.tr"
     while ((i < _tr_str_lenv((n)))) {
 #line 185 "src/racecheck.tr"
-        if (({ TrStr _cmpa_t3512 = (_tr_str_slicev((n), i, (i + 1LL))); TrStr _cmpb_t3513 = (_tr_str_lit_len(".", 1LL)); _Bool _cmpr_t3514 = _tr_str_eqv(_cmpa_t3512, _cmpb_t3513); _tr_str_release(_cmpa_t3512); _cmpr_t3514; })) {
+        if (({ TrStr _cmpa_t3525 = (_tr_str_slicev((n), i, (i + 1LL))); TrStr _cmpb_t3526 = (_tr_str_lit_len(".", 1LL)); _Bool _cmpr_t3527 = _tr_str_eqv(_cmpa_t3525, _cmpb_t3526); _tr_str_release(_cmpa_t3525); _cmpr_t3527; })) {
 #line 185 "src/racecheck.tr"
             return i;
         }
@@ -2507,17 +2507,17 @@ __attribute__((hot)) bool _rc_is_thread_spawn(Expr* v) {
         return false;
     }
 #line 191 "src/racecheck.tr"
-    __auto_type _t3515 = (*v);
-    if (_t3515.tag == Expr_EMethodCall) {
-        __auto_type o = _t3515.data.EMethodCall.obj;
-__auto_type m = _t3515.data.EMethodCall.method;
+    __auto_type _t3528 = (*v);
+    if (_t3528.tag == Expr_EMethodCall) {
+        __auto_type o = _t3528.data.EMethodCall.obj;
+__auto_type m = _t3528.data.EMethodCall.method;
 #line 193 "src/racecheck.tr"
-        if ((_tr_str_eqv((m), (_tr_str_lit_len("spawn", 5LL))) && ({ TrStr _cmpa_t3516 = (_rc_root(o)); TrStr _cmpb_t3517 = (_tr_str_lit_len("Thread", 6LL)); _Bool _cmpr_t3518 = _tr_str_eqv(_cmpa_t3516, _cmpb_t3517); _tr_str_release(_cmpa_t3516); _cmpr_t3518; }))) {
+        if ((_tr_str_eqv((m), (_tr_str_lit_len("spawn", 5LL))) && ({ TrStr _cmpa_t3529 = (_rc_root(o)); TrStr _cmpb_t3530 = (_tr_str_lit_len("Thread", 6LL)); _Bool _cmpr_t3531 = _tr_str_eqv(_cmpa_t3529, _cmpb_t3530); _tr_str_release(_cmpa_t3529); _cmpr_t3531; }))) {
 #line 193 "src/racecheck.tr"
             return true;
         }
     } else if (1) {
-        __auto_type _ = _t3515;
+        __auto_type _ = _t3528;
         /* pass */
     }
 #line 195 "src/racecheck.tr"
@@ -2531,11 +2531,11 @@ __attribute__((hot)) bool _rc_is_lambda(Expr* v) {
         return false;
     }
 #line 199 "src/racecheck.tr"
-    __auto_type _t3519 = (*v);
-    if (_t3519.tag == Expr_EClosure) {
+    __auto_type _t3532 = (*v);
+    if (_t3532.tag == Expr_EClosure) {
         return true;
     } else if (1) {
-        __auto_type _ = _t3519;
+        __auto_type _ = _t3532;
         return false;
     }
 #line 202 "src/racecheck.tr"
@@ -2553,7 +2553,7 @@ __attribute__((hot)) bool _rc_ifaces_sendable(ClassDef* c) {
 #line 1065 "src/racecheck.tr"
     while ((i < c->iface_names->len)) {
 #line 1066 "src/racecheck.tr"
-        if (({ TrStr _cmpa_t3520 = (List_TrStr_get(c->iface_names, i)); TrStr _cmpb_t3521 = (_tr_str_lit_len("Sendable", 8LL)); _Bool _cmpr_t3522 = _tr_str_eqv(_cmpa_t3520, _cmpb_t3521); _tr_str_release(_cmpa_t3520); _cmpr_t3522; })) {
+        if (({ TrStr _cmpa_t3533 = (List_TrStr_get(c->iface_names, i)); TrStr _cmpb_t3534 = (_tr_str_lit_len("Sendable", 8LL)); _Bool _cmpr_t3535 = _tr_str_eqv(_cmpa_t3533, _cmpb_t3534); _tr_str_release(_cmpa_t3533); _cmpr_t3535; })) {
 #line 1066 "src/racecheck.tr"
             return true;
         }
@@ -2584,13 +2584,13 @@ __attribute__((hot)) List_TrStr* check_data_races(Program* prog, List_TrStr* dec
 #line 1079 "src/racecheck.tr"
     ck->msgs = (void*)List_TrStr_new();
 #line 1080 "src/racecheck.tr"
-    RcFn* _cltmp_t3523 = _rc_new_fn(_tr_str_lit_len("", 0LL), input_path, 0LL, true);
+    RcFn* _cltmp_t3536 = _rc_new_fn(_tr_str_lit_len("", 0LL), input_path, 0LL, true);
     _tr_obj_release(ck->cur, _trdrop_RcFn);
-    ck->cur = _cltmp_t3523;
+    ck->cur = _cltmp_t3536;
 #line 1081 "src/racecheck.tr"
-    RcFn* _cltmp_t3524 = _rc_new_fn(_tr_str_lit_len("", 0LL), input_path, 0LL, true);
+    RcFn* _cltmp_t3537 = _rc_new_fn(_tr_str_lit_len("", 0LL), input_path, 0LL, true);
     _tr_obj_release(ck->cur, _trdrop_RcFn);
-    ck->cur = _cltmp_t3524;
+    ck->cur = _cltmp_t3537;
 #line 1082 "src/racecheck.tr"
     long long i = 0LL;
 #line 1083 "src/racecheck.tr"
@@ -2600,18 +2600,18 @@ __attribute__((hot)) List_TrStr* check_data_races(Program* prog, List_TrStr* dec
 #line 1085 "src/racecheck.tr"
         if ((decl_files->len == prog->decls->len)) {
 #line 1085 "src/racecheck.tr"
-            TrStr _strtmp_t3525 = List_TrStr_get(decl_files, i);
+            TrStr _strtmp_t3538 = List_TrStr_get(decl_files, i);
             _tr_str_release(dfc);
-            dfc = _strtmp_t3525;
+            dfc = _strtmp_t3538;
         }
 #line 1086 "src/racecheck.tr"
-        __auto_type _t3526 = (*((Decl*)List_ptr_get(prog->decls, i)));
-        if (_t3526.tag == Decl_DClass) {
-            __auto_type c = _t3526.data.DClass.cls;
+        __auto_type _t3539 = (*((Decl*)List_ptr_get(prog->decls, i)));
+        if (_t3539.tag == Decl_DClass) {
+            __auto_type c = _t3539.data.DClass.cls;
 #line 1088 "src/racecheck.tr"
             List_ptr_append(ck->classes, _tr_obj_retain(c));
 #line 1089 "src/racecheck.tr"
-            ({ __auto_type _ord_t3527 = (_rc_path_lib(dfc)); List_bool_append(ck->class_lib, _ord_t3527); });
+            ({ __auto_type _ord_t3540 = (_rc_path_lib(dfc)); List_bool_append(ck->class_lib, _ord_t3540); });
 #line 1090 "src/racecheck.tr"
             if ((!_rc_path_lib(dfc))) {
 #line 1091 "src/racecheck.tr"
@@ -2619,19 +2619,19 @@ __attribute__((hot)) List_TrStr* check_data_races(Program* prog, List_TrStr* dec
 #line 1092 "src/racecheck.tr"
                 while ((fq < c->fields->len)) {
 #line 1093 "src/racecheck.tr"
-                    ({ __auto_type _ord_t3528 = (((FieldDef*)List_ptr_get(c->fields, fq))->ty); __auto_type _ord_t3529 = (c->line); RcCk_ty_check(ck, _ord_t3528, dfc, _ord_t3529); });
+                    ({ __auto_type _ord_t3541 = (((FieldDef*)List_ptr_get(c->fields, fq))->ty); __auto_type _ord_t3542 = (c->line); RcCk_ty_check(ck, _ord_t3541, dfc, _ord_t3542); });
 #line 1094 "src/racecheck.tr"
                     fq = (fq + 1LL);
                 }
             }
-        } else if (_t3526.tag == Decl_DActor) {
-            __auto_type c2 = _t3526.data.DActor.cls;
+        } else if (_t3539.tag == Decl_DActor) {
+            __auto_type c2 = _t3539.data.DActor.cls;
 #line 1096 "src/racecheck.tr"
             List_ptr_append(ck->classes, _tr_obj_retain(c2));
 #line 1097 "src/racecheck.tr"
-            ({ __auto_type _ord_t3530 = (_rc_path_lib(dfc)); List_bool_append(ck->class_lib, _ord_t3530); });
+            ({ __auto_type _ord_t3543 = (_rc_path_lib(dfc)); List_bool_append(ck->class_lib, _ord_t3543); });
         } else if (1) {
-            __auto_type _ = _t3526;
+            __auto_type _ = _t3539;
             /* pass */
         }
 #line 1099 "src/racecheck.tr"
@@ -2647,50 +2647,50 @@ __attribute__((hot)) List_TrStr* check_data_races(Program* prog, List_TrStr* dec
 #line 1103 "src/racecheck.tr"
         if ((decl_files->len == prog->decls->len)) {
 #line 1103 "src/racecheck.tr"
-            TrStr _strtmp_t3531 = List_TrStr_get(decl_files, i);
+            TrStr _strtmp_t3544 = List_TrStr_get(decl_files, i);
             _tr_str_release(df);
-            df = _strtmp_t3531;
+            df = _strtmp_t3544;
         }
 #line 1104 "src/racecheck.tr"
         bool lib = _rc_path_lib(df);
 #line 1105 "src/racecheck.tr"
-        __auto_type _t3532 = (*((Decl*)List_ptr_get(prog->decls, i)));
-        if (_t3532.tag == Decl_DTopLevelStmt) {
-            __auto_type sp = _t3532.data.DTopLevelStmt.stmt;
+        __auto_type _t3545 = (*((Decl*)List_ptr_get(prog->decls, i)));
+        if (_t3545.tag == Decl_DTopLevelStmt) {
+            __auto_type sp = _t3545.data.DTopLevelStmt.stmt;
 #line 1107 "src/racecheck.tr"
-            __auto_type _t3533 = (*sp);
-            if (_t3533.tag == Stmt_SLet) {
-                __auto_type name = _t3533.data.SLet.name;
-__auto_type is_mut = _t3533.data.SLet.is_mut;
-__auto_type is_const = _t3533.data.SLet.is_const;
-__auto_type ty = _t3533.data.SLet.ty;
-__auto_type v = _t3533.data.SLet.val;
+            __auto_type _t3546 = (*sp);
+            if (_t3546.tag == Stmt_SLet) {
+                __auto_type name = _t3546.data.SLet.name;
+__auto_type is_mut = _t3546.data.SLet.is_mut;
+__auto_type is_const = _t3546.data.SLet.is_const;
+__auto_type ty = _t3546.data.SLet.ty;
+__auto_type v = _t3546.data.SLet.val;
 #line 1109 "src/racecheck.tr"
                 if ((!lib)) {
 #line 1109 "src/racecheck.tr"
                     RcCk_add_global(ck, name, is_mut, is_const, ty, v, df);
                 }
-            } else if (_t3533.tag == Stmt_SAssign) {
-                __auto_type tg = _t3533.data.SAssign.target;
-__auto_type v3 = _t3533.data.SAssign.val;
+            } else if (_t3546.tag == Stmt_SAssign) {
+                __auto_type tg = _t3546.data.SAssign.target;
+__auto_type v3 = _t3546.data.SAssign.val;
 #line 1112 "src/racecheck.tr"
                 if (((!lib) && (!_rc_nul(tg)))) {
 #line 1113 "src/racecheck.tr"
-                    __auto_type _t3534 = (*tg);
-                    if (_t3534.tag == Expr_EIdent) {
-                        __auto_type gn = _t3534.data.EIdent.name;
+                    __auto_type _t3547 = (*tg);
+                    if (_t3547.tag == Expr_EIdent) {
+                        __auto_type gn = _t3547.data.EIdent.name;
                         RcCk_add_global(ck, gn, false, false, (AstType**)(0LL), v3, df);
                     } else if (1) {
-                        __auto_type _ = _t3534;
+                        __auto_type _ = _t3547;
                         /* pass */
                     }
                 }
             } else if (1) {
-                __auto_type _ = _t3533;
+                __auto_type _ = _t3546;
                 /* pass */
             }
         } else if (1) {
-            __auto_type _ = _t3532;
+            __auto_type _ = _t3545;
             /* pass */
         }
 #line 1118 "src/racecheck.tr"
@@ -2706,42 +2706,42 @@ __auto_type v3 = _t3533.data.SAssign.val;
 #line 1122 "src/racecheck.tr"
         if ((decl_files->len == prog->decls->len)) {
 #line 1122 "src/racecheck.tr"
-            TrStr _strtmp_t3535 = List_TrStr_get(decl_files, i);
+            TrStr _strtmp_t3548 = List_TrStr_get(decl_files, i);
             _tr_str_release(df2);
-            df2 = _strtmp_t3535;
+            df2 = _strtmp_t3548;
         }
 #line 1123 "src/racecheck.tr"
         bool lib2 = _rc_path_lib(df2);
 #line 1124 "src/racecheck.tr"
-        __auto_type _t3536 = (*((Decl*)List_ptr_get(prog->decls, i)));
-        if (_t3536.tag == Decl_DFunction) {
-            __auto_type f = _t3536.data.DFunction.func;
+        __auto_type _t3549 = (*((Decl*)List_ptr_get(prog->decls, i)));
+        if (_t3549.tag == Decl_DFunction) {
+            __auto_type f = _t3549.data.DFunction.func;
             RcCk_add_fn(ck, f, df2, lib2);
-        } else if (_t3536.tag == Decl_DClass) {
-            __auto_type c3 = _t3536.data.DClass.cls;
+        } else if (_t3549.tag == Decl_DClass) {
+            __auto_type c3 = _t3549.data.DClass.cls;
 #line 1127 "src/racecheck.tr"
             long long mi = 0LL;
 #line 1128 "src/racecheck.tr"
             while ((mi < c3->methods->len)) {
 #line 1129 "src/racecheck.tr"
-                ({ __auto_type _ord_t3537 = (((FunctionDef*)List_ptr_get(c3->methods, mi))); __auto_type _ord_t3538 = (c3->name); RcCk_add_method(ck, _ord_t3537, _ord_t3538, df2, lib2); });
+                ({ __auto_type _ord_t3550 = (((FunctionDef*)List_ptr_get(c3->methods, mi))); __auto_type _ord_t3551 = (c3->name); RcCk_add_method(ck, _ord_t3550, _ord_t3551, df2, lib2); });
 #line 1130 "src/racecheck.tr"
                 mi = (mi + 1LL);
             }
-        } else if (_t3536.tag == Decl_DActor) {
-            __auto_type c4 = _t3536.data.DActor.cls;
+        } else if (_t3549.tag == Decl_DActor) {
+            __auto_type c4 = _t3549.data.DActor.cls;
 #line 1132 "src/racecheck.tr"
             long long mi2 = 0LL;
 #line 1133 "src/racecheck.tr"
             while ((mi2 < c4->methods->len)) {
 #line 1134 "src/racecheck.tr"
-                ({ __auto_type _ord_t3539 = (((FunctionDef*)List_ptr_get(c4->methods, mi2))); __auto_type _ord_t3540 = (c4->name); RcCk_add_method(ck, _ord_t3539, _ord_t3540, df2, lib2); });
+                ({ __auto_type _ord_t3552 = (((FunctionDef*)List_ptr_get(c4->methods, mi2))); __auto_type _ord_t3553 = (c4->name); RcCk_add_method(ck, _ord_t3552, _ord_t3553, df2, lib2); });
 #line 1135 "src/racecheck.tr"
                 mi2 = (mi2 + 1LL);
             }
-        } else if (_t3536.tag == Decl_DExtend) {
-            __auto_type tgt = _t3536.data.DExtend.target;
-__auto_type methods = _t3536.data.DExtend.methods;
+        } else if (_t3549.tag == Decl_DExtend) {
+            __auto_type tgt = _t3549.data.DExtend.target;
+__auto_type methods = _t3549.data.DExtend.methods;
 #line 1137 "src/racecheck.tr"
             long long mi3 = 0LL;
 #line 1138 "src/racecheck.tr"
@@ -2752,7 +2752,7 @@ __auto_type methods = _t3536.data.DExtend.methods;
                 mi3 = (mi3 + 1LL);
             }
         } else if (1) {
-            __auto_type _ = _t3536;
+            __auto_type _ = _t3549;
             /* pass */
         }
 #line 1142 "src/racecheck.tr"
@@ -2772,7 +2772,7 @@ __auto_type methods = _t3536.data.DExtend.methods;
 #line 1148 "src/racecheck.tr"
             while ((mj < f->msgs->len)) {
 #line 1149 "src/racecheck.tr"
-                ({ TrStr _ord_t3541 = (List_TrStr_get(f->msgs, mj)); List_TrStr_append(ck->msgs, _ord_t3541); _tr_str_release(_ord_t3541); });
+                ({ TrStr _ord_t3554 = (List_TrStr_get(f->msgs, mj)); List_TrStr_append(ck->msgs, _ord_t3554); _tr_str_release(_ord_t3554); });
 #line 1150 "src/racecheck.tr"
                 mj = (mj + 1LL);
             }
@@ -2810,9 +2810,9 @@ __auto_type methods = _t3536.data.DExtend.methods;
 #line 1166 "src/racecheck.tr"
                 while ((qk < qf->pairs_a->len)) {
 #line 1167 "src/racecheck.tr"
-                    if ((({ __auto_type _ord_t3542 = (List_TrStr_get(qf->pairs_a, qk)); __auto_type _wr = (({ TrStr _cmpa_t3543 = (_ord_t3542); TrStr _cmpb_t3544 = (List_TrStr_get(pf->pairs_b, pk)); _Bool _cmpr_t3545 = _tr_str_eqv(_cmpa_t3543, _cmpb_t3544); _tr_str_release(_cmpa_t3543); _tr_str_release(_cmpb_t3544); _cmpr_t3545; })); _wr; }) && ({ __auto_type _ord_t3546 = (List_TrStr_get(qf->pairs_b, qk)); __auto_type _wr = (({ TrStr _cmpa_t3547 = (_ord_t3546); TrStr _cmpb_t3548 = (List_TrStr_get(pf->pairs_a, pk)); _Bool _cmpr_t3549 = _tr_str_eqv(_cmpa_t3547, _cmpb_t3548); _tr_str_release(_cmpa_t3547); _tr_str_release(_cmpb_t3548); _cmpr_t3549; })); _wr; }))) {
+                    if ((({ __auto_type _ord_t3555 = (List_TrStr_get(qf->pairs_a, qk)); __auto_type _wr = (({ TrStr _cmpa_t3556 = (_ord_t3555); TrStr _cmpb_t3557 = (List_TrStr_get(pf->pairs_b, pk)); _Bool _cmpr_t3558 = _tr_str_eqv(_cmpa_t3556, _cmpb_t3557); _tr_str_release(_cmpa_t3556); _tr_str_release(_cmpb_t3557); _cmpr_t3558; })); _wr; }) && ({ __auto_type _ord_t3559 = (List_TrStr_get(qf->pairs_b, qk)); __auto_type _wr = (({ TrStr _cmpa_t3560 = (_ord_t3559); TrStr _cmpb_t3561 = (List_TrStr_get(pf->pairs_a, pk)); _Bool _cmpr_t3562 = _tr_str_eqv(_cmpa_t3560, _cmpb_t3561); _tr_str_release(_cmpa_t3560); _tr_str_release(_cmpb_t3561); _cmpr_t3562; })); _wr; }))) {
 #line 1168 "src/racecheck.tr"
-                        ({ __auto_type _ord_t3550 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("W|", 2LL)), (pf->file))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3551 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3550); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(pf->line)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": [T-9] lock-order inversion: '", 31LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3552 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3551); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (pf->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' locks '", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3553 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3552); TrStr _tr_cr = (List_TrStr_get(pf->pairs_a, pk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' then '", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3554 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3553); TrStr _tr_cr = (List_TrStr_get(pf->pairs_b, pk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', but '", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3555 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3554); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (qf->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' locks them in the opposite order: two threads running them can deadlock.\n      FIX: always acquire the mutexes in one global order.", 133LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(ck->msgs, _ord_t3555); _tr_str_release(_ord_t3555); });
+                        ({ __auto_type _ord_t3563 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("W|", 2LL)), (pf->file))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(":", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3564 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3563); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(pf->line)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": [T-9] lock-order inversion: '", 31LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3565 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3564); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (pf->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' locks '", 9LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3566 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3565); TrStr _tr_cr = (List_TrStr_get(pf->pairs_a, pk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' then '", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _ord_t3567 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3566); TrStr _tr_cr = (List_TrStr_get(pf->pairs_b, pk)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("', but '", 8LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _ord_t3568 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t3567); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (qf->name)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("' locks them in the opposite order: two threads running them can deadlock.\n      FIX: always acquire the mutexes in one global order.", 133LL))); _tr_str_release(_tr_cl); _tr_cres; })); List_TrStr_append(ck->msgs, _ord_t3568); _tr_str_release(_ord_t3568); });
                     }
 #line 1169 "src/racecheck.tr"
                     qk = (qk + 1LL);

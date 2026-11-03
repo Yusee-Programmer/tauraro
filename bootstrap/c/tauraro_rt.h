@@ -641,6 +641,87 @@ static inline long long _tr_mem_live_strs(void) {
  * alloc/borrowed pointer, which would corrupt the heap on release). */
 _TR_XLINK char* _tr_rt_str_new(const char* s);
 
+/* Alloc-block size table (debug/ASan builds, or -DTAURARO_PTR_CHECK): remembers the extent of every
+ * block handed out by _tr_c_calloc / _tr_c_realloc so raw Pointer[T] offset/index on the block's BASE
+ * pointer can be range-checked WITHOUT depending on AddressSanitizer internals (portable: works on
+ * macOS where __asan_locate_address is unusable). Interior pointers (a.offset(2)) are not in the table
+ * and stay unchecked here (ASan redzones / the Linux ASan locate fallback still cover them). */
+#if defined(TAURARO_PTR_CHECK) && !defined(_TR_NO_CRASH_HANDLER)
+#  define _TR_PTRCHK_WANT 1
+#endif
+#if defined(_TR_NO_CRASH_HANDLER) || defined(_TR_PTRCHK_WANT)
+#  define _TR_PTRCHK_ON 1
+#endif
+#if defined(_TR_PTRCHK_ON) \
+    && !defined(TAURARO_BARE) && !defined(_WIN32) && !defined(TAURARO_KERNEL) && (defined(__GNUC__) || defined(__clang__))
+#  define _TR_PTRTAB 1
+typedef struct { uintptr_t base; size_t size; } _TrPtrTabEnt;
+static _TrPtrTabEnt* _tr_ptrtab = 0;
+static size_t _tr_ptrtab_cap = 0, _tr_ptrtab_used = 0;   /* used counts live + tombstones */
+static volatile int _tr_ptrtab_lock = 0;
+#define _TR_PT_TOMB ((uintptr_t)1)
+static inline void _tr_pt_lock(void)   { while (__atomic_exchange_n(&_tr_ptrtab_lock, 1, __ATOMIC_ACQUIRE)) { } }
+static inline void _tr_pt_unlock(void) { __atomic_store_n(&_tr_ptrtab_lock, 0, __ATOMIC_RELEASE); }
+static inline size_t _tr_pt_hash(uintptr_t b) { b ^= b >> 17; b *= 0x9E3779B97F4A7C15ULL; return (size_t)(b >> 20); }
+static void _tr_pt_grow(void) {                 /* caller holds the lock */
+    size_t ncap = _tr_ptrtab_cap ? _tr_ptrtab_cap * 2 : 1024;
+    _TrPtrTabEnt* nt = (_TrPtrTabEnt*)calloc(ncap, sizeof(_TrPtrTabEnt));
+    if (!nt) return;
+    size_t live = 0;
+    for (size_t i = 0; i < _tr_ptrtab_cap; i++) {
+        uintptr_t b = _tr_ptrtab[i].base;
+        if (b > _TR_PT_TOMB) {
+            size_t h = _tr_pt_hash(b) & (ncap - 1);
+            while (nt[h].base) h = (h + 1) & (ncap - 1);
+            nt[h] = _tr_ptrtab[i]; live++;
+        }
+    }
+    free(_tr_ptrtab); _tr_ptrtab = nt; _tr_ptrtab_cap = ncap; _tr_ptrtab_used = live;
+}
+static void _tr_pt_add(void* p, size_t size) {
+    if (!p || size == 0) return;
+    _tr_pt_lock();
+    if ((_tr_ptrtab_used + 1) * 2 > _tr_ptrtab_cap) _tr_pt_grow();
+    if (_tr_ptrtab_cap) {
+        size_t h = _tr_pt_hash((uintptr_t)p) & (_tr_ptrtab_cap - 1);
+        while (_tr_ptrtab[h].base > _TR_PT_TOMB && _tr_ptrtab[h].base != (uintptr_t)p) h = (h + 1) & (_tr_ptrtab_cap - 1);
+        if (_tr_ptrtab[h].base == 0) _tr_ptrtab_used++;
+        _tr_ptrtab[h].base = (uintptr_t)p; _tr_ptrtab[h].size = size;
+    }
+    _tr_pt_unlock();
+}
+static void _tr_pt_del(void* p) {
+    if (!p) return;
+    _tr_pt_lock();
+    if (_tr_ptrtab_cap) {
+        size_t h = _tr_pt_hash((uintptr_t)p) & (_tr_ptrtab_cap - 1);
+        while (_tr_ptrtab[h].base) {
+            if (_tr_ptrtab[h].base == (uintptr_t)p) { _tr_ptrtab[h].base = _TR_PT_TOMB; break; }
+            h = (h + 1) & (_tr_ptrtab_cap - 1);
+        }
+    }
+    _tr_pt_unlock();
+}
+/* Size of the tracked block whose BASE is p, or 0 if p is not a tracked block base. */
+static size_t _tr_pt_size(const void* p) {
+    size_t r = 0;
+    if (!p) return 0;
+    _tr_pt_lock();
+    if (_tr_ptrtab_cap) {
+        size_t h = _tr_pt_hash((uintptr_t)p) & (_tr_ptrtab_cap - 1);
+        while (_tr_ptrtab[h].base) {
+            if (_tr_ptrtab[h].base == (uintptr_t)p) { r = _tr_ptrtab[h].size; break; }
+            h = (h + 1) & (_tr_ptrtab_cap - 1);
+        }
+    }
+    _tr_pt_unlock();
+    return r;
+}
+#else
+#  define _tr_pt_add(p, n) ((void)0)
+#  define _tr_pt_del(p)    ((void)0)
+#endif
+
 // Wrappers for core library to avoid signature conflicts
 _TR_XLINK void* _tr_c_malloc(size_t size) {
     _TR_HEAPCHK("c_malloc");
@@ -651,12 +732,12 @@ _TR_XLINK void* _tr_c_malloc(size_t size) {
 _TR_XLINK void* _tr_c_calloc(size_t count, size_t size) {
     void* p = TAURARO_CALLOC(count, size);
     if (!p && count * size > 0) { _TR_OOM_ABORT(); }
-    if (p) _TR_MEMCOUNT_INC();
+    if (p) { _TR_MEMCOUNT_INC(); _tr_pt_add(p, count * size); }
     return p;
 }
 _TR_XLINK void _tr_free(void* p) {
     _TR_HEAPCHK("free");
-    if (p) { _TR_MEMCOUNT_DEC(); TAURARO_FREE(p); }
+    if (p) { _tr_pt_del(p); _TR_MEMCOUNT_DEC(); TAURARO_FREE(p); }
 }
 /* Runtime memory helpers used by std/core (Vec/String) via `extern "C"` decls. `static
  * inline` for the C backend (#includes this header, inlines them); EXPORTED as real
@@ -680,6 +761,7 @@ static inline void _tr_eprint(char* s) { _TR_WRITE(s); _TR_WRITE("\n"); }
 _TR_XLINK void* _tr_c_realloc(void* ptr, size_t size) {
     _TR_HEAPCHK("realloc");
     void* p = TAURARO_REALLOC(ptr, size);
+    if (p) { if (ptr) _tr_pt_del(ptr); _tr_pt_add(p, size); }
     /* realloc(NULL, n) acts as malloc -> a new live block; realloc of an
      * existing block frees the old internally (no _tr_free) and keeps the
      * same logical block, so only the fresh-allocation case is counted. */
@@ -5416,13 +5498,22 @@ static inline unsigned long long _tr_f2u(double x) {
  * base pointer points into (alloc[T](n) is a malloc block, so ASan knows its exact extent). Catches the
  * out-of-bounds access that lands inside ANOTHER valid block (which ASan's redzones alone would miss).
  * In release builds _TR_PTR_OFF / _TR_PTR_IDX are plain pointer arithmetic: raw Pointer[T] is unchecked.
- * Not on macOS: Apple's ASan asserts in __asan_locate_address outside a report (ASan redzones still apply). */
-#if defined(_TR_NO_CRASH_HANDLER) && !defined(TAURARO_BARE) && !defined(_WIN32) && !defined(__APPLE__)
+ * The block extent comes from a portable alloc table (no ASan internals), so macOS is covered too. */
+#if defined(_TR_PTRTAB)
+#if defined(_TR_NO_CRASH_HANDLER) && !defined(__APPLE__) && !defined(TAURARO_NO_ASAN_LOCATE)
 extern const char* __asan_locate_address(void* addr, char* name, size_t name_size, void** region_address, size_t* region_size);
+#  define _TR_HAVE_ASAN_LOCATE 1
+#endif
 static inline void* _tr_dbg_ptr(void* p, long long k, size_t esz, int deref) {
-    char nm[16]; void* rb = 0; size_t rs = 0;
-    const char* cat = p ? __asan_locate_address(p, nm, sizeof nm, &rb, &rs) : 0;
-    if (cat && cat[0] == 'h' && cat[1] == 'e' && cat[2] == 'a' && cat[3] == 'p' && cat[4] == 0 && (char*)p >= (char*)rb && (char*)p < (char*)rb + rs) {
+    void* rb = 0; size_t rs = _tr_pt_size(p);
+    if (rs) rb = p;
+#ifdef _TR_HAVE_ASAN_LOCATE
+    else if (p) {   /* interior pointer: let ASan name the heap block it points into (Linux) */
+        char nm[16]; const char* cat = __asan_locate_address(p, nm, sizeof nm, &rb, &rs);
+        if (!(cat && cat[0] == 'h' && cat[1] == 'e' && cat[2] == 'a' && cat[3] == 'p' && cat[4] == 0 && (char*)p >= (char*)rb && (char*)p < (char*)rb + rs)) rs = 0;
+    }
+#endif
+    if (rs) {
         long long off = (long long)((char*)p - (char*)rb) + k * (long long)esz;
         long long lim = deref ? (long long)rs - (long long)esz : (long long)rs;
         if (off < 0 || off > lim) {
@@ -9990,11 +10081,30 @@ static char* _tr_sb_append(char* buf, size_t* len, size_t* cap, const char* s) {
         while (*len + sl + 1 > *cap) *cap *= 2;
         char* nb = (char*)_tr_checked_alloc(*cap);
         memcpy(nb, buf, *len + 1);
+        _tr_free(buf);
         buf = nb;
     }
     memcpy(buf + *len, s, sl);
     *len += sl;
     buf[*len] = '\0';
+    return buf;
+}
+static char* _tr_fmt_i64(const void* p); static char* _tr_fmt_i32(const void* p); static char* _tr_fmt_i16(const void* p);
+static char* _tr_fmt_i8(const void* p); static char* _tr_fmt_u8(const void* p); static char* _tr_fmt_u16(const void* p);
+static char* _tr_fmt_u32(const void* p); static char* _tr_fmt_u64(const void* p); static char* _tr_fmt_f64(const void* p);
+static char* _tr_fmt_bool(const void* p); static char* _tr_fmt_char(const void* p); static char* _tr_fmt_str(const void* p);
+static char* _tr_fmt_str_box(const void* p); static char* _tr_fmt_str_raw(const void* p);
+/* True for the runtime's own element formatters, which always return a fresh heap string the
+   caller must free (user-class / nested formatters may return literals or borrowed text). */
+static int _tr_fmt_owns_result(_TrElemFmt f) {
+    return f == _tr_fmt_i64 || f == _tr_fmt_i32 || f == _tr_fmt_i16 || f == _tr_fmt_i8 || f == _tr_fmt_u8 ||
+           f == _tr_fmt_u16 || f == _tr_fmt_u32 || f == _tr_fmt_u64 || f == _tr_fmt_f64 || f == _tr_fmt_bool ||
+           f == _tr_fmt_char || f == _tr_fmt_str || f == _tr_fmt_str_box || f == _tr_fmt_str_raw;
+}
+static char* _tr_sb_append_fmt(char* buf, size_t* len, size_t* cap, _TrElemFmt f, const void* ep) {
+    char* t = f(ep);
+    buf = _tr_sb_append(buf, len, cap, t);
+    if (_tr_fmt_owns_result(f)) _tr_free(t);
     return buf;
 }
 static char* _tr_collection_to_str(const void* data, size_t len, size_t elem_size, _TrElemFmt fmt, const char* open, const char* close, const char* sep) {
@@ -10004,7 +10114,7 @@ static char* _tr_collection_to_str(const void* data, size_t len, size_t elem_siz
     for (size_t i = 0; i < len; i++) {
         if (i > 0) buf = _tr_sb_append(buf, &blen, &cap, sep);
         const char* ep = (const char*)data + i * elem_size;
-        buf = _tr_sb_append(buf, &blen, &cap, fmt(ep));
+        buf = _tr_sb_append_fmt(buf, &blen, &cap, fmt, ep);
     }
     buf = _tr_sb_append(buf, &blen, &cap, close);
     return buf;
@@ -10018,9 +10128,9 @@ static char* _tr_dict_to_str(const void* kdata, const void* vdata, size_t len, s
         if (i > 0) buf = _tr_sb_append(buf, &blen, &cap, ", ");
         const char* kp = (const char*)kdata + i * sizeof(TrStr);
         const char* vp = (const char*)vdata + i * vsize;
-        buf = _tr_sb_append(buf, &blen, &cap, kfmt(kp));
+        buf = _tr_sb_append_fmt(buf, &blen, &cap, kfmt, kp);
         buf = _tr_sb_append(buf, &blen, &cap, ": ");
-        buf = _tr_sb_append(buf, &blen, &cap, vfmt(vp));
+        buf = _tr_sb_append_fmt(buf, &blen, &cap, vfmt, vp);
     }
     buf = _tr_sb_append(buf, &blen, &cap, "}");
     return buf;
@@ -10035,9 +10145,9 @@ static char* _tr_dict_to_str_ks(const void* kdata, const void* vdata, size_t len
         if (i > 0) buf = _tr_sb_append(buf, &blen, &cap, ", ");
         const char* kp = (const char*)kdata + i * ksize;
         const char* vp = (const char*)vdata + i * vsize;
-        buf = _tr_sb_append(buf, &blen, &cap, kfmt(kp));
+        buf = _tr_sb_append_fmt(buf, &blen, &cap, kfmt, kp);
         buf = _tr_sb_append(buf, &blen, &cap, ": ");
-        buf = _tr_sb_append(buf, &blen, &cap, vfmt(vp));
+        buf = _tr_sb_append_fmt(buf, &blen, &cap, vfmt, vp);
     }
     buf = _tr_sb_append(buf, &blen, &cap, "}");
     return buf;

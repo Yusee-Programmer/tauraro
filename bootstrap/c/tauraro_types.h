@@ -561,6 +561,8 @@ static inline __attribute__((always_inline)) Token Token_ctor_Ident(TrStr name) 
 #define Token_make_Eof() ((Token){.tag=Token_Eof})
 static inline __attribute__((always_inline)) Token Token_ctor_Error(TrStr msg) { Token _r = {.tag=Token_Error}; _r.data.Error.msg = _tr_str_retain(msg); return _r; }
 
+static inline void Token_drop(Token* _e) { switch (_e->tag) { case Token_StrLit: _tr_str_release(_e->data.StrLit.val); break; case Token_TripleStrLit: _tr_str_release(_e->data.TripleStrLit.val); break; case Token_ByteStrLit: _tr_str_release(_e->data.ByteStrLit.val); break; case Token_RawStrLit: _tr_str_release(_e->data.RawStrLit.val); break; case Token_FStrLit: _tr_str_release(_e->data.FStrLit.val); break; case Token_Ident: _tr_str_release(_e->data.Ident.name); break; case Token_Error: _tr_str_release(_e->data.Error.msg); break; default: break; } }
+
 typedef enum {
     Pattern_PWild,
     Pattern_PBind,
@@ -624,6 +626,8 @@ static inline __attribute__((always_inline)) Pattern Pattern_ctor_PVariantBind(T
 static inline __attribute__((always_inline)) Pattern Pattern_ctor_PVariantBindMany(TrStr type_name, TrStr variant, List_TrStr* fields) { Pattern _r = {.tag=Pattern_PVariantBindMany}; _r.data.PVariantBindMany.type_name = _tr_str_retain(type_name); _r.data.PVariantBindMany.variant = _tr_str_retain(variant); _r.data.PVariantBindMany.fields = fields; return _r; }
 static inline __attribute__((always_inline)) Pattern Pattern_ctor_PTuple(TrStr first, TrStr second) { Pattern _r = {.tag=Pattern_PTuple}; _r.data.PTuple.first = _tr_str_retain(first); _r.data.PTuple.second = _tr_str_retain(second); return _r; }
 static inline __attribute__((always_inline)) Pattern Pattern_ctor_POr(List_Pattern* patterns) { Pattern _r = {.tag=Pattern_POr}; _r.data.POr.patterns = patterns; return _r; }
+
+static inline void Pattern_drop(Pattern* _e) { switch (_e->tag) { case Pattern_PBind: _tr_str_release(_e->data.PBind.name); break; case Pattern_PLitStr: _tr_str_release(_e->data.PLitStr.val); break; case Pattern_PVariant: _tr_str_release(_e->data.PVariant.type_name); _tr_str_release(_e->data.PVariant.variant); break; case Pattern_PVariantBind: _tr_str_release(_e->data.PVariantBind.type_name); _tr_str_release(_e->data.PVariantBind.variant); _tr_str_release(_e->data.PVariantBind.field); break; case Pattern_PVariantBindMany: _tr_str_release(_e->data.PVariantBindMany.type_name); _tr_str_release(_e->data.PVariantBindMany.variant); break; case Pattern_PTuple: _tr_str_release(_e->data.PTuple.first); _tr_str_release(_e->data.PTuple.second); break; default: break; } }
 
 typedef enum {
     Ownership_Own,
@@ -877,6 +881,8 @@ static inline __attribute__((always_inline)) Expr Expr_ctor_EMacroCall(TrStr nam
 static inline __attribute__((always_inline)) Expr Expr_ctor_ELoop(Block* body) { Expr _r = {.tag=Expr_ELoop}; _r.data.ELoop.body = body; return _r; }
 static inline __attribute__((always_inline)) Expr Expr_ctor_EWhileExpr(Expr* cond, Block* body, Block* else_body) { Expr _r = {.tag=Expr_EWhileExpr}; _r.data.EWhileExpr.cond = cond; _r.data.EWhileExpr.body = body; _r.data.EWhileExpr.else_body = else_body; return _r; }
 
+static inline void Expr_drop(Expr* _e) { switch (_e->tag) { case Expr_ELitStr: _tr_str_release(_e->data.ELitStr.val); break; case Expr_ELitBytes: _tr_str_release(_e->data.ELitBytes.val); break; case Expr_ERawStr: _tr_str_release(_e->data.ERawStr.val); break; case Expr_EIdent: _tr_str_release(_e->data.EIdent.name); break; case Expr_EBinOp: _tr_str_release(_e->data.EBinOp.op); break; case Expr_EUnaryOp: _tr_str_release(_e->data.EUnaryOp.op); break; case Expr_EMethodCall: _tr_str_release(_e->data.EMethodCall.method); break; case Expr_EPropAccess: _tr_str_release(_e->data.EPropAccess.prop); break; case Expr_ESuperMethodCall: _tr_str_release(_e->data.ESuperMethodCall.base_class); _tr_str_release(_e->data.ESuperMethodCall.method); break; case Expr_ESuperPropAccess: _tr_str_release(_e->data.ESuperPropAccess.base_class); _tr_str_release(_e->data.ESuperPropAccess.prop); break; case Expr_EMacroCall: _tr_str_release(_e->data.EMacroCall.name); break; default: break; } }
+
 typedef enum {
     Stmt_SExpr,
     Stmt_SLet,
@@ -1040,6 +1046,8 @@ static inline __attribute__((always_inline)) Stmt Stmt_ctor_SDefer(Stmt* stmt) {
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SLine(long long n) { Stmt _r = {.tag=Stmt_SLine}; _r.data.SLine.n = n; return _r; }
 static inline __attribute__((always_inline)) Stmt Stmt_ctor_SLocalDecl(Decl* decl) { Stmt _r = {.tag=Stmt_SLocalDecl}; _r.data.SLocalDecl.decl = decl; return _r; }
 
+static inline void Stmt_drop(Stmt* _e) { switch (_e->tag) { case Stmt_SLet: _tr_str_release(_e->data.SLet.name); break; case Stmt_SFor: _tr_str_release(_e->data.SFor.var); break; case Stmt_SAsm: _tr_str_release(_e->data.SAsm.code); _tr_str_release(_e->data.SAsm.outputs); _tr_str_release(_e->data.SAsm.inputs); _tr_str_release(_e->data.SAsm.clobbers); break; default: break; } }
+
 typedef enum {
     Decl_DFunction,
     Decl_DClass,
@@ -1114,6 +1122,8 @@ static inline __attribute__((always_inline)) Decl Decl_ctor_DTopLevelStmt(Stmt* 
 static inline __attribute__((always_inline)) Decl Decl_ctor_DActor(ClassDef* cls) { Decl _r = {.tag=Decl_DActor}; _r.data.DActor.cls = _tr_obj_retain(cls); return _r; }
 static inline __attribute__((always_inline)) Decl Decl_ctor_DDecoratorDef(FunctionDef* func) { Decl _r = {.tag=Decl_DDecoratorDef}; _r.data.DDecoratorDef.func = _tr_obj_retain(func); return _r; }
 static inline __attribute__((always_inline)) Decl Decl_ctor_DTypeAlias(TrStr name, AstType** target) { Decl _r = {.tag=Decl_DTypeAlias}; _r.data.DTypeAlias.name = _tr_str_retain(name); _r.data.DTypeAlias.target = target; return _r; }
+
+static inline void Decl_drop(Decl* _e) { switch (_e->tag) { case Decl_DFunction: _tr_obj_release(_e->data.DFunction.func, _trdrop_FunctionDef); break; case Decl_DClass: _tr_obj_release(_e->data.DClass.cls, _trdrop_ClassDef); break; case Decl_DEnum: _tr_obj_release(_e->data.DEnum.enm, _trdrop_EnumDef); break; case Decl_DInterface: _tr_obj_release(_e->data.DInterface.iface, _trdrop_InterfaceDef); break; case Decl_DExtend: _tr_str_release(_e->data.DExtend.target); break; case Decl_DImport: _tr_str_release(_e->data.DImport.path); _tr_str_release(_e->data.DImport.alias); break; case Decl_DFromImport: _tr_str_release(_e->data.DFromImport.path); break; case Decl_DExtern: _tr_str_release(_e->data.DExtern.abi); break; case Decl_DActor: _tr_obj_release(_e->data.DActor.cls, _trdrop_ClassDef); break; case Decl_DDecoratorDef: _tr_obj_release(_e->data.DDecoratorDef.func, _trdrop_FunctionDef); break; case Decl_DTypeAlias: _tr_str_release(_e->data.DTypeAlias.name); break; default: break; } }
 
 typedef enum {
     HirExpr_ELitInt,
@@ -1391,6 +1401,8 @@ static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EMatchExpr(Hir
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_ELoop(HirBlock* body, AstType* ty) { HirExpr _r = {.tag=HirExpr_ELoop}; _r.data.ELoop.body = _tr_obj_retain(body); _r.data.ELoop.ty = ty; return _r; }
 static inline __attribute__((always_inline)) HirExpr HirExpr_ctor_EWhileExpr(HirExpr* cond, HirBlock* body, HirBlock* else_body, AstType* ty) { HirExpr _r = {.tag=HirExpr_EWhileExpr}; _r.data.EWhileExpr.cond = cond; _r.data.EWhileExpr.body = _tr_obj_retain(body); _r.data.EWhileExpr.else_body = _tr_obj_retain(else_body); _r.data.EWhileExpr.ty = ty; return _r; }
 
+static inline void HirExpr_drop(HirExpr* _e) { switch (_e->tag) { case HirExpr_ELitStr: _tr_str_release(_e->data.ELitStr.val); break; case HirExpr_ELitBytes: _tr_str_release(_e->data.ELitBytes.val); break; case HirExpr_ERawStr: _tr_str_release(_e->data.ERawStr.val); break; case HirExpr_EIdent: _tr_str_release(_e->data.EIdent.name); break; case HirExpr_EBinOp: _tr_str_release(_e->data.EBinOp.op); break; case HirExpr_EUnaryOp: _tr_str_release(_e->data.EUnaryOp.op); break; case HirExpr_EMethodCall: _tr_str_release(_e->data.EMethodCall.method); break; case HirExpr_EPropAccess: _tr_str_release(_e->data.EPropAccess.prop); break; case HirExpr_EClosure: _tr_obj_release(_e->data.EClosure.body, _trdrop_HirBlock); break; case HirExpr_ESuperMethodCall: _tr_str_release(_e->data.ESuperMethodCall.base_class); _tr_str_release(_e->data.ESuperMethodCall.method); break; case HirExpr_ESuperPropAccess: _tr_str_release(_e->data.ESuperPropAccess.base_class); _tr_str_release(_e->data.ESuperPropAccess.prop); break; case HirExpr_ETry: _tr_obj_release(_e->data.ETry.try_body, _trdrop_HirBlock); _tr_obj_release(_e->data.ETry.finally_b, _trdrop_HirBlock); break; case HirExpr_EDo: _tr_obj_release(_e->data.EDo.body, _trdrop_HirBlock); break; case HirExpr_ELoop: _tr_obj_release(_e->data.ELoop.body, _trdrop_HirBlock); break; case HirExpr_EWhileExpr: _tr_obj_release(_e->data.EWhileExpr.body, _trdrop_HirBlock); _tr_obj_release(_e->data.EWhileExpr.else_body, _trdrop_HirBlock); break; default: break; } }
+
 typedef enum {
     HirStmt_SExpr,
     HirStmt_SLet,
@@ -1556,6 +1568,8 @@ static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SDefer(HirStmt
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SAutoDrop(TrStr name, TrStr class_name) { HirStmt _r = {.tag=HirStmt_SAutoDrop}; _r.data.SAutoDrop.name = _tr_str_retain(name); _r.data.SAutoDrop.class_name = _tr_str_retain(class_name); return _r; }
 static inline __attribute__((always_inline)) HirStmt HirStmt_ctor_SLineMarker(long long n) { HirStmt _r = {.tag=HirStmt_SLineMarker}; _r.data.SLineMarker.n = n; return _r; }
 
+static inline void HirStmt_drop(HirStmt* _e) { switch (_e->tag) { case HirStmt_SLet: _tr_str_release(_e->data.SLet.name); break; case HirStmt_SUnsafe: _tr_obj_release(_e->data.SUnsafe.body, _trdrop_HirBlock); break; case HirStmt_SIf: _tr_obj_release(_e->data.SIf.then_b, _trdrop_HirBlock); _tr_obj_release(_e->data.SIf.else_b, _trdrop_HirBlock); break; case HirStmt_SWhile: _tr_obj_release(_e->data.SWhile.body, _trdrop_HirBlock); break; case HirStmt_SFor: _tr_str_release(_e->data.SFor.var); _tr_obj_release(_e->data.SFor.body, _trdrop_HirBlock); break; case HirStmt_SForUnpack: _tr_obj_release(_e->data.SForUnpack.body, _trdrop_HirBlock); break; case HirStmt_STry: _tr_obj_release(_e->data.STry.try_body, _trdrop_HirBlock); _tr_obj_release(_e->data.STry.finally_b, _trdrop_HirBlock); break; case HirStmt_SWith: _tr_obj_release(_e->data.SWith.body, _trdrop_HirBlock); break; case HirStmt_SAsm: _tr_str_release(_e->data.SAsm.code); _tr_str_release(_e->data.SAsm.outputs); _tr_str_release(_e->data.SAsm.inputs); _tr_str_release(_e->data.SAsm.clobbers); break; case HirStmt_STaskGroup: _tr_obj_release(_e->data.STaskGroup.body, _trdrop_HirBlock); break; case HirStmt_SGpuBlock: _tr_obj_release(_e->data.SGpuBlock.body, _trdrop_HirBlock); break; case HirStmt_SFree: _tr_str_release(_e->data.SFree.name); break; case HirStmt_SAutoDrop: _tr_str_release(_e->data.SAutoDrop.name); _tr_str_release(_e->data.SAutoDrop.class_name); break; default: break; } }
+
 typedef enum {
     MirStmt_MDeclare,
     MirStmt_MAssign,
@@ -1582,6 +1596,8 @@ typedef struct MirStmt {
 static inline __attribute__((always_inline)) MirStmt MirStmt_ctor_MDeclare(TrStr place, HirExpr* value) { MirStmt _r = {.tag=MirStmt_MDeclare}; _r.data.MDeclare.place = _tr_str_retain(place); _r.data.MDeclare.value = value; return _r; }
 static inline __attribute__((always_inline)) MirStmt MirStmt_ctor_MAssign(TrStr place, HirExpr* value) { MirStmt _r = {.tag=MirStmt_MAssign}; _r.data.MAssign.place = _tr_str_retain(place); _r.data.MAssign.value = value; return _r; }
 static inline __attribute__((always_inline)) MirStmt MirStmt_ctor_MEval(HirExpr* value) { MirStmt _r = {.tag=MirStmt_MEval}; _r.data.MEval.value = value; return _r; }
+
+static inline void MirStmt_drop(MirStmt* _e) { switch (_e->tag) { case MirStmt_MDeclare: _tr_str_release(_e->data.MDeclare.place); break; case MirStmt_MAssign: _tr_str_release(_e->data.MAssign.place); break; default: break; } }
 
 typedef enum {
     MirTerm_TGoto,
@@ -1822,6 +1838,8 @@ static inline __attribute__((always_inline)) LInst LInst_ctor_IStore(long long b
 static inline __attribute__((always_inline)) LInst LInst_ctor_ILoadB(long long dst, long long base, long long off) { LInst _r = {.tag=LInst_ILoadB}; _r.data.ILoadB.dst = dst; _r.data.ILoadB.base = base; _r.data.ILoadB.off = off; return _r; }
 static inline __attribute__((always_inline)) LInst LInst_ctor_IStoreB(long long base, long long off, long long src) { LInst _r = {.tag=LInst_IStoreB}; _r.data.IStoreB.base = base; _r.data.IStoreB.off = off; _r.data.IStoreB.src = src; return _r; }
 
+static inline void LInst_drop(LInst* _e) { switch (_e->tag) { case LInst_IBinOp: _tr_str_release(_e->data.IBinOp.op); break; case LInst_ILoadVar: _tr_str_release(_e->data.ILoadVar.name); break; case LInst_IStoreVar: _tr_str_release(_e->data.IStoreVar.name); break; case LInst_ICall: _tr_str_release(_e->data.ICall.callee); break; case LInst_IFBinOp: _tr_str_release(_e->data.IFBinOp.op); break; case LInst_IFCall1: _tr_str_release(_e->data.IFCall1.callee); break; case LInst_IFCallF: _tr_str_release(_e->data.IFCallF.callee); break; case LInst_IFCall2F: _tr_str_release(_e->data.IFCall2F.callee); break; case LInst_IAddrVar: _tr_str_release(_e->data.IAddrVar.name); break; case LInst_IFuncAddr: _tr_str_release(_e->data.IFuncAddr.fname); break; case LInst_IAsm: _tr_str_release(_e->data.IAsm.code); _tr_str_release(_e->data.IAsm.cons); break; default: break; } }
+
 typedef enum {
     LTerm_TRetInt,
     LTerm_TRetVal,
@@ -1895,6 +1913,8 @@ static inline __attribute__((always_inline)) MacroVal MacroVal_ctor_MBool(bool b
 static inline __attribute__((always_inline)) MacroVal MacroVal_ctor_MList(List_ptr* items) { MacroVal _r = {.tag=MacroVal_MList}; _r.data.MList.items = items; return _r; }
 static inline __attribute__((always_inline)) MacroVal MacroVal_ctor_MRec(List_TrStr* keys, List_ptr* vals) { MacroVal _r = {.tag=MacroVal_MRec}; _r.data.MRec.keys = keys; _r.data.MRec.vals = vals; return _r; }
 #define MacroVal_make_MNil() ((MacroVal){.tag=MacroVal_MNil})
+
+static inline void MacroVal_drop(MacroVal* _e) { switch (_e->tag) { case MacroVal_MStr: _tr_str_release(_e->data.MStr.s); break; default: break; } }
 
 #ifndef StringObj_STRUCT_DEFINED
 #define StringObj_STRUCT_DEFINED
@@ -3437,6 +3457,8 @@ typedef struct CGenerator {
     TrMap* method_owners;
     TrMap* decl_vars;
     TrMap* str_local_names;
+    TrMap* enum_owning;
+    TrMap* enum_local_names;
     TrMap* class_local_names;
     TrMap* class_local_mono;
     TrMap* fn_owned;
@@ -3515,6 +3537,8 @@ static void _trdrop_CGenerator(void* vp) {
     Dict_free_objval(self->interfaces, _trdrop_HirInterface);
     Dict_free_objval(self->functions, _trdrop_HirFunction);
     Dict_free(self->method_owners);
+    Dict_free(self->enum_owning);
+    Dict_free(self->enum_local_names);
     Dict_free(self->class_local_names);
     Dict_free_strval(self->class_local_mono);
     Dict_free(self->fn_owned);
@@ -4642,6 +4666,8 @@ __attribute__((hot)) bool Sema__is_pure_scalar(Sema* self, TrStr tn);
 __attribute__((hot)) bool Sema__pc_owns_return(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_apply_borrow_drops(Sema* self, HirProgram* hp);
 __attribute__((hot)) void Sema__borrow_drops_block(Sema* self, HirBlock* b);
+__attribute__((hot)) bool Sema__block_assigns_before(Sema* self, HirBlock* b, long long upto, TrStr nm);
+__attribute__((hot)) bool Sema__block_has_drop_or_reassign_after(Sema* self, HirBlock* b, long long from_i, TrStr nm);
 __attribute__((hot)) void Sema__borrow_drops_recurse_stmt(Sema* self, HirStmt* sp);
 __attribute__((hot)) bool Sema__is_fresh_owned_producer(Sema* self, HirExpr* val, TrStr cn);
 __attribute__((hot)) bool Sema__is_owned_droppable_class(Sema* self, TrStr cn);
@@ -4656,6 +4682,8 @@ __attribute__((hot)) bool Sema__pc_anyrefs(Sema* self, List_ptr* args, TrStr nam
 __attribute__((hot)) bool Sema__param_consumed_in_block(Sema* self, TrStr pname, HirBlock* b);
 __attribute__((hot)) bool Sema__param_consumed_in_stmt(Sema* self, TrStr pname, HirStmt* sp);
 __attribute__((hot)) bool Sema__param_consumed_in_expr(Sema* self, TrStr pname, HirExpr* ep);
+__attribute__((hot)) bool Sema__enum_owns_payload(Sema* self, TrStr en);
+__attribute__((hot)) bool Sema__ret_yields_fresh_enum(Sema* self, HirExpr* e);
 __attribute__((hot)) bool Sema__fn_ret_is_heap_class(Sema* self, HirFunction* f);
 __attribute__((hot)) void Sema__collect_returns(Sema* self, HirBlock* b, List_ptr* out);
 __attribute__((hot)) void Sema__collect_returns_stmt(Sema* self, HirStmt* sp, List_ptr* out);
@@ -4696,6 +4724,7 @@ __attribute__((hot)) HirClass* Sema_lower_class(Sema* self, ClassDef* c);
 __attribute__((hot)) HirEnum* Sema_lower_enum(Sema* self, EnumDef* e);
 __attribute__((hot)) HirInterface* Sema_lower_interface(Sema* self, InterfaceDef* i_def);
 __attribute__((hot)) void Sema_apply_escape_marks(Sema* self, HirStmt* _hs);
+__attribute__((hot)) bool Sema__for_iter_builtin_only(Sema* self, HirExpr* it);
 __attribute__((hot)) HirBlock* Sema_lower_block(Sema* self, Block* b);
 __attribute__((hot)) HirStmt* Sema_lower_stmt(Sema* self, Stmt* s_ptr);
 __attribute__((hot)) AstType* Sema_variant_field_ty(Sema* self, TrStr type_name, TrStr variant_name, long long field_idx);
@@ -5621,6 +5650,7 @@ __attribute__((hot)) void CGenerator_set_proven_borrows(CGenerator* self, List_T
 __attribute__((hot)) TrStr CGenerator_str_retain_wrap(CGenerator* self, HirExpr* e, TrStr s, bool is_return);
 __attribute__((hot)) void CGenerator__scan_ptr_aliased(CGenerator* self, AstType* t);
 __attribute__((hot)) bool CGenerator__is_coll_type_name(CGenerator* self, TrStr n);
+__attribute__((hot)) bool CGenerator__is_fresh_list_do(CGenerator* self, HirExpr* v);
 __attribute__((hot)) bool CGenerator__coll_init_is_borrow(CGenerator* self, HirExpr* v);
 __attribute__((hot)) bool CGenerator__is_fresh_coll_expr(CGenerator* self, HirExpr* e);
 __attribute__((hot)) void CGenerator__scan_coll_fields(CGenerator* self, HirProgram* prog);
@@ -5635,6 +5665,7 @@ __attribute__((hot)) TrStr CGenerator_iface_wrap_to(CGenerator* self, AstType* t
 __attribute__((hot)) TrStr CGenerator_obj_retain_wrap(CGenerator* self, HirExpr* e, TrStr s, bool is_return);
 __attribute__((hot)) bool CGenerator__fn_owned_lookup(CGenerator* self, TrStr key);
 __attribute__((hot)) void CGenerator__reg_fn_owned(CGenerator* self, TrStr key, bool v);
+__attribute__((hot)) bool CGenerator__enum_expr_fresh(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__obj_expr_owns_ref(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__is_user_borrow_wrapper_call(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__store_target_is_borrow_field(CGenerator* self, HirExpr* t);

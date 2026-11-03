@@ -539,7 +539,7 @@ __attribute__((hot)) void ModuleResolver_resolve_file(ModuleResolver* self, TrSt
 #line 323 "src/resolver.tr"
         self->parse_errors = (self->parse_errors + 1LL);
 #line 324 "src/resolver.tr"
-        ({ printf("%s", _tr_strz(({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("error: [LEX-1] ", 15LL)), (path))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" contains a NUL byte (offset ", 29LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(nul_at)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); source files must be text.", 29LL))); _tr_str_release(_tr_cl); _tr_cres; }))); printf("\n"); });
+        ({ ({ TrStr _ps = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("error: [LEX-1] ", 15LL)), (path))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" contains a NUL byte (offset ", 29LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(nul_at)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("); source files must be text.", 29LL))); _tr_str_release(_tr_cl); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); });
 #line 325 "src/resolver.tr"
         ({ printf("%s", _tr_strz(_tr_str_lit_len("  = help: remove the stray NUL (0x00) byte - it would silently truncate the rest of the file.", 93LL))); printf("\n"); });
 #line 326 "src/resolver.tr"

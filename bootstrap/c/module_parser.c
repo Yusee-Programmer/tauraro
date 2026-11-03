@@ -220,7 +220,7 @@ __attribute__((hot)) void Parser_emit_diag(Parser* self, TrStr msg, TrStr hint) 
 #line 250 "src/parser.tr"
     long long col = Parser_cur_col(self);
 #line 251 "src/parser.tr"
-    ({ __auto_type _ord_t60 = (({ TrStr _tr_cl = (c_red(_tr_str_lit_len("error", 5LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); ({ printf("%s", _tr_strz(({ TrStr _tr_cl = (_ord_t60); TrStr _tr_cr = (c_bold(msg)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; }))); printf("\n"); }); });
+    ({ __auto_type _ord_t60 = (({ TrStr _tr_cl = (c_red(_tr_str_lit_len("error", 5LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); ({ ({ TrStr _ps = ({ TrStr _tr_cl = (_ord_t60); TrStr _tr_cr = (c_bold(msg)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); }); });
 #line 252 "src/parser.tr"
     TrStr loc = _tr_str_lit_len("", 0LL);
 #line 253 "src/parser.tr"
@@ -238,7 +238,7 @@ __attribute__((hot)) void Parser_emit_diag(Parser* self, TrStr msg, TrStr hint) 
         ({ TrStr _ap_t62 = (_tr_str_lit_len(":", 1LL)); TrStr _ap_t63 = (_tr_str_wrap(_tr_int_to_str((long long)(col)))); _tr_str_append(&head, _ap_t62); _tr_str_append(&head, _ap_t63); _tr_str_release(_ap_t63); });
     }
 #line 258 "src/parser.tr"
-    ({ printf("%s", _tr_strz(({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (c_cyan(_tr_str_lit_len("-->", 3LL))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("  ", 2LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (head)); _tr_str_release(_tr_cl); _tr_cres; }))); printf("\n"); });
+    ({ ({ TrStr _ps = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (c_cyan(_tr_str_lit_len("-->", 3LL))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("  ", 2LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (head)); _tr_str_release(_tr_cl); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); });
 #line 260 "src/parser.tr"
     if (((_tr_str_lenv((self->src_text)) > 0LL) && (ln > 0LL))) {
 #line 261 "src/parser.tr"
@@ -258,7 +258,7 @@ __attribute__((hot)) void Parser_emit_diag(Parser* self, TrStr msg, TrStr hint) 
 #line 267 "src/parser.tr"
             TrStr gbar = ({ TrStr _tr_cl = (_spaces((_tr_str_lenv((gnum)) - 2LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("| ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; });
 #line 268 "src/parser.tr"
-            ({ printf("%s", _tr_strz(({ TrStr _tr_cl = (c_dim(gnum)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (srcline)); _tr_str_release(_tr_cl); _tr_cres; }))); printf("\n"); });
+            ({ ({ TrStr _ps = ({ TrStr _tr_cl = (c_dim(gnum)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (srcline)); _tr_str_release(_tr_cl); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); });
 #line 269 "src/parser.tr"
             if ((col1 > 0LL)) {
 #line 272 "src/parser.tr"
@@ -277,7 +277,7 @@ __attribute__((hot)) void Parser_emit_diag(Parser* self, TrStr msg, TrStr hint) 
                     }
                 }
 #line 278 "src/parser.tr"
-                ({ __auto_type _ord_t66 = (c_dim(gbar)); __auto_type _ord_t68 = (({ TrStr _tr_cl = (_ord_t66); TrStr _tr_cr = (_spaces((col1 - 1LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _at_t67 = (repeat_char(_tr_str_lit_len("^", 1LL), width)); ({ printf("%s", _tr_strz(({ TrStr _tr_cl = (_ord_t68); TrStr _tr_cr = (c_red(_at_t67)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; }))); printf("\n"); }); _tr_str_release(_at_t67); });
+                ({ __auto_type _ord_t66 = (c_dim(gbar)); __auto_type _ord_t68 = (({ TrStr _tr_cl = (_ord_t66); TrStr _tr_cr = (_spaces((col1 - 1LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _at_t67 = (repeat_char(_tr_str_lit_len("^", 1LL), width)); ({ ({ TrStr _ps = ({ TrStr _tr_cl = (_ord_t68); TrStr _tr_cr = (c_red(_at_t67)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); }); _tr_str_release(_at_t67); });
             }
             _tr_str_release(gnum);
         }
@@ -285,7 +285,7 @@ __attribute__((hot)) void Parser_emit_diag(Parser* self, TrStr msg, TrStr hint) 
 #line 279 "src/parser.tr"
     if ((_tr_str_lenv((hint)) > 0LL)) {
 #line 280 "src/parser.tr"
-        ({ printf("%s", _tr_strz(({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (c_green(_tr_str_lit_len("= help", 6LL))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("  ", 2LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (hint)); _tr_str_release(_tr_cl); _tr_cres; }))); printf("\n"); });
+        ({ ({ TrStr _ps = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (c_green(_tr_str_lit_len("= help", 6LL))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("  ", 2LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (hint)); _tr_str_release(_tr_cl); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); });
     }
 #line 281 "src/parser.tr"
     self->error_count = (self->error_count + 1LL);
@@ -3839,7 +3839,7 @@ __attribute__((hot)) Expr* Parser_parse_postfix(Parser* self) {
 
 __attribute__((hot)) void Parser_emit_diag_at(Parser* self, long long ln, long long col, TrStr msg, TrStr hint) {
 #line 2128 "src/parser.tr"
-    ({ __auto_type _ord_t304 = (({ TrStr _tr_cl = (c_red(_tr_str_lit_len("error", 5LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); ({ printf("%s", _tr_strz(({ TrStr _tr_cl = (_ord_t304); TrStr _tr_cr = (c_bold(msg)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; }))); printf("\n"); }); });
+    ({ __auto_type _ord_t304 = (({ TrStr _tr_cl = (c_red(_tr_str_lit_len("error", 5LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); ({ ({ TrStr _ps = ({ TrStr _tr_cl = (_ord_t304); TrStr _tr_cr = (c_bold(msg)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); }); });
 #line 2129 "src/parser.tr"
     TrStr loc = _tr_str_lit_len("", 0LL);
 #line 2130 "src/parser.tr"
@@ -3857,7 +3857,7 @@ __attribute__((hot)) void Parser_emit_diag_at(Parser* self, long long ln, long l
         ({ TrStr _ap_t306 = (_tr_str_lit_len(":", 1LL)); TrStr _ap_t307 = (_tr_str_wrap(_tr_int_to_str((long long)(col)))); _tr_str_append(&head, _ap_t306); _tr_str_append(&head, _ap_t307); _tr_str_release(_ap_t307); });
     }
 #line 2135 "src/parser.tr"
-    ({ printf("%s", _tr_strz(({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (c_cyan(_tr_str_lit_len("-->", 3LL))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("  ", 2LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (head)); _tr_str_release(_tr_cl); _tr_cres; }))); printf("\n"); });
+    ({ ({ TrStr _ps = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (c_cyan(_tr_str_lit_len("-->", 3LL))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("  ", 2LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" ", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (head)); _tr_str_release(_tr_cl); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); });
 #line 2136 "src/parser.tr"
     if (((_tr_str_lenv((self->src_text)) > 0LL) && (ln > 0LL))) {
 #line 2137 "src/parser.tr"
@@ -3877,11 +3877,11 @@ __attribute__((hot)) void Parser_emit_diag_at(Parser* self, long long ln, long l
 #line 2143 "src/parser.tr"
             TrStr gbar = ({ TrStr _tr_cl = (_spaces((_tr_str_lenv((gnum)) - 2LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("| ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; });
 #line 2144 "src/parser.tr"
-            ({ printf("%s", _tr_strz(({ TrStr _tr_cl = (c_dim(gnum)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (srcline)); _tr_str_release(_tr_cl); _tr_cres; }))); printf("\n"); });
+            ({ ({ TrStr _ps = ({ TrStr _tr_cl = (c_dim(gnum)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (srcline)); _tr_str_release(_tr_cl); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); });
 #line 2145 "src/parser.tr"
             if ((col > 0LL)) {
 #line 2146 "src/parser.tr"
-                ({ __auto_type _ord_t310 = (c_dim(gbar)); __auto_type _ord_t311 = (({ TrStr _tr_cl = (_ord_t310); TrStr _tr_cr = (_spaces((col2 - 1LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); ({ printf("%s", _tr_strz(({ TrStr _tr_cl = (_ord_t311); TrStr _tr_cr = (c_red(_tr_str_lit_len("^", 1LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; }))); printf("\n"); }); });
+                ({ __auto_type _ord_t310 = (c_dim(gbar)); __auto_type _ord_t311 = (({ TrStr _tr_cl = (_ord_t310); TrStr _tr_cr = (_spaces((col2 - 1LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); ({ ({ TrStr _ps = ({ TrStr _tr_cl = (_ord_t311); TrStr _tr_cr = (c_red(_tr_str_lit_len("^", 1LL))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); }); });
             }
             _tr_str_release(gnum);
         }
@@ -3889,7 +3889,7 @@ __attribute__((hot)) void Parser_emit_diag_at(Parser* self, long long ln, long l
 #line 2147 "src/parser.tr"
     if ((_tr_str_lenv((hint)) > 0LL)) {
 #line 2148 "src/parser.tr"
-        ({ printf("%s", _tr_strz(({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (c_green(_tr_str_lit_len("= help", 6LL))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("  ", 2LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (hint)); _tr_str_release(_tr_cl); _tr_cres; }))); printf("\n"); });
+        ({ ({ TrStr _ps = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (c_green(_tr_str_lit_len("= help", 6LL))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("  ", 2LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(": ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (hint)); _tr_str_release(_tr_cl); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); });
     }
 #line 2149 "src/parser.tr"
     self->error_count = (self->error_count + 1LL);
