@@ -1,6 +1,6 @@
 # EXPECT: [M-1]
 # Wrapping in Some(x) moves x.
 def main():
-    mut s = "abc"
+    mut s = [1, 2]
     mut o = Some(s)
     print(s)

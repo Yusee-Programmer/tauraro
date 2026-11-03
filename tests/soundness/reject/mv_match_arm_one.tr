@@ -1,9 +1,9 @@
 # EXPECT: [M-5]
 # Moved in one match arm only.
-def take(s: str):
+def take(s: List[int]):
     print(s)
 def main():
-    mut s = "a"
+    mut s = [1, 2]
     mut k = 2
     match k:
         case 1:

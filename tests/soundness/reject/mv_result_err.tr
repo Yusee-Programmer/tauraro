@@ -1,6 +1,6 @@
 # EXPECT: [M-1]
 # Wrapping in Err(x) moves x.
 def main():
-    mut msg = "boom"
-    mut r: Result[int, str] = Err(msg)
+    mut msg = [1, 2]
+    mut r: Result[int, List[int]] = Err(msg)
     print(msg)

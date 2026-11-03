@@ -1,9 +1,9 @@
 # EXPECT: [M-5]
 # Moved in one arm of an if/elif chain.
-def take(s: str):
+def take(s: List[int]):
     print(s)
 def main():
-    mut s = "a"
+    mut s = [1, 2]
     mut k = len(s)
     if k == 1:
         print("one")

@@ -1,8 +1,8 @@
 # EXPECT: [M-1]
 # Interpolating a moved value.
-def take(s: str):
+def take(s: List[int]):
     print(s)
 def main():
-    mut s = "a"
+    mut s = [1, 2]
     take(s)
-    print(f"{s}")
+    print(f"{len(s)}")

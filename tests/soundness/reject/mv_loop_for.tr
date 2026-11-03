@@ -1,8 +1,8 @@
 # EXPECT: [M-1]
 # Moving an outer variable on every iteration of a for loop.
-def take(s: str):
+def take(s: List[int]):
     print(s)
 def main():
-    mut s = "x"
+    mut s = [1, 2]
     for i in range(3):
         take(s)

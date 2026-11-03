@@ -3,6 +3,6 @@
 def ident[T](x: T) -> T:
     return x
 def main():
-    mut s = "a"
+    mut s = [1, 2]
     mut t = ident(s)
     print(s)

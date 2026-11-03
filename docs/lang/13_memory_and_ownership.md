@@ -170,7 +170,8 @@ print(len(data))         # data still valid
 
 | Copy | Move (consumed) |
 |---|---|
-| `int`, `float`, `bool`, `char`, all `i8`..`u64`/`f32`/`f64`/`usize` | `str` |
+| `int`, `float`, `bool`, `char`, all `i8`..`u64`/`f32`/`f64`/`usize` | |
+| `str` (copy-on-use: passing, storing or sending a `str` never consumes it) | |
 | `Pointer[T]`, `RawPtr`, `StrView` | `List`, `Vec`, `Dict`, `Map`, `Set`, `Deque`, `StringBuilder` |
 | function values (`def(...) -> R`, lambdas) | classes (`is_class`) and enums with payload variants |
 | `ref T` / `mut ref T` borrows | `Option[T]` / `Result[T, E]` / tuples / fixed arrays **when some component is a move type** |
@@ -185,16 +186,16 @@ Sync handles and `Sendable` classes are *shared*, not owned: handing the same `C
 **Re-initialisation.** `x = value`, `mut x = ...` (also inside a nested block, which shadows the outer variable only for that block), a `for` loop variable, a `match`/`catch` binding and tuple destructuring `(a, b) = f()` give the name a fresh value; uses after that are valid.
 
 ```python
-def take(s: str): print(s)           # by value: consumes
-def show(s: ref str): print(s)       # borrows
+def take(s: List[int]): print(len(s))      # by value: consumes
+def show(s: ref List[int]): print(len(s))  # borrows
 
-mut a = "hi"
+mut a = [1, 2]
 show(a); show(a)                     # OK: borrowed twice
-take(a)                              # a is consumed here
-print(a)                             # ERROR [M-1]: 'a' was moved (moved at line 6, into argument 1 of 'take')
-a = "again"                          # re-initialised
+take(a)                              # a is consumed here (a `str` would just be copied)
+print(len(a))                        # ERROR [M-1]: 'a' was moved (moved at line 6, into argument 1 of 'take')
+a = [3]                              # re-initialised
 print(a)                             # OK
-take(str(a)); print(a)               # OK: a copy was consumed (`str(s)` copies a str; List/Dict/class use `.clone()`)
+
 ```
 
 **Default vs. `--strict`**

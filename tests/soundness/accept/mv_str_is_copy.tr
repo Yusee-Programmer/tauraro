@@ -1,0 +1,20 @@
+# str is a Copy type under --strict: passing, appending, binding and storing
+# wrapping a str does not consume it.
+enum Msg:
+    Text(body: str)
+    Quit
+def take(s: str) -> int:
+    return len(s)
+def main():
+    mut s = "hello"
+    mut names: List[str] = []
+    names.append(s)
+    mut t = s
+    mut n = take(s)
+    mut m = Msg.Text(s)
+    mut o = Some(s)
+    print(s)
+    print(t)
+    print(f"{s} {n}")
+    if len(names) != 1 or n != 5:
+        raise("bad")

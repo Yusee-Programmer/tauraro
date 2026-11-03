@@ -1,8 +1,8 @@
 # EXPECT: [M-1]
 # A Result of a move type is a move type.
-def take(r: Result[str, str]):
+def take(r: Result[List[int], str]):
     pass
 def main():
-    mut r: Result[str, str] = Ok("a")
+    mut r: Result[List[int], str] = Ok([1, 2])
     take(r)
     print(r.is_ok)

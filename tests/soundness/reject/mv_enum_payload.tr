@@ -1,9 +1,9 @@
 # EXPECT: [M-1]
 # Building an enum variant moves the payload.
 enum Msg:
-    Text(body: str)
+    Text(body: List[int])
     Quit
 def main():
-    mut s = "hi"
+    mut s = [1, 2]
     mut m = Msg.Text(s)
     print(s)

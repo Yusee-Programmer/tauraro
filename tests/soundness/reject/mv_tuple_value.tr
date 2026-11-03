@@ -1,8 +1,8 @@
 # EXPECT: [M-1]
 # A tuple holding a move type is a move type.
-def take(t: (str, int)):
+def take(t: (List[int], int)):
     pass
 def main():
-    mut t = ("a", 1)
+    mut t = ([1, 2], 1)
     take(t)
     print(t[1])

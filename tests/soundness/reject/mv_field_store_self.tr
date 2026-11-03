@@ -1,11 +1,11 @@
 # EXPECT: [M-1]
 # Storing a parameter into self.field moves it.
 class Holder:
-    pub name: str
+    pub name: List[int]
 extend Holder:
-    pub def rename(self, nm: str):
+    pub def rename(self, nm: List[int]):
         self.name = nm
         print(nm)
 def main():
     mut h = Holder()
-    h.rename("a")
+    h.rename([1, 2])

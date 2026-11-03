@@ -13,6 +13,7 @@ there is no deprecation period.
 
 ### Added
 
+- Under `--strict`, `str` is a `Copy` type: passing, appending, storing or wrapping a `str` no longer consumes it (the `str(x)` copy workaround is unnecessary). `List`/`Dict`/classes etc. still move.
 - `--strict` consuming calls (Rust-style moves): passing a non-`Copy` local by value to a function / method /
   constructor, `append`/`insert`/`send`, a field or element store, `Some(x)`/`Ok(x)`/tuple/list/dict construction,
   `Shared[T].init(x)`, `Thread.spawn(f, x)` / `spawn f(x)`, or capturing it in a spawned / returned / stored closure

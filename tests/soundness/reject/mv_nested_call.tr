@@ -1,9 +1,9 @@
 # EXPECT: [M-1]
 # A value moved by an inner call is used by an outer argument.
-def take(s: str) -> int:
+def take(s: List[int]) -> int:
     return len(s)
-def add(a: int, b: str) -> int:
+def add(a: int, b: List[int]) -> int:
     return a + len(b)
 def main():
-    mut s = "abc"
+    mut s = [1, 2]
     print(add(take(s), s))

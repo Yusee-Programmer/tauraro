@@ -108,11 +108,11 @@ before moving; for a callee that only reads the value declare the parameter
 a new value to re-initialise it.
 
 ```python
-def take(s: str): print(s)           # --strict: by-value parameter consumes
-mut a = "hi"
+def take(s: List[int]): print(len(s))  # --strict: by-value parameter consumes (str is Copy and never consumed)
+mut a = [1, 2]
 take(a)
-print(a)             # M-1 (--strict): 'a' was moved (moved at line 3, into argument 1 of 'take')
-take(str(a))         # RIGHT: consume a copy (`str(s)` for str, `.clone()` for List/Dict/class)
+print(len(a))        # M-1 (--strict): 'a' was moved (moved at line 3, into argument 1 of 'take')
+take(a.clone())      # RIGHT: consume a copy (`.clone()` for List/Dict/class)
 ```
 
 ---

@@ -1,7 +1,7 @@
 # EXPECT: [M-1]
 # Appending the same outer value in every iteration.
 def main():
-    mut acc = "a"
-    mut out: List[str] = []
+    mut acc = [1, 2]
+    mut out: List[List[int]] = []
     for i in range(3):
         out.append(acc)

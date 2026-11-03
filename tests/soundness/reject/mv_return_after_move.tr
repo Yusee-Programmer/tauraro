@@ -1,9 +1,9 @@
 # EXPECT: [M-1]
 # Returning a value that was already moved.
-def take(s: str):
+def take(s: List[int]):
     print(s)
-def f() -> str:
-    mut s = "a"
+def f() -> List[int]:
+    mut s = [1, 2]
     take(s)
     return s
 def main():

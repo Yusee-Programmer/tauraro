@@ -187,7 +187,7 @@ def mv_is_move(cx: MvCtx, t: AstType) -> bool:
             if mv_is_move(cx, t.args.get(i).read()): return true
             i = i + 1
         return false
-    if n == "str" or n == "List" or n == "Vec" or n == "Dict" or n == "Map" or n == "Set" or n == "Shared" or n == "Weak" or n == "Deque" or n == "StringBuilder": return true
+    if n == "List" or n == "Vec" or n == "Dict" or n == "Map" or n == "Set" or n == "Shared" or n == "Weak" or n == "Deque" or n == "StringBuilder": return true
     if cx.mv.contains(n): return cx.mv.get(n)
     return false
 
@@ -205,7 +205,7 @@ def mv_use(cx: MvCtx, nm: str, st: MvState):
         if cx.msite.contains(nm): at = at + ", into " + cx.msite.get(nm)
         at = at + ")"
     if mv_has(st.all, nm):
-        cx.err("[M-1] '" + nm + "' was moved" + at + " and cannot be used again (--strict: passing a value by value consumes it).\n      FIX: pass a copy to the call that consumes it (`" + nm + ".clone()`; for a `str` use `str(" + nm + ")`), pass a `ref` borrow, or stop using '" + nm + "' after the move; assign it a new value to re-initialise it.")
+        cx.err("[M-1] '" + nm + "' was moved" + at + " and cannot be used again (--strict: passing a value by value consumes it).\n      FIX: pass a copy to the call that consumes it (`" + nm + ".clone()`), pass a `ref` borrow, or stop using '" + nm + "' after the move; assign it a new value to re-initialise it.")
     elif mv_has(st.lp, nm):
         cx.err("[M-1] '" + nm + "' is moved inside a loop" + at + " and used again by the next iteration: it was already moved in the previous one.\n      FIX: move a `clone()` of it, give '" + nm + "' a new value before the end of the loop body, or `break` right after the move.")
     else:

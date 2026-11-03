@@ -1,9 +1,9 @@
 # EXPECT: [M-1]
 # spawn f(x) moves x into the spawned task.
-def work(s: str):
+def work(s: List[int]):
     print(s)
 async def main():
-    mut s = "job"
+    mut s = [1, 2]
     task_group:
         spawn work(s)
     print(s)

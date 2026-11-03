@@ -1,9 +1,9 @@
 # EXPECT: [M-1]
 # Moved in an inner loop of an outer-declared variable.
-def take(s: str):
+def take(s: List[int]):
     print(s)
 def main():
-    mut s = "a"
+    mut s = [1, 2]
     for i in range(2):
         for j in range(2):
             take(s)
