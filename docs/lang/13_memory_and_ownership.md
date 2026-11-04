@@ -92,8 +92,29 @@ handle (`append`/`insert`/`set`/index-assign clone a non-fresh handle and transf
 `for w in ws` loop variable or `x = ws[i]` / `ws.get(i)` alias *borrows* the slot instead of dropping it.
 `Shared[T]`/`Weak[T]` as `Dict`/`Set` elements stays rejected by `[T-11]`.
 
-Known remaining gaps: tuples holding a class or `str` are not yet dropped, and enum values
-reached through a collection or field are released only by their container.
+#### Tuples
+
+A tuple value is a small array of raw slots (`str` slots are heap boxes, class slots are object
+pointers) that is copied freely, so a tuple *owns one reference per `str` / refcounted-class slot*
+rather than being refcounted itself:
+
+- **Packing** gives the slot its own reference: a fresh value (`Node(..)`, a concatenation, a call
+  result) moves in, a local that is `return`ed straight out of the function moves in, anything else
+  (a live local, a parameter, a field, a list element) is retained. (Before this rule a class slot
+  was stored *without* a retain, so `t = (y, 2); mut (p, q) = t` released `y` twice.)
+- **Unpacking** `mut (a, b) = e` takes the references over when `e` is a *fresh* tuple (a tuple
+  literal, or a call to a function whose every `return` is a tuple literal or such a call; decided by
+  a whole-program fixpoint, methods only when every override agrees) and retains otherwise. The
+  unpacked locals are ordinary owners and are released at scope exit.
+- A tuple *local* bound exactly once to a fresh tuple that is never passed, returned, aliased,
+  captured or reassigned releases its slots at scope exit.
+
+Not covered (these leak, never double-free): `List`/`Dict`/`Set` slots (collections are raw,
+non-refcounted pointers whose uniqueness the flow-insensitive escape tracking cannot prove for a
+tuple slot), tuples stored in collections, `Result`/`Option` payload tuples, and tuples produced by
+the runtime (`enumerate`, `zip`, `Dict.items()`), which borrow their elements.
+
+Enum values reached through a collection or field are released only by their container.
 
 ### Common Mistakes
 

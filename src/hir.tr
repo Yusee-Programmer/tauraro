@@ -194,6 +194,10 @@ pub class HirFunction:
                                      # caller must NOT drop it (leak-safe). Only meaningful when
                                      # ret_ty is a heap class; computed by a whole-program
                                      # fixpoint in sema, consumed by codegen `_obj_expr_owns_ref`.
+    pub returns_fresh_tuple: bool    # tuple-ownership inference: every return path builds a FRESH tuple
+                                     # (a tuple literal or a call to such a function), so the result owns
+                                     # one reference per str/class slot and a caller unpacking it may
+                                     # take those references over instead of retaining.
 
 pub class HirField:
     pub name: str

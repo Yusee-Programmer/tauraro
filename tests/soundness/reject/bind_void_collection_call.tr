@@ -1,0 +1,7 @@
+# EXPECT: [E-5]
+# A builtin collection mutator returns nothing: binding its result is a diagnostic (a line that starts
+# with '.' continues the previous statement, so `st = set()` + `.add(5)` used to reach the C compiler).
+def main():
+    st = set()
+    .add(5)
+    print(st.len())

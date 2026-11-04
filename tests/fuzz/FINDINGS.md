@@ -88,3 +88,17 @@ then applying it (`apply_borrow_drops`) plus precise transfer/borrow/consume rul
 (static-ctor transfer, pure-scalar-return borrow, `.free()` consume, Mutex-owns-
 collection). Every fix validated by the differential oracle (elide ≡ pure-ARC) + the
 gen2≡gen3 fixpoint; the Linux ASan CI is the final UAF gate.
+
+## Round 2026-11 (post tuple-ownership)
+
+Fresh seeds on the final compiler: `run2.py` 91000-91039 (valid programs, default and
+`--debug`), `badprog.py` 4242-4541 and 9100-9499, `tokfuzz.py` 5151-5350 and 7300-7599.
+
+- `run2.py`: no MISMATCH / MODEDIFF / CRASH. The CFAILs are the generator mutating a list while it
+  iterates it, which Tauraro rejects on purpose with `[M-6]` (a normal diagnostic, identical on the
+  previous compiler); two GENFAILs are the Python oracle timing out.
+- `badprog.py` / `tokfuzz.py`: 6 ICE-class findings, all fixed with diagnostics + reject tests
+  (`tests/soundness/reject`): a nested `def main()` from a duplicated line (`nested_main_fn`, `[N-2]`),
+  an undeclared one-letter class constructor `H()` (`undefined_single_letter_ctor`, `[N-3]`),
+  `f(2 * 3 * "str")` with an `int` parameter (`str_repeat_int_arg`, `[E-5]`), and
+  `st = set()` + a continuation line `.add(5)` that bound a void call (`bind_void_collection_call`, `[E-5]`).

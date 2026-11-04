@@ -1,0 +1,17 @@
+# EXTRA-FLAGS: --checked-pointers
+# EXPECT-EXIT: nonzero
+# EXPECT-STDERR: out of bounds
+# An INTERIOR pointer (`base.offset(2)`) plus a run-time offset past the end of its alloc block is
+# trapped in --debug builds on every platform (the block is found by scanning the alloc table).
+def main():
+    unsafe:
+        buf = alloc[int](4)
+        mut i = 0
+        while i < 4:
+            buf.offset(i).write(i)
+            i = i + 1
+        q = buf.offset(2)
+        xs = [1, 2]
+        n = 1 + len(xs)
+        r = q.offset(n)
+        print(r.read())

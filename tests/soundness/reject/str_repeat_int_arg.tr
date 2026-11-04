@@ -1,0 +1,8 @@
+# EXPECT: [E-5]
+# `n * "s"` repeats a string: its result is a str, so passing it where an int is expected is a
+# diagnostic (it used to surface as a late raw [C-1]).
+def f(a: int):
+    print(a)
+
+def main():
+    f(2 * 3 * "str")

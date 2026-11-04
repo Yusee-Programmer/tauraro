@@ -300,6 +300,8 @@ pub class CGenerator:
     pub enum_local_names: Map[str, bool]  # enum-typed locals in the current function that OWN a fresh enum value (dropped at scope exit)
     pub class_local_names: Map[str, bool]  # heap-class-typed locals in current function that OWN a refcount (released at scope exit; reset in seed_params)
     pub class_local_mono: Map[str, str]    # heap-class local name -> its monomorphized C prefix (e.g. "Buffer_f64") so SAutoDrop's free()/drop call uses the mono name, not the bare generic ("Buffer")
+    pub tuple_fresh: Map[str, bool]  # tuple-ownership inference (sema HirFunction.returns_fresh_tuple): fn key ("name" or "Class.method") -> every return builds a FRESH tuple whose str/class slots the result owns
+    pub tup_ret_addr: usize          # address of the tuple literal that is the direct operand of the `return` being generated (class locals move into it instead of being retained)
     pub fn_owned: Map[str, bool]  # return-ownership inference (from sema HirFunction.returns_owned): fn key ("name" or "Class.method") -> returns an OWNED heap-class ref; drives _obj_expr_owns_ref
     pub raw_aliased: Map[str, bool]  # class names reachable as Pointer[T] anywhere in the program — their instances are aliased by RAW pointers that bypass refcounting, so they must NEVER be auto-dropped (is_heap_class_tn excludes them). e.g. AstType via AstType.args: Vec[Pointer[AstType]]
     pub coll_field_owned: Map[str, bool]  # "Class.field" collection field with a FRESH-collection assignment (candidate to free in _trdrop_T)
@@ -391,6 +393,8 @@ pub class CGenerator:
         g.enum_local_names = Map[str, bool].init(16)
         g.class_local_mono = Map[str, str].init(16)
         g.fn_owned = Map[str, bool].init(64)
+        g.tuple_fresh = Map[str, bool].init(64)
+        g.tup_ret_addr = 0 as usize
         g.raw_aliased = Map[str, bool].init(32)
         g.coll_field_owned = Map[str, bool].init(32)
         g.coll_field_disq = Map[str, bool].init(32)
@@ -3251,7 +3255,7 @@ pub class CGenerator:
                 else:
                     nq_val = "(" + ok_c + "*)" + nq + ".data.Ok.val"
                 return "({ " + nq_pre + "; " + nq_chk + "; " + nq_val + "; })"
-            case HirExpr.ETuple(items, _): return self.gen_tuple(items)
+            case HirExpr.ETuple(items, _): return self.gen_tuple(items, (e_ptr as usize) == self.tup_ret_addr)
             case HirExpr.EList(items, ty): return self.gen_list_literal(items, ty)
             case HirExpr.EDict(keys, vals, dict_ty): return self.gen_dict_literal(keys, vals, dict_ty)
             case HirExpr.EClosure(params, ret_ty, body, _, captures):
@@ -4283,6 +4287,35 @@ pub class CGenerator:
             if not self.fn_owned.get(key): nv = false
         self.fn_owned.insert(key, nv)
 
+    # Register a fn/method's tuple freshness; on a key collision the NON-fresh verdict wins.
+    pub def _reg_tuple_fresh(self, key: str, v: bool):
+        mut nv = v
+        if self.tuple_fresh.contains(key) and not self.tuple_fresh.get(key): nv = false
+        self.tuple_fresh.insert(key, nv)
+
+    # A tuple expression whose str/class slots the value OWNS (+1 each) and that nothing else
+    # references: a tuple literal, or a direct call to a function/method sema proved returns only
+    # fresh tuples. Unpacking such a value may take the slot references over (no retain, box freed).
+    pub def _tuple_expr_fresh(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return false
+        match e.read():
+            case HirExpr.ETuple(_, _): return true
+            case HirExpr.ECall(callee, _, _):
+                match callee.read():
+                    case HirExpr.EIdent(cn, _, _):
+                        if self.classes.contains(cn): return false
+                        return self.tuple_fresh.contains(cn) and self.tuple_fresh.get(cn)
+                    case _: return false
+            case HirExpr.EMethodCall(recv, m, _, _):
+                mut rt = hir_expr_type(recv).name
+                match recv.read():
+                    case HirExpr.EIdent(rn, _, _):
+                        if self.classes.contains(rn): rt = rn
+                    case _: pass
+                mut k = rt + "." + m
+                return self.tuple_fresh.contains(k) and self.tuple_fresh.get(k)
+            case _: return false
+
     # A variant-constructor call or a call to a function proven to return a FRESH enum value.
     pub def _enum_expr_fresh(self, e: Pointer[HirExpr]) -> bool:
         if _is_invalid_ptr(e as usize): return false
@@ -4770,6 +4803,7 @@ pub class CGenerator:
         if self.coll_local_strval.contains(n): self.coll_local_strval.remove(n)
         if self.class_local_mono.contains(n): self.class_local_mono.remove(n)
         if self.coll_local_sfx.contains(n): self.coll_local_sfx.remove(n)
+        if self.coll_local_sfx.contains("@tup:" + n): self.coll_local_sfx.remove("@tup:" + n)
         if self.coll_local_vtcoll.contains(n): self.coll_local_vtcoll.remove(n)
         if self.shared_vars.contains(n): self.shared_vars.remove(n)
 
@@ -8586,7 +8620,39 @@ pub class CGenerator:
             return "({ " + fpre + "int _fz = snprintf(NULL,0,\"" + fmt + "\"" + fargs + "); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,\"" + fmt + "\"" + fargs + "); TrStr _frs = _tr_str_wrap_len(_fr, (size_t)_fz); " + fpost + "_frs; })"
         return "({ int _fz = snprintf(NULL,0,\"" + fmt + "\"" + fargs + "); char* _fr=(char*)_tr_checked_alloc(_fz+1); snprintf(_fr,_fz+1,\"" + fmt + "\"" + fargs + "); _tr_str_wrap_len(_fr, (size_t)_fz); })"
 
-    pub def gen_tuple(self, items: Vec[Pointer[HirExpr]]) -> str:
+    # C statements releasing every owned slot (str box + reference, refcounted class reference) of the
+    # tuple value held in C variable `cv`; "" when no slot is owned.
+    pub def _tuple_release_stmt(self, cv: str, ty: AstType) -> str:
+        mut out = ""
+        mut i = 0
+        while i < ty.args.len:
+            mut en = self.resolve_generic_prim(ty.args.get(i).read().name)
+            mut slot = cv + ".data[" + i.to_str() + "]"
+            if _is_str_type(en):
+                out = out + "{ void* _tb = (void*)(uintptr_t)" + slot + "; if (_tb) { _tr_str_release(*(TrStr*)_tb); _tr_free(_tb); } } "
+            elif self.is_heap_class_tn(self.resolve_generic_tyname(ty.args.get(i).read().name)):
+                out = out + "_tr_obj_release((void*)(uintptr_t)" + slot + ", " + self.obj_drop_fn(self.resolve_generic_tyname(ty.args.get(i).read().name)) + "); "
+            i = i + 1
+        return out
+
+    # True when tuple item `i` is a bare identifier that another item names again (`(x, x)`): a move
+    # into two slots would double-own one reference, so the packer retains instead.
+    pub def _tuple_ident_dup(self, items: Vec[Pointer[HirExpr]], i: int) -> bool:
+        mut nm = ""
+        match items.get(i).read():
+            case HirExpr.EIdent(n0, _, _): nm = n0
+            case _: return false
+        mut j = 0
+        while j < items.len:
+            if j != i:
+                match items.get(j).read():
+                    case HirExpr.EIdent(n1, _, _):
+                        if n1 == nm: return true
+                    case _: pass
+            j = j + 1
+        return false
+
+    pub def gen_tuple(self, items: Vec[Pointer[HirExpr]], is_return: bool) -> str:
         if items.len == 0: return "((TrTuple){.data={0}})"
         mut s = "((TrTuple){.data={"
         mut i = 0
@@ -8599,11 +8665,37 @@ pub class CGenerator:
                 # Retain before boxing: the box's TrStr shares .data/.rc with
                 # tup_es's source; without a retain, the source's auto-drop
                 # would free .data while the box still points at it (UAF).
-                s = s + "(long long)(uintptr_t)_tr_str_box(_tr_str_retain(" + tup_es + "))"
+                # The slot owns one reference: a fresh value (concat/call/f-string) moves in; a tracked
+                # local returned straight out moves in (excluded from the exit drops); anything else is
+                # retained.
+                mut tup_smove = self._is_fresh_str_expr(tup_e)
+                if not tup_smove and is_return and not self._tuple_ident_dup(items, i):
+                    match tup_e.read():
+                        case HirExpr.EIdent(tup_sn, _, _):
+                            if self.str_local_names.contains(tup_sn): tup_smove = true
+                        case _: pass
+                if tup_smove:
+                    s = s + "(long long)(uintptr_t)_tr_str_box(" + tup_es + ")"
+                else:
+                    s = s + "(long long)(uintptr_t)_tr_str_box(_tr_str_retain(" + tup_es + "))"
             elif _is_float_type(tup_tn):
                 # Bit-preserve the double in the long long slot (a plain cast
                 # would truncate 3.14 -> 3). Read back via _tr_ptr_to_f64.
                 s = s + "(long long)(uintptr_t)_tr_f64_to_ptr((double)(" + tup_es + "))"
+            elif self.is_heap_class_tn(self.resolve_generic_tyname(hir_expr_type(tup_e).name)):
+                # The tuple OWNS one reference per class slot: a fresh instance moves in; a local
+                # returned straight out moves in (it is excluded from the exit drops); anything else
+                # (a live local, parameter, field, collection element) is retained.
+                mut tup_move = self._is_fresh_obj_expr(tup_e)
+                if not tup_move and is_return and not self._tuple_ident_dup(items, i):
+                    match tup_e.read():
+                        case HirExpr.EIdent(tup_in, _, _):
+                            if self.class_local_names.contains(tup_in): tup_move = true
+                        case _: pass
+                if tup_move:
+                    s = s + "(long long)(uintptr_t)(" + tup_es + ")"
+                else:
+                    s = s + "(long long)(uintptr_t)_tr_obj_retain(" + tup_es + ")"
             else:
                 s = s + "(long long)(uintptr_t)(" + tup_es + ")"
             i = i + 1
@@ -8838,6 +8930,7 @@ pub class CGenerator:
         # statement too late (a straight C compile error: used-before-declared).
         self.w(pad + "TrTuple " + tmp + " = " + self.flush_wraps(self.gen_expr(val), false) + ";\n")
         mut val_ty = hir_expr_type(val)
+        mut tup_fresh = self._tuple_expr_fresh(val)
         mut i = 0
         while i < names.len:
             mut vname = _safe_c_varname(names.get(i))
@@ -8847,7 +8940,12 @@ pub class CGenerator:
                 # Retain: _tr_str_unbox is non-destructive and shares the
                 # box's refcount. Without retaining, an auto-drop of `vname`
                 # could free data the (leaked) box's TrStr still points at.
-                self.w(pad + "TrStr " + vname + " = _tr_str_retain(_tr_str_unbox((void*)(uintptr_t)" + tmp + ".data[" + i.to_str() + "]));\n")
+                if tup_fresh:
+                    # A fresh tuple owns its str slot (box + one reference): take both over.
+                    self.w(pad + "TrStr " + vname + " = ({ void* _tb" + tmp + i.to_str() + " = (void*)(uintptr_t)" + tmp + ".data[" + i.to_str() + "]; TrStr _ts" + tmp + i.to_str() + " = _tr_str_unbox(_tb" + tmp + i.to_str() + "); if (_tb" + tmp + i.to_str() + ") _tr_free(_tb" + tmp + i.to_str() + "); _ts" + tmp + i.to_str() + "; });\n")
+                else:
+                    self.w(pad + "TrStr " + vname + " = _tr_str_retain(_tr_str_unbox((void*)(uintptr_t)" + tmp + ".data[" + i.to_str() + "]));\n")
+                self.str_local_names.insert(names.get(i), true)
             elif _is_float_type(elem_ty_n):
                 # Float slots hold the f64 BIT PATTERN (stored via _tr_f64_to_ptr):
                 # reinterpret the bits — an arithmetic (double) cast of the raw
@@ -8869,7 +8967,10 @@ pub class CGenerator:
                 # `-> (MdNode, int)` from a block-level Markdown parser helper)
                 # and never released the node (a leak).
                 mut _cty = self.type_to_c(val_ty.args.get(i).read())
-                self.w(pad + _cty + " " + vname + " = (" + _cty + ")(uintptr_t)" + tmp + ".data[" + i.to_str() + "];\n")
+                if tup_fresh:
+                    self.w(pad + _cty + " " + vname + " = (" + _cty + ")(uintptr_t)" + tmp + ".data[" + i.to_str() + "];\n")
+                else:
+                    self.w(pad + _cty + " " + vname + " = (" + _cty + ")_tr_obj_retain((void*)(uintptr_t)" + tmp + ".data[" + i.to_str() + "]);\n")
                 self.class_local_names.insert(names.get(i), true)
             elif val_ty.args.len > i and (elem_ty_n == "List" or elem_ty_n == "Vec" or elem_ty_n == "Dict" or elem_ty_n == "Map" or elem_ty_n == "Set"):
                 # Collection slot: the tuple packer stored the raw pointer; read it back as a
@@ -9848,6 +9949,7 @@ pub class CGenerator:
                 self.w(pad + "_tr_df" + _df_idx.to_str() + " = 1;\n")
                 self.defer_stack.push("if (_tr_df" + _df_idx.to_str() + ") {\n" + deferred_c + "}\n")
             case HirStmt.SReturn(e):
+                self.tup_ret_addr = e as usize
                 # Flush deferred statements in LIFO order before returning (unless
                 # gen_block already ran them ahead of this exit's local auto-drops).
                 if self.defers_pre_flushed:
@@ -9998,6 +10100,11 @@ pub class CGenerator:
                 if _rl_ty.name != "Result" and v as usize != 0 as usize: _rl_ty = hir_expr_type(v)
                 if _rl_ty.name == "Result" and _rl_ty.args.len >= 2:
                     self.coll_local_sfx.insert("@res:" + n, self.resolve_generic_prim(_rl_ty.args.get(0).read().name) + "|" + self.resolve_generic_prim(_rl_ty.args.get(1).read().name))
+                # Tuple local bound to a FRESH tuple: it owns one reference per str / class slot, released at
+                # scope exit (sema only schedules the drop when the local never escapes or is reassigned).
+                if v as usize != 0 as usize and self._tuple_expr_fresh(v):
+                    mut _tl_stmt = self._tuple_release_stmt(_safe_c_varname(n), hir_expr_type(v))
+                    if _tl_stmt != "": self.coll_local_sfx.insert("@tup:" + n, _tl_stmt)
                 mut c_ty = self.type_to_c(ty)
                 # If SLet.ty is Vec/List without generic args, recover c_ty from the init expression
                 if c_ty == "List_ptr*" and v as usize != 0 as usize:
@@ -10500,6 +10607,12 @@ pub class CGenerator:
                                 self.coll_local_sfx.insert(n, _sa_lct.slice(5, _sa_lct.len() - 1))
                             else:
                                 self.w(pad + "__auto_type " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
+                                # First binding of a tuple local to a FRESH tuple: it owns one reference per
+                                # str / class slot (released at scope exit when sema proves it is bound once
+                                # and never escapes).
+                                if self._tuple_expr_fresh(v):
+                                    mut _tl2 = self._tuple_release_stmt(_safe_c_varname(n), hir_expr_type(v))
+                                    if _tl2 != "": self.coll_local_sfx.insert("@tup:" + n, _tl2)
                                 # A bare `s = set()` is int-keyed in C: record it so the auto-drop
                                 # frees it with _tr_idict_free, not Dict_free.
                                 mut _sa_ty0 = hir_expr_type(v).name
@@ -10624,6 +10737,7 @@ pub class CGenerator:
                         mut ta_tmp = "_tup" + self.next_temp()
                         self.w(pad + "TrTuple " + ta_tmp + " = " + self.flush_wraps(self.gen_expr(v), false) + ";\n")
                         mut ta_val_ty = hir_expr_type(v)
+                        mut ta_fresh = self._tuple_expr_fresh(v)
                         mut ta_i = 0
                         while ta_i < ta_items.len:
                             mut ta_tgt = ta_items.get(ta_i)
@@ -10633,6 +10747,8 @@ pub class CGenerator:
                             mut ta_lval = self.gen_expr(ta_tgt)
                             if _is_str_type(ta_elem_ty_n):
                                 mut ta_rhs = "_tr_str_retain(_tr_str_unbox((void*)(uintptr_t)" + ta_slot + "))"
+                                if ta_fresh:
+                                    ta_rhs = "({ void* _tb" + ta_tmp + " = (void*)(uintptr_t)" + ta_slot + "; TrStr _ts" + ta_tmp + " = _tr_str_unbox(_tb" + ta_tmp + "); if (_tb" + ta_tmp + ") _tr_free(_tb" + ta_tmp + "); _ts" + ta_tmp + "; })"
                                 match ta_tgt.read():
                                     case HirExpr.EIdent(ta_n, _, _):
                                         if self.str_local_names.contains(ta_n):
@@ -10643,6 +10759,21 @@ pub class CGenerator:
                                 self.w(pad + ta_lval + " = " + ta_rhs + ";\n")
                             elif _is_float_type(ta_elem_ty_n):
                                 self.w(pad + ta_lval + " = _tr_ptr_to_f64((void*)(uintptr_t)" + ta_slot + ");\n")
+                            elif self.is_heap_class_tn(ta_elem_ty_n):
+                                # The slot holds one reference: a fresh tuple's moves into the target, any
+                                # other tuple's is retained so both holders own theirs.
+                                mut ta_cty = self.type_to_c(ta_val_ty.args.get(ta_i).read())
+                                match ta_tgt.read():
+                                    case HirExpr.EIdent(ta_cn, _, _):
+                                        # the target local owned a reference to its OLD value: let it go
+                                        # (the tuple already holds its own, so a swap is safe)
+                                        if self.class_local_names.contains(ta_cn) and not self.raw_aliased.contains(ta_elem_ty_n):
+                                            self.w(pad + "_tr_obj_release(" + ta_lval + ", " + self.obj_drop_fn(ta_elem_ty_n) + ");\n")
+                                    case _: pass
+                                if ta_fresh:
+                                    self.w(pad + ta_lval + " = (" + ta_cty + ")(uintptr_t)" + ta_slot + ";\n")
+                                else:
+                                    self.w(pad + ta_lval + " = (" + ta_cty + ")_tr_obj_retain((void*)(uintptr_t)" + ta_slot + ");\n")
                             else:
                                 self.w(pad + ta_lval + " = (long long)" + ta_slot + ";\n")
                             ta_i = ta_i + 1
@@ -11240,6 +11371,9 @@ pub class CGenerator:
                         mut _rer = self.payload_free_stmt(_rv + ".data.Err.err", _rk.slice(_rbar + 1, _rk.len()))
                         if _rok != "" or _rer != "":
                             self.w(pad + "if (" + _rv + ".tag == Result_Err) { " + _rer + " } else { " + _rok + " }\n")
+                elif adc == "Tuple" or adc == "tuple":
+                    if self.coll_local_sfx.contains("@tup:" + adn):
+                        self.w(pad + self.coll_local_sfx.get("@tup:" + adn) + "\n")
                 elif adc == "Mutex":
                     # Mutex[T] local: rc-guarded drop — frees the box (unlocking a
                     # still-held guard) and releases an owned fresh payload. Only fires
@@ -12119,8 +12253,10 @@ pub class CGenerator:
             # Return-ownership: key free functions by name, methods by "Class.method".
             if pf.class_name == "":
                 self._reg_fn_owned(pf.name, pf.returns_owned)
+                self._reg_tuple_fresh(pf.name, pf.returns_fresh_tuple)
             else:
                 self._reg_fn_owned(pf.class_name + "." + pf.name, pf.returns_owned)
+                self._reg_tuple_fresh(pf.class_name + "." + pf.name, pf.returns_fresh_tuple)
             i = i + 1
         # Class/enum methods live in their container's method list (not always in
         # prog.functions) — register those too, keyed "Class.method".
@@ -12130,6 +12266,7 @@ pub class CGenerator:
             mut rocm = 0
             while rocm < roc.methods.len:
                 self._reg_fn_owned(roc.name + "." + roc.methods.get(rocm).name, roc.methods.get(rocm).returns_owned)
+                self._reg_tuple_fresh(roc.name + "." + roc.methods.get(rocm).name, roc.methods.get(rocm).returns_fresh_tuple)
                 rocm = rocm + 1
             i = i + 1
         i = 0
@@ -12138,6 +12275,7 @@ pub class CGenerator:
             mut roem = 0
             while roem < roe.methods.len:
                 self._reg_fn_owned(roe.name + "." + roe.methods.get(roem).name, roe.methods.get(roem).returns_owned)
+                self._reg_tuple_fresh(roe.name + "." + roe.methods.get(roem).name, roe.methods.get(roem).returns_fresh_tuple)
                 roem = roem + 1
             i = i + 1
         # Raw-alias scan: any class reachable as Pointer[T] (a class field, enum

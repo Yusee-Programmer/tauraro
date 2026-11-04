@@ -2507,6 +2507,7 @@ typedef struct HirFunction {
     List_TrStr* borrow_sources;
     List_TrStr* proven_borrows;
     bool returns_owned;
+    bool returns_fresh_tuple;
 } HirFunction;
 static void _trdrop_HirFunction(void* vp) {
     HirFunction* self = (HirFunction*)vp; (void)self;
@@ -3067,6 +3068,7 @@ typedef struct Sema {
     bool no_heap;
     bool heap_boxes_tuples;
     TrMap* mutating_methods;
+    TrMap* fn_tuple_fresh;
     TrMap* fn_ret_owned;
     TrMap* fn_param_consumes;
     TrMap* ptr_aliased;
@@ -3147,6 +3149,7 @@ static void _trdrop_Sema(void* vp) {
     List_TrStr_free(self->cur_func_borrowers);
     List_TrStr_free(self->cur_func_sources);
     Dict_free(self->mutating_methods);
+    Dict_free(self->fn_tuple_fresh);
     Dict_free(self->fn_ret_owned);
     Dict_free(self->fn_param_consumes);
     Dict_free(self->ptr_aliased);
@@ -3475,6 +3478,8 @@ typedef struct CGenerator {
     TrMap* enum_local_names;
     TrMap* class_local_names;
     TrMap* class_local_mono;
+    TrMap* tuple_fresh;
+    unsigned long long tup_ret_addr;
     TrMap* fn_owned;
     TrMap* raw_aliased;
     TrMap* coll_field_owned;
@@ -3555,6 +3560,7 @@ static void _trdrop_CGenerator(void* vp) {
     Dict_free(self->enum_local_names);
     Dict_free(self->class_local_names);
     Dict_free_strval(self->class_local_mono);
+    Dict_free(self->tuple_fresh);
     Dict_free(self->fn_owned);
     Dict_free(self->raw_aliased);
     Dict_free(self->coll_field_owned);
@@ -4516,6 +4522,7 @@ __attribute__((hot)) bool _stmt_mutates_self(Stmt* s);
 __attribute__((hot)) bool _rhs_is_alias(Expr* e);
 __attribute__((hot)) void _block_alias_assigns(Block* b, TrMap* out);
 __attribute__((hot)) void _pblock_alias_assigns(Block** pb, TrMap* out);
+__attribute__((hot)) void _bind_count(TrMap* out, TrStr n);
 __attribute__((hot)) void _stmt_alias_assigns(Stmt* s, TrMap* out);
 __attribute__((hot)) bool _is_coll_mutator(TrStr m);
 __attribute__((hot)) bool _expr_is_mut_call_on(Expr* e, TrStr name);
@@ -4687,6 +4694,10 @@ __attribute__((hot)) bool Sema_is_global_not_local(Sema* self, TrStr name);
 __attribute__((hot)) HirProgram* Sema_analyze(Sema* self, Program* prog);
 __attribute__((hot)) void Sema_check_free_fn_method_c_name_collisions(Sema* self, HirProgram* hp);
 __attribute__((hot)) void Sema_compute_return_ownership(Sema* self, HirProgram* hp);
+__attribute__((hot)) bool Sema__is_tuple_ty(Sema* self, AstType* t);
+__attribute__((hot)) void Sema__tuple_and(Sema* self, TrStr key, bool v);
+__attribute__((hot)) bool Sema__ret_yields_fresh_tuple(Sema* self, HirExpr* e);
+__attribute__((hot)) void Sema_compute_tuple_fresh(Sema* self, HirProgram* hp);
 __attribute__((hot)) void Sema_compute_param_ownership(Sema* self, HirProgram* hp);
 __attribute__((hot)) bool Sema__is_pure_scalar(Sema* self, TrStr tn);
 __attribute__((hot)) bool Sema__pc_owns_return(Sema* self, HirExpr* e);
@@ -4719,6 +4730,7 @@ __attribute__((hot)) void Sema__collect_returns_stmt(Sema* self, HirStmt* sp, Li
 __attribute__((hot)) bool Sema__owned_of(Sema* self, TrStr key);
 __attribute__((hot)) bool Sema__ret_yields_owned(Sema* self, HirExpr* e);
 __attribute__((hot)) bool Sema_is_known_type_name_strict(Sema* self, TrStr n);
+__attribute__((hot)) bool Sema__is_declared_type_param(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema__is_type_param_in_scope(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema__type_satisfies_bound(Sema* self, TrStr type_name, TrStr iface_name);
 __attribute__((hot)) AstType** Sema__resolve_generic_bound_method_ret(Sema* self, TrStr pname, TrStr method);
@@ -4816,6 +4828,7 @@ __attribute__((hot)) bool _i_candidate(FunctionDef* f);
 __attribute__((hot)) void _i_collect(Program* prog, List_ptr* fns, List_TrStr* files, List_TrStr* decl_files, TrStr input_path);
 __attribute__((hot)) AstType** _i_box(AstType* t);
 __attribute__((hot)) List_TrStr* infer_return_types(Program* prog, List_TrStr* decl_files, bool strict_mode, bool no_heap, bool boxes, TrStr input_path);
+__attribute__((hot)) bool _rc_spawned(RcCk* ck, TrStr name);
 __attribute__((hot)) RcFn* _rc_new_fn(TrStr name, TrStr file, long long line, bool is_lib);
 __attribute__((hot)) bool _rc_sync_ty(TrStr n);
 __attribute__((hot)) bool _rc_mut_method(TrStr m);
@@ -5696,6 +5709,8 @@ __attribute__((hot)) TrStr CGenerator_iface_wrap_to(CGenerator* self, AstType* t
 __attribute__((hot)) TrStr CGenerator_obj_retain_wrap(CGenerator* self, HirExpr* e, TrStr s, bool is_return);
 __attribute__((hot)) bool CGenerator__fn_owned_lookup(CGenerator* self, TrStr key);
 __attribute__((hot)) void CGenerator__reg_fn_owned(CGenerator* self, TrStr key, bool v);
+__attribute__((hot)) void CGenerator__reg_tuple_fresh(CGenerator* self, TrStr key, bool v);
+__attribute__((hot)) bool CGenerator__tuple_expr_fresh(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__enum_expr_fresh(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__obj_expr_owns_ref(CGenerator* self, HirExpr* e);
 __attribute__((hot)) bool CGenerator__is_user_borrow_wrapper_call(CGenerator* self, HirExpr* e);
@@ -5768,7 +5783,9 @@ __attribute__((hot)) HirExpr* CGenerator_order_operand(CGenerator* self, HirExpr
 __attribute__((hot)) TrStr CGenerator_gen_method_call(CGenerator* self, HirExpr* obj, TrStr method, List_ptr* args, AstType* call_ty);
 __attribute__((hot)) TrStr CGenerator_gen_method_call_impl(CGenerator* self, HirExpr* obj, TrStr method, List_ptr* args, AstType* call_ty);
 __attribute__((hot)) TrStr CGenerator_gen_fstring(CGenerator* self, List_ptr* parts);
-__attribute__((hot)) TrStr CGenerator_gen_tuple(CGenerator* self, List_ptr* items);
+__attribute__((hot)) TrStr CGenerator__tuple_release_stmt(CGenerator* self, TrStr cv, AstType* ty);
+__attribute__((hot)) bool CGenerator__tuple_ident_dup(CGenerator* self, List_ptr* items, long long i);
+__attribute__((hot)) TrStr CGenerator_gen_tuple(CGenerator* self, List_ptr* items, bool is_return);
 __attribute__((hot)) TrStr CGenerator_gen_tuple_to_str(CGenerator* self, TrStr s, AstType* ty);
 __attribute__((hot)) void CGenerator_emit_async_wrapper_for_call(CGenerator* self, TrStr fn_name, List_ptr* args, TrStr ret_name);
 __attribute__((hot)) TrStr CGenerator_gen_await_call(CGenerator* self, HirExpr* expr);

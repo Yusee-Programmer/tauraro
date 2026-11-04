@@ -4,6 +4,7 @@
 #   # EXPECT-EXIT: 0 | nonzero
 #   # EXPECT-STDOUT: <exact line>      (repeatable, checked in order)
 #   # EXPECT-STDERR: <substring>       (optional)
+#   # EXTRA-FLAGS: <flags>           (extra tauraroc flags, e.g. --checked-pointers, in both modes)
 #   # EXPECT-NOOPT: 1                  (build at -O0; optimizers may legally remove runaway recursion)
 # Every program is built twice: plain, and with --debug (ASan + UBSan). Any sanitizer report on a
 # program that is expected to exit 0 is a failure. Run from the repo root.
@@ -23,6 +24,7 @@ for f in tests/runtime_san/*.tr; do
     if [ $mode = plain ] && grep -q "^# SAN-ONLY" "$f"; then continue; fi
     if [ "$(uname -s)" = Darwin ] && grep -q "^# SKIP-DARWIN" "$f"; then continue; fi
     flags="$opt"; [ $mode = san ] && flags="$opt --debug"
+    flags="$flags $(sed -n 's/^# EXTRA-FLAGS: //p' "$f" | head -1)"
     if ! "$TAURAROC" "$f" -o "$TMP/$n.$mode" $flags >"$TMP/build.log" 2>&1; then
       echo "FAIL  $n [$mode] (build): $(grep -m1 error "$TMP/build.log")"; fail=$((fail+1)); continue
     fi

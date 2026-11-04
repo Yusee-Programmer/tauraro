@@ -337,6 +337,18 @@ jobs:
         run: TAURAROC=./tauraroc${{ matrix.ext }} bash scripts/leak_check.sh
 
       # -------------------------------------------------------
+      # AddressSanitizer + LeakSanitizer sweep over the curated leak-free set
+      # (tests/asan_clean.list). Built through `tauraroc --debug` so std C shims link.
+      # Tests that still leak are listed in tests/asan_leak_allow.list (documented limitation);
+      # a clean test that starts leaking, or any ASan error, fails the job. (Linux x64 only:
+      # LeakSanitizer is unavailable on macOS/Windows and slow under emulation.)
+      # -------------------------------------------------------
+      - name: ASan leak sweep, curated clean set (Linux x64)
+        if: matrix.platform == 'linux-x64'
+        shell: bash
+        run: LEAKS=1 JOBS=2 TAURAROC=./tauraroc bash scripts/asan_check.sh $(cat tests/asan_clean.list)
+
+      # -------------------------------------------------------
       # Concurrency corpus under sanitizers (Linux): each tests/concurrency/*.tr
       # runs under ThreadSanitizer (data races — a lost Mutex update, or a
       # non-atomic refcount touched by two threads) AND AddressSanitizer (UAF /

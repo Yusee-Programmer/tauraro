@@ -13,7 +13,7 @@ __attribute__((hot)) TrStr _cov_obj_base(TrStr c_path) {
 #line 19 "src/coverage.tr"
     long long n = _tr_str_lenv((c_path));
 #line 20 "src/coverage.tr"
-    if (((n > 2LL) && ({ TrStr _cmpa_t4086 = (_tr_str_slicev((c_path), (n - 2LL), n)); TrStr _cmpb_t4087 = (_tr_str_lit_len(".c", 2LL)); _Bool _cmpr_t4088 = _tr_str_eqv(_cmpa_t4086, _cmpb_t4087); _tr_str_release(_cmpa_t4086); _cmpr_t4088; }))) {
+    if (((n > 2LL) && ({ TrStr _cmpa_t4119 = (_tr_str_slicev((c_path), (n - 2LL), n)); TrStr _cmpb_t4120 = (_tr_str_lit_len(".c", 2LL)); _Bool _cmpr_t4121 = _tr_str_eqv(_cmpa_t4119, _cmpb_t4120); _tr_str_release(_cmpa_t4119); _cmpr_t4121; }))) {
 #line 20 "src/coverage.tr"
         return _tr_str_slicev((c_path), 0LL, (n - 2LL));
     }
@@ -25,10 +25,10 @@ __attribute__((hot)) void _cov_rm(TrStr path) {
 #line 24 "src/coverage.tr"
     if (_tr_is_windows()) {
 #line 24 "src/coverage.tr"
-        ({ TrStr _aet_t4089 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_replacev((path), (_tr_str_lit_len("/", 1LL)), (_tr_str_lit_len("\\", 1LL)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("del /Q \"", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" 2>nul >nul", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4089.data); _tr_str_release(_aet_t4089); });
+        ({ TrStr _aet_t4122 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_replacev((path), (_tr_str_lit_len("/", 1LL)), (_tr_str_lit_len("\\", 1LL)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("del /Q \"", 8LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" 2>nul >nul", 12LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4122.data); _tr_str_release(_aet_t4122); });
     } else {
 #line 25 "src/coverage.tr"
-        ({ TrStr _aet_t4090 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("rm -f \"", 7LL)), (path))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\"", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4090.data); _tr_str_release(_aet_t4090); });
+        ({ TrStr _aet_t4123 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("rm -f \"", 7LL)), (path))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\"", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_system(_aet_t4123.data); _tr_str_release(_aet_t4123); });
     }
 }
 
@@ -38,7 +38,7 @@ __attribute__((hot)) void coverage_reset(List_TrStr* c_files) {
 #line 30 "src/coverage.tr"
     while ((i < c_files->len)) {
 #line 31 "src/coverage.tr"
-        TrStr g = ({ TrStr _at_t4091 = (List_TrStr_get(c_files, i)); __auto_type _wr = (({ TrStr _tr_cl = (_cov_obj_base(_at_t4091)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".gcda", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_str_release(_at_t4091); _wr; });
+        TrStr g = ({ TrStr _at_t4124 = (List_TrStr_get(c_files, i)); __auto_type _wr = (({ TrStr _tr_cl = (_cov_obj_base(_at_t4124)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".gcda", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); _tr_str_release(_at_t4124); _wr; });
 #line 32 "src/coverage.tr"
         if (file_exists(g)) {
 #line 32 "src/coverage.tr"
@@ -56,14 +56,14 @@ __attribute__((hot)) TrStr _cov_tool(TrStr cc) {
 #line 39 "src/coverage.tr"
     if (_tr_is_windows()) {
 #line 39 "src/coverage.tr"
-        TrStr _strtmp_t4092 = _tr_str_lit_len("nul", 3LL);
+        TrStr _strtmp_t4125 = _tr_str_lit_len("nul", 3LL);
         _tr_str_release(null_dev);
-        null_dev = _strtmp_t4092;
+        null_dev = _strtmp_t4125;
     }
 #line 40 "src/coverage.tr"
     if ((_tr_str_index_ofv((cc), (_tr_str_lit_len("clang", 5LL))) >= 0LL)) {
 #line 41 "src/coverage.tr"
-        if (({ TrStr _aet_t4093 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("llvm-cov --version >", 20LL)), (null_dev))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" 2>&1", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = ((_tr_system(_aet_t4093.data) == 0LL)); _tr_str_release(_aet_t4093); _wr; })) {
+        if (({ TrStr _aet_t4126 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("llvm-cov --version >", 20LL)), (null_dev))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(" 2>&1", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = ((_tr_system(_aet_t4126.data) == 0LL)); _tr_str_release(_aet_t4126); _wr; })) {
 #line 41 "src/coverage.tr"
             _tr_str_release(null_dev);
             return _tr_str_lit_len("llvm-cov gcov", 13LL);
@@ -112,9 +112,9 @@ __attribute__((hot)) long long _cov_int(TrStr s) {
         return (-1LL);
     }
 #line 60 "src/coverage.tr"
-    long long _trret694 = v;
+    long long _trret700 = v;
     _tr_str_release(t);
-    return _trret694;
+    return _trret700;
 }
 
 __attribute__((hot)) bool _cov_is_std(TrStr path) {
@@ -148,10 +148,10 @@ __attribute__((hot)) TrStr _cov_ranges(List_i64* lines) {
 #line 75 "src/coverage.tr"
         if ((a == b)) {
 #line 75 "src/coverage.tr"
-            ({ TrStr _sbt_t4094 = (_tr_str_wrap(_tr_int_to_str((long long)(a)))); StringBuilder_append(sb, _sbt_t4094); _tr_str_release(_sbt_t4094); });
+            ({ TrStr _sbt_t4127 = (_tr_str_wrap(_tr_int_to_str((long long)(a)))); StringBuilder_append(sb, _sbt_t4127); _tr_str_release(_sbt_t4127); });
         } else {
 #line 76 "src/coverage.tr"
-            ({ __auto_type _ord_t4095 = (({ TrStr _tr_cl = (_tr_str_wrap(_tr_int_to_str((long long)(a)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("-", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t4096 = (({ TrStr _tr_cl = (_ord_t4095); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(b)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); StringBuilder_append(sb, _sbt_t4096); _tr_str_release(_sbt_t4096); });
+            ({ __auto_type _ord_t4128 = (({ TrStr _tr_cl = (_tr_str_wrap(_tr_int_to_str((long long)(a)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("-", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t4129 = (({ TrStr _tr_cl = (_ord_t4128); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(b)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); StringBuilder_append(sb, _sbt_t4129); _tr_str_release(_sbt_t4129); });
         }
 #line 77 "src/coverage.tr"
         i = (i + 1LL);
@@ -166,12 +166,12 @@ __attribute__((hot)) TrStr _cov_pad(TrStr s, long long w) {
 #line 82 "src/coverage.tr"
     while ((_tr_str_lenv((out)) < w)) {
 #line 82 "src/coverage.tr"
-        ({ TrStr _ap_t4097 = (_tr_str_lit_len(" ", 1LL)); _tr_str_append(&out, _ap_t4097); });
+        ({ TrStr _ap_t4130 = (_tr_str_lit_len(" ", 1LL)); _tr_str_append(&out, _ap_t4130); });
     }
 #line 83 "src/coverage.tr"
-    TrStr _trret695 = _tr_str_retain(out);
+    TrStr _trret701 = _tr_str_retain(out);
     _tr_str_release(out);
-    return _trret695;
+    return _trret701;
 }
 
 __attribute__((hot)) TrStr _cov_lpad(TrStr s, long long w) {
@@ -180,14 +180,14 @@ __attribute__((hot)) TrStr _cov_lpad(TrStr s, long long w) {
 #line 87 "src/coverage.tr"
     while ((_tr_str_lenv((out)) < w)) {
 #line 87 "src/coverage.tr"
-        TrStr _strtmp_t4098 = _tr_strx_concatv((_tr_str_lit_len(" ", 1LL)), (out));
+        TrStr _strtmp_t4131 = _tr_strx_concatv((_tr_str_lit_len(" ", 1LL)), (out));
         _tr_str_release(out);
-        out = _strtmp_t4098;
+        out = _strtmp_t4131;
     }
 #line 88 "src/coverage.tr"
-    TrStr _trret696 = _tr_str_retain(out);
+    TrStr _trret702 = _tr_str_retain(out);
     _tr_str_release(out);
-    return _trret696;
+    return _trret702;
 }
 
 __attribute__((hot)) long long coverage_report(List_TrStr* c_files, TrStr cc, TrStr lcov_path, bool include_std) {
@@ -210,7 +210,7 @@ __attribute__((hot)) long long coverage_report(List_TrStr* c_files, TrStr cc, Tr
 #line 101 "src/coverage.tr"
         TrStr base = _cov_obj_base(cpath);
 #line 102 "src/coverage.tr"
-        if (({ TrStr _at_t4099 = (_tr_strx_concatv((base), (_tr_str_lit_len(".gcda", 5LL)))); __auto_type _wr = (file_exists(_at_t4099)); _tr_str_release(_at_t4099); _wr; })) {
+        if (({ TrStr _at_t4132 = (_tr_strx_concatv((base), (_tr_str_lit_len(".gcda", 5LL)))); __auto_type _wr = (file_exists(_at_t4132)); _tr_str_release(_at_t4132); _wr; })) {
 #line 103 "src/coverage.tr"
             TrStr cmd = ({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_tr_strx_concatv((tool), (_tr_str_lit_len(" -t -o \"", 8LL)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (base)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".o\" \"", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (cpath)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" > \"", 5LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (tmp)); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\" 2>&1", 6LL))); _tr_str_release(_tr_cl); _tr_cres; });
 #line 104 "src/coverage.tr"
@@ -220,9 +220,9 @@ __attribute__((hot)) long long coverage_report(List_TrStr* c_files, TrStr cc, Tr
 #line 106 "src/coverage.tr"
             if (file_exists(tmp)) {
 #line 106 "src/coverage.tr"
-                TrStr _strtmp_t4100 = read_file(tmp);
+                TrStr _strtmp_t4133 = read_file(tmp);
                 _tr_str_release(text);
-                text = _strtmp_t4100;
+                text = _strtmp_t4133;
             }
 #line 107 "src/coverage.tr"
             TrStr src = _tr_str_lit_len("", 0LL);
@@ -237,16 +237,16 @@ __attribute__((hot)) long long coverage_report(List_TrStr* c_files, TrStr cc, Tr
 #line 112 "src/coverage.tr"
                 if ((nl < 0LL)) {
 #line 113 "src/coverage.tr"
-                    TrStr _strtmp_t4101 = _tr_str_slicev((text), pos, _tr_str_lenv((text)));
+                    TrStr _strtmp_t4134 = _tr_str_slicev((text), pos, _tr_str_lenv((text)));
                     _tr_str_release(line);
-                    line = _strtmp_t4101;
+                    line = _strtmp_t4134;
 #line 114 "src/coverage.tr"
                     pos = _tr_str_lenv((text));
                 } else {
 #line 116 "src/coverage.tr"
-                    TrStr _strtmp_t4102 = _tr_str_slicev((text), pos, (pos + nl));
+                    TrStr _strtmp_t4135 = _tr_str_slicev((text), pos, (pos + nl));
                     _tr_str_release(line);
-                    line = _strtmp_t4102;
+                    line = _strtmp_t4135;
 #line 117 "src/coverage.tr"
                     pos = ((pos + nl) + 1LL);
                 }
@@ -270,7 +270,7 @@ __attribute__((hot)) long long coverage_report(List_TrStr* c_files, TrStr cc, Tr
                     continue;
                 }
 #line 123 "src/coverage.tr"
-                long long lno = ({ TrStr _at_t4103 = (_tr_str_slicev((rest), 0LL, c2)); __auto_type _wr = (_cov_int(_at_t4103)); _tr_str_release(_at_t4103); _wr; });
+                long long lno = ({ TrStr _at_t4136 = (_tr_str_slicev((rest), 0LL, c2)); __auto_type _wr = (_cov_int(_at_t4136)); _tr_str_release(_at_t4136); _wr; });
 #line 124 "src/coverage.tr"
                 TrStr cnt_s = _tr_str_stripv((_tr_str_slicev((line), 0LL, c1)));
 #line 125 "src/coverage.tr"
@@ -280,9 +280,9 @@ __attribute__((hot)) long long coverage_report(List_TrStr* c_files, TrStr cc, Tr
 #line 127 "src/coverage.tr"
                     if (_tr_str_starts_withv((tail), (_tr_str_lit_len("Source:", 7LL)))) {
 #line 127 "src/coverage.tr"
-                        TrStr _strtmp_t4104 = _tr_str_stripv((_tr_str_slicev((tail), 7LL, _tr_str_lenv((tail)))));
+                        TrStr _strtmp_t4137 = _tr_str_stripv((_tr_str_slicev((tail), 7LL, _tr_str_lenv((tail)))));
                         _tr_str_release(src);
-                        src = _strtmp_t4104;
+                        src = _strtmp_t4137;
                     }
 #line 128 "src/coverage.tr"
                     _tr_str_release(line);
@@ -392,7 +392,7 @@ __attribute__((hot)) long long coverage_report(List_TrStr* c_files, TrStr cc, Tr
 #line 156 "src/coverage.tr"
         while (((fj >= 0LL) && (strcmp(_tr_strz(List_TrStr_get(files, fj)), _tr_strz(cur)) > 0))) {
 #line 157 "src/coverage.tr"
-            ({ TrStr _at_t4105 = (List_TrStr_get(files, fj)); List_TrStr_set(files, (fj + 1LL), _at_t4105); _tr_str_release(_at_t4105); });
+            ({ TrStr _at_t4138 = (List_TrStr_get(files, fj)); List_TrStr_set(files, (fj + 1LL), _at_t4138); _tr_str_release(_at_t4138); });
 #line 158 "src/coverage.tr"
             fj = (fj - 1LL);
         }
@@ -437,7 +437,7 @@ __attribute__((hot)) long long coverage_report(List_TrStr* c_files, TrStr cc, Tr
 #line 176 "src/coverage.tr"
         List_i64* missing = (void*)List_i64_new();
 #line 177 "src/coverage.tr"
-        ({ TrStr _sbt_t4106 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("SF:", 3LL)), (f))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(lcov, _sbt_t4106); _tr_str_release(_sbt_t4106); });
+        ({ TrStr _sbt_t4139 = (({ TrStr _tr_cl = (_tr_strx_concatv((_tr_str_lit_len("SF:", 3LL)), (f))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(lcov, _sbt_t4139); _tr_str_release(_sbt_t4139); });
 #line 178 "src/coverage.tr"
         long long ln = 1LL;
 #line 179 "src/coverage.tr"
@@ -461,14 +461,14 @@ __attribute__((hot)) long long coverage_report(List_TrStr* c_files, TrStr cc, Tr
                     List_i64_append(missing, ln);
                 }
 #line 187 "src/coverage.tr"
-                ({ __auto_type _ord_t4107 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ln)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("DA:", 3LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(",", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t4108 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4107); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(c)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(lcov, _sbt_t4108); _tr_str_release(_sbt_t4108); });
+                ({ __auto_type _ord_t4140 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(ln)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("DA:", 3LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(",", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t4141 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4140); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(c)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\n", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(lcov, _sbt_t4141); _tr_str_release(_sbt_t4141); });
             }
 #line 188 "src/coverage.tr"
             ln = (ln + 1LL);
             _tr_str_release(key);
         }
 #line 189 "src/coverage.tr"
-        ({ __auto_type _ord_t4109 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(nlines)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("LF:", 3LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\nLH:", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t4110 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4109); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(nhit)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\nend_of_record\n", 15LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(lcov, _sbt_t4110); _tr_str_release(_sbt_t4110); });
+        ({ __auto_type _ord_t4142 = (({ TrStr _tr_cl = (({ TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(nlines)))); TrStr _tr_cres = _tr_strx_concatv((_tr_str_lit_len("LF:", 3LL)), _tr_cr); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\nLH:", 4LL))); _tr_str_release(_tr_cl); _tr_cres; })); TrStr _sbt_t4143 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4142); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(nhit)))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("\nend_of_record\n", 15LL))); _tr_str_release(_tr_cl); _tr_cres; })); StringBuilder_append(lcov, _sbt_t4143); _tr_str_release(_sbt_t4143); });
 #line 190 "src/coverage.tr"
         double pct = 100.0;
 #line 191 "src/coverage.tr"
@@ -477,9 +477,9 @@ __attribute__((hot)) long long coverage_report(List_TrStr* c_files, TrStr cc, Tr
             pct = ((((double)(nhit)) * 100.0) / ((double)(nlines)));
         }
 #line 192 "src/coverage.tr"
-        TrStr pct_s = ({ __auto_type _ord_t4111 = (({ TrStr _tr_cl = (_tr_str_wrap(_tr_int_to_str((long long)(_tr_idiv((long long)(((long long)_tr_f2i((double)(((pct * 10.0) + 0.5)), 64, 1))), (long long)(10LL)))))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4111); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(_tr_imod((long long)(((long long)_tr_f2i((double)(((pct * 10.0) + 0.5)), 64, 1))), (long long)(10LL)))))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("%", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+        TrStr pct_s = ({ __auto_type _ord_t4144 = (({ TrStr _tr_cl = (_tr_str_wrap(_tr_int_to_str((long long)(_tr_idiv((long long)(((long long)_tr_f2i((double)(((pct * 10.0) + 0.5)), 64, 1))), (long long)(10LL)))))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4144); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(_tr_imod((long long)(((long long)_tr_f2i((double)(((pct * 10.0) + 0.5)), 64, 1))), (long long)(10LL)))))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("%", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
 #line 193 "src/coverage.tr"
-        ({ __auto_type _ord_t4113 = (_cov_pad(f, width)); TrStr _at_t4112 = (_tr_str_wrap(_tr_int_to_str((long long)(nlines)))); __auto_type _ord_t4115 = (({ TrStr _tr_cl = (_ord_t4113); TrStr _tr_cr = (_cov_lpad(_at_t4112, 8LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _at_t4114 = (_tr_str_wrap(_tr_int_to_str((long long)(nhit)))); __auto_type _ord_t4116 = (({ TrStr _tr_cl = (_ord_t4115); TrStr _tr_cr = (_cov_lpad(_at_t4114, 6LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); __auto_type _ord_t4117 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4116); TrStr _tr_cr = (_cov_lpad(pct_s, 7LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("  ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); ({ ({ TrStr _ps = ({ TrStr _tr_cl = (_ord_t4117); TrStr _tr_cr = (_cov_ranges(missing)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); }); _tr_str_release(_at_t4112); _tr_str_release(_at_t4114); });
+        ({ __auto_type _ord_t4146 = (_cov_pad(f, width)); TrStr _at_t4145 = (_tr_str_wrap(_tr_int_to_str((long long)(nlines)))); __auto_type _ord_t4148 = (({ TrStr _tr_cl = (_ord_t4146); TrStr _tr_cr = (_cov_lpad(_at_t4145, 8LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _at_t4147 = (_tr_str_wrap(_tr_int_to_str((long long)(nhit)))); __auto_type _ord_t4149 = (({ TrStr _tr_cl = (_ord_t4148); TrStr _tr_cr = (_cov_lpad(_at_t4147, 6LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); __auto_type _ord_t4150 = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4149); TrStr _tr_cr = (_cov_lpad(pct_s, 7LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("  ", 2LL))); _tr_str_release(_tr_cl); _tr_cres; })); ({ ({ TrStr _ps = ({ TrStr _tr_cl = (_ord_t4150); TrStr _tr_cr = (_cov_ranges(missing)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); }); _tr_str_release(_at_t4145); _tr_str_release(_at_t4147); });
 #line 194 "src/coverage.tr"
         tot_lines = (tot_lines + nlines);
 #line 195 "src/coverage.tr"
@@ -497,13 +497,13 @@ __attribute__((hot)) long long coverage_report(List_TrStr* c_files, TrStr cc, Tr
         tpct = ((((double)(tot_hit)) * 100.0) / ((double)(tot_lines)));
     }
 #line 199 "src/coverage.tr"
-    TrStr tpct_s = ({ __auto_type _ord_t4118 = (({ TrStr _tr_cl = (_tr_str_wrap(_tr_int_to_str((long long)(_tr_idiv((long long)(((long long)_tr_f2i((double)(((tpct * 10.0) + 0.5)), 64, 1))), (long long)(10LL)))))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4118); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(_tr_imod((long long)(((long long)_tr_f2i((double)(((tpct * 10.0) + 0.5)), 64, 1))), (long long)(10LL)))))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("%", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
+    TrStr tpct_s = ({ __auto_type _ord_t4151 = (({ TrStr _tr_cl = (_tr_str_wrap(_tr_int_to_str((long long)(_tr_idiv((long long)(((long long)_tr_f2i((double)(((tpct * 10.0) + 0.5)), 64, 1))), (long long)(10LL)))))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len(".", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); __auto_type _wr = (({ TrStr _tr_cl = (({ TrStr _tr_cl = (_ord_t4151); TrStr _tr_cr = (_tr_str_wrap(_tr_int_to_str((long long)(_tr_imod((long long)(((long long)_tr_f2i((double)(((tpct * 10.0) + 0.5)), 64, 1))), (long long)(10LL)))))); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, (_tr_str_lit_len("%", 1LL))); _tr_str_release(_tr_cl); _tr_cres; })); _wr; });
 #line 200 "src/coverage.tr"
-    ({ __auto_type _ord_t4120 = (_cov_pad(_tr_str_lit_len("TOTAL", 5LL), width)); TrStr _at_t4119 = (_tr_str_wrap(_tr_int_to_str((long long)(tot_lines)))); __auto_type _ord_t4122 = (({ TrStr _tr_cl = (_ord_t4120); TrStr _tr_cr = (_cov_lpad(_at_t4119, 8LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _at_t4121 = (_tr_str_wrap(_tr_int_to_str((long long)(tot_hit)))); __auto_type _ord_t4123 = (({ TrStr _tr_cl = (_ord_t4122); TrStr _tr_cr = (_cov_lpad(_at_t4121, 6LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); ({ ({ TrStr _ps = ({ TrStr _tr_cl = (_ord_t4123); TrStr _tr_cr = (_cov_lpad(tpct_s, 7LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); }); _tr_str_release(_at_t4119); _tr_str_release(_at_t4121); });
+    ({ __auto_type _ord_t4153 = (_cov_pad(_tr_str_lit_len("TOTAL", 5LL), width)); TrStr _at_t4152 = (_tr_str_wrap(_tr_int_to_str((long long)(tot_lines)))); __auto_type _ord_t4155 = (({ TrStr _tr_cl = (_ord_t4153); TrStr _tr_cr = (_cov_lpad(_at_t4152, 8LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); TrStr _at_t4154 = (_tr_str_wrap(_tr_int_to_str((long long)(tot_hit)))); __auto_type _ord_t4156 = (({ TrStr _tr_cl = (_ord_t4155); TrStr _tr_cr = (_cov_lpad(_at_t4154, 6LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; })); ({ ({ TrStr _ps = ({ TrStr _tr_cl = (_ord_t4156); TrStr _tr_cr = (_cov_lpad(tpct_s, 7LL)); TrStr _tr_cres = _tr_strx_concatv(_tr_cl, _tr_cr); _tr_str_release(_tr_cl); _tr_str_release(_tr_cr); _tr_cres; }); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); }); _tr_str_release(_at_t4152); _tr_str_release(_at_t4154); });
 #line 201 "src/coverage.tr"
     if ((!_tr_str_eqv((lcov_path), (_tr_str_lit_len("", 0LL))))) {
 #line 202 "src/coverage.tr"
-        ({ TrStr _at_t4124 = (StringObj_as_str(StringBuilder_to_string(lcov))); write_file(lcov_path, _at_t4124); _tr_str_release(_at_t4124); });
+        ({ TrStr _at_t4157 = (StringObj_as_str(StringBuilder_to_string(lcov))); write_file(lcov_path, _at_t4157); _tr_str_release(_at_t4157); });
 #line 203 "src/coverage.tr"
         ({ ({ TrStr _ps = _tr_strx_concatv((_tr_str_lit_len("coverage: LCOV data written to ", 31LL)), (lcov_path)); printf("%s", _tr_strz(_ps)); _tr_str_release(_ps); }); printf("\n"); });
     }

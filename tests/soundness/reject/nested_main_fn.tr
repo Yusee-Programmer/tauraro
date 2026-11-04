@@ -1,0 +1,10 @@
+# EXPECT: [N-2]
+# A duplicated `def main():` line used to nest a second `main` inside the first and fail late with a
+# raw `[C-1]` (missing spawn wrapper); it is a plain diagnostic now.
+def worker(n: int):
+    print(n)
+
+def main():
+def main():
+    a = Thread.spawn(worker, 1)
+    a.join()

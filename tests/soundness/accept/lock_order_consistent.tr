@@ -1,0 +1,19 @@
+# EXPECT: pass
+# Both spawned functions take the module-level mutexes in the SAME order: no inversion.
+mut ma: Mutex[int] = Mutex.init(0)
+mut mb: Mutex[int] = Mutex.init(0)
+def first(n: int) -> void:
+    mut x = ma.get()
+    mut y = mb.get()
+    ma.set(x + n)
+    mb.set(y + n)
+def second(n: int) -> void:
+    mut x = ma.get()
+    mut y = mb.get()
+    ma.set(x + n)
+    mb.set(y + n)
+async def main():
+    task_group:
+        spawn first(1)
+        spawn second(2)
+    print("ok")

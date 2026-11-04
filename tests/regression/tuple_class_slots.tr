@@ -1,0 +1,50 @@
+# tests/regression/tuple_class_slots.tr
+# A tuple OWNS one reference per refcounted-class / str slot. Building a tuple from a live local
+# retains it; unpacking a non-fresh tuple retains; unpacking a fresh one (literal or a call to a
+# function returning only tuple literals) takes the reference over. The old code stored the class
+# pointer WITHOUT a retain, so `t = (y, 2); mut (p, q) = t` released the same object twice
+# (heap-use-after-free under --debug).
+from std.test import TestRunner
+
+class Node:
+    pub v: int
+extend Node:
+    pub def init(v: int) -> Node:
+        mut n = Node()
+        n.v = v
+        return n
+
+def mkn(i: int) -> (Node, int):
+    x = Node.init(i)
+    return (x, i)
+
+def keep(n: Node) -> (Node, int):
+    return (n, 7)
+
+def pair_s(i: int) -> (str, Node):
+    return ("s" + i.to_str(), Node.init(i))
+
+def main():
+    mut t = TestRunner.init("tuple_class_slots")
+    t.section("unpack of a returned tuple")
+    mut (a, b) = mkn(3)
+    t.assert_eq_int(a.v + b, 6, "mkn")
+    t.section("tuple of a live local, unpacked twice")
+    y = Node.init(9)
+    tp = (y, 2)
+    mut (p, q) = tp
+    mut (p2, q2) = tp
+    t.assert_eq_int(p.v + q + p2.v + q2 + y.v, 9 + 2 + 9 + 2 + 9, "alias unpack")
+    t.section("parameter returned in a tuple")
+    mut (u, w) = keep(y)
+    t.assert_eq_int(u.v + w, 16, "keep")
+    t.section("mixed str/class")
+    mut (s, n) = pair_s(4)
+    t.assert_eq_str(s, "s4", "str slot")
+    t.assert_eq_int(n.v, 4, "class slot")
+    t.section("swap of class locals")
+    mut m = Node.init(1)
+    mut o = Node.init(2)
+    (m, o) = (o, m)
+    t.assert_eq_int(m.v * 10 + o.v, 21, "swap")
+    t.summary()

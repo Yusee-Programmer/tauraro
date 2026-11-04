@@ -223,13 +223,27 @@ def _pblock_alias_assigns(pb: Pointer[Block], out: Map[str, bool]):
     if pb as usize == 0 as usize: return
     _block_alias_assigns(pb.read(), out)
 
+# Count the binding events (declaration / assignment / loop or unpack binding) of local `n`: the key
+# "#2" + n appears once a name is bound MORE than once in the function (tuple locals are only
+# scheduled for a scope-exit release when bound exactly once).
+def _bind_count(out: Map[str, bool], n: str):
+    if out.contains("#" + n): out.insert("#2" + n, true)
+    else: out.insert("#" + n, true)
+
 def _stmt_alias_assigns(s: Pointer[Stmt], out: Map[str, bool]):
     if s as usize == 0 as usize: return
     match s.read():
+        case Stmt.SLet(ln, _, _, _, _, _, _): _bind_count(out, ln)
+        case Stmt.SMultiLet(mls, _, _):
+            mut mi = 0
+            while mi < mls.len:
+                _bind_count(out, mls.get(mi))
+                mi = mi + 1
         case Stmt.SAssign(tgt, val):
             if tgt as usize != 0 as usize:
                 match tgt.read():
                     case Expr.EIdent(tn):
+                        _bind_count(out, tn)
                         out.insert("=" + tn, true)    # ANY reassignment of local `tn` (closure capture-by-value analysis)
                         if _rhs_is_alias(val): out.insert(tn, true)
                     case _: pass
@@ -241,8 +255,15 @@ def _stmt_alias_assigns(s: Pointer[Stmt], out: Map[str, bool]):
                 i = i + 1
             _block_alias_assigns(else_b, out)
         case Stmt.SWhile(_, body, _): _block_alias_assigns(body, out)
-        case Stmt.SFor(_, _, body, _, _): _block_alias_assigns(body, out)
-        case Stmt.SForUnpack(_, _, body): _block_alias_assigns(body, out)
+        case Stmt.SFor(fv, _, body, _, _):
+            _bind_count(out, fv)
+            _block_alias_assigns(body, out)
+        case Stmt.SForUnpack(fvs, _, body):
+            mut fi = 0
+            while fi < fvs.len:
+                _bind_count(out, fvs.get(fi))
+                fi = fi + 1
+            _block_alias_assigns(body, out)
         case Stmt.SUnsafe(body): _block_alias_assigns(body, out)
         case Stmt.SWith(_, _, body): _block_alias_assigns(body, out)
         case Stmt.STaskGroup(body): _block_alias_assigns(body, out)
@@ -514,6 +535,7 @@ pub class Sema:
     pub no_heap: bool                   # --no-heap: reject heap-allocating constructs -> [H-1] error (bare-metal zero-heap guarantee)
     pub heap_boxes_tuples: bool         # true when the selected backend heap-allocates tuples/enums (llvm/native). The C backend keeps them as stack value structs, so under --no-heap it allows them; the other backends must reject them to keep the zero-heap guarantee honest.
     pub mutating_methods: Map[str, bool] # "ClassName.method" -> true if it stores into self.<field> (implicit-borrow check)
+    pub fn_tuple_fresh:  Map[str, bool] # tuple-ownership inference: fn/method key -> every return path builds a fresh tuple (see compute_tuple_fresh)
     pub fn_ret_owned:    Map[str, bool] # return-ownership inference: fn/method key -> true if it returns an OWNED heap-class ref (see compute_return_ownership)
     pub fn_param_consumes: Map[str, bool] # parameter-ownership inference: "fnkey#i" -> true if the fn CONSUMES (moves/frees/stores/returns) param i; false = PROVEN only-borrowed. Interprocedural monotone fixpoint (compute_param_ownership); the precise per-callee effect the drop heuristics lack.
     pub ptr_aliased:     Map[str, bool] # class names reachable as Pointer[T] (raw, NOT refcounted) — excluded from the [S-2] ownership-cycle graph
@@ -684,6 +706,7 @@ extend Sema:
         s.heap_boxes_tuples      = false
         s.mutating_methods       = Map[str, bool].init(32)
         s.fn_ret_owned           = Map[str, bool].init(64)
+        s.fn_tuple_fresh         = Map[str, bool].init(64)
         s.fn_param_consumes      = Map[str, bool].init(64)
         s.ptr_aliased            = Map[str, bool].init(32)
         s.decorator_names        = Map[str, bool].init(16)
@@ -1343,6 +1366,7 @@ extend Sema:
                 mut lf = self.firm_family(l)
                 mut rf = self.firm_family(r)
                 if op == "+" and lf == "str" and rf == "str": return "str"
+                if op == "*" and ((lf == "str" and rf == "int") or (lf == "int" and rf == "str")): return "str"   # repetition
                 if op == "+" or op == "-" or op == "*" or op == "/" or op == "//" or op == "%" or op == "**":
                     if (lf == "int" or lf == "float") and (rf == "int" or rf == "float"):
                         if lf == "float" or rf == "float": return "float"
@@ -1524,6 +1548,12 @@ extend Sema:
                                 self.error("[E-5] Type mismatch: " + what + " is a call to '" + vfn + "()', which returns no value.\n      FIX: give '" + vfn + "' a return type (`-> <type>`) and return a value, or call it as a statement.")
                     case _: pass
             case HirExpr.EMethodCall(vmo, vmm, _, _):
+                # `x = xs.append(1)` / `st = set().add(5)`: a builtin collection mutator returns nothing.
+                if vmm == "append" or vmm == "add" or vmm == "push" or vmm == "insert" or vmm == "clear" or vmm == "extend" or vmm == "sort" or vmm == "reverse" or vmm == "update" or vmm == "discard":
+                    mut vrn = hir_expr_type(vmo).name
+                    if vrn == "List" or vrn == "Vec" or vrn == "Set" or vrn == "Dict" or vrn == "Map":
+                        self.error("[E-5] Type mismatch: " + what + " is a call to '." + vmm + "()', which returns nothing.\n      FIX: call it as a statement on its own line (`xs." + vmm + "(..)`); if a line starting with '.' continues the previous line, remove the stray '.'.")
+                        return
                 if vmm == "join" and hir_expr_type(vmo).name == "Thread":
                     self.error("[E-5] Type mismatch: " + what + " is a call to 'Thread.join()', which returns no value.\n      FIX: call 'join()' as a statement; share results through a Shared[T] / Atomic value.")
                     return
@@ -3351,6 +3381,16 @@ extend Sema:
         # A Result local owns its boxed payloads (a str or value-type Ok value, a
         # str error): free them at scope exit unless the Result itself was passed
         # on, returned, aliased or moved (then the new holder owns them).
+        # A tuple local owns one reference per str / refcounted-class slot (codegen registers the
+        # release only when it was initialised from a FRESH tuple). Never dropped when it escapes
+        # (passed, returned, aliased, captured) or is ever reassigned.
+        if tn == "Tuple" or tn == "tuple":
+            if sym.coll_escaped: return false
+            if self.alias_assigned.contains(sym.name) or self.alias_assigned.contains("#2" + sym.name): return false
+            if sym.is_moved or sym.is_maybe_moved or sym.is_freed: return false
+            if sym.active_borrows > 0: return false
+            if not sym.is_init or sym.is_maybe_init: return false
+            return true
         if tn == "Result":
             if sym.coll_escaped: return false
             if self.alias_assigned.contains(sym.name): return false
@@ -4134,8 +4174,8 @@ extend Sema:
                     # outlive this frame: codegen must give it a HEAP env (see
                     # escaping_closures), not a stack env.
                     self.mark_coll_escaped(nm)
-                elif tn == "Result":
-                    # a Result handed on (argument, return, alias) is owned by its new
+                elif tn == "Result" or tn == "Tuple" or tn == "tuple":
+                    # a Result / tuple handed on (argument, return, alias) is owned by its new
                     # holder: never auto-drop it here
                     self.mark_coll_escaped(nm)
                 elif self.classes.contains(tn):
@@ -4304,7 +4344,7 @@ extend Sema:
                 while i < captures.len:
                     mut cap = captures.get(i)
                     mut ctn = cap.ty.name
-                    if ctn == "List" or ctn == "Vec" or ctn == "Dict" or ctn == "Map" or ctn == "Set":
+                    if ctn == "List" or ctn == "Vec" or ctn == "Dict" or ctn == "Map" or ctn == "Set" or ctn == "Tuple" or ctn == "tuple":
                         self.mark_coll_escaped(cap.name)
                     i = i + 1
             # `super.method(args)` may stash a collection arg into a
@@ -4874,6 +4914,7 @@ extend Sema:
         # a call-result local is auto-dropped — enabling reclamation of owned
         # factory/free-function results without ever over-releasing a borrow.
         self.compute_return_ownership(hp)
+        self.compute_tuple_fresh(hp)
         # Parameter-ownership summary (consumes(fn,i)): the interprocedural monotone
         # fixpoint the drop heuristics lack, over the fully-lowered program.
         self.compute_param_ownership(hp)
@@ -5007,6 +5048,126 @@ extend Sema:
             mut hf2 = fns.get(wi)
             hf2.returns_owned = self.fn_ret_owned.get(keys.get(wi))
             wi = wi + 1
+
+    # ---- Tuple-ownership inference (whole-program monotone fixpoint) ----
+    # A tuple-returning function yields a FRESH tuple iff EVERY return builds one: a tuple literal
+    # (the packer gives each str/class slot its own reference) or a call to another such function.
+    # Anything else (`return t`, `return self.pair`, a parameter, a collection element) may hand out
+    # a tuple whose slot references someone else owns, so it is NOT fresh. A caller unpacking a fresh
+    # tuple takes the slot references over; otherwise it retains. Methods are keyed `Class.m` and
+    # additionally `.m` (ANDed across every class) so an override returning a non-fresh tuple
+    # disables the optimisation for dynamic dispatch through the base type.
+    pub def _is_tuple_ty(self, t: AstType) -> bool:
+        if (t as usize) == 0 as usize: return false
+        return t.name == "Tuple" or t.name == "tuple"
+
+    pub def _tuple_and(self, key: str, v: bool):
+        mut nv = v
+        if self.fn_tuple_fresh.contains(key) and not self.fn_tuple_fresh.get(key): nv = false
+        self.fn_tuple_fresh.insert(key, nv)
+
+    pub def _ret_yields_fresh_tuple(self, e: Pointer[HirExpr]) -> bool:
+        if e as usize == 0 as usize: return false
+        match e.read():
+            case HirExpr.ETuple(_, _): return true
+            case HirExpr.ECall(callee, _, _):
+                if callee as usize == 0 as usize: return false
+                match callee.read():
+                    case HirExpr.EIdent(cn, _, _):
+                        return self.fn_tuple_fresh.contains(cn) and self.fn_tuple_fresh.get(cn)
+                    case _: return false
+            case HirExpr.EMethodCall(recv, m, _, _):
+                mut rt = hir_expr_type(recv).name
+                match recv.read():
+                    case HirExpr.EIdent(rn, _, _):
+                        if self.classes.contains(rn): rt = rn
+                    case _: pass
+                mut k = rt + "." + m
+                return self.fn_tuple_fresh.contains(k) and self.fn_tuple_fresh.get(k) and self.fn_tuple_fresh.contains("." + m) and self.fn_tuple_fresh.get("." + m)
+            case HirExpr.EIfElse(_, a, b2, _):
+                return self._ret_yields_fresh_tuple(a) and self._ret_yields_fresh_tuple(b2)
+            case _: return false
+
+    pub def compute_tuple_fresh(self, hp: HirProgram):
+        mut keys = Vec[str].init(32)
+        mut fns  = Vec[HirFunction].init(32)
+        mut fi = 0
+        while fi < hp.functions.len:
+            mut f = hp.functions.get(fi)
+            if self._is_tuple_ty(f.ret_ty) and f.generics.len == 0:
+                keys.push(f.name)
+                fns.push(f)
+            fi = fi + 1
+        mut ci = 0
+        while ci < hp.classes.len:
+            mut c = hp.classes.get(ci)
+            mut mi = 0
+            while mi < c.methods.len:
+                mut m = c.methods.get(mi)
+                if self._is_tuple_ty(m.ret_ty) and m.generics.len == 0 and c.generics.len == 0:
+                    keys.push(c.name + "." + m.name)
+                    fns.push(m)
+                mi = mi + 1
+            ci = ci + 1
+        mut ei = 0
+        while ei < hp.enums.len:
+            mut en = hp.enums.get(ei)
+            mut emi = 0
+            while emi < en.methods.len:
+                mut em = en.methods.get(emi)
+                if self._is_tuple_ty(em.ret_ty) and em.generics.len == 0:
+                    keys.push(en.name + "." + em.name)
+                    fns.push(em)
+                emi = emi + 1
+            ei = ei + 1
+        # Optimistic start; a duplicate key (overloads) keeps the weaker verdict.
+        mut ki = 0
+        while ki < keys.len:
+            self.fn_tuple_fresh.insert(keys.get(ki), true)
+            ki = ki + 1
+        mut changed = true
+        while changed:
+            changed = false
+            mut xi = 0
+            while xi < fns.len:
+                mut k = keys.get(xi)
+                if self.fn_tuple_fresh.get(k):
+                    mut rets = Vec[Pointer[HirExpr]].init(4)
+                    self._collect_returns(fns.get(xi).body, rets)
+                    mut ok = rets.len > 0
+                    mut ri = 0
+                    while ri < rets.len:
+                        if not self._ret_yields_fresh_tuple(rets.get(ri)): ok = false
+                        ri = ri + 1
+                    if not ok:
+                        self.fn_tuple_fresh.insert(k, false)
+                        changed = true
+                xi = xi + 1
+        # Method names: AND across every class/enum (dynamic dispatch through a base/interface type).
+        mut wi = 0
+        while wi < fns.len:
+            mut hf = fns.get(wi)
+            mut v = self.fn_tuple_fresh.get(keys.get(wi))
+            if hf.class_name != "": self._tuple_and("." + hf.name, v)
+            wi = wi + 1
+        # Also: any NON-tuple-typed or generic method sharing the name makes it non-fresh.
+        mut cj = 0
+        while cj < hp.classes.len:
+            mut c2 = hp.classes.get(cj)
+            mut mj = 0
+            while mj < c2.methods.len:
+                mut m2 = c2.methods.get(mj)
+                if not (self._is_tuple_ty(m2.ret_ty) and m2.generics.len == 0 and c2.generics.len == 0):
+                    if self.fn_tuple_fresh.contains("." + m2.name): self.fn_tuple_fresh.insert("." + m2.name, false)
+                mj = mj + 1
+            cj = cj + 1
+        mut pi = 0
+        while pi < fns.len:
+            mut hf2 = fns.get(pi)
+            hf2.returns_fresh_tuple = self.fn_tuple_fresh.get(keys.get(pi))
+            if hf2.class_name != "":
+                hf2.returns_fresh_tuple = hf2.returns_fresh_tuple and self.fn_tuple_fresh.get("." + hf2.name)
+            pi = pi + 1
 
     # ---- Parameter-ownership inference (whole-program monotone fixpoint) ----
     # consumes(fn, i): the fn moves/frees/stores/returns parameter i, or passes it to
@@ -5733,6 +5894,21 @@ extend Sema:
     # generics — bounds on such a name can't be checked yet, so we don't false-error.
     pub def is_known_type_name_strict(self, n: str) -> bool:
         return self.classes.contains(n) or self.enums.contains(n) or self.interfaces.contains(n) or self.type_aliases.contains(n) or self.fn_sigs.contains(n) or self.extern_names.contains(n)
+
+    # True when `name` is a type parameter DECLARED by the enclosing function or class (unlike
+    # _is_type_param_in_scope, a lone capital that nothing declares is not accepted).
+    pub def _is_declared_type_param(self, name: str) -> bool:
+        mut i = 0
+        while i < self.current_func_generics.len:
+            if self.current_func_generics.get(i) == name: return true
+            i = i + 1
+        if self.current_class_name != "" and self.classes.contains(self.current_class_name):
+            mut ccls = self.classes.get(self.current_class_name)
+            mut ci = 0
+            while ci < ccls.generics.len:
+                if ccls.generics.get(ci) == name: return true
+                ci = ci + 1
+        return false
 
     pub def _is_type_param_in_scope(self, name: str) -> bool:
         if _tr_strlen(name) == 1: return true
@@ -7693,6 +7869,7 @@ extend Sema:
                             self.clo_let_scopes.push(self.scopes.len - 1)
                         case _: pass
                 hval = self.retype_none(hval, ty)
+                self.check_not_void_call(hval, "the value bound here")
                 if not is_shared and hval as usize != 0 as usize and not _is_invalid_ptr(hval as usize):
                     mut _sh_owned = false
                     match hval.read():
@@ -8502,6 +8679,12 @@ extend Sema:
                 if self.current_func_name != "main":
                     self.error("[E-2] Nested class/def/enum/interface declarations are only supported inside main().\n      FIX: Move this declaration to module (top-level) scope, or declare it inside main().")
                     return box_hirstmt(HirStmt.SPass)
+                match ldecl.read():
+                    case Decl.DFunction(ld_chk):
+                        if ld_chk.name == "main":
+                            self.error("[N-2] a nested function cannot be named 'main': that is the program entry point, which is already the enclosing function.\n      FIX: rename the inner function, or remove the duplicated `def main():` line.")
+                            return box_hirstmt(HirStmt.SPass)
+                    case _: pass
                 self.register_decl(ldecl)
                 # lower_func/lower_class reset current_func_name/current_class_name
                 # to "" on exit; save+restore so main's own context survives the
@@ -9511,6 +9694,8 @@ extend Sema:
                 mut _n3_known = self.is_known_name(name)
                 if _n3_known and name.len() == 1 and name >= "a" and name <= "z" and not self.fn_sigs.contains(name) and not self.extern_names.contains(name) and not self.classes.contains(name):
                     _n3_known = false   # a lone lowercase letter is a variable, not a type parameter (those are `T`, `K`, ...)
+                if _n3_known and name.len() == 1 and name >= "A" and name <= "Z" and not self.fn_sigs.contains(name) and not self.extern_names.contains(name) and not self.classes.contains(name) and not self.enums.contains(name) and not self._is_declared_type_param(name):
+                    _n3_known = false   # a lone capital that is no declared class and no type parameter in scope (`H()` after `class H` was renamed)
                 if self.sym_out_of_scope(sym) and not self.in_assign_target and not _n3_recv_ok:
                     sym = Symbol.init("", SymbolKind.SVariable, box_asttype(AstType.init("void")))
                     _n3_known = false

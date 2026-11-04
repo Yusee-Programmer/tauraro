@@ -1,0 +1,68 @@
+# Leak gate: tuples own one reference per str / refcounted-class slot. Unpacking a FRESH tuple
+# (a tuple literal or a call to a function that only returns tuple literals) takes the references
+# over; unpacking any other tuple retains. Both used to leak (str boxes) or double-release (classes).
+extern "C":
+    def _tr_mem_live() -> int
+
+class Node:
+    pub v: int
+extend Node:
+    pub def init(v: int) -> Node:
+        mut n = Node()
+        n.v = v
+        return n
+
+def mks(i: int) -> (str, int):
+    s = "item" + i.to_str()
+    return (s, i)
+
+def mkn(i: int) -> (Node, int):
+    x = Node.init(i)
+    return (x, i)
+
+def mkboth(i: int) -> (Node, str):
+    return (Node.init(i), "n" + i.to_str())
+
+def forward(i: int) -> (Node, str):
+    return mkboth(i + 1)
+
+def keep(n: Node) -> (Node, int):
+    return (n, 1)
+
+def workload() -> int:
+    mut tot = 0
+    mut (s, k) = mks(3)
+    tot = tot + s.len() + k
+    mut (n, j) = mkn(4)
+    tot = tot + n.v + j
+    mut (a, b) = mkboth(5)
+    tot = tot + a.v + b.len()
+    mut (c, d) = forward(6)
+    tot = tot + c.v + d.len()
+    y = Node.init(9)
+    t = (y, 2)
+    mut (p, q) = t
+    tot = tot + p.v + q + y.v
+    mut (u, w) = keep(y)
+    tot = tot + u.v + w
+    mut (e, f) = ("lit" + "x", Node.init(1))
+    tot = tot + e.len() + f.v
+    mut m = Node.init(1)
+    mut o = Node.init(2)
+    (m, o) = (o, m)
+    tot = tot + m.v * 10 + o.v
+    return tot
+
+def main():
+    workload()
+    mut before = _tr_mem_live()
+    mut r = 0
+    while r < 100:
+        workload()
+        r = r + 1
+    mut leaked = _tr_mem_live() - before
+    print(workload())
+    if leaked <= 0:
+        print("LEAK-GATE PASS")
+    else:
+        print("LEAK-GATE FAIL leaked=" + leaked.to_str())

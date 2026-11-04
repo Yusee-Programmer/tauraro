@@ -17,6 +17,18 @@
 from core.vec import Vec
 from ast import Program, Decl, Stmt, Block, FunctionDef, AstType, ClassDef, Expr, Param, ElifClause, MatchArm, FieldDef, Comprehension
 
+# True when some function spawns `name` (a thread entry point).
+def _rc_spawned(ck: RcCk, name: str) -> bool:
+    mut i = 0
+    while i < ck.fns.len:
+        mut f = ck.fns.get(i)
+        mut j = 0
+        while j < f.sites.len:
+            if f.sites.get(j).target == name: return true
+            j = j + 1
+        i = i + 1
+    return false
+
 class RcSite:
     pub target:   str
     pub args:     Vec[Pointer[Expr]]
@@ -1247,7 +1259,12 @@ pub def check_data_races(prog: Program, decl_files: Vec[str], input_path: str) -
                 mut qk = 0
                 while qk < qf.pairs_a.len:
                     if qf.pairs_a.get(qk) == pf.pairs_b.get(pk) and qf.pairs_b.get(qk) == pf.pairs_a.get(pk):
-                        ck.msgs.push("W|" + pf.file + ":" + pf.line.to_str() + ": [T-9] lock-order inversion: '" + pf.name + "' locks '" + pf.pairs_a.get(pk) + "' then '" + pf.pairs_b.get(pk) + "', but '" + qf.name + "' locks them in the opposite order: two threads running them can deadlock.\n      FIX: always acquire the mutexes in one global order.")
+                        # Both functions are SPAWNED somewhere (two threads can really run them at once):
+                        # the opposite acquisition order is a provable deadlock hazard -> error. Otherwise
+                        # (only one is a thread entry, or neither) it stays a warning.
+                        mut inv_pre = "W|"
+                        if _rc_spawned(ck, pf.name) and _rc_spawned(ck, qf.name): inv_pre = ""
+                        ck.msgs.push(inv_pre + pf.file + ":" + pf.line.to_str() + ": [T-9] lock-order inversion: '" + pf.name + "' locks '" + pf.pairs_a.get(pk) + "' then '" + pf.pairs_b.get(pk) + "', but '" + qf.name + "' locks them in the opposite order: two threads running them can deadlock.\n      FIX: always acquire the mutexes in one global order.")
                     qk = qk + 1
                 qi = qi + 1
             pk = pk + 1

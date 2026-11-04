@@ -641,9 +641,14 @@ Inside `unsafe:` you take over the guarantees the compiler gives everywhere else
 - `[P-2]` `*p`, `p[i]`, `p + n`, `.read()`, `.offset()` and `p.field` outside `unsafe:`.
 
 **Checked at run time**
-- Release builds: nothing. `Pointer[T]` index/`offset`/`read`/`write` are plain C pointer operations.
+- Release builds (default): nothing. `Pointer[T]` index/`offset`/`read`/`write` are plain C pointer operations.
   An out-of-range or freed access is undefined behaviour; a crash prints
   `tauraro: fatal: invalid memory access ...` (or `stack overflow` for runaway recursion).
+- `--checked-pointers` (also implied by `--strict`, or set `TAURARO_PTR_CHECK=1`): the same range check on
+  `p[i]` / `p.offset(k)` as `--debug`, in an optimised release build and without AddressSanitizer. Every
+  `alloc[T](n)` block is recorded in a table, so each access costs a hash lookup (interior pointers a
+  scan); an out-of-range access prints `raw pointer ... out of bounds` and traps. Pointers into memory the
+  table does not know (stack, globals, C-owned) stay unchecked. Not available on Windows or bare-metal.
 - `--debug` builds (AddressSanitizer + UBSan): every `p[i]` and `p.offset(k)` is checked against the heap
   block `p` points into (interior pointers such as `p.offset(2)` are resolved to their block on every
   platform, not only where ASan can locate it) (`raw pointer ... out of bounds`), and ASan additionally traps use-after-free,

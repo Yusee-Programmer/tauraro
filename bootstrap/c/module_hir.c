@@ -54,59 +54,59 @@ __attribute__((hot)) void HirBlock_push(HirBlock* self, HirStmt* s) {
 }
 
 __attribute__((malloc,returns_nonnull,hot)) HirProgram* HirProgram_init() {
-#line 247 "src/hir.tr"
-    HirProgram* p = ((HirProgram*)_tr_obj_alloc(sizeof(HirProgram)));
-#line 248 "src/hir.tr"
-    p->functions = (void*)List_ptr_new();
-#line 249 "src/hir.tr"
-    p->classes = (void*)List_ptr_new();
-#line 250 "src/hir.tr"
-    p->enums = (void*)List_ptr_new();
 #line 251 "src/hir.tr"
-    p->interfaces = (void*)List_ptr_new();
+    HirProgram* p = ((HirProgram*)_tr_obj_alloc(sizeof(HirProgram)));
 #line 252 "src/hir.tr"
-    p->top_level_stmts = (void*)List_ptr_new();
+    p->functions = (void*)List_ptr_new();
 #line 253 "src/hir.tr"
-    p->extern_funcs = (void*)List_ptr_new();
+    p->classes = (void*)List_ptr_new();
 #line 254 "src/hir.tr"
-    p->decorator_defs = (void*)List_ptr_new();
+    p->enums = (void*)List_ptr_new();
 #line 255 "src/hir.tr"
-    p->type_alias_names = (void*)List_TrStr_new();
+    p->interfaces = (void*)List_ptr_new();
 #line 256 "src/hir.tr"
-    p->type_alias_types = (void*)List_ptr_new();
+    p->top_level_stmts = (void*)List_ptr_new();
 #line 257 "src/hir.tr"
+    p->extern_funcs = (void*)List_ptr_new();
+#line 258 "src/hir.tr"
+    p->decorator_defs = (void*)List_ptr_new();
+#line 259 "src/hir.tr"
+    p->type_alias_names = (void*)List_TrStr_new();
+#line 260 "src/hir.tr"
+    p->type_alias_types = (void*)List_ptr_new();
+#line 261 "src/hir.tr"
     return p;
 }
 
 __attribute__((hot)) HirExpr* box_hirexpr(HirExpr e) {
-#line 262 "src/hir.tr"
+#line 266 "src/hir.tr"
     /* unsafe block */
-#line 263 "src/hir.tr"
+#line 267 "src/hir.tr"
     HirExpr* p = ((HirExpr*)_tr_c_calloc((size_t)(1LL), sizeof(HirExpr)));
-#line 264 "src/hir.tr"
+#line 268 "src/hir.tr"
     (*p = e);
-#line 265 "src/hir.tr"
+#line 269 "src/hir.tr"
     return p;
 }
 
 __attribute__((hot)) HirStmt* box_hirstmt(HirStmt s) {
-#line 268 "src/hir.tr"
+#line 272 "src/hir.tr"
     /* unsafe block */
-#line 269 "src/hir.tr"
+#line 273 "src/hir.tr"
     HirStmt* p = ((HirStmt*)_tr_c_calloc((size_t)(1LL), sizeof(HirStmt)));
-#line 270 "src/hir.tr"
+#line 274 "src/hir.tr"
     (*p = s);
-#line 271 "src/hir.tr"
+#line 275 "src/hir.tr"
     return p;
 }
 
 __attribute__((hot)) AstType* hir_expr_type(HirExpr* e) {
-#line 274 "src/hir.tr"
+#line 278 "src/hir.tr"
     if ((((unsigned long long)(e)) == ((unsigned long long)(0LL)))) {
-#line 274 "src/hir.tr"
+#line 278 "src/hir.tr"
         return AstType_init(_tr_str_lit_len("void", 4LL));
     }
-#line 275 "src/hir.tr"
+#line 279 "src/hir.tr"
     __auto_type _t659 = (*e);
     if (_t659.tag == HirExpr_ELitInt) {
         __auto_type ty = _t659.data.ELitInt.ty;
@@ -149,12 +149,12 @@ __attribute__((hot)) AstType* hir_expr_type(HirExpr* e) {
         return ty;
     } else if (_t659.tag == HirExpr_EPropAccess) {
         __auto_type ty = _t659.data.EPropAccess.ty;
-#line 293 "src/hir.tr"
+#line 297 "src/hir.tr"
         if ((_tr_str_eqv((ty->name), (_tr_str_lit_len("Bits", 4LL))) && (ty->args->len > 0LL))) {
-#line 293 "src/hir.tr"
+#line 297 "src/hir.tr"
             return (*((AstType**)List_ptr_get(ty->args, 0LL)));
         }
-#line 294 "src/hir.tr"
+#line 298 "src/hir.tr"
         return ty;
     } else if (_t659.tag == HirExpr_EIndex) {
         __auto_type ty = _t659.data.EIndex.ty;
@@ -171,32 +171,32 @@ __attribute__((hot)) AstType* hir_expr_type(HirExpr* e) {
     } else if (_t659.tag == HirExpr_EClosure) {
         __auto_type _cl_ps = _t659.data.EClosure.params;
 __auto_type _cl_ret = _t659.data.EClosure.ret_ty;
-#line 303 "src/hir.tr"
-        AstType* _clt = AstType_init(_tr_str_lit_len("def", 3LL));
-#line 304 "src/hir.tr"
-        long long _cli = 0LL;
-#line 305 "src/hir.tr"
-        while ((_cli < _cl_ps->len)) {
-#line 306 "src/hir.tr"
-            /* unsafe block */
 #line 307 "src/hir.tr"
-            AstType** _clp = ((AstType**)_tr_c_calloc((size_t)(1LL), sizeof(AstType*)));
+        AstType* _clt = AstType_init(_tr_str_lit_len("def", 3LL));
 #line 308 "src/hir.tr"
-            (*_clp = ((HirParam*)List_ptr_get(_cl_ps, _cli))->ty);
+        long long _cli = 0LL;
 #line 309 "src/hir.tr"
-            List_ptr_append(_clt->args, _clp);
+        while ((_cli < _cl_ps->len)) {
 #line 310 "src/hir.tr"
+            /* unsafe block */
+#line 311 "src/hir.tr"
+            AstType** _clp = ((AstType**)_tr_c_calloc((size_t)(1LL), sizeof(AstType*)));
+#line 312 "src/hir.tr"
+            (*_clp = ((HirParam*)List_ptr_get(_cl_ps, _cli))->ty);
+#line 313 "src/hir.tr"
+            List_ptr_append(_clt->args, _clp);
+#line 314 "src/hir.tr"
             _cli = (_cli + 1LL);
         }
-#line 311 "src/hir.tr"
-        /* unsafe block */
-#line 312 "src/hir.tr"
-        AstType** _clrp = ((AstType**)_tr_c_calloc((size_t)(1LL), sizeof(AstType*)));
-#line 313 "src/hir.tr"
-        (*_clrp = _cl_ret);
-#line 314 "src/hir.tr"
-        List_ptr_append(_clt->args, _clrp);
 #line 315 "src/hir.tr"
+        /* unsafe block */
+#line 316 "src/hir.tr"
+        AstType** _clrp = ((AstType**)_tr_c_calloc((size_t)(1LL), sizeof(AstType*)));
+#line 317 "src/hir.tr"
+        (*_clrp = _cl_ret);
+#line 318 "src/hir.tr"
+        List_ptr_append(_clt->args, _clrp);
+#line 319 "src/hir.tr"
         return _clt;
     } else if (_t659.tag == HirExpr_ESuperMethodCall) {
         __auto_type ty = _t659.data.ESuperMethodCall.ty;
@@ -260,26 +260,26 @@ __auto_type _cl_ret = _t659.data.EClosure.ret_ty;
         return ty;
     } else if (1) {
         __auto_type _ = _t659;
-#line 337 "src/hir.tr"
+#line 341 "src/hir.tr"
         /* pass */
     }
-#line 338 "src/hir.tr"
+#line 342 "src/hir.tr"
     return AstType_init(_tr_str_lit_len("void", 4LL));
 }
 
 __attribute__((hot)) long long _tr_str_len(TrStr s) {
-#line 341 "src/hir.tr"
-    /* unsafe block */
-#line 342 "src/hir.tr"
-    char* p = ((char*)(_tr_strz(s)));
-#line 343 "src/hir.tr"
-    long long i = 0LL;
-#line 344 "src/hir.tr"
-    while ((((long long)((*_TR_PTR_OFF(p, i)))) != 0LL)) {
 #line 345 "src/hir.tr"
+    /* unsafe block */
+#line 346 "src/hir.tr"
+    char* p = ((char*)(_tr_strz(s)));
+#line 347 "src/hir.tr"
+    long long i = 0LL;
+#line 348 "src/hir.tr"
+    while ((((long long)((*_TR_PTR_OFF(p, i)))) != 0LL)) {
+#line 349 "src/hir.tr"
         i = (i + 1LL);
     }
-#line 346 "src/hir.tr"
+#line 350 "src/hir.tr"
     return i;
 }
 

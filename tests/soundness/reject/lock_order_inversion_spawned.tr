@@ -1,0 +1,19 @@
+# EXPECT: [T-9]
+# Two functions that are both spawned lock the same module-level mutexes in opposite orders: a
+# provable deadlock hazard (it used to be only a warning).
+mut ma: Mutex[int] = Mutex.init(0)
+mut mb: Mutex[int] = Mutex.init(0)
+def first(n: int) -> void:
+    mut x = ma.get()
+    mut y = mb.get()
+    ma.set(x + n)
+    mb.set(y + n)
+def second(n: int) -> void:
+    mut y = mb.get()
+    mut x = ma.get()
+    mb.set(y + n)
+    ma.set(x + n)
+async def main():
+    task_group:
+        spawn first(1)
+        spawn second(2)

@@ -123,6 +123,7 @@ pub def print_usage():
     print("  --debug           Compile with ASAN and bounds-check assertions")
     print("  --coverage        Instrument for line coverage (gcov data mapped to .tr lines)")
     print("  --strict          Treat alloc/dealloc outside 'unsafe:' as a hard error [U-1]")
+    print("  --checked-pointers  Range-check raw Pointer[T] offset/index against the alloc block in release builds (implied by --strict)")
     print("  --no-heap         Reject heap types (List/Dict/Set/heap class/dynamic str) [H-1] — structurally")
     print("                    zero-heap for bare metal; value-types/fixed-arrays/pointers/StrView only")
 
@@ -1592,6 +1593,7 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
     mut dbg = ""
     if debug_mode:
         dbg = " -fsanitize=address,undefined -g"
+    if _tr_getenv("TAURARO_PTR_CHECK") == "1": dbg = dbg + " -DTAURARO_PTR_CHECK"
     # Coverage: gcov counters; the #line markers map them to .tr lines.
     if coverage:
         dbg = dbg + " --coverage -g"
@@ -2227,6 +2229,12 @@ pub def main(args: Vec[str]):
             prof_mode = true
         elif arg == "--strict":
             strict_mode = true
+            # --strict also range-checks raw Pointer[T] offset/index against the alloc block (see --checked-pointers).
+            _tr_setenv("TAURARO_PTR_CHECK", "1")
+        elif arg == "--checked-pointers":
+            # Release-build raw-pointer bounds checks: alloc[T](n) blocks are recorded in a table and every
+            # Pointer offset/index is range-checked (trap with a diagnostic). Opt-in; ~hash lookup per access.
+            _tr_setenv("TAURARO_PTR_CHECK", "1")
         elif arg == "--no-elide":
             no_elide = true
         elif arg == "--no-auto-cpp":
@@ -2757,6 +2765,7 @@ pub def main(args: Vec[str]):
     mut flags_sig = "opt=" + opt_level + ";tgt=" + target
     if static_link: flags_sig = flags_sig + ";static"
     if debug_mode:  flags_sig = flags_sig + ";debug"
+    if _tr_getenv("TAURARO_PTR_CHECK") == "1": flags_sig = flags_sig + ";ptrchk"
     if cov_mode:    flags_sig = flags_sig + ";cov"
     if sysroot != "": flags_sig = flags_sig + ";sysroot=" + sysroot
     mut flags_path = build_dir + ".build_flags"

@@ -1,0 +1,6 @@
+# EXPECT: [N-3]
+# `H()` where no class H exists (e.g. it was renamed) is an undefined name, not an implicit type
+# parameter (it used to surface as a late raw [C-1]).
+def main():
+    mut h = H()
+    print(1)
