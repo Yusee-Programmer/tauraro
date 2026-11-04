@@ -1518,6 +1518,24 @@ int64_t trc_x509_store_load_system(void* h) {
         fclose(f); free(buf);
         if (total > 0) break;
     }
+#if defined(__APPLE__)
+    /* macOS: /etc/ssl/cert.pem is a stale LibreSSL bundle that lacks roots current sites chain to (CI saw
+     * example.com fail with "no path to a trusted root"). The real trust anchors live in the system
+     * keychain; `security` prints them as PEM on every Mac. Always merge them in; failure is harmless. */
+    {
+        FILE* p = popen("/usr/bin/security find-certificate -a -p /System/Library/Keychains/SystemRootCertificates.keychain 2>/dev/null", "r");
+        if (p) {
+            size_t cap = 1 << 20, len = 0, got; char* pb = (char*)malloc(cap);
+            while (pb && (got = fread(pb + len, 1, cap - len, p)) > 0) {
+                len += got;
+                if (len == cap) { char* nb = (char*)realloc(pb, cap * 2); if (!nb) break; pb = nb; cap *= 2; }
+            }
+            pclose(p);
+            if (pb && len > 0) total += trc_x509_store_add_pem(h, pb, (int64_t)len);
+            free(pb);
+        }
+    }
+#endif
     return total;
 #endif
 }

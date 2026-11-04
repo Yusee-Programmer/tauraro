@@ -25,6 +25,7 @@ there is no deprecation period.
 
 ### Fixed
 
+- macOS: the system trust store now also merges the roots from the system keychain (`security find-certificate -p SystemRootCertificates.keychain`): `/etc/ssl/cert.pem` is a stale bundle that no longer contains the root `example.com` chains to (CI's `57_net_https` failed on macOS for the previously green commit b700ddf as well when re-run). `57_net_https` reports a failed connect as SKIP instead of failing when the environment offers no usable roots / network.
 - Arithmetic on a module-level `mut g = None` that is never given a real value is `[E-5]` (was a late `[C-1]`). `g = m.get()` on a Mutex/RwLock marks the guard as a borrow of the lock's payload (a double release under ASan otherwise).
 - Known limitation: tuples holding `str`/`List`/class elements are not dropped (they leak safely). A tuple is a copied array of raw slots that aliases boxes on copy, so a drop is only sound with a uniqueness proof the compiler does not have.
 - Fuzz: a class that inherits from itself no longer overflows the compiler's stack (`class_method_exists` / `class_has_field` are depth-limited; `[N-6]` is reported); `def( -> int]` no longer hangs the parser; `x: mut int` is a parse error (it used to become a `void` parameter); printing an enum value, a non-function first argument of `Thread.spawn`, and a mistyped scalar argument of a generic class constructor are diagnostics instead of late `[C-1]`/`[ICE]` errors.
