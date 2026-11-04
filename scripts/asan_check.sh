@@ -9,6 +9,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 TAURAROC="${TAURAROC:-$ROOT/tauraroc}"
 [ -x "$TAURAROC" ] || { echo "ERROR: $TAURAROC not found"; exit 1; }
+case "$TAURAROC" in /*) ;; *) TAURAROC="$ROOT/${TAURAROC#./}" ;; esac   # each test runs in its own cwd
 CC="${CC:-gcc}"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 one() {
